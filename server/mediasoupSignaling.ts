@@ -19,7 +19,7 @@
  * ── WHY EVERY FAILURE IS A NULL, NEVER A THROW ────────────────────────────────────
  *
  * The caller is the call path. A node that is slow, restarting, or newly gone must degrade
- * the call — to LiveKit, or to the mesh — and must never propagate an exception into
+ * the call — to the mesh — and must never propagate an exception into
  * signaling, where an unhandled rejection in the invite handler would cost the caller their
  * dial. So every op resolves to `{ok:true, data}` or `{ok:false, reason}`, the reason is
  * always one of a closed set, and the CALLER decides what to do about it. This is the same
@@ -95,9 +95,9 @@ export type FetchLike = (
 /**
  * Read the shared secret.
  *
- * Read PER CALL rather than captured at module load, the same pattern as `iceServers()` and
- * `livekitConfig()` — so a fleet can be given the secret without a restart, and so a test
- * can change it between cases.
+ * Read PER CALL rather than captured at module load, the same pattern as `iceServers()` —
+ * so a fleet can be given the secret without a restart, and so a test can change it
+ * between cases.
  */
 export function voipNodeSecret(): string {
   return process.env.VOIP_NODE_SECRET || "";
@@ -199,7 +199,7 @@ export async function callNode<T = unknown>(
  * call assigned to it fails, and NOTHING degrades: the registry says the fleet is fine.
  *
  * So the ops report, and the reports feed `planRoomTransport`'s `excludeInstanceIds`. The
- * whole point is that the call then goes to the other node, or to LiveKit, or to the mesh.
+ * whole point is that the call then goes to the other node, or to the mesh.
  *
  * THE FAILURES ARE NOT EQUIVALENT, AND TREATING THEM AS ONE IS THE TRAP IN BOTH DIRECTIONS:
  *
@@ -219,7 +219,7 @@ export async function callNode<T = unknown>(
  * had already recovered, on a fleet of two.
  *
  * AND IT MAY EXCLUDE EVERY NODE, deliberately. If all of them really are refusing, then the
- * right answer is LiveKit or the mesh, and a "never exclude the last one" rule would keep
+ * right answer is the mesh, and a "never exclude the last one" rule would keep
  * routing calls into a fleet that cannot carry them. That is what fail-open means here: the
  * CALL survives, not the SFU.
  * ────────────────────────────────────────────────────────────────────────────────────── */

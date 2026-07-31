@@ -1,10 +1,14 @@
 /**
  * THE mediasoup MEDIA-NODE REGISTRY, AND THE TRANSPORT PRECEDENCE.
  *
- * RELAY is gaining a self-hosted mediasoup SFU as its primary media transport, with
- * LiveKit Cloud kept as a selectable fallback and the WebRTC mesh underneath both. Two
- * media nodes exist in Mumbai, one per availability zone, smoke-tested: a worker per
- * core, `WebRtcTransport` announcing the node's own public IP, UDP+TCP 40000-49999 open.
+ * RELAY's media transport is a self-hosted mediasoup SFU with the WebRTC mesh underneath
+ * it as the floor. Two media nodes exist in Mumbai, one per availability zone,
+ * smoke-tested: a worker per core, `WebRtcTransport` announcing the node's own public IP,
+ * UDP+TCP 40000-49999 open.
+ *
+ * THERE WERE THREE RUNGS UNTIL v2.106.53 — a hosted SFU sat between these two. The owner
+ * cancelled that account, so the ladder is now our own nodes or no infrastructure at all,
+ * and the mesh's 6-participant cap is the real ceiling whenever a node is unavailable.
  *
  * THIS FILE IS THE PART THAT CAN BE REASONED ABOUT AND TESTED WITHOUT ANY OF THAT.
  * Everything here is PURE plus an injected client, the same shape `callStats.ts` and
@@ -26,7 +30,7 @@
  *
  * Media is a live UDP flow that must reach the EXACT host holding that room's router. A
  * load balancer would spray packets across hosts and break the stream — this is true of
- * every SFU, LiveKit included. So the signaling plane keeps one endpoint (the existing
+ * every SFU, hosted or otherwise. So the signaling plane keeps one endpoint (the existing
  * ALB) and the media plane fans out beneath it, one public IP per node, with each room
  * PINNED to one node.
  */
@@ -179,8 +183,8 @@ export function isNodeFresh(n: VoipNode, nowMs: number, ttlMs = NODE_TTL_MS): bo
      file's own header says must never happen.
      `updatedAt` is the NODE's clock and `nowMs` is the READER's, so they are two machines'
      clocks compared to the millisecond. ONE millisecond of forward skew on a node excluded
-     it; both nodes skewed forward excluded the WHOLE FLEET, and every call silently went to
-     LiveKit with nothing anywhere saying why. Two hosts running NTP are normally within a
+     it; both nodes skewed forward excluded the WHOLE FLEET, and every call silently fell to
+     the mesh with nothing anywhere saying why. Two hosts running NTP are normally within a
      few milliseconds, which is precisely why this would have looked fine and then bitten
      once during a clock step.
      The recorded intent is KEPT and merely bounded: a timestamp far in the future is still
@@ -255,8 +259,8 @@ export function rankNodes(
      secret is wrong (or which has wedged) keeps looking perfectly healthy in the registry —
      it heartbeats happily — while refusing every operation, so `planRoomTransport` keeps
      choosing it and every call fails with no degradation. `mediasoupSignaling` reports such
-     nodes and they are excluded here, which is what makes the fallback to LiveKit or the
-     mesh actually happen. */
+     nodes and they are excluded here, which is what makes the fallback to the mesh actually
+     happen. */
   const excluded = new Set(opts.excludeInstanceIds ?? []);
   const usable = nodes.filter(
     (n) => !excluded.has(n.instanceId) && isNodeUsable(n, opts.nowMs, opts.ttlMs),
@@ -302,14 +306,13 @@ export function selectVoipNode(
 }
 
 /** Which media transport a call should use. */
-export type CallTransport = "mediasoup" | "livekit" | "mesh";
+export type CallTransport = "mediasoup" | "mesh";
 
 /**
  * THE PRECEDENCE, IN ONE PLACE.
  *
- * mediasoup when there is a usable node and nothing has opted this call out; else LiveKit
- * when it is configured; else the mesh, which needs no server at all and is therefore the
- * floor.
+ * mediasoup when there is a usable node and nothing has opted this call out; else the mesh,
+ * which needs no server at all and is therefore the floor.
  *
  * IT CANNOT RETURN "NOTHING", and that is the point rather than a convenience. This
  * decides whether a call can be placed, and the rule this repo keeps re-learning is that
@@ -318,22 +321,21 @@ export type CallTransport = "mediasoup" | "livekit" | "mesh";
  * always the last resort precisely because it depends on no infrastructure — up to six
  * participants it is a complete answer.
  *
- * `forceLivekit` exists for staged rollout and A/B comparison: the two transports have to
- * be comparable on the same account with numbers, which is the only way the owner's
- * "video degrades during the call" report gets an answer rather than an opinion.
+ * THE LADDER USED TO HAVE A MIDDLE RUNG (v2.106.53). It was a hosted SFU, and the owner
+ * cancelled that account, so there are now exactly two rungs: our own nodes, or no
+ * infrastructure at all. `forceMesh` survives from that arrangement because it is still
+ * the only way to compare the two with numbers on one account, which is what turns a
+ * "video degrades mid-call" report into an answer rather than an opinion.
  */
 export function chooseCallTransport(opts: {
   mediasoupNode: VoipNode | null;
-  livekitEnabled: boolean;
   /** Per-room or per-user opt-out, for staged rollout and A/B. */
-  forceLivekit?: boolean;
+  forceMesh?: boolean;
   /** Kill switch: mediasoup off fleet-wide without a deploy. */
   mediasoupEnabled?: boolean;
 }): CallTransport {
-  const msoup = opts.mediasoupEnabled !== false && !opts.forceLivekit && opts.mediasoupNode !== null;
-  if (msoup) return "mediasoup";
-  if (opts.livekitEnabled) return "livekit";
-  return "mesh";
+  const msoup = opts.mediasoupEnabled !== false && !opts.forceMesh && opts.mediasoupNode !== null;
+  return msoup ? "mediasoup" : "mesh";
 }
 
 /**
@@ -394,15 +396,14 @@ export function assignmentStillValid(
 export function planRoomTransport(opts: {
   nodes: VoipNode[];
   nowMs: number;
-  livekitEnabled: boolean;
   mediasoupEnabled?: boolean;
-  forceLivekit?: boolean;
+  forceMesh?: boolean;
   preferAz?: string | null;
   pending?: Record<string, number> | Map<string, number> | null;
   excludeInstanceIds?: Iterable<string> | null;
 }): { transport: CallTransport; voip: VoipAssignment | null } {
   const node =
-    opts.mediasoupEnabled === false || opts.forceLivekit
+    opts.mediasoupEnabled === false || opts.forceMesh
       ? null
       : selectVoipNode(opts.nodes, {
           nowMs: opts.nowMs,
@@ -412,8 +413,7 @@ export function planRoomTransport(opts: {
         });
   const transport = chooseCallTransport({
     mediasoupNode: node,
-    livekitEnabled: opts.livekitEnabled,
-    forceLivekit: opts.forceLivekit,
+    forceMesh: opts.forceMesh,
     mediasoupEnabled: opts.mediasoupEnabled,
   });
   if (transport !== "mediasoup" || !node) return { transport, voip: null };
@@ -439,11 +439,15 @@ export function planRoomTransport(opts: {
  */
 export function transportForHydratedRoom(
   rec: { transport?: unknown } | null | undefined,
-  cfg: { livekitEnabled: boolean },
 ): CallTransport {
   const t = rec?.transport;
-  if (t === "mediasoup" || t === "livekit" || t === "mesh") return t;
-  return cfg.livekitEnabled ? "livekit" : "mesh";
+  if (t === "mediasoup" || t === "mesh") return t;
+  /* A RECORD NAMING THE RETIRED HOSTED SFU READS AS MESH (v2.106.53), which is the same
+     answer an ABSENT transport gets and for the same reason: the only thing we know is
+     that this room is not on one of our nodes, and the mesh is the transport that needs
+     no server to be true. Reading it as mediasoup would hand the room to a node that has
+     never heard of it. */
+  return "mesh";
 }
 
 /**
@@ -469,10 +473,11 @@ export function orderRelaysByAz<T>(hosts: T[], azs: (string | null | undefined)[
  *
  * An SFU decouples a participant's cost from the party size — on the mesh each phone runs
  * N-1 encoders and N-1 decoders, which v2.99.84 measured as the single biggest lever on
- * call CPU and heat. So the mesh keeps its 6 and the SFU paths get 10, matching what
- * LiveKit is already allowed. mediasoup is not given MORE than LiveKit here on purpose:
- * the nodes are 2-core and the real ceiling has to come from load testing the actual
- * subscription pattern rather than from a number chosen in advance.
+ * call CPU and heat. So the mesh keeps its 6 and mediasoup gets 10.
+ *
+ * THE 10 IS STILL PROVISIONAL, and now more so than before: it was inherited from what a
+ * hosted SFU was allowed rather than derived, and the nodes are 2-core, so the real
+ * ceiling has to come from load-testing the actual subscription pattern.
  */
 export function transportCap(t: CallTransport): number {
   return t === "mesh" ? 6 : 10;

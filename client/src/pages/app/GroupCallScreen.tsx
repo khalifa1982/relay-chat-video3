@@ -416,9 +416,9 @@ function PartyLinesSection({ onJoined }: { onJoined: () => void }) {
       {open && (
         <div className="space-y-2 px-4 pb-3">
           {/* The board's mono caption. The cap is read from the live transport,
-              never the frame's literal 10 — the party-line room cap is
-              `livekitConfig().enabled ? 10 : 6`, so a hardcoded 10 is a false
-              claim about capacity on a mesh fleet (the v2.106.9 argument). */}
+              never the frame's literal 10 — every call runs the mesh, whose cap is
+              6, so a hardcoded 10 would be a false claim about capacity (the
+              v2.106.9 argument). */}
           <p className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-muted-foreground">
             Dial the number — you drop straight in · up to {lineCap}
           </p>

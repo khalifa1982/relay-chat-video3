@@ -469,32 +469,47 @@ describe("the worker's copy is kept current by ONE subscription", () => {
 describe("/api/health says which media transport the fleet is on (v2.105.20)", () => {
   const CORE = read("server/_core/index.ts");
 
-  it("reports the LiveKit gate, so 'am I on the SFU or the mesh?' needs no second browser", () => {
+  it("reports the transport, so 'what am I on?' needs no second browser", () => {
     // It was not answerable before: the flag only reaches a client inside the
     // `registered` signaling frame, so finding out required opening a call. It is the
     // biggest lever on call CPU and latency (the mesh runs N-1 encoders per phone),
     // so it belongs beside `redisBus` and `cluster`.
-    expect(CORE).toMatch(/media: \{ livekit: livekitConfig\(\)\.enabled \}/);
-    expect(CORE).toMatch(/import \{ attachRelay, livekitConfig \} from "\.\.\/relay"/);
+    /* A LITERAL now (v2.106.53), because there is nothing left to read: the mesh is
+       what every call uses. It stays REPORTED rather than being dropped — a health
+       endpoint that stops answering a question is worse than one that answers it
+       plainly, and an operator reading this needs to know the fleet is on the mesh
+       rather than merely that it is not on something else. */
+    expect(CORE).toMatch(/media: \{ mesh: true \}/);
+    expect(CORE).toMatch(/import \{ attachRelay \} from "\.\.\/relay"/);
   });
 
   it("a BOOLEAN only — never the URL, never the key", () => {
     // Same discipline as `redisBus: Boolean(REDIS_URL)`: the health endpoint is
     // unauthenticated, so it may report WHETHER a credential is configured and never
     // any part of it.
-    /* ON STRIPPED CODE. The first cut of this failed on correct code, because the
-       comment I wrote INSIDE the handler names `LIVEKIT_URL` in order to explain what
-       the gate is — text ABOUT a pattern satisfying a search FOR it. The prose-anchor
-       trap, for the third time in this session's two releases. */
+    /* ON STRIPPED CODE. The first cut of this failed on correct code, because a
+       comment INSIDE the handler names an env var in order to explain what the gate
+       is — text ABOUT a pattern satisfying a search FOR it. The prose-anchor trap. */
     const health = CORE.slice(CORE.indexOf('app.get("/api/health"'));
-    const body = codeOnly(health.slice(0, health.indexOf("});")));
-    expect(body).not.toMatch(/LIVEKIT_URL/);
-    expect(body).not.toMatch(/LIVEKIT_API_KEY/);
-    expect(body).not.toMatch(/LIVEKIT_API_SECRET/);
-    expect(body).not.toMatch(/livekitConfig\(\)\.url/);
-    // …and the strip is doing work rather than hiding a defect: the raw slice really
-    // does contain the string, in the comment.
-    expect(health.slice(0, health.indexOf("});"))).toMatch(/LIVEKIT_URL/);
+    const raw = health.slice(0, health.indexOf("});"));
+    const body = codeOnly(raw);
+    /* THE SWEEP IS THE PROPERTY, not a list of names. This endpoint is
+       UNAUTHENTICATED, so no env VALUE may reach the JSON — only a boolean or a
+       comparison derived from one. Written as a sweep over every env read so it
+       covers the variable somebody adds next, which a name list would exempt. */
+    const reads = [...body.matchAll(/process\.env\.([A-Z_]+)/g)];
+    expect(reads.length, "the endpoint does read some env").toBeGreaterThan(0);
+    for (const m of reads) {
+      const around = body.slice(Math.max(0, m.index! - 12), m.index! + m[0].length + 12);
+      expect(around, `${m[1]} must be reduced, not emitted`).toMatch(
+        /Boolean\(process\.env|!!process\.env|process\.env\.[A-Z_]+ ===/,
+      );
+    }
+    // No credential-shaped variable is touched at all, whatever the reduction.
+    expect(body).not.toMatch(/_KEY|_SECRET|_PASS|_TOKEN/);
+    // …and the strip is doing work rather than hiding a defect: the raw slice does
+    // mention a variable name, in prose.
+    expect(raw).toMatch(/REDIS_URL/);
   });
 });
 

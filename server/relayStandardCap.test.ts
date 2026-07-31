@@ -11,8 +11,8 @@ import {
  * cap had coverage (relayPartyLine.test.ts). A conference audit flagged this
  * gap. These fill a real mesh room to the 6-cap and assert the 7th join is
  * refused with error{code:"full"} at BOTH enforcement points (invite + accept),
- * and that the room never exceeds the cap. (LiveKit env is unset in tests, so
- * the cap is the mesh 6.)
+ * and that the room never exceeds the cap. The cap is 6 unconditionally since
+ * v2.106.53 — one transport, one number (`ROOM_MAX`).
  */
 type Sent = Record<string, unknown>;
 class FakeConn {

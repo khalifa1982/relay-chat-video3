@@ -16,9 +16,9 @@
       ~43.7 Mpx/s -> ~5.5 Mpx/s of canvas fill.
    3. "On the conference call, somebody got a line, when he answer and he
       returned back, he disappeared… he keep hearing [him], but his profile is
-      disappeared." onPeerHold restored a placeholder tile only when LiveKit was
-      active, and on the way BACK it only stripped a CSS class — so if the tile
-      had already gone with the peer's transport there was nothing to un-hold.
+      disappeared." onPeerHold restored a placeholder tile only on one transport,
+      and on the way BACK it only stripped a CSS class — so if the tile had
+      already gone with the peer's transport there was nothing to un-hold.
    4. "Don't show it on the main screen as a side banner from up to down. Show it
       only on the notification center on the top… and also on the history."
    ============================================================ */
@@ -118,21 +118,23 @@ describe("3 — a peer who takes another call comes back with a tile", () => {
   });
 
   it("the real tile REPLACES the placeholder on both transports", () => {
-    // Without this, addTile/addLkTile would append a second #tile-<id>.
+    // Without this, addTile would append a second #tile-<id>.
     const addTile = RELAY.slice(RELAY.indexOf("function addTile(id: string"), RELAY.indexOf("function attachRemote"));
     expect(addTile).toMatch(/dropPlaceholderTile\(id\);/);
-    const addLk = RELAY.slice(RELAY.indexOf("function addLkTile(id: string"), RELAY.indexOf("function addLkTile(id: string") + 400);
-    expect(addLk).toMatch(/dropPlaceholderTile\(id\);/);
+    /* There used to be a SECOND tile builder for the SFU path, and it needed the
+       same call; that transport is gone (v2.106.53), so what is worth pinning now is
+       that there is exactly ONE builder — two is how one of them comes to forget. */
+    expect((RELAY.match(/function addTile\(/g) || []).length).toBe(1);
     // And only a placeholder is ever removed by it.
     const drop = RELAY.slice(RELAY.indexOf("function dropPlaceholderTile"), RELAY.indexOf("function dropPlaceholderTile") + 300);
     expect(drop).toMatch(/dataset\.ph === "1"/);
   });
 
-  it("restores the tile on hold on EITHER transport, not just LiveKit", () => {
+  it("restores the tile on hold, whatever the transport", () => {
     const hold = RELAY.slice(RELAY.indexOf("function onPeerHold"), RELAY.indexOf("function onRoleChange"));
     expect(hold).toMatch(/ensurePlaceholderTile\(pin, nm\);/);
-    // The LiveKit-only guard is what left a mesh conference with no tile.
-    expect(hold).not.toMatch(/if \(livekitEnabled && !document\.getElementById/);
+    // A transport-gated guard is what left a mesh conference with no tile at all.
+    expect(hold).not.toMatch(/if \(livekitEnabled/);
   });
 
   it("RESTORES the tile when they come back — the reported symptom", () => {

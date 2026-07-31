@@ -1,7 +1,7 @@
 /* ──────────────────────────────────────────────────────────────────────────
  * Redis event bus for horizontal scale (v2.91).
  *
- * Gated ENTIRELY on REDIS_URL (read per-call, like TURN_* / LIVEKIT_*):
+ * Gated ENTIRELY on REDIS_URL (read per-call, like TURN_*):
  * absent ⇒ every function here is a no-op and RELAY behaves byte-identically
  * to the single-instance builds — that's `.org` on Manus and any `.io` box
  * that hasn't provisioned ElastiCache yet.

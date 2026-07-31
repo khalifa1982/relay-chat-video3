@@ -871,10 +871,15 @@ function Row({ ok, label, detail }: { ok: boolean; label: string; detail?: strin
 /**
  * WHICH MEDIA STACK THE FLEET IS ON (v2.105.22).
  *
- * Owner, while diagnosing "slowness … when the voice and video started together":
- * *"make sure livekit details is already in your system"*. `/api/health` says WHETHER
- * LiveKit is configured; it deliberately does not say WHICH project, because that
- * endpoint is unauthenticated. This screen is `requireAdmin`-gated, so it can.
+ * Owner, while diagnosing "slowness … when the voice and video started together": make
+ * sure the media details are visible in the system. `/api/health` reports the transport
+ * as a bare boolean; this screen is `requireAdmin`-gated, so it can also enumerate the
+ * relays, which is the part an operator has to act on.
+ *
+ * IT LOST A ROW IN v2.106.53 rather than gaining one. It used to name the hosted SFU's
+ * project host, because "configured" is not the same claim as "pointed at the right
+ * project" — and the account behind it is gone, so there is no project to name and no
+ * key to report. What is left is the transport, stated plainly, plus the relays.
  *
  * NOT per-identity: it describes the FLEET, so it renders once at the top rather than
  * inside a searched user's card. It is also the first thing to look at when the
@@ -908,7 +913,7 @@ function MediaCheck() {
       </p>
     );
   }
-  const { livekit: lk, turn } = q.data;
+  const { transport, turn } = q.data;
   return (
     <div
       className="rsheet space-y-2 rounded-[20px] border bg-card p-4"
@@ -916,18 +921,15 @@ function MediaCheck() {
     >
       <h3 className={GOLD_LABEL}>Call media — this fleet</h3>
       <ul className="text-xs">
+        {/* `ok` is TRUE, deliberately: the mesh is the transport this fleet is meant
+            to be on, so drawing it as a fault would make the one row that always
+            renders read as a permanent problem and teach an operator to ignore the
+            card. The DETAIL carries the cost honestly instead. */}
         <Row
-          ok={lk.enabled}
-          label={lk.enabled ? "LiveKit SFU in use" : "WebRTC mesh in use"}
-          detail={
-            lk.enabled
-              ? // The host is the whole point: "configured" is not the same claim as
-                // "pointed at the right project".
-                `${lk.host ?? "host unreadable"}${lk.cloud ? " · LiveKit Cloud" : ""}`
-              : "No LIVEKIT_URL/KEY/SECRET — every phone in an N-party call runs N−1 encoders."
-          }
+          ok
+          label={transport === "mesh" ? "WebRTC mesh in use" : `${transport} in use`}
+          detail="Peer-to-peer — each phone in an N-party call runs N−1 encoders, so 6 is the cap."
         />
-        <Row ok={lk.apiKeySet} label="LiveKit API key set" detail="The value is never shown here." />
         <Row
           ok={turn.turnsTls > 0}
           label={`Relays: ${turn.hosts.length} host${turn.hosts.length === 1 ? "" : "s"}, ${turn.turnsTls} TLS`}

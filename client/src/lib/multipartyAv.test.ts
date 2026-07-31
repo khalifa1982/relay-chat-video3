@@ -30,9 +30,14 @@ describe("mesh — camera-less participants (the '2/6 cameras dead' class)", () 
     expect(SRC).toMatch(/const track = await reacquireCameraForPublish\(\);\s*\n\s*if \(track\) \{\s*\n\s*await replaceVideoEverywhere\(track\);/);
   });
 
-  it("a failed (re)acquire is HONEST on both paths: camera button off + toast, never a fake-on camera", () => {
+  it("a failed (re)acquire is HONEST: camera button off + toast, never a fake-on camera", () => {
+    /* Was `toBe(2)` — one message per transport — and the SFU's copy went with it
+       (v2.106.53). ONE now, and asserted as exactly one rather than at-least-one:
+       two copies of a user-facing message is how they come to disagree. */
     const honest = SRC.match(/Camera unavailable — check that RELAY has camera permission and no other app is using it\./g) || [];
-    expect(honest.length).toBe(2); // mesh setCam branch + SFU syncLivekitVideoPublication
+    expect(honest.length).toBe(1);
+    // …and the button really goes off, rather than the toast being the only signal.
+    expect(SRC).toMatch(/camOn = false;[\s\S]{0,200}Camera unavailable/);
   });
 
   it("the audio-only JOIN fallback reflects on the camera button immediately", () => {
@@ -47,18 +52,15 @@ describe("remote video going quiet shows the AVATAR, never a frozen last frame",
     expect(SRC).toMatch(/v\?\.addEventListener\("resize", sync\);/);
   });
 
-  it("SFU: TrackMuted/TrackUnmuted handlers exist and toggle the placeholder", () => {
-    expect(SRC).toMatch(/RoomEventEnum\.TrackMuted, \(pub: any, participant: any\) => \{[\s\S]*?bindLkPlaceholder\(el, false\);/);
-    expect(SRC).toMatch(/RoomEventEnum\.TrackUnmuted, \(pub: any, participant: any\) => \{[\s\S]*?bindLkPlaceholder\(el, lkHasVideo\(participant\)\);/);
-  });
+  /* EIGHT SFU-PATH TESTS STOOD HERE and went with the transport (v2.106.53). Each
+     described a hazard of a media server we no longer have: track mute/unmute
+     events, adaptiveStream pausing a subscription, screen-share publications, a
+     detached audio element per subscribed track, publish retries. The MESH halves
+     of the same properties — a quiet remote video showing the avatar, an honest
+     failed reacquire, the tap-to-unlock fallback — are asserted above and below.
+     They are recorded here rather than silently dropped so the next transport is
+     written knowing which hazards it inherits. */
 
-  it("SFU: adaptiveStream PAUSES (TrackStreamStateChanged) flip the tile to the avatar and back", () => {
-    expect(SRC).toMatch(/RoomEventEnum\.TrackStreamStateChanged, \(pub: any, state: any, participant: any\) => \{[\s\S]*?if \(String\(state\) === "paused"\) bindLkPlaceholder\(el, false\);/);
-  });
-
-  it("the quiet-video handlers ignore SCREEN-SHARE publications (owned by the share flow)", () => {
-    expect(SRC).toMatch(/const isRemoteCameraVideo = \(pub: unknown\): boolean => \{[\s\S]*?!isScreenPub\(pub\);/);
-  });
 });
 
 describe("signaling reliability at multi-party scale", () => {
@@ -77,20 +79,11 @@ describe("the 'one participant muted / distorted' class", () => {
     expect(SRC).toMatch(/toast\("Microphone reconnected\."\);/);
   });
 
-  it("SFU inbound audio arms the one-tap unlock on EVERY platform (autoplay rejection = silent participant)", () => {
-    expect(SRC).toMatch(/void \(audioEl as HTMLMediaElement\)\.play\?\.\(\)\.catch\(\(\) => armAudioUnlock\(\)\);/);
-    expect(SRC).toMatch(/AudioPlaybackStatusChanged[\s\S]{0,300}canPlaybackAudio === false\) armAudioUnlock\(\);/);
-  });
-
   it("Web-Audio taps use FRESH wrapper streams so loudspeaker + analyser never fight over one stream (the loser fell back to the earpiece = one quiet voice)", () => {
     const wraps = SRC.match(/createMediaStreamSource\(new MediaStream\(stream\.getAudioTracks\(\)\)\)/g) || [];
     expect(wraps.length).toBe(2); // loudspeaker route + mesh analyser
   });
 
-  it("SFU publish failures are no longer silent: retried once, then reported honestly", () => {
-    expect(SRC).toMatch(/const publishSafe = async \(t: MediaStreamTrack, what: "camera" \| "microphone"\)/);
-    expect(SRC).toMatch(/Couldn't send your microphone — others may not hear you\./);
-  });
 });
 
 describe("publication hygiene", () => {
@@ -98,17 +91,6 @@ describe("publication hygiene", () => {
     expect(SRC).toMatch(/await replaceVideoEverywhere\(camOn \? currentCameraVideoTrack\(\) : null\);/);
   });
 
-  it("a fresh SFU publish from replaceVideoEverywhere requires camera-on or an active screen share", () => {
-    expect(SRC).toMatch(/if \(!swapped && \(camOn \|\| screenSharing\)\) await lp\.publishTrack\(track\);/);
-  });
-
-  it("adaptiveStream keeps flowing in the background (frozen auto-PiP fix) while size-based adaptation stays on", () => {
-    expect(SRC).toMatch(/adaptiveStream: \{ pauseVideoInBackground: false \}/);
-  });
-
-  it("unsubscribed Android audio elements are removed from the DOM (no per-call leak)", () => {
-    expect(SRC).toMatch(/try \{ d\.remove\(\); \} catch \{ \/\* not in the DOM — fine \*\/ \}/);
-  });
 });
 
 describe("second-wave audit fixes (finders re-reviewed the fresh code)", () => {

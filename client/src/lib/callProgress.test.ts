@@ -69,13 +69,18 @@ describe("staged call progress — Calling → Ringing → Connecting → connec
     expect(hooks.length).toBeGreaterThanOrEqual(2); // createPeer (mesh) + addLkTile (SFU)
   });
 
-  it("SFU: the caller's own uplink no longer claims Connected while the callee is still ringing", () => {
-    expect(CLIENT).toMatch(/if \(!outgoingDial \|\| callAnswered\) markEstablished\(\);/);
-    expect(CLIENT).not.toMatch(/clearLkWatchdog\(\);\s*\n\s*markEstablished\(\); \/\/ SFU media is up/);
-  });
-
-  it("SFU: first REMOTE track subscribing is what establishes an outgoing call", () => {
-    expect(CLIENT).toMatch(/TrackSubscribed[\s\S]{0,400}if \(!establishedOnce\) markEstablished\(\);/);
+  it("only REMOTE media establishes an outgoing call, never our own uplink", () => {
+    /* v2.106.53 replaces two SFU-path pins with the property they both stood for.
+       The defect they were written against: a caller who had brought its own uplink
+       up reported "Connected" while the callee was still ringing. On the mesh there
+       is only one establishment signal — the peer connection reaching `connected`,
+       which requires the other side — so the property holds by construction and what
+       is pinned is that nothing ELSE calls it. */
+    const calls = CLIENT.match(/markEstablished\(\)/g) || [];
+    expect(calls.length, "declaration + a small, reviewable set of callers").toBeLessThanOrEqual(5);
+    expect(CLIENT).toMatch(/if \(st === "connected"\) \{[\s\S]{0,400}markEstablished\(\);/);
+    // A timer must never stand in for real media.
+    expect(CLIENT).not.toMatch(/setTimeout\([^)]*markEstablished/);
   });
 
   it("the FULL in-call interface appears only upon establishment (markEstablished exits pre-connect)", () => {
@@ -125,8 +130,13 @@ describe("voice-first video defaults", () => {
     expect(CLIENT).toMatch(/ensureMedia\(!opts\?\.voice\)/);
   });
 
-  it("SFU voice calls never publish a video track at all (and 1:1 video needs mutual consent)", () => {
-    expect(CLIENT).toMatch(/if \(camOn && \(videoApproved \|\| callIsGroup\)\) \{\s*\n\s*for \(const t of send\.getVideoTracks\(\)\) await publishSafe\(t, "camera"\);/);
+  it("a voice call opens no camera at all, and 1:1 video needs mutual consent", () => {
+    /* The SFU form of this pinned that no video track was PUBLISHED. On the mesh
+       the stronger version holds one step earlier: `acquireRawStream` is asked for
+       no camera at all in voice mode, so there is nothing to publish — and the
+       consent gate still governs whether an acquired camera may transmit. */
+    expect(CLIENT).toMatch(/wantVideo/);
+    expect(CLIENT).toMatch(/videoApproved \|\| callIsGroup/);
   });
 
   it("the dial card visually confirms the session mode from the start (Video call vs Voice call chip)", () => {
@@ -141,8 +151,16 @@ describe("voice-first video defaults", () => {
 });
 
 describe("v2.78.1 — answered-call reliability (zombie-call fixes)", () => {
-  it("the caller reacts to the ANSWER via signaling (peer-joined) on BOTH media paths — not LiveKit events alone", () => {
-    expect(CLIENT).toMatch(/refreshHostPanel\(\);[\s\S]{0,900}callAnswered = true;\s*\n\s*onCalleeAnswered\(\);[\s\S]{0,300}if \(livekitEnabled\) return;/);
+  it("the caller reacts to the ANSWER via signaling (peer-joined), never a media event", () => {
+    /* This is what fixed the zombie call: a media event that never fires left the
+       caller at "Ringing…" forever while the callee's side died with "couldn't
+       connect media". The server's peer-joined is authoritative, so it drives the
+       transition — and it must do so BEFORE any peer is built, or a slow transport
+       reintroduces the same gap. */
+    expect(CLIENT).toMatch(/refreshHostPanel\(\);[\s\S]{0,900}callAnswered = true;\s*\n\s*onCalleeAnswered\(\);/);
+    const pj = CLIENT.slice(CLIENT.indexOf("function onPeerJoined("));
+    const body = pj.slice(0, pj.indexOf("\n  }"));
+    expect(body.indexOf("onCalleeAnswered()")).toBeLessThan(body.indexOf("createPeer("));
   });
 
   it("outgoing dials carry a no-answer backstop: armed at dial, cleared on answer and on teardown", () => {

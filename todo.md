@@ -11278,6 +11278,67 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.53 — the hosted SFU is deleted (2026-07-31)
+
+Owner, stated twice: *"Remove completely … I cancel my account … I will only rely on media soup, which
+is on my servers."* Cancelled infrastructure, so the code is DELETED rather than disabled.
+
+- [x] **This was behaviour-neutral by construction, which is what made a 1,400-line removal from the
+      call path safe in one commit.** v2.106.52 had already made the config function return
+      `{enabled:false}` unconditionally, reading no env var — so every branch deleted here was
+      ALREADY unreachable on every deploy. Nothing about how a call behaves changes.
+- [x] **Removed**: 19 functions and all their state from `relayClient.ts` (−1,211 lines), the config
+      reader / token mint / device-addressed token push (11 call sites) / 26 wire fields / the
+      `refresh-livekit` case from `relay.ts` (−273), the transport tier from `voipRegistry.ts`,
+      the `/api/health` field, the admin diagnostics half, the markup + CSS, and both npm packages.
+      Source sweep for the name across `client/src server shared voip-node scripts` returns NOTHING,
+      and nothing matches in `package.json`, the lockfile, `.github/` or `ecosystem.config.cjs`.
+- [x] **RECORDING WENT WITH IT, and that is a real loss stated rather than buried.** `recording.ts`
+      was Egress in its entirety — its own header said recording *requires* the SFU — so the module,
+      its test, `reg.recordings`, both signaling cases, the in-call Record chip and the ● REC badge
+      are all gone. Re-adding it means a mediasoup recording path, which is different work.
+- [x] **THE LADDER LOST ITS MIDDLE RUNG, so the mesh cap is now the real ceiling.**
+      `mediasoup → mesh`. Four copies of `enabled ? 10 : 6` in `relay.ts` collapse into one exported
+      `ROOM_MAX = 6`, and the client keeps `transportMax()` as a FUNCTION rather than a bare constant
+      because every reader — the group picker, the invite guard, `maxParticipants()` — has to agree
+      with the number the user was shown, and three copies of that ternary had to be consolidated
+      once already.
+- [x] **A hydrated room record naming the retired transport reads as MESH, never as the surviving
+      SFU.** All we know from such a record is that the room is not on one of our own nodes, and the
+      mesh is the transport that needs no server to be true.
+- [x] **`establishingLabel()` stays a function though it now has one branch**, with the reason
+      recorded in place: the label WAS a false claim (a caller already in an SFU room was told
+      "Securing connection…"), so whichever transport comes next must be able to say something truer
+      rather than inherit a sentence about a phase it is not in.
+- [x] **VERIFIED BY DRIVING REAL TWO-BROWSER CALLS against the built server**, not by reading:
+      voice — RTP both ways, `connectionState: connected` on both sides, and inbound
+      `totalAudioEnergy` **3.346 / 3.291 and still rising**, so v2.106.51's playout fix still holds;
+      video — energy **3.278 / 3.255** plus 513 pkts / 227 frames and 474 pkts / 230 frames inbound.
+      Zero page errors on either.
+- [x] **The mesh needs no counterpart to the SFU's tile-removal hold guard**, recorded in the test
+      rather than left looking like a gap: a hold FREEZES media and keeps the peer connection, and
+      both grace-timeout removals are gated on a peer whose media never arrived, so a holder is never
+      removed.
+- [x] **`mobile/native` IS NOT TOUCHED, deliberately, and the reasons matter**: it is a separate
+      package no test or typecheck here covers, it is built by codemagic (which I must not touch),
+      its SFU branch is ALREADY unreachable because the server no longer sends the flag, and
+      `@livekit/react-native-webrtc` is the MESH's own WebRTC binding — so "remove completely" cannot
+      be literally satisfied in that directory anyway. Offered as its own commit.
+- [x] **My own tooling cost two rounds and both are worth recording.** A brace-matching deleter took
+      a function's RETURN TYPE as its body and left a 15-line residue that broke the parse — the
+      `fnBody` trap this file records at v2.105.9 / v2.105.27 / v2.106.4, for the fourth time; and a
+      `not.toMatch` for the retired cap ternary matched MY OWN COMMENT quoting it, so it is asserted
+      on comment-stripped source. Four more of my new assertions were simply wrong about the code
+      (wrong constant name, wrong import name, a slice whose end preceded its start — caught only by
+      its own non-empty guard, and a deadline pin asserting a flag the function does not read; that
+      one is now stronger, asserting both halves of the real hand-over).
+- [x] **One sweep of mine flagged CORRECT code and was tightened rather than relaxed**: a ban on env
+      reads in `/api/health` flagged the legitimate `Boolean(process.env.REDIS_URL)`, so it now
+      requires every env read there to be REDUCED to a boolean and bans credential-shaped names —
+      which covers the variable somebody adds next.
+- [x] `pnpm verify` EXIT=0 — 276 files, 4879 passed / 1 skipped. No schema change, no new dependency,
+      two removed, no new env var.
+
 ## v2.106.52 — LiveKit retired; the ring drops to 257ms (2026-07-31)
 
 Owner cancelled the LiveKit subscription and APIs: *"remove it completely, and I need the ring in one

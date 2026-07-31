@@ -233,53 +233,27 @@ describe("the token addressing itself, pinned in source because behaviour cannot
     return body;
   }
 
-  it("pushLivekitToken sends to its `socket` parameter and never to a registry lookup", () => {
-    const body = fnBody("function pushLivekitToken(");
-    expect(body).toMatch(/safeSend\(socket, \{ type: "livekit-token"/);
-    // The defect: resolving the destination from the registry at send time.
-    expect(body).not.toMatch(/safeSend\(c\.socket/);
-    expect(body).not.toMatch(/safeSend\(client\.socket/);
-    expect(body).not.toMatch(/safeSend\(reg\.clients/);
-  });
+  it("nothing pushes a per-device media credential any more", () => {
+    /* THE FOUR TESTS THIS REPLACES pinned the ADDRESSING of an SFU join token: it
+       used to be sent to `reg.clients.get(pin).socket` — the NUMBER's primary —
+       while every call site sat directly after a `safeSend(<a specific socket>, …)`.
+       A number can hold several devices and `reg.clients` holds exactly one, so a
+       call placed from a non-primary device had its token delivered elsewhere:
+       total, deterministic media failure while ring, accept and roster all
+       succeeded.
 
-  it("the socket is REQUIRED, so a forgotten site is a compile error not a dead call", () => {
-    expect(code).toMatch(
-      /function pushLivekitToken\(\s*reg: RelayRegistry,\s*pin: string,\s*roomId: string,\s*socket: RelaySocket,?\s*\)/,
-    );
-    // A default would silently preserve the bug at any site somebody forgets, so
-    // the ban is scoped to THIS signature (an unrelated `const socket: RelaySocket
-    // = {` legitimately exists elsewhere in the file).
-    const sig = code.slice(code.indexOf("function pushLivekitToken("));
-    const upTo = sig.slice(0, sig.indexOf(")") + 1);
-    expect(upTo).not.toMatch(/socket: RelaySocket\s*=/);
-    expect(upTo).not.toMatch(/socket\?: RelaySocket/);
-  });
-
-  it("EVERY call site names a socket — the count is the guard against a twelfth", () => {
-    const calls = code.match(/pushLivekitToken\(reg,[^)]*\)/g) || [];
-    expect(calls.length).toBeGreaterThanOrEqual(11);
-    for (const c of calls) {
-      // reg, pin, room, socket — four arguments, so three commas.
-      expect((c.match(/,/g) || []).length, `must name a socket: ${c}`).toBe(3);
-      expect(c, `the 4th argument must be a socket: ${c}`).toMatch(/[Ss]ocket\)$/);
-    }
-  });
-
-  it("no call site re-derives its socket from the registry, INCLUDING via `self`", () => {
-    const calls = code.match(/pushLivekitToken\(reg,[^)]*\)/g) || [];
-    for (const c of calls) {
-      expect(c, `a registry lookup defeats the point: ${c}`).not.toMatch(/reg\.clients/);
-      // `self` IS `reg.clients.get(conn.pin)` — the same primary record under
-      // another name, and the whole defect is that it can be a DIFFERENT device
-      // from the connection we are answering. Found because a mutation swapping
-      // `conn.socket` for `self.socket` in refresh-livekit SURVIVED the
-      // behavioural tests: by then the dial has promoted this device to primary,
-      // so the two are the same object and no behaviour can separate them.
-      expect(c, `\`self\` is the primary record, not this connection: ${c}`).not.toMatch(/self\.socket/);
-    }
-    // `pc.socket` IS registry-derived and is CORRECT: that one is the merge
-    // fan-out to OTHER members, where their primary is the only answer we have.
-    expect(code).toMatch(/pushLivekitToken\(reg, p, activeRid, pc\.socket\)/);
+       The token is gone with the hosted SFU (v2.106.53), so the addressing bug
+       cannot recur in that shape. What CAN recur is the shape itself — a new
+       per-device credential pushed to a number rather than to a socket — so this
+       asserts the absence rather than being deleted, and the promotion tests below
+       stay because they are a MESH concern: `signal` still routes through
+       `reg.clients.get(to)`. */
+    expect(code).not.toMatch(/pushLivekitToken/);
+    expect(code).not.toMatch(/mintLivekitToken/);
+    expect(code).not.toMatch(/type: "livekit-token"/);
+    // No frame carries a token or a media-server URL to a device at all.
+    expect(code).not.toMatch(/\btoken\b\s*[,:]/);
+    expect(code).not.toMatch(/livekitUrl/);
   });
 
   it("claimPrimaryForCall yields to a primary that is mid-call, and bumps no epoch", () => {

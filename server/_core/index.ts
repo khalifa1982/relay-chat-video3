@@ -11,7 +11,7 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./static";
-import { attachRelay, livekitConfig } from "../relay";
+import { attachRelay } from "../relay";
 import { registerV2Upload, uploadRateGate } from "../v2upload";
 import { registerV2Events, publishToIdentity, publishPresenceTo } from "../v2events";
 import { registerV2Offline } from "../v2offline";
@@ -542,19 +542,23 @@ async function startServer() {
       /**
        * WHICH MEDIA TRANSPORT THE FLEET IS ACTUALLY USING (v2.105.20).
        *
-       * Added because it was NOT ANSWERABLE without opening a call. `livekit` is
-       * gated on LIVEKIT_URL + LIVEKIT_API_KEY + LIVEKIT_API_SECRET, none of which
-       * appear in `ecosystem.config.cjs` or any workflow — so unless an operator
-       * pasted all three into `/home/relay/.env`, calls run the WebRTC MESH, where
-       * every phone in an N-party call runs N-1 encoders and N-1 decoders. That is
-       * the single biggest lever on call CPU, heat and latency (v2.99.84 measured
-       * it), and "is the SFU even on?" should not require a second browser to find
-       * out.
+       * Added because it was NOT ANSWERABLE without opening a call, and the answer
+       * matters: on the WebRTC mesh every phone in an N-party call runs N-1
+       * encoders and N-1 decoders, which v2.99.84 measured as the single biggest
+       * lever on call CPU, heat and latency.
        *
-       * A BOOLEAN, never the URL and never the key — the same discipline as
-       * `redisBus: Boolean(REDIS_URL)` above. `false` here means mesh.
+       * `mesh` IS NOW UNCONDITIONALLY TRUE (v2.106.53) and stays reported rather
+       * than being dropped, because a health endpoint that stops answering a
+       * question is worse than one that answers it plainly: an operator reading
+       * this needs to know the fleet is on the mesh, not merely that it is not on
+       * something else. `mediasoup` will join it here when a room can be pinned to
+       * one of our own nodes; until then it is honestly absent rather than false,
+       * since a `false` would imply the wiring exists and is off.
+       *
+       * BOOLEANS ONLY, never a URL and never a key — the same discipline as
+       * `redisBus: Boolean(REDIS_URL)` above.
        */
-      media: { livekit: livekitConfig().enabled },
+      media: { mesh: true },
     });
   });
   // v2.0 attachment upload (multipart-friendly JSON body)

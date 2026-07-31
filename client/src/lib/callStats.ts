@@ -10,22 +10,22 @@
  * vendor on that basis would have been a guess.
  *
  * THE ONE NUMBER THAT MATTERS MOST IS `path`. If the selected ICE candidate pair
- * is a RELAY pair, media is going out to coturn and back instead of to the SFU
- * directly — which roughly doubles the round trip and is a CONFIGURATION problem no
- * vendor change fixes. `relay` therefore has to be visible, not inferred.
+ * is a RELAY pair, media is going out to coturn and back instead of straight to the
+ * other side — which roughly doubles the round trip and is a CONFIGURATION problem no
+ * change of transport fixes. `relay` therefore has to be visible, not inferred.
  *
  * PURE CORE, INJECTED COLLECTION. `summarizeStats` takes reports and returns a
- * record; it touches no RTCPeerConnection, no LiveKit room and no clock. That is
+ * record; it touches no RTCPeerConnection, no SFU room and no clock. That is
  * what makes the arithmetic — seconds→ms, loss as a ratio of the right
  * denominator, bitrate as a DELTA — testable without a browser, which matters
  * because every one of those is easy to get subtly wrong and impossible to notice
  * by looking at a number on a screen.
  *
- * ONE SHAPE FOR BOTH TRANSPORTS, deliberately: the mesh exposes
- * `RTCPeerConnection.getStats()` per peer and LiveKit exposes
- * `Track.getRTCStatsReport()` per track, so the collectors differ and the summary
- * must not — otherwise the two paths cannot be compared, which is the entire point
- * of measuring before switching vendors.
+ * ONE SHAPE FOR EVERY TRANSPORT, deliberately: the mesh exposes
+ * `RTCPeerConnection.getStats()` per peer while an SFU exposes its own per-track
+ * report, so the collectors differ and the summary must not — otherwise the two
+ * paths cannot be compared, which is the entire point of measuring before moving a
+ * call onto a different transport.
  */
 
 /** A single stats entry, narrowed to the fields we read. Deliberately loose: the

@@ -378,7 +378,7 @@ describe("the wire details that must not drift", () => {
   });
 
   it("the secret is read per call, so a fleet can be configured without a restart", () => {
-    /* The `iceServers()` / `livekitConfig()` pattern. Captured at module load it would need
+    /* The `iceServers()` pattern — env read PER CALL. Captured at module load it would need
        a deploy to turn mediasoup on, and a test could not change it between cases. */
     delete process.env.VOIP_NODE_SECRET;
     expect(voipNodeSecret()).toBe("");
@@ -534,7 +534,7 @@ describe("an unhealthy node is set aside so the call can go elsewhere", () => {
 
   it("IT MAY EXCLUDE EVERY NODE — the CALL fails open, not the SFU", () => {
     /* Deliberately no "never exclude the last one" rule. If both nodes really are refusing,
-       the right answer is LiveKit or the mesh, and protecting the fleet's membership here
+       the right answer is the mesh, and protecting the fleet's membership here
        would keep routing calls into a fleet that cannot carry them. */
     const store = fresh();
     recordNodeOutcome("i-a", { ok: false, reason: "unauthorized" }, { nowMs: NOW, store });
@@ -612,10 +612,9 @@ describe("an unhealthy node is set aside so the call can go elsewhere", () => {
     const plan = planRoomTransport({
       nodes: [NODE],
       nowMs: NOW,
-      livekitEnabled: true,
       excludeInstanceIds: excluded,
     });
-    expect(plan.transport, "a refusing node must not keep taking rooms").toBe("livekit");
+    expect(plan.transport, "a refusing node must not keep taking rooms").toBe("mesh");
     expect(plan.voip).toBeNull();
   });
 });

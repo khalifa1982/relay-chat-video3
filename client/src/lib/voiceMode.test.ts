@@ -156,8 +156,6 @@ describe("voice mode acquires NO camera", () => {
     expect(unlock).toMatch(/if \(!camOn\) setCam\(true\)/);
     const setCam = fnBody(CODE, "function setCam(on: boolean)");
     expect(setCam).toMatch(/reacquireCameraForPublish\(\)/);
-    const sync = fnBody(CODE, "async function syncLivekitVideoPublication(enabled: boolean)");
-    expect(sync).toMatch(/reacquireCameraForPublish\(\)/);
     // …and reacquire builds the fresh stream from the EXISTING audio tracks, so
     // it needs no camera to have been open at join time.
     const re = fnBody(CODE, "async function reacquireCameraForPublish()");

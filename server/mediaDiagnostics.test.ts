@@ -1,11 +1,14 @@
 /* ──────────────────────────────────────────────────────────────────────────
  * v2.105.22 — the admin panel says which media stack the fleet is on.
  *
- * Owner, mid-diagnosis: *"make sure livekit details is already in your system"*.
- * `/api/health` already answers WHETHER LiveKit is configured (v2.105.20) as a bare
- * boolean, but it cannot say WHICH project — and "the credentials are set" is not the
- * same claim as "they are the right ones". Until now the only way to find out was to
- * open a call and read `livekitUrl` out of the `registered` frame in devtools.
+ * Owner, mid-diagnosis: make sure the media details are visible in the system.
+ * `/api/health` reports the transport as a bare boolean; this screen is admin-gated,
+ * so it can also enumerate the RELAYS, which is the half an operator has to act on.
+ *
+ * IT LOST A ROW IN v2.106.53 rather than gaining one: it used to name the hosted
+ * SFU's project host, because "the credentials are set" is not the same claim as
+ * "pointed at the right project" — and that account is gone, so there is no project
+ * to name and no key to report.
  *
  * THE WHOLE POINT OF THESE TESTS IS THE SECOND HALF: a screen that reports config is
  * one small mistake away from reporting a CREDENTIAL. So the assertions below are
@@ -38,7 +41,7 @@ describe("it is admin-gated, before anything is read", () => {
     // the cached whoami role, which has been through a browser (v2.99.76).
     expect(PROC).toMatch(/await requireAdmin\(ctx\);/);
     const gate = PROC.indexOf("requireAdmin");
-    const read1 = PROC.indexOf("livekitConfig()");
+    const read1 = PROC.indexOf("iceServers(");
     expect(gate).toBeGreaterThan(-1);
     expect(read1).toBeGreaterThan(gate);
   });
@@ -56,17 +59,15 @@ describe("it is admin-gated, before anything is read", () => {
 describe("it can NEVER return a credential — the load-bearing half", () => {
   const code = codeOnly(PROC);
 
-  it("never reads the LiveKit API SECRET at all", () => {
-    // The secret is the one value that would let a reader mint join tokens for the
-    // project. It is not reported, not compared, not touched.
-    expect(code).not.toMatch(/LIVEKIT_API_SECRET/);
-  });
-
-  it("reports the API key as a BOOLEAN, never its value", () => {
-    expect(code).toMatch(/apiKeySet: !!process\.env\.LIVEKIT_API_KEY/);
-    // …and nothing else does anything with it. `!!x` is the only permitted use.
-    const uses = code.match(/LIVEKIT_API_KEY/g) || [];
-    expect(uses.length).toBe(1);
+  it("reads no media-server credential at all — there is no longer one to read", () => {
+    /* v2.106.53: the hosted SFU is retired, so this reports the transport as a
+       literal and touches nothing secret on that side. The pin stays as a SWEEP
+       rather than being deleted, because the dangerous regression is a NEW
+       credential being surfaced here — this endpoint's whole risk is that a
+       config screen is one careless line from printing a secret. */
+    expect(code).not.toMatch(/LIVEKIT/);
+    expect(code).not.toMatch(/API_SECRET/);
+    expect(code).not.toMatch(/apiKey/i);
   });
 
   it("reports the TURN secret as a boolean too", () => {
@@ -83,30 +84,26 @@ describe("it can NEVER return a credential — the load-bearing half", () => {
     expect(code).not.toMatch(/\.username\b/);
   });
 
-  it("returns the HOST only — no scheme, path or query", () => {
-    // `new URL(...).host`, not a slice: a URL with a port or a path would otherwise
-    // be mis-reported as a hostname, and a malformed value must yield null rather
-    // than a confident wrong answer.
-    expect(code).toMatch(/new URL\(lk\.url\)\.host \|\| null/);
-    expect(code).toMatch(/livekitHost = null;/); // the catch
-    expect(code).not.toMatch(/host: lk\.url/);
-  });
 });
 
 describe("what it reports", () => {
-  it("whether the SFU is in use at all — false meaning the mesh", () => {
-    expect(PROC).toMatch(/enabled: lk\.enabled/);
-    expect(PANEL).toMatch(/lk\.enabled \? "LiveKit SFU in use" : "WebRTC mesh in use"/);
-    // The mesh case explains its own cost, because that is the number that matters:
-    // N−1 encoders per phone is the biggest lever on call CPU and latency.
+  it("which transport every call is on", () => {
+    expect(PROC).toMatch(/transport: "mesh" as const/);
+    expect(PANEL).toMatch(/transport === "mesh" \? "WebRTC mesh in use"/);
+    // It explains its own cost, because that is the number that matters: N−1
+    // encoders per phone is the biggest lever on call CPU and latency, and it is
+    // also why the cap is 6.
     expect(PANEL).toMatch(/N−1 encoders/);
   });
 
-  it("the host, which is the entire reason this exists", () => {
-    // "Configured" is not the same claim as "pointed at the right project", and only
-    // the host distinguishes them.
-    expect(PROC).toMatch(/host: livekitHost/);
-    expect(PANEL).toMatch(/lk\.host \?\? "host unreadable"/);
+  it("the transport row is not drawn as a fault", () => {
+    /* It renders on EVERY load, so an `ok={false}` there would make the card read
+       as a permanent problem and teach an operator to ignore it. The honest cost
+       goes in the detail line instead. */
+    const row = PANEL.slice(PANEL.indexOf("<ul className=\"text-xs\">"));
+    const first = row.slice(0, row.indexOf("<Row", row.indexOf("<Row") + 4));
+    expect(first).toMatch(/\bok\b/);
+    expect(first).not.toMatch(/ok=\{false\}/);
   });
 
   it("the relay list as clients are actually TOLD it, not a re-derivation", () => {
@@ -133,16 +130,12 @@ describe("it degrades rather than misleads", () => {
     expect(PANEL).toMatch(/if \(!q\.data\)/);
   });
 
-  it("an unreadable URL yields null, and the panel says so rather than showing blank", () => {
-    expect(PANEL).toMatch(/host unreadable/);
-  });
-
   it("no TURN at all is called out, because it is a real gap and not a neutral zero", () => {
     expect(PANEL).toMatch(/No TURN advertised/);
   });
 
-  it("every read is individually guarded, so one bad value cannot 500 the page", () => {
-    expect((PROC.match(/catch/g) || []).length).toBeGreaterThanOrEqual(2);
+  it("the relay read is guarded, so one bad value cannot 500 the page", () => {
+    expect((PROC.match(/catch/g) || []).length).toBeGreaterThanOrEqual(1);
   });
 });
 

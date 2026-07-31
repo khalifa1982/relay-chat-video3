@@ -21,12 +21,6 @@
 
 import crypto from "crypto";
 import type { Request, Response, Express } from "express";
-import { AccessToken, type VideoGrant } from "livekit-server-sdk";
-import {
-  recordingConfig,
-  startRoomRecording,
-  stopRoomRecording,
-} from "./recording";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
 import { createContext } from "./_core/context";
 
@@ -196,13 +190,6 @@ export interface RelayConnection {
   pin: string | null;   // assigned 6-digit number after `register`
 }
 
-export interface RoomRecording {
-  egressId: string;
-  by: string;   // pin that started it
-  key: string;  // S3 object key
-  startedAt: number;
-}
-
 /**
  * Lifetime metadata for a room, accumulated so we can write a CONFERENCE
  * HISTORY row when the room ends. `roster` keeps EVERYONE who was ever in the
@@ -309,7 +296,6 @@ export interface RelayRegistry {
   rooms: Map<string, Set<string>>;            // rid   -> set<pin>
   connections: Map<string, RelayConnection>;  // cid   -> connection
   cidToPin: Map<string, string>;              // cid   -> last assigned pin
-  recordings: Map<string, RoomRecording>;     // rid   -> active recording
   /**
    * Multi-device ring (feature-flagged): every LIVE device socket per number,
    * keyed pin -> cid -> socket. Always maintained (cheap bookkeeping); only
@@ -366,7 +352,6 @@ export function createRegistry(): RelayRegistry {
     rooms: new Map(),
     connections: new Map(),
     cidToPin: new Map(),
-    recordings: new Map(),
     devices: new Map(),
     pinRoom: new Map(),
     heldRoom: new Map(),
@@ -565,11 +550,6 @@ function reapRoom(reg: RelayRegistry, roomId: string) {
     });
     reg.rooms.delete(roomId);
   }
-  const rec = reg.recordings.get(roomId);
-  if (rec) {
-    reg.recordings.delete(roomId);
-    if (rec.egressId) stopRoomRecording(rec.egressId).catch(() => { /* best-effort */ });
-  }
 }
 
 /** If a room has no connected members, arm the abandonment reaper. */
@@ -587,9 +567,8 @@ function maybeScheduleRoomReap(reg: RelayRegistry, roomId: string) {
 /**
  * If `pin` is still a member of an active call, hand the (re)connecting client a
  * `rejoin` so it re-enters the call WITHOUT a fresh invite: cancel the room's
- * abandonment timer, restore the live roomId, send the current member list, and
- * (SFU) mint a fresh join token. Forward declarations `livekitConfig`,
- * `iceServers`, `pushLivekitToken` are defined below in the same module.
+ * abandonment timer, restore the live roomId and send the current member list.
+ * `iceServers` is declared below in the same module.
  */
 function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string) {
   const rid = reg.pinRoom.get(pin);
@@ -628,7 +607,6 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
       if (t0) { clearTimeout(t0); reg.roomReapT.delete(rid); }
       const cs = reg.clients.get(pin);
       if (cs) cs.roomId = rid;
-      const lk0 = livekitConfig();
       safeSend(socket, {
         type: "rejoin",
         roomId: rid,
@@ -638,10 +616,7 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
         selfRole: roleOf(rmeta, pin),
         hostPin: rmeta?.hostPin ?? null,
         iceServers: iceServers(pin),
-        livekit: lk0.enabled,
-        livekitUrl: lk0.url,
       });
-      pushLivekitToken(reg, pin, rid, socket);
       return;
     }
     // ALONE (stale solo dial room) or only ghosts left. Don't drop the user
@@ -654,7 +629,6 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
   if (t) { clearTimeout(t); reg.roomReapT.delete(rid); }
   const cself = reg.clients.get(pin);
   if (cself) cself.roomId = rid;
-  const lk = livekitConfig();
   safeSend(socket, {
     type: "rejoin",
     roomId: rid,
@@ -666,10 +640,7 @@ function sendRejoinIfInRoom(reg: RelayRegistry, socket: RelaySocket, pin: string
     selfRole: roleOf(rmeta, pin),
     hostPin: rmeta?.hostPin ?? null,
     iceServers: iceServers(pin),
-    livekit: lk.enabled,
-    livekitUrl: lk.url,
   });
-  pushLivekitToken(reg, pin, rid, socket);
 }
 
 /**
@@ -685,7 +656,7 @@ function admitToRoom(reg: RelayRegistry, pin: string, roomId: string): void {
   const room = reg.rooms.get(roomId);
   const meta = reg.roomMeta.get(roomId);
   if (!joiner || !room || !meta) return;
-  const cap = livekitConfig().enabled ? 10 : 6;
+  const cap = ROOM_MAX;
   if (room.size >= cap && !room.has(pin)) {
     safeSend(joiner.socket, { type: "knock-result", to: "", ok: false, reason: "full" });
     return;
@@ -699,8 +670,6 @@ function admitToRoom(reg: RelayRegistry, pin: string, roomId: string): void {
   joiner.roomId = roomId;
   meta.roster.set(pin, joiner.name);
   meta.lastActiveAt = Date.now();
-  const lk = livekitConfig();
-  pushLivekitToken(reg, pin, roomId, joiner.socket);
   safeSend(joiner.socket, {
     type: "joined",
     roomId,
@@ -709,11 +678,7 @@ function admitToRoom(reg: RelayRegistry, pin: string, roomId: string): void {
     selfRole: roleOf(meta, pin),
     hostPin: meta.hostPin ?? null,
     iceServers: iceServers(pin),
-    livekit: lk.enabled,
-    livekitUrl: lk.url,
   });
-  const activeRec = reg.recordings.get(roomId);
-  if (activeRec) safeSend(joiner.socket, { type: "recording", on: true, by: activeRec.by });
   members.forEach(m => {
     const o = reg.clients.get(m.pin);
     if (o) {
@@ -725,8 +690,6 @@ function admitToRoom(reg: RelayRegistry, pin: string, roomId: string): void {
         flag: joiner.flag,
         role: roleOf(meta, pin),
         iceServers: iceServers(m.pin),
-        livekit: lk.enabled,
-        livekitUrl: lk.url,
       });
     }
   });
@@ -946,62 +909,21 @@ export function iceServers(userId: string, ttlSecOverride?: number): IceServer[]
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
- * LiveKit SFU (optional, feature-gated like TURN). When LIVEKIT_URL +
- * LIVEKIT_API_KEY + LIVEKIT_API_SECRET are all set, call MEDIA is routed through
- * the LiveKit SFU (10-way, recording-capable) instead of the WebRTC mesh. The
- * SSE relay below stays the "phone" (presence + ring/accept/leave + roomId);
- * LiveKit only replaces the per-peer RTCPeerConnection mesh. When unset, the
- * mesh runs unchanged. Env is read per-call so creds can be added via Manus
- * Secrets without a restart (same pattern as iceServers()).
+ * THE PARTICIPANT CAP.
+ *
+ * Every call runs on the WebRTC mesh, so this is one number rather than a
+ * per-transport choice. It was `sfuEnabled ? 10 : 6` until v2.106.53, when the
+ * hosted SFU it named was retired; the mesh number is what the whole ladder
+ * degrades to and therefore the only cap the signaling layer can promise.
+ *
+ * SIX, and it is a measurement rather than a preference: on the mesh each phone
+ * runs N-1 encoders and N-1 decoders, which v2.99.84 measured as the single
+ * biggest lever on call CPU and heat. `transportCap()` in voipRegistry.ts holds
+ * the same 6 for the mesh and the higher number for a room pinned to one of our
+ * own mediasoup nodes; when that path reaches this file, this is where it reads
+ * from rather than a second copy of the arithmetic.
  * ────────────────────────────────────────────────────────────────────────── */
-export function livekitConfig(): { enabled: boolean; url: string } {
-  // ── LIVEKIT IS RETIRED (v2.106.52). ───────────────────────────────────────
-  // The owner cancelled the LiveKit subscription and asked for it removed, so
-  // this returns DISABLED unconditionally and does not read the env at all.
-  //
-  // WHY THIS IS THE LOAD-BEARING LINE RATHER THAN A CLEANUP. `enabled` is what
-  // every `registered`/`room`/`joined`/`peer-joined` frame stamps as `livekit`,
-  // and the client's whole SFU branch hangs off that one boolean. Returning
-  // false here therefore routes EVERY call onto the mesh immediately — which is
-  // the speed fix, measured: the mesh rings in ~255ms and connects ~350ms after
-  // the answer, where an unreachable SFU cost 4.5s + 3x4s of watchdog before
-  // v2.106.48's fallback could even start rebuilding on the mesh.
-  //
-  // It deliberately IGNORES the env instead of trusting the operator to unset
-  // three variables on two boxes: a stale LIVEKIT_URL left in /home/relay/.env
-  // would otherwise bring the ~20s wait straight back, and that is exactly the
-  // failure the owner has been living with. Not readable from the environment
-  // means not reachable by accident.
-  //
-  // The remaining LiveKit code is dead as a consequence and comes out next; it
-  // cannot run while this is false, so removing it changes no behaviour.
-  return { enabled: false, url: "" };
-}
-
-/**
- * Mint a short-lived (60s) LiveKit join token for ONE room + identity, minted
- * server-side from registry state we control — never from client-supplied
- * room/identity. The API secret is the HMAC key and must NEVER reach the
- * browser (only this signed JWT does). `toJwt()` is async in v2.
- */
-export async function mintLivekitToken(
-  identity: string,
-  name: string,
-  room: string
-): Promise<string> {
-  const apiKey = process.env.LIVEKIT_API_KEY || "";
-  const apiSecret = process.env.LIVEKIT_API_SECRET || "";
-  const at = new AccessToken(apiKey, apiSecret, { identity, name, ttl: 60 });
-  const grant: VideoGrant = {
-    roomJoin: true,
-    room,
-    canPublish: true,
-    canSubscribe: true,
-    canPublishData: true,
-  };
-  at.addGrant(grant);
-  return await at.toJwt();
-}
+export const ROOM_MAX = 6;
 
 /**
  * THE DEVICE THAT PLACES OR ANSWERS A CALL BECOMES THE NUMBER'S PRIMARY.
@@ -1051,49 +973,6 @@ function claimPrimaryForCall(
   if (conn.cid) prev.cid = conn.cid;
 }
 
-/**
- * Fire-and-forget: mint a LiveKit join token for `pin` in `roomId` and push it to the
- * NAMED SOCKET as a `livekit-token` message. No-op when LiveKit isn't configured. The JWT
- * is never logged. Authorization is implicit: the caller only ever passes pins/rooms
- * derived from trusted registry state.
- *
- * `socket` IS REQUIRED, AND THAT IS THE POINT. This used to address the NUMBER —
- * `reg.clients.get(pin).socket` — while every one of its twelve call sites sits directly
- * after a `safeSend(<some specific socket>, { room | joined | rejoin | resumed })`. One
- * number can hold SEVERAL devices (`reg.devices`, and MULTI_DEVICE_RING is baked on in
- * ecosystem.config.cjs), and `reg.clients` holds exactly ONE of them: the register
- * handler makes the LATEST registration primary unless the previous primary is already in
- * a call. So whenever the device placing or answering the call was not the primary, the
- * room frame went to the right device and its join token went to a DIFFERENT one.
- *
- * That is total, deterministic media failure on every call for anyone signed in on two
- * devices: `joinLivekit` returns early at "waiting for token", so nothing is published and
- * nothing is subscribed, while our own signaling — ring, accept, roster, the in-call UI —
- * all succeed. It presents as "the call connects and there is no audio and no video", in
- * both directions, and the idle device silently discards a token for a room it is not in.
- *
- * A required parameter rather than a defaulted one, deliberately, and the opposite call
- * from v2.106.44's `wantVideo`: there a default was right because the change could only
- * ever NARROW what was opened, whereas a default here would preserve this bug at any site
- * somebody forgets — and the cost of forgetting is a call that carries nothing. Required
- * makes each missed site a compile error instead.
- *
- * THE INVARIANT: the token and the room frame that authorizes it go to the SAME device.
- */
-function pushLivekitToken(reg: RelayRegistry, pin: string, roomId: string, socket: RelaySocket) {
-  const lk = livekitConfig();
-  if (!lk.enabled) return;
-  const client = reg.clients.get(pin);
-  if (!client) return;
-  mintLivekitToken(pin, client.name || "Guest", roomId)
-    .then(token => {
-      // Still a live number (the mint is async), but the token goes to the SOCKET the
-      // caller named — never to whichever device happens to be primary by the time we
-      // resolve. See the header above for why that distinction is the whole point.
-      if (reg.clients.has(pin)) safeSend(socket, { type: "livekit-token", roomId, token, url: lk.url });
-    })
-    .catch(e => console.warn("[relay] livekit token mint failed:", e));
-}
 
 /**
  * Number of clients currently in a room. Returns 0 for a null/unknown
@@ -1343,8 +1222,6 @@ export function rebindRegisteredPin(
         const knock = meta.knocks?.get(oldPin);
         if (knock) { meta.knocks!.delete(oldPin); meta.knocks!.set(newPin, knock); }
       }
-      const rec = reg.recordings.get(rid);
-      if (rec && rec.by === oldPin) rec.by = newPin;
     });
 
     // STEP 8 — pending rings: the KEY (a ring aimed at us) and every `from` value
@@ -1619,7 +1496,6 @@ function promoteHeldRoom(
   roomActivityTouch(reg, heldRid);
   broadcastToRoom(reg, heldRid, { type: "peer-hold", pin, on: false }, pin);
   const rmeta = reg.roomMeta.get(heldRid);
-  const lk = livekitConfig();
   safeSend(conn.socket, {
     type: "resumed",
     roomId: heldRid,
@@ -1628,10 +1504,7 @@ function promoteHeldRoom(
     selfRole: roleOf(rmeta, pin),
     hostPin: rmeta?.hostPin ?? null,
     iceServers: iceServers(pin),
-    livekit: lk.enabled,
-    livekitUrl: lk.url,
   });
-  pushLivekitToken(reg, pin, heldRid, conn.socket);
   return true;
 }
 
@@ -1727,7 +1600,7 @@ function joinPartyLine(
     leaveRoom(reg, callerPin);
   }
   const existing = reg.rooms.get(rid);
-  const cap = livekitConfig().enabled ? 10 : 6;
+  const cap = ROOM_MAX;
   if (existing && existing.size >= cap) {
     safeSend(socket, { type: "error", code: "full", message: `Call is full (${cap} max).` });
     return;
@@ -1764,7 +1637,6 @@ function joinPartyLine(
     meta.accepted = true;
     if (meta.answeredAt == null) meta.answeredAt = Date.now();
   }
-  const lk = livekitConfig();
   safeSend(socket, {
     type: "joined",
     roomId: rid,
@@ -1774,10 +1646,7 @@ function joinPartyLine(
     hostPin: null,
     cap: mintRoomCap(rid, callerPin, undefined),
     iceServers: iceServers(callerPin),
-    livekit: lk.enabled,
-    livekitUrl: lk.url,
   });
-  pushLivekitToken(reg, callerPin, rid, socket);
   members.forEach(m => {
     const o = reg.clients.get(m.pin);
     if (o) {
@@ -1788,14 +1657,9 @@ function joinPartyLine(
         device: me.device,
         flag: me.flag,
         iceServers: iceServers(m.pin),
-        livekit: lk.enabled,
-        livekitUrl: lk.url,
       });
     }
   });
-  // An active recording on the line is disclosed to the newcomer (consent).
-  const activeRec = reg.recordings.get(rid);
-  if (activeRec) safeSend(socket, { type: "recording", on: true, by: activeRec.by });
 }
 
 export interface RelayMessage {
@@ -1943,8 +1807,7 @@ export function handleMessage(
             broadcastToRoom(reg, existing.roomId, { type: "peer-meta", pin: conn.pin, flag: newFlag }, conn.pin);
           }
         }
-        const lk = livekitConfig();
-        safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
+        safeSend(conn.socket, { type: "registered", pin: conn.pin, name: existing.name, iceServers: iceServers(conn.pin), });
         // A within-grace re-attach (same cid) also auto-rejoins its active call.
         // Multi-device (v2.99.5): a SECONDARY device's re-affirm (geo flag,
         // SSE blip) must NOT receive a rejoin while the number's call lives on
@@ -2102,14 +1965,13 @@ export function handleMessage(
       // match this new record's generation and ghost-ring under it.
       reg.clients.set(pin, { socket: conn.socket, name, device: msg.device ? String(msg.device).slice(0, 16) : undefined, flag: msg.flag ? String(msg.flag).slice(0, 8) : undefined, roomId: null, cid: cid || null, graceT: null, ringing: new Set(), ctxEpoch: ++dialEpochSeq, verifiedPin: verifiedClaim(pin), ip: registerIp });
     }
-    const lk = livekitConfig();
-    safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), livekit: lk.enabled, livekitUrl: lk.url, recording: recordingConfig().enabled });
+    safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), });
     // AUTO-REJOIN an active call this number is still a member of (no re-invite).
     // Multi-device (v2.99.5): NOT when the call lives on another device that
     // kept the primary slot — sending the rejoin here dragged every freshly
     // opened secondary device straight into the primary's live call.
-    // A rejoin hands over the room id, the member list, ICE servers and (on the
-    // SFU path) a LiveKit publish token — so it must only ever go to a client that
+    // A rejoin hands over the room id, the member list and ICE servers — so it
+    // must only ever go to a client that
     // PROVED it owns this number, or to the very browser connection that was
     // already registered under it. A fresh anonymous cid has neither, so a
     // `genPin` collision with a number that is still a room member can no longer
@@ -2206,9 +2068,6 @@ export function handleMessage(
               video: wantVideo,
             });
             safeSend(callerSocket, { type: "room", roomId: rid, selfRole: "host", hostPin: callerPin, cap: mintRoomCap(rid, callerPin, "host") });
-            // On the LiveKit path, the caller joins the SFU room immediately (alone)
-            // so the callee connects near-instantly the moment they accept.
-            pushLivekitToken(reg, callerPin, rid, callerSocket);
           }
           // Whether the room is new or growing, make sure the caller is in the roster.
           rosterTouch(reg, me.roomId!, callerPin, me.name);
@@ -2415,7 +2274,7 @@ export function handleMessage(
         const room = reg.rooms.get(me.roomId!);
         // 10-way only on the SFU; the mesh fallback stays capped at 6 (a 10-way
         // mesh is ~45 peer connections — far too heavy for the fallback path).
-        const inviteCap = livekitConfig().enabled ? 10 : 6;
+        const inviteCap = ROOM_MAX;
         if (room && room.size >= inviteCap) {
           safeSend(callerSocket, {
             type: "error",
@@ -2557,7 +2416,7 @@ export function handleMessage(
         break;
       }
       // 10-way only on the SFU; the mesh fallback stays capped at 6.
-      const acceptCap = livekitConfig().enabled ? 10 : 6;
+      const acceptCap = ROOM_MAX;
       if (room.size >= acceptCap) {
         safeSend(conn.socket, {
           type: "error",
@@ -2641,11 +2500,6 @@ export function handleMessage(
           });
         }
       }
-      // On the LiveKit path, the newcomer joins the SFU room; LiveKit's own
-      // ParticipantConnected/TrackSubscribed events drive peer discovery, so the
-      // mesh peer-joined/offer dance is skipped client-side.
-      pushLivekitToken(reg, conn.pin, roomId, conn.socket);
-      const lk = livekitConfig();
       // Newcomer learns existing members and will offer to each (only one
       // side ever offers, which avoids SDP glare in the mesh). Fresh ICE
       // servers keyed to this peer are minted right as it's about to build
@@ -2658,14 +2512,7 @@ export function handleMessage(
         selfRole: roleOf(roomMetaForRoles, conn.pin),
         hostPin: roomMetaForRoles?.hostPin ?? null,
         iceServers: iceServers(conn.pin),
-        livekit: lk.enabled,
-        livekitUrl: lk.url,
       });
-      // If this room is already being recorded, tell the newcomer right away so
-      // they see the REC indicator (consent/transparency — they joined after the
-      // start broadcast).
-      const activeRec = reg.recordings.get(roomId);
-      if (activeRec) safeSend(conn.socket, { type: "recording", on: true, by: activeRec.by });
       const newcomerPin = conn.pin;
       // Answered — this call's ring must never redeliver on a later reconnect.
       clearPendingRing(reg, newcomerPin, { roomId });
@@ -2682,8 +2529,6 @@ export function handleMessage(
             flag: self.flag,
             role: roleOf(roomMetaForRoles, newcomerPin),
             iceServers: iceServers(m.pin),
-            livekit: lk.enabled,
-            livekitUrl: lk.url,
           });
         }
       });
@@ -2915,7 +2760,6 @@ export function handleMessage(
       self.roomId = rid;
       meta.roster.set(selfPin, self.name);
       meta.lastActiveAt = Date.now();
-      const lkr = livekitConfig();
       const others = membersOf(reg, rid, selfPin);
       safeSend(conn.socket, {
         type: "rejoin",
@@ -2926,10 +2770,7 @@ export function handleMessage(
         selfRole: roleOf(meta, selfPin),
         hostPin: meta.hostPin ?? null,
         iceServers: iceServers(selfPin),
-        livekit: lkr.enabled,
-        livekitUrl: lkr.url,
       });
-      pushLivekitToken(reg, selfPin, rid, conn.socket);
       // Tell whoever is already back that this peer returned, so the mesh
       // re-links without waiting for anybody's timeout.
       others.forEach(m => {
@@ -2943,68 +2784,10 @@ export function handleMessage(
             flag: self.flag,
             role: roleOf(meta, selfPin),
             iceServers: iceServers(m.pin),
-            livekit: lkr.enabled,
-            livekitUrl: lkr.url,
           });
         }
       });
       touchBusyState();
-      break;
-    }
-
-    case "refresh-livekit": {
-      // Client lost or never received its SFU token (mint failure / dropped SSE
-      // frame / connect failure). Re-mint for its CURRENT room, derived from
-      // trusted server state — never a client-supplied room name.
-      if (self.roomId) pushLivekitToken(reg, conn.pin, self.roomId, conn.socket);
-      break;
-    }
-
-    case "start-recording": {
-      const rid = self.roomId;
-      if (!recordingConfig().enabled) {
-        safeSend(conn.socket, { type: "recording-error", message: "Recording isn't set up on this server." });
-        break;
-      }
-      if (!rid) break;
-      const existing = reg.recordings.get(rid);
-      if (existing) {
-        safeSend(conn.socket, { type: "recording", on: true, by: existing.by });
-        break;
-      }
-      // Reserve the slot SYNCHRONOUSLY so a double-tap (or a second participant)
-      // can't kick off two egresses for the same room while we await the SDK.
-      reg.recordings.set(rid, { egressId: "", by: conn.pin, key: "", startedAt: Date.now() });
-      broadcastToRoom(reg, rid, { type: "recording", on: true, by: conn.pin });
-      startRoomRecording(rid, Date.now())
-        .then(({ egressId, key }) => {
-          const cur = reg.recordings.get(rid);
-          // Room ended (or slot cleared) while we awaited — undo.
-          if (!cur || !reg.rooms.has(rid)) {
-            stopRoomRecording(egressId).catch(() => { /* */ });
-            reg.recordings.delete(rid);
-            return;
-          }
-          cur.egressId = egressId;
-          cur.key = key;
-        })
-        .catch(e => {
-          console.warn("[relay] start recording failed:", e);
-          reg.recordings.delete(rid);
-          broadcastToRoom(reg, rid, { type: "recording", on: false });
-          safeSend(conn.socket, { type: "recording-error", message: "Couldn't start the recording." });
-        });
-      break;
-    }
-
-    case "stop-recording": {
-      const rid = self.roomId;
-      if (!rid) break;
-      const rec = reg.recordings.get(rid);
-      if (!rec) break;
-      reg.recordings.delete(rid);
-      broadcastToRoom(reg, rid, { type: "recording", on: false });
-      if (rec.egressId) stopRoomRecording(rec.egressId).catch(e => console.warn("[relay] stop recording failed:", e));
       break;
     }
 
@@ -3102,7 +2885,6 @@ export function handleMessage(
       broadcastToRoom(reg, heldRid, { type: "peer-hold", pin: conn.pin, on: false }, conn.pin);
       broadcastToRoom(reg, activeRid, { type: "peer-hold", pin: conn.pin, on: true }, conn.pin);
       const rmeta = reg.roomMeta.get(heldRid);
-      const lk = livekitConfig();
       safeSend(conn.socket, {
         type: "resumed",
         roomId: heldRid,
@@ -3112,10 +2894,7 @@ export function handleMessage(
         selfRole: roleOf(rmeta, conn.pin),
         hostPin: rmeta?.hostPin ?? null,
         iceServers: iceServers(conn.pin),
-        livekit: lk.enabled,
-        livekitUrl: lk.url,
       });
-      pushLivekitToken(reg, conn.pin, heldRid, conn.socket);
       break;
     }
 
@@ -3171,7 +2950,6 @@ export function handleMessage(
       touchBusyState();
       const heldRoom = reg.rooms.get(heldRid)!;
       const activeMeta = reg.roomMeta.get(activeRid);
-      const lkm = livekitConfig();
       const movers = Array.from(heldRoom).filter(p => p !== conn.pin);
       // Remove the holder from the held room first so movers don't try to link to
       // a "ghost" copy of us in the old room (we're already in the active room).
@@ -3195,10 +2973,7 @@ export function handleMessage(
             selfRole: roleOf(activeMeta, p),
             hostPin: activeMeta?.hostPin ?? null,
             iceServers: iceServers(p),
-            livekit: lkm.enabled,
-            livekitUrl: lkm.url,
           });
-          pushLivekitToken(reg, p, activeRid, pc.socket);
         }
         broadcastToRoom(reg, activeRid, {
           type: "peer-joined",

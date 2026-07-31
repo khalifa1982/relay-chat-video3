@@ -75,7 +75,7 @@ export function signBody(secret, body, nowMs) {
  * ability to call. But this is a decision about whether a REQUEST IS AUTHENTIC, and an
  * unconfigured node that accepted everything would be an open SFU that anybody inside the
  * VPC could drive. The fail-open behaviour lives one level up, in the app: no secret means
- * mediasoup is simply not selected, and the call takes LiveKit or the mesh.
+ * mediasoup is simply not selected, and the call takes the mesh.
  *
  * @param {string} secret
  * @param {string} rawBody  the bytes as received, NOT a re-serialization of the parsed JSON

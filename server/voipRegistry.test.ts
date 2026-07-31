@@ -131,7 +131,7 @@ describe("freshness is judged on the node's own timestamp", () => {
        so it read as protecting something while the near-future half was fail-SHUT.
        `updatedAt` is the NODE's clock and `nowMs` the READER's, two machines compared to the
        millisecond. One millisecond of forward skew excluded a node; both nodes skewed forward
-       excluded the whole fleet and sent every call to LiveKit with nothing saying why — the
+       excluded the whole fleet and sent every call to the mesh with nothing saying why — the
        exact direction the module's own header says must never happen.
        Both halves now bite: a plausible skew is health, a broken clock is not. */
     expect(isNodeFresh(A({ updatedAt: NOW + 1 }), NOW), "1ms of skew is not a dead node").toBe(true);
@@ -217,61 +217,49 @@ describe("selecting a node for a new room", () => {
 
 describe("the transport precedence FAILS OPEN — a call is always possible", () => {
   it("mediasoup when a node is usable", () => {
-    expect(chooseCallTransport({ mediasoupNode: A(), livekitEnabled: true })).toBe("mediasoup");
+    expect(chooseCallTransport({ mediasoupNode: A() })).toBe("mediasoup");
   });
 
-  it("LiveKit when no node is usable but LiveKit is configured", () => {
-    expect(chooseCallTransport({ mediasoupNode: null, livekitEnabled: true })).toBe("livekit");
-  });
-
-  it("the MESH when neither is available, because it needs no infrastructure", () => {
+  it("the MESH when no node is, because it needs no infrastructure", () => {
     /* This is the floor and the reason the function cannot return "nothing": a Redis
-       hiccup, an unconfigured SFU or a saturated fleet must degrade the call's QUALITY,
-       never remove the ability to place it. */
-    expect(chooseCallTransport({ mediasoupNode: null, livekitEnabled: false })).toBe("mesh");
+       hiccup, an unreachable node or a saturated fleet must degrade the call's QUALITY,
+       never remove the ability to place it.
+
+       THE LADDER LOST ITS MIDDLE RUNG in v2.106.53 — a hosted SFU sat here and the
+       owner cancelled that account — so this is now the ONLY fallback, which makes
+       its 6-participant cap the real ceiling whenever a node is unavailable. */
+    expect(chooseCallTransport({ mediasoupNode: null })).toBe("mesh");
   });
 
-  it("never answers with anything outside the three transports", () => {
+  it("never answers with anything outside the two transports", () => {
     const all = new Set<string>();
     for (const node of [A(), null]) {
-      for (const livekitEnabled of [true, false]) {
-        for (const forceLivekit of [true, false, undefined]) {
-          for (const mediasoupEnabled of [true, false, undefined]) {
-            all.add(
-              chooseCallTransport({ mediasoupNode: node, livekitEnabled, forceLivekit, mediasoupEnabled }),
-            );
-          }
+      for (const forceMesh of [true, false, undefined]) {
+        for (const mediasoupEnabled of [true, false, undefined]) {
+          all.add(chooseCallTransport({ mediasoupNode: node, forceMesh, mediasoupEnabled }));
         }
       }
     }
-    expect([...all].sort()).toEqual(["livekit", "mediasoup", "mesh"]);
+    expect([...all].sort()).toEqual(["mediasoup", "mesh"]);
   });
 
-  it("the A/B override sends a call to LiveKit even with a healthy node", () => {
+  it("the A/B override sends a call to the mesh even with a healthy node", () => {
     // Staged rollout and A/B need this: the two transports must be comparable on one
     // account with numbers, which is the only way "video degrades" gets an answer.
-    expect(
-      chooseCallTransport({ mediasoupNode: A(), livekitEnabled: true, forceLivekit: true }),
-    ).toBe("livekit");
+    expect(chooseCallTransport({ mediasoupNode: A(), forceMesh: true })).toBe("mesh");
   });
 
   it("the fleet kill switch does not strand the call", () => {
-    expect(
-      chooseCallTransport({ mediasoupNode: A(), livekitEnabled: true, mediasoupEnabled: false }),
-    ).toBe("livekit");
-    expect(
-      chooseCallTransport({ mediasoupNode: A(), livekitEnabled: false, mediasoupEnabled: false }),
-    ).toBe("mesh");
+    expect(chooseCallTransport({ mediasoupNode: A(), mediasoupEnabled: false })).toBe("mesh");
   });
 
-  it("an SFU raises the cap; the mesh keeps its six", () => {
+  it("mediasoup raises the cap; the mesh keeps its six", () => {
     /* On the mesh each phone runs N-1 encoders and N-1 decoders — v2.99.84 measured that
        as the biggest lever on call CPU and heat. An SFU decouples cost from party size,
-       so the SFU paths get 10. mediasoup is deliberately NOT given more than LiveKit: the
+       so it gets 10 — a number inherited rather than derived, and still provisional: the
        nodes are 2-core and the real ceiling has to come from load testing. */
     expect(transportCap("mesh")).toBe(6);
-    expect(transportCap("livekit")).toBe(10);
-    expect(transportCap("mediasoup")).toBe(transportCap("livekit"));
+    expect(transportCap("mediasoup")).toBe(10);
   });
 });
 

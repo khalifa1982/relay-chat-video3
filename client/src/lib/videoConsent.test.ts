@@ -40,10 +40,17 @@ describe("mutual-consent video — 1:1 protocol", () => {
     expect(CLIENT).toMatch(/ringSub\.textContent = m\.video \? "Video call…" : "Voice call…";/);
   });
 
-  it("publication is consent-gated on BOTH media paths (SFU publish, mesh addTrack, SFU republish choke)", () => {
-    expect(CLIENT).toMatch(/if \(camOn && \(videoApproved \|\| callIsGroup\)\)/);
+  it("publication is consent-gated at every point video can start flowing", () => {
+    /* The SFU's publish gate went with that transport (v2.106.53). The two that
+       remain are the ones that matter on the mesh: `createPeer` decides whether a
+       video track joins the peer connection at all, and the mid-call re-assert
+       refuses to fill a sender that consent has not opened. */
     expect(CLIENT).toMatch(/const consentOk = videoApproved \|\| callIsGroup;/);
-    expect(CLIENT).toMatch(/if \(!videoApproved && !callIsGroup\) return;/);
+    // The re-assert refuses to fill a sender consent has not opened.
+    const re = CLIENT.slice(CLIENT.indexOf("function ensureApprovedVideoFlowing()"));
+    expect(re.slice(0, 400)).toMatch(/!\(videoApproved \|\| callIsGroup\)/);
+    // And `createPeer` decides whether a video track joins the connection at all.
+    expect(CLIENT).toMatch(/consentOk \? \(sendStream\.getVideoTracks\(\)\[0\] \|\| null\) : null/);
   });
 
   it("consent arriving before the transport settles still starts video (re-assert on connect)", () => {

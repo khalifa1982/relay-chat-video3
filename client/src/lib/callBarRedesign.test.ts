@@ -158,14 +158,17 @@ describe("the board's standard bar", () => {
     const ids = [...markup.matchAll(/class="ctrl[^"]*"[^>]*id="([a-zA-Z]+)"|id="([a-zA-Z]+)"[^>]*class="ctrl[^"]*"/g)]
       .map((m) => m[1] ?? m[2]);
     expect(ids.length).toBeGreaterThan(5);
-    /* `statsBtn` (the v2.105.21 call-quality readout) and `recordBtn` are real controls
-       that carry no per-control hue — they fall back to the base text colour, which is
-       correct: one is a mono text chip and the other only exists when recording is
-       configured. Enumerating them here is what makes this list the actual control set
-       rather than my recollection of it; leaving `statsBtn` out is how the first run
-       failed on correct code. */
+    /* `statsBtn` (the v2.105.21 call-quality readout) is a real control that carries no
+       per-control hue — it falls back to the base text colour, which is correct for a mono
+       text chip. Enumerating it here is what makes this list the actual control set rather
+       than my recollection of it; leaving it out is how the first run failed on correct code.
+
+       `recordBtn` WAS exempted here too and is deliberately no longer, because recording was
+       LiveKit Egress in its entirety and went with that account (v2.106.53). A stale
+       exemption is worse than none: it reads as covering the rule while quietly admitting
+       the one id that must not come back without the transport that made it work. */
     for (const id of ids) {
-      expect([...CONTROL_IDS, "hangBtn", "recordBtn", "statsBtn"], id).toContain(id);
+      expect([...CONTROL_IDS, "hangBtn", "statsBtn"], id).toContain(id);
     }
   });
 

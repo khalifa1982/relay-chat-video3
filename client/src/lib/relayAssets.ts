@@ -74,7 +74,6 @@ export const RELAY_MARKUP = `
     <div class="call-head">
       <div class="ct"><span class="live-dot"></span> <span id="callRoomLbl">In call</span></div>
       <div class="call-head-right">
-        <span id="recIndicator" class="rec-ind" style="display:none"><span class="rec-blink"></span>REC</span>
         <div class="timer" id="timer">00:00</div>
       </div>
     </div>
@@ -261,14 +260,6 @@ export const RELAY_MARKUP = `
         <button class="ctrl" id="chatBtn" title="In-call chat with everyone on the line">
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/></svg><span class="badge" id="chatBadge" style="display:none">0</span></span>
           <span class="ctrl-lbl">Chat</span>
-        </button>
-        <!-- Record (v2.99.36): promoted OUT of the removed ⋯ More menu into the
-             bar as a normal labeled chip. Still hidden unless the operator has
-             recording configured (JS toggles this id's display/.on exactly as
-             before) — the owner removed the overflow menu, not the feature. -->
-        <button class="ctrl" id="recordBtn" style="display:none" title="Record this call — everyone sees a REC badge">
-          <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="7"/></svg></span>
-          <span class="ctrl-lbl">Record</span>
         </button>
         <button class="ctrl hangup" id="hangBtn" title="Leave">
           <!-- Material "call end": a DRAWN horizontal handset, no CSS transform.
@@ -675,12 +666,13 @@ export const RELAY_CSS = `
   min-height:0;display:flex;align-items:center;justify-content:center}
 .relay-root .relay-tile video{width:100%;height:100%;object-fit:cover;background:#000}
 /* Hide the inner video for audio-only tiles with visibility, NOT display:none.
-   LiveKit adaptiveStream samples element visibility on track.attach() and PAUSES
-   inbound video for any element whose computed display is none — so an
+   An SFU that samples element visibility to decide what to send will PAUSE inbound
+   video for any element whose computed display is none — so an
    audio-subscribes-before-video race (common with 3+ parties) leaves that
    participant's camera stuck/black. visibility:hidden keeps display non-none
    (video keeps flowing) while hiding the empty/old frame; the avatar (.ph)
-   overlays it for true audio-only participants. */
+   overlays it for true audio-only participants. Kept because that hazard belongs
+   to any SFU, not to one vendor. */
 .relay-root .relay-tile.audio-only video{visibility:hidden}
 /* ── active-speaker / spotlight view (v2.35) ──────────────────────────────
    Tiles are clickable to spotlight. layoutGrid() toggles .spotlight/.compact on
@@ -1047,13 +1039,8 @@ export const RELAY_CSS = `
 .relay-root .ctrl.voiced:not(.off) .ctrl-ic{animation:relayMicVoiced 1.1s ease-out infinite}
 @keyframes relayMicVoiced{0%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),.45)}100%{box-shadow:0 0 0 7px rgba(var(--accent-rgb),0)}}
 @media (prefers-reduced-motion: reduce){.relay-root .ctrl.voiced:not(.off) .ctrl-ic{animation:none;box-shadow:0 0 0 3px rgba(var(--accent-rgb),.35)}}
-/* Record row (now inside the ⋯ More menu), when armed, glows red. */
-.relay-root #recordBtn .ctrl-ic{color:#ff5d5d;background:rgba(255,76,76,.12);border-color:rgba(255,76,76,.3)}
-.relay-root #recordBtn.on .ctrl-ic{background:rgba(255,76,76,.26);border-color:#ff5d5d}
-/* "● REC" live indicator in the call header. */
+/* The call header's right-hand cluster. */
 .relay-root .call-head-right{display:flex;align-items:center;gap:12px}
-.relay-root .rec-ind{display:flex;align-items:center;gap:6px;font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700;letter-spacing:.06em;color:#ff5d5d}
-.relay-root .rec-blink{width:9px;height:9px;border-radius:50%;background:#ff3b3b;box-shadow:0 0 8px #ff3b3b;animation:relayPulse2 1s ease-in-out infinite}
 /* The screen-share button is hidden by default and revealed by JS only when the
    browser actually supports getDisplayMedia (Android Chrome yes, iOS Safari no)
    — see the capability gate in relayClient.ts. So it now shows on mobile where

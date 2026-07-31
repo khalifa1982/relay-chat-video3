@@ -97,9 +97,9 @@ describe("accent fallbacks are literals, never a custom-property cycle", () => {
 
 describe("the caption's capacity claim comes from the live transport", () => {
   it("the cap is engine.maxParticipants, not a literal 10 and not the picker's cap−1", () => {
-    // The party-line room cap is `livekitConfig().enabled ? 10 : 6`, so a
-    // hardcoded 10 is a false claim on a mesh fleet (the v2.106.9 argument about
-    // the board's "2×4 fits up to 8").
+    // Every call runs the mesh, whose room cap is 6, so a hardcoded 10 would be a
+    // false claim about capacity (the v2.106.9 argument about the board's "2×4 fits
+    // up to 8"). Read from the engine so it cannot go stale if the cap moves.
     expect(R).toMatch(/const lineCap = engine\.maxParticipants/);
     expect(R).toMatch(/up to \{lineCap\}/);
     // MAX_PARTICIPANTS is cap−1 because it counts INVITEES; a party line's cap
