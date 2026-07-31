@@ -463,3 +463,119 @@ describe("aws-ops.yml — live-verify: read-only, two vantage points, injection-
     expect(lv).toMatch(/\[ \$EDGE -eq 0 \] && \[ \$APP -ne 1 \] && \[ \$MAIL -eq 0 \] \|\| exit 1/);
   });
 });
+
+/* ─────────────────────────────────────────────────────────────────────────────────────
+ * A MEDIA NODE MUST NEVER BE DEPLOYED TO OR WRITTEN TO.
+ *
+ * THE HAZARD IS SPECIFIC AND IT IS ONE I CREATED. Two mediasoup media nodes now exist in the
+ * account, and every SSM target in these workflows is `tag:Name=relay-app`. If either node
+ * carries that tag, `deploy.yml` — which runs on EVERY push to main with `--max-errors 0` —
+ * would install the app on it, fail the `/api/health` probe there, and ABORT THE WHOLE FLEET
+ * DEPLOY. Whether they do carry it CANNOT be established from this repo: every EC2 call
+ * filters on that one tag and nothing records what those instances were named.
+ *
+ * So the guard is not a tag check. `/opt/relay-voip` is evidence the HOST ITSELF carries — an
+ * app box never has it — which cannot go stale the way a tag list or a hardcoded instance id
+ * would, and needs no AWS read to be correct.
+ *
+ * ONE GUARD GIVES TWO DIFFERENT CORRECT BEHAVIOURS, and that is worth stating because
+ * treating the two kinds of command the same WOULD be a bug:
+ *   - a FLEET command (deploy, env-set, ses-ssm) wants a silent skip, so the guard exits 0;
+ *   - a SINGLE-INSTANCE command that must run exactly once (admin-tool, recover-identity)
+ *     must NOT silently skip, because an operator would believe the operation ran. Those two
+ *     read a printed marker (`ADMIN_EXIT=0` / `RECOVER_EXIT=0`) and fail when it is absent —
+ *     and the guard never prints one, so exiting 0 there FAILS the step loudly with
+ *     SKIP_MEDIA_NODE in the output saying exactly why.
+ * ────────────────────────────────────────────────────────────────────────────────────── */
+describe("no workflow can deploy to or write to a mediasoup media node", () => {
+  /* `OPS` is already read once at module scope with a resolved path; reading it again here
+     would be a second source of truth for the same file. `DEPLOY` follows the same resolution
+     so the suite does not depend on the process's working directory. */
+  const DEPLOY = fs.readFileSync(
+    path.resolve(__dirname, "..", ".github", "workflows", "deploy.yml"),
+    "utf8",
+  );
+
+  it("the rolling deploy refuses a media node BEFORE it fetches anything", () => {
+    /* First command, so nothing is even downloaded onto a box that is not an app server. */
+    const cmds = DEPLOY.slice(DEPLOY.indexOf("--parameters 'commands=["));
+    const first = cmds.slice(0, cmds.indexOf('",'));
+    expect(first, "the guard must be the FIRST remote command").toMatch(/\/opt\/relay-voip/);
+    expect(first).toMatch(/SKIP_MEDIA_NODE/);
+    expect(first, "and it must exit 0, or a media node aborts the fleet deploy").toMatch(/exit 0/);
+  });
+
+  it("the guard is defined ONCE in aws-ops, not pasted per action", () => {
+    /* Five call sites reference it. A copy each is exactly how one comes to be forgotten —
+       the class this repo keeps paying for. */
+    expect(OPS).toMatch(/MEDIA_NODE_GUARD: '.*\/opt\/relay-voip.*'/);
+    /* DERIVED rather than a literal count, and my first draft got that literal wrong — it said
+       five where there are six. A hardcoded number is also exactly what goes stale on the
+       seventh action somebody adds, so the property is stated instead: every `jq -n` that
+       builds an SSM `commands:` array must reference the one definition. */
+    const builders = OPS.match(/jq -n[^\n]*\{commands:\[/g) ?? [];
+    expect(builders.length, "there must be some to check").toBeGreaterThan(3);
+    for (const b of builders) {
+      expect(b, `an SSM param builder with no guard: ${b.slice(0, 70)}…`).toContain(
+        "$MEDIA_NODE_GUARD",
+      );
+    }
+  });
+
+  it("EVERY tag-targeted SSM command carries it — a sweep, not a list of today's five", () => {
+    /* A list would go stale on the sixth action somebody adds. This reads every
+       `ssm send-command` in the file and requires each tag-targeted one to be guarded, so a
+       new action is covered rather than exempt. */
+    const lines = OPS.split("\n");
+    const unguarded: number[] = [];
+    lines.forEach((l, i) => {
+      if (!l.includes("ssm send-command")) return;
+      const window = lines.slice(Math.max(0, i - 25), i + 6).join("\n");
+      const tagTargeted = window.includes("Key=tag:Name");
+      const guarded = window.includes("MEDIA_NODE_GUARD") || window.includes("/opt/relay-voip");
+      if (tagTargeted && !guarded) unguarded.push(i + 1);
+    });
+    expect(unguarded, `tag-targeted and unguarded at line(s): ${unguarded.join(", ")}`).toEqual([]);
+  });
+
+  it("the two single-instance DB operations are guarded too, and FAIL rather than skip", () => {
+    /* Both pick ONE instance from the same tag filter, so a media node can be the one picked.
+       Skipping silently there would leave an operator believing an admin operation ran. The
+       marker check is what turns the skip into a loud failure — asserted here so a future
+       change that drops the marker check does not quietly make the guard dangerous. */
+    for (const marker of ["ADMIN_EXIT=0", "RECOVER_EXIT=0"]) {
+      expect(OPS, `${marker} must still be required`).toContain(marker);
+    }
+    for (const script of ["admin-tool.mjs", "recover-orphan-identity.mjs"]) {
+      const at = OPS.indexOf(script);
+      expect(at, script).toBeGreaterThan(0);
+      const region = OPS.slice(at, at + 900);
+      expect(region, `${script} must be guarded`).toMatch(/MEDIA_NODE_GUARD/);
+    }
+  });
+
+  it("the coturn probe is DELIBERATELY unguarded, and cannot select a media node anyway", () => {
+    /* The one `ssm send-command` without the guard targets the RELAY hosts by matching
+       `TURN_HOSTS` addresses against SSM-managed IPs. A media node's IP is not in TURN_HOSTS,
+       so it can never be selected — and that command is read-only (`ss -lnt`, a config grep).
+       Recorded as a decision rather than left looking like the one that was missed. */
+    const at = OPS.indexOf("--instance-ids $RELAY_IIDS");
+    expect(at, "the coturn probe must still select by resolved IP").toBeGreaterThan(0);
+    const window = OPS.slice(Math.max(0, at - 900), at + 400);
+    expect(window, "selected from TURN_HOSTS, never from the app tag").not.toContain(
+      "Key=tag:Name",
+    );
+    expect(window, "and it must stay read-only").not.toMatch(/pm2 |rm -f|> \/home\/relay/);
+  });
+
+  it("the guard cannot match an app box, which is what makes it safe to exit 0", () => {
+    /* If the discriminator could be true on a real app server, every deploy would silently
+       skip the fleet and report success — the worst possible failure of this guard. It keys on
+       a directory that only the media agent's own install creates. */
+    expect(OPS).toMatch(/MEDIA_NODE_GUARD:.*\[ -d \/opt\/relay-voip \]/);
+    // And the agent really does live there, or the guard is checking nothing.
+    expect(
+      fs.readFileSync(path.resolve(__dirname, "..", "voip-node", "relay-voip.service"), "utf8"),
+    ).toMatch(/\/opt\/relay-voip/);
+  });
+});

@@ -50,6 +50,40 @@ is correct either way.
 The app half is `server/voipRegistry.ts` (node selection, freshness, transport precedence)
 with `server/voipRegistry.test.ts` and `server/voipNodeParity.test.ts`.
 
+## The app fleet's workflows will never touch this box
+
+`deploy.yml` runs on every push to `main` and targets **`tag:Name=relay-app`** with
+`--max-errors 0`. If a media node carried that tag, the deploy would try to install the app here,
+fail its `/api/health` probe, and **abort the whole fleet deploy** — so a push to main would stop
+deploying at all. Every `aws-ops.yml` action targets the same tag.
+
+Both are now guarded, and the guard does **not** depend on a tag:
+
+```sh
+if [ -d /opt/relay-voip ]; then echo SKIP_MEDIA_NODE; exit 0; fi
+```
+
+That directory is evidence this host carries about itself — an app box never has it — so it cannot
+go stale the way a tag list or a hardcoded instance id would, and it needs no AWS read to be right.
+It is the **first** remote command, so nothing is even downloaded here.
+
+One guard, two correct behaviours, because the callers differ:
+
+| command | behaviour on a media node | why that is right |
+|---|---|---|
+| `deploy`, `env-set`, `ses-ssm` | silent skip, exit 0 | fleet-wide; a media node in the target set must cost nothing |
+| `admin-tool`, `recover-identity` | the step **FAILS** | they pick ONE instance and require a printed `ADMIN_EXIT=0` / `RECOVER_EXIT=0`; the guard prints neither, so a skip cannot be mistaken for a completed admin operation |
+
+The coturn probe in `verify` is deliberately unguarded: it selects the relay hosts by matching
+`TURN_HOSTS` addresses against SSM-managed IPs, so a media node can never be selected, and it is
+read-only.
+
+**Still worth doing, owner-side:** tag these two instances something of their own (`relay-voip`)
+rather than relying on the guard. The guard makes a mis-tag harmless; a correct tag makes the
+`verify` action's instance table readable, and stops `aws-ops` reporting a media node as part of the
+app fleet. Nothing in the repo records what they are currently named, which is exactly why the
+guard keys on the filesystem instead.
+
 ## Install / update
 
 Run on each media node. `/opt/relay-voip` already exists with mediasoup 3.19.3 installed and

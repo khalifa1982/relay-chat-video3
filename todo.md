@@ -11278,6 +11278,67 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.33 — the media nodes could have stopped every deploy (2026-07-31)
+
+The 28-agent LiveKit-removal plan flagged this as *"check before the next deploy, not after"*, and it
+is the sharpest item in the whole document.
+
+### The hazard
+
+`deploy.yml` runs on **every push to `main`** and targets `tag:Name=relay-app` with
+`--max-errors 0`. If either mediasoup media node carries that tag, the deploy installs the app on it,
+fails the `/api/health` probe there, and **aborts the whole fleet deploy** — a push to main would
+simply stop deploying, and the failure would be a health check on a box nobody was thinking about.
+
+**Whether they carry it cannot be established from the repo.** Every EC2 call in every workflow
+filters on that one tag, nothing records what those instances were named, and this sandbox has no
+AWS CLI and no credentials — so the check the plan asked for was not available to me.
+
+### The guard, which needs no AWS read
+
+```sh
+if [ -d /opt/relay-voip ]; then echo SKIP_MEDIA_NODE; exit 0; fi
+```
+
+Evidence the **host itself** carries. An app box never has it, so it cannot go stale the way a tag
+list or a hardcoded instance id would. First remote command, so nothing is even downloaded onto a box
+that is not an app server.
+
+**One guard, two correct behaviours** — treating the two kinds of command alike would have been a bug:
+
+| command | on a media node | why |
+|---|---|---|
+| `deploy`, `env-set`, `ses-ssm` | silent skip, exit 0 | fleet-wide; a media node in the target set must cost nothing |
+| `admin-tool`, `recover-identity` | the step **FAILS** | they pick ONE instance from the same tag filter, so a media node can be the one picked; both require a printed `ADMIN_EXIT=0` / `RECOVER_EXIT=0` and the guard prints neither, so a skip can never be mistaken for a completed database operation |
+
+Defined **once** at the job level rather than pasted per action — a copy per call site is how the
+sixth comes to be forgotten. The pin is a **sweep**: every `ssm send-command` in the file is read and
+each tag-targeted one must be guarded, so the next action is covered rather than exempt.
+
+**One site is deliberately unguarded and says so:** the coturn probe selects relay hosts by matching
+`TURN_HOSTS` against SSM-managed IPs, so a media node can never be selected, and it is read-only.
+
+**The guard's own safety is asserted**, because the dangerous failure is the opposite one: if the
+discriminator could be true on a real app server, every deploy would silently skip the fleet and
+report success. The test pins that it keys on that directory *and* that the agent's systemd unit
+really installs there — a guard checking a path nothing creates is a guard checking nothing.
+
+### Two defects in my own work, both caught by an assertion failing
+
+- A python patch asserted its needle occurred once, found **four**, and aborted **before writing** —
+  so an earlier edit in the same script was discarded and had to be redone. The assertion protected
+  the file and cost a round trip, which is the right trade.
+- My reference **count was wrong**: five where the workflow has six. Now derived from the `jq`
+  builders themselves rather than frozen as a literal that goes stale on the seventh.
+
+`server/awsOps.test.ts` → 49. **5 tripwires verified by mutation** off a confirmed-green baseline,
+including the guard removed outright and the guard made to exit non-zero; sources byte-identical
+afterwards.
+
+**Still owner-side, and worth doing anyway:** tag those two instances `relay-voip`. The guard makes a
+mis-tag harmless; a correct tag is what makes `verify`'s instance table readable and stops aws-ops
+reporting a media node as part of the app fleet. 4722 tests.
+
 ## v2.106.32 — hardening the dormant SFU registry, and a fail-shut defect I shipped four hours earlier (2026-07-31)
 
 A 26-agent design pass over v2.106.28's mediasoup work chose this as **increment zero** because it
