@@ -20,12 +20,14 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  GROUP_BUBBLE_STYLE,
+  GROUP_PALETTE,
   OWN_BUBBLE_STYLE,
   PEER_BUBBLE_STYLE,
-  GROUP_PALETTE,
-  peerPaletteIndex,
   bubbleStyleFor,
   nameColorFor,
+  peerPaletteIndex,
+  senderAvatarStyle,
 } from "./peerColors";
 
 const ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -36,7 +38,7 @@ const TYPING = read("client/src/app/TypingLine.tsx");
 function codeOnly(src: string): string {
   return src
     .split("\n")
-    .filter((l) => {
+    .filter(l => {
       const t = l.trim();
       return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
     })
@@ -45,8 +47,12 @@ function codeOnly(src: string): string {
 
 describe("the colour rule", () => {
   it("mine is orange, everywhere", () => {
-    expect(bubbleStyleFor({ mine: true, isGroup: false, senderIdentityId: 7 })).toBe(OWN_BUBBLE_STYLE);
-    expect(bubbleStyleFor({ mine: true, isGroup: true, senderIdentityId: 7 })).toBe(OWN_BUBBLE_STYLE);
+    expect(
+      bubbleStyleFor({ mine: true, isGroup: false, senderIdentityId: 7 })
+    ).toBe(OWN_BUBBLE_STYLE);
+    expect(
+      bubbleStyleFor({ mine: true, isGroup: true, senderIdentityId: 7 })
+    ).toBe(OWN_BUBBLE_STYLE);
     expect(String(OWN_BUBBLE_STYLE.background)).toContain("#fb923c");
   });
 
@@ -54,20 +60,93 @@ describe("the colour rule", () => {
     // The owner asked for blue specifically. A two-person thread has no ambiguity
     // to resolve, so it must not depend on an id-derived hue that could differ.
     for (const id of [1, 2, 3, 40, 999, 123456]) {
-      expect(bubbleStyleFor({ mine: false, isGroup: false, senderIdentityId: id })).toBe(PEER_BUBBLE_STYLE);
+      expect(
+        bubbleStyleFor({ mine: false, isGroup: false, senderIdentityId: id })
+      ).toBe(PEER_BUBBLE_STYLE);
     }
     expect(String(PEER_BUBBLE_STYLE.background)).toContain("#3b82f6");
   });
 
   it("in a group each member gets their own colour", () => {
-    const seen = new Set<string>();
+    /* REWRITTEN v2.106.61. This collected the BUBBLE background, i.e. it pinned WHERE the
+       colour was applied rather than the property — that each member is told apart by
+       colour. The owner's board (frame 3c) puts a group person's colour on their NAME and
+       AVATAR and gives every received bubble one neutral surface, and asked directly, they
+       chose the board. So the rule is unchanged and only its carrier moved; asserted on
+       both carriers now, which is STRICTER than the single value it replaced. */
+    const names = new Set<string>();
+    const discs = new Set<string>();
     for (const id of [11, 12, 13, 14, 15]) {
-      seen.add(String(bubbleStyleFor({ mine: false, isGroup: true, senderIdentityId: id }).background));
+      names.add(nameColorFor({ isGroup: true, senderIdentityId: id }));
+      discs.add(
+        String(
+          senderAvatarStyle({ isGroup: true, senderIdentityId: id }).background
+        )
+      );
     }
     // Five consecutive ids must not collapse onto one hue — that is the whole
     // feature, and a plain `id % N` would be fine here while failing elsewhere,
     // which is why the next test exists.
-    expect(seen.size).toBeGreaterThan(1);
+    expect(names.size).toBeGreaterThan(1);
+    expect(discs.size).toBeGreaterThan(1);
+    /* A person's disc and their name must come from the SAME palette entry, or the two
+       surfaces tell you a different person is speaking. Compared PER PERSON, not by
+       cardinality: `expect(discs.size).toBe(names.size)` was the first version of this and
+       a mutation that shifted the disc's entry by three SURVIVED it — the counts match
+       either way. Caught by mutation, not by reading. */
+    for (const id of [11, 12, 13, 14, 15, 0, 987654]) {
+      const entry = GROUP_PALETTE[peerPaletteIndex(id)];
+      const disc = String(
+        senderAvatarStyle({ isGroup: true, senderIdentityId: id }).background
+      );
+      expect(disc, `id ${id}`).toContain(`hsl(${entry.hue} 65% 62%)`);
+      expect(nameColorFor({ isGroup: true, senderIdentityId: id })).toBe(
+        entry.text
+      );
+    }
+  });
+
+  it("PeerAvatar actually APPLIES the tint it is handed", () => {
+    /* Without this the whole thing is a silent no-op: `senderAvatarStyle` would compute a
+       correct gradient, the gutter would pass it, and the disc would render in the shared
+       `.ravatar-fallback` grey with every test still green. A mutation dropping the spread
+       SURVIVED the first version of this suite. */
+    const po = fs.readFileSync(
+      path.join(__dirname, "PeerOverlays.tsx"),
+      "utf8"
+    );
+    expect(po).toMatch(/fallbackStyle\?:\s*React\.CSSProperties/);
+    // Spread INTO the fallback span's style, and after the geometry so a caller can only
+    // add colour and can never break the alignment every row depends on.
+    expect(po).toMatch(
+      /fontSize: Math\.max\(11, size \* 0\.34\),\s*\.\.\.fallbackStyle/
+    );
+  });
+
+  it("every received group bubble is the SAME neutral surface", () => {
+    // The board's reply quote and @mention are accent-coloured INSIDE the bubble, which
+    // only reads on a neutral fill — a per-person hue there would compete with the accent
+    // in every bubble. So one surface for everybody is what makes the rest of 3c possible.
+    const seen = new Set<string>();
+    for (const id of [11, 12, 13, 14, 15, 999, 123456]) {
+      seen.add(
+        String(
+          bubbleStyleFor({ mine: false, isGroup: true, senderIdentityId: id })
+            .background
+        )
+      );
+    }
+    expect(seen.size).toBe(1);
+    expect(
+      bubbleStyleFor({ mine: false, isGroup: true, senderIdentityId: 11 })
+    ).toBe(GROUP_BUBBLE_STYLE);
+    // Mine and the 1:1 peer keep their own colours — the owner named both explicitly.
+    expect(
+      bubbleStyleFor({ mine: true, isGroup: true, senderIdentityId: 11 })
+    ).not.toBe(GROUP_BUBBLE_STYLE);
+    expect(
+      bubbleStyleFor({ mine: false, isGroup: false, senderIdentityId: 11 })
+    ).not.toBe(GROUP_BUBBLE_STYLE);
   });
 
   it("neighbouring ids land on DIFFERENT hues", () => {
@@ -87,10 +166,13 @@ describe("the colour rule", () => {
     // pair must always collide; that is the pigeonhole, not a defect.
     const runs: string[][] = [];
     for (const base of [1, 10, 100, 1000, 5000]) {
-      runs.push([0, 1, 2, 3].map((k) => String(peerPaletteIndex(base + k))));
+      runs.push([0, 1, 2, 3].map(k => String(peerPaletteIndex(base + k))));
     }
     for (const run of runs) {
-      expect(new Set(run).size, "four neighbours share a hue: " + run.join(",")).toBeGreaterThan(2);
+      expect(
+        new Set(run).size,
+        "four neighbours share a hue: " + run.join(",")
+      ).toBeGreaterThan(2);
     }
   });
 
@@ -103,21 +185,46 @@ describe("the colour rule", () => {
   });
 
   it("never indexes outside the palette, for any input", () => {
-    for (const id of [0, -1, -99999, 1, 2 ** 31, Number.MAX_SAFE_INTEGER, NaN, Infinity, null, undefined]) {
+    for (const id of [
+      0,
+      -1,
+      -99999,
+      1,
+      2 ** 31,
+      Number.MAX_SAFE_INTEGER,
+      NaN,
+      Infinity,
+      null,
+      undefined,
+    ]) {
       const i = peerPaletteIndex(id as number);
       expect(Number.isInteger(i)).toBe(true);
       expect(i).toBeGreaterThanOrEqual(0);
       expect(i).toBeLessThan(GROUP_PALETTE.length);
-      // …and the style it produces is always well-formed.
-      const st = bubbleStyleFor({ mine: false, isGroup: true, senderIdentityId: id as number });
-      expect(String(st.background)).toMatch(/^linear-gradient\(135deg,#[0-9a-f]{6},#[0-9a-f]{6}\)$/);
+      // …and the per-person AVATAR gradient it produces is always well-formed. (This
+      // asserted the BUBBLE gradient until v2.106.61, when the hue moved off the fill;
+      // the property — no input can produce a malformed colour — is unchanged.)
+      const st = senderAvatarStyle({
+        isGroup: true,
+        senderIdentityId: id as number,
+      });
+      expect(String(st.background)).toMatch(
+        /^linear-gradient\(135deg,hsl\(\d{1,3} 65% 62%\),hsl\(\d{1,3} 70% 42%\)\)$/
+      );
+      // Every hue is a real angle, so no entry can emit `hsl(NaN …)`.
+      for (const h of String(st.background).matchAll(/hsl\((\d{1,3}) /g)) {
+        expect(Number(h[1])).toBeLessThan(360);
+      }
     }
   });
 
   it("the group palette excludes blue and the own-bubble orange", () => {
     // Blue would read as "the other person" from the 1:1 rule; the own orange is
     // always you. Either would make the colour lie about who is speaking.
-    const hues = GROUP_PALETTE.flatMap((c) => [c.from.toLowerCase(), c.to.toLowerCase()]);
+    const hues = GROUP_PALETTE.flatMap(c => [
+      c.from.toLowerCase(),
+      c.to.toLowerCase(),
+    ]);
     expect(hues).not.toContain("#3b82f6");
     expect(hues).not.toContain("#1d4ed8");
     expect(hues).not.toContain("#fb923c");
@@ -125,10 +232,11 @@ describe("the colour rule", () => {
   });
 
   it("every palette entry is complete and distinct", () => {
-    const froms = new Set(GROUP_PALETTE.map((c) => c.from.toLowerCase()));
+    const froms = new Set(GROUP_PALETTE.map(c => c.from.toLowerCase()));
     expect(froms.size, "no duplicate hues").toBe(GROUP_PALETTE.length);
     for (const c of GROUP_PALETTE) {
-      for (const v of [c.from, c.to, c.text]) expect(v).toMatch(/^#[0-9a-fA-F]{6}$/);
+      for (const v of [c.from, c.to, c.text])
+        expect(v).toMatch(/^#[0-9a-fA-F]{6}$/);
     }
   });
 
@@ -137,16 +245,24 @@ describe("the colour rule", () => {
     // all, so both come from one module and one index.
     for (const id of [3, 17, 88, 1204]) {
       const idx = peerPaletteIndex(id);
-      expect(nameColorFor({ isGroup: true, senderIdentityId: id })).toBe(GROUP_PALETTE[idx].text);
+      expect(nameColorFor({ isGroup: true, senderIdentityId: id })).toBe(
+        GROUP_PALETTE[idx].text
+      );
     }
     // 1:1 name colour is the blue, lightened for text on the page background.
-    expect(nameColorFor({ isGroup: false, senderIdentityId: 5 })).toBe("#93c5fd");
+    expect(nameColorFor({ isGroup: false, senderIdentityId: 5 })).toBe(
+      "#93c5fd"
+    );
   });
 });
 
 describe("the bubbles use the shared rule, not their own copy", () => {
   it("both bubble render paths go through bubbleStyleFor", () => {
-    const calls = (MESSAGES.match(/bubbleStyleFor\(\{ mine, isGroup, senderIdentityId: m\.senderIdentityId \}\)/g) ?? []).length;
+    const calls = (
+      MESSAGES.match(
+        /bubbleStyleFor\(\{ mine, isGroup, senderIdentityId: m\.senderIdentityId \}\)/g
+      ) ?? []
+    ).length;
     expect(calls, "both paths").toBe(2);
   });
 
@@ -165,25 +281,36 @@ describe("the bubbles use the shared rule, not their own copy", () => {
        accent CTA is asserted, so a hardcoded fill coming back on either button fails. */
     expect(code).not.toMatch(/linear-gradient\(135deg,#fb923c/);
     expect(code).not.toMatch(/BRAND_GRADIENT/);
-    expect((code.match(/\brcta\b/g) ?? []).length, "both send buttons").toBeGreaterThanOrEqual(2);
+    expect(
+      (code.match(/\brcta\b/g) ?? []).length,
+      "both send buttons"
+    ).toBeGreaterThanOrEqual(2);
   });
 
   it("the dead dark-text-on-grey branches are gone", () => {
     // Every bubble now sits on a colour with white text, so a `mine ? white :
     // muted` inner ternary would render muted grey on a blue bubble.
     const code = codeOnly(MESSAGES);
-    expect(code).not.toMatch(/mine \? "text-white\/\d+" : "text-muted-foreground"/);
+    expect(code).not.toMatch(
+      /mine \? "text-white\/\d+" : "text-muted-foreground"/
+    );
     expect(code).not.toMatch(/mine \? "bg-white\/\d+" : "bg-foreground/);
     expect(code).not.toMatch(/bg-muted\/70 text-foreground border-white\/10/);
   });
 
   it("the group sender label carries the person's own colour", () => {
-    const labels = (MESSAGES.match(/color: nameColorFor\(\{ isGroup, senderIdentityId: m\.senderIdentityId \}\)/g) ?? []).length;
+    const labels = (
+      MESSAGES.match(
+        /color: nameColorFor\(\{ isGroup, senderIdentityId: m\.senderIdentityId \}\)/g
+      ) ?? []
+    ).length;
     // THREE: both bubble paths AND the emoji-only path. The count is what caught the
     // miss — my first pass converted one of the two bubble labels and left the other
     // on `text-primary`, one colour for everybody, which is the thing being fixed.
     expect(labels, "every label site").toBe(3);
-    expect(codeOnly(MESSAGES)).not.toMatch(/text-\[11px\] font-semibold text-primary/);
+    expect(codeOnly(MESSAGES)).not.toMatch(
+      /text-\[11px\] font-semibold text-primary/
+    );
   });
 
   it("an emoji-only message in a group finally says WHO sent it", () => {
@@ -191,7 +318,10 @@ describe("the bubbles use the shared rule, not their own copy", () => {
     // arrived attached to nobody while every text message from the same person was
     // labelled — visible in the owner's own group screenshot.
     const emoji = MESSAGES.slice(MESSAGES.indexOf("if (emojiOnly) {"));
-    const branch = emoji.slice(0, emoji.indexOf("return (\n                <div"));
+    const branch = emoji.slice(
+      0,
+      emoji.indexOf("return (\n                <div")
+    );
     expect(branch.length).toBeGreaterThan(200);
     expect(branch).toMatch(/isGroup && !mine && !sameAsPrev/);
     expect(branch).toMatch(/nameById\.get\(m\.senderIdentityId\)/);
@@ -202,7 +332,9 @@ describe("the typing line", () => {
   it("lives in its own component, so its tick cannot re-render the thread", () => {
     // A several-times-a-second state update inline in the conversation re-renders
     // the whole message list — the v2.99.67 mistake.
-    expect(MESSAGES).toMatch(/<TypingLine typers=\{typers\} isGroup=\{isGroup\} labelFor=\{senderLabel\} \/>/);
+    expect(MESSAGES).toMatch(
+      /<TypingLine typers=\{typers\} isGroup=\{isGroup\} labelFor=\{senderLabel\} \/>/
+    );
     // The old inline block, with its hand-rolled "Several people are typing…", is
     // gone rather than left beside the new one.
     expect(codeOnly(MESSAGES)).not.toMatch(/Several people are typing/);
@@ -210,7 +342,9 @@ describe("the typing line", () => {
   });
 
   it("walks ONE capital along the name, and it repeats", () => {
-    expect(TYPING).toMatch(/const hot = idxs\[\(step \+ offset\) % idxs\.length\]/);
+    expect(TYPING).toMatch(
+      /const hot = idxs\[\(step \+ offset\) % idxs\.length\]/
+    );
     expect(TYPING).toMatch(/textTransform: "uppercase"/);
     expect(TYPING).toMatch(/textTransform: "lowercase"/);
   });
@@ -234,7 +368,9 @@ describe("the typing line", () => {
 
   it("gives each typer their own colour, from the shared module", () => {
     expect(TYPING).toMatch(/import \{ nameColorFor \} from ".\/peerColors"/);
-    expect(TYPING).toMatch(/color=\{nameColorFor\(\{ isGroup, senderIdentityId: id \}\)\}/);
+    expect(TYPING).toMatch(
+      /color=\{nameColorFor\(\{ isGroup, senderIdentityId: id \}\)\}/
+    );
   });
 
   it("staggers two typers so they are not mid-step together", () => {
@@ -269,7 +405,9 @@ describe("the message ⋮ reads as a button", () => {
   });
 
   it("has a real chip affordance — fill, border and shadow", () => {
-    const btn = MESSAGES.slice(MESSAGES.indexOf('aria-label="Message options"'));
+    const btn = MESSAGES.slice(
+      MESSAGES.indexOf('aria-label="Message options"')
+    );
     const cls = btn.slice(0, btn.indexOf("MoreVertical"));
     expect(cls).toMatch(/border border-border/);
     expect(cls).toMatch(/bg-muted\/80/);

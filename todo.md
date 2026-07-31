@@ -11278,6 +11278,20 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.61 — a group person's colour moves off the bubble onto their name and face (2026-07-31)
+
+Owner: *"you matched it about 60% ... for example, inside the message, where different people participate in the messages with different bubble colors"* — the one screen they named.
+
+- [x] **Board frame 3c and the owner's own earlier words genuinely conflict**, so it was asked rather than decided: the board gives every received bubble ONE neutral glass and colours the sender's NAME and AVATAR; `peerColors.ts` records them asking for per-person BUBBLE colours twice, widened to sixteen in v2.103.3. Asked directly, they chose **"Match the board exactly"**.
+- [x] The board's choice is load-bearing: 3c's reply quote and `@mention` are accent-coloured INSIDE the bubble, which only reads on a neutral fill. This is what unblocks the rest of the frame.
+- [x] **Nobody's colour moves** — `peerPaletteIndex` untouched, so the same identity picks the same entry; only what it tints changed. Each entry gained a `hue` derived from its own `from` colour, so the two cannot disagree.
+- [x] Mine (orange) and the 1:1 peer (blue) deliberately untouched — both named explicitly by the owner and neither is what they asked about.
+- [x] `PeerAvatar` gained `fallbackStyle` (a style, not a class — a runtime-composed Tailwind class comes out unstyled), merged after the geometry so a caller can only add colour.
+- [x] **9 tripwires bite by mutation**, sources byte-identical. Two survived first and were real gaps: the disc-agrees-with-name check compared only cardinality, and nothing asserted `PeerAvatar` APPLIES the tint (dropping the spread made the whole feature a silent no-op).
+- [x] Three pre-existing pins rewritten to the property — all three had frozen WHERE the colour was applied rather than the rule.
+- [ ] **The rest of frame 3c is unbuilt**: reply quote, `@mention`, seen-by, mono day divider, in-bubble timestamp, bubble radii, header, composer. Waiting on the fidelity audit's verified list rather than guessing at forty values.
+- [ ] Not verified on a device.
+
 ## v2.106.60 — the swipe row stays where you slid it, opaque, one side at a time (2026-07-31)
 
 Owner: *"when you slide on a message or group, the back buttons above the cover of the message or group become transparent, which is incorrect. When you slide right or left, that bar shouldn't be transparent; it should only show you the icons, either on the left or the right. When you remove your hand, the bar should stop where you slid it, and you can then click on these buttons: pen, delete, or whatever is mentioned there."*

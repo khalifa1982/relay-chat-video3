@@ -98,7 +98,7 @@ import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useThreadMuted, isThreadMuted, setThreadMuted, onMutedChange } from "@/app/mutedThreads";
 import { useTypers, useTypingConversations } from "@/app/typingStore";
-import { bubbleStyleFor, bubbleGlyphColor, nameColorFor } from "@/app/peerColors";
+import { bubbleStyleFor, bubbleGlyphColor, nameColorFor, senderAvatarStyle } from "@/app/peerColors";
 import { TypingLine } from "@/app/TypingLine";
 import { useDraft } from "@/app/draftStore";
 
@@ -238,9 +238,12 @@ function isEmojiOnly(body: string | null | undefined): boolean {
 function SenderThumb({
   member,
   show,
+  senderIdentityId,
 }: {
   member?: { name: string; number: string; avatarUrl: string | null };
   show: boolean;
+  /** Whose disc this is — the hue its initials fallback is tinted with (v2.106.61). */
+  senderIdentityId: number;
 }) {
   return (
     <span className="w-9 shrink-0 self-start grid place-items-center">
@@ -252,6 +255,14 @@ function SenderThumb({
           size={28}
           clickable={!!member?.number}
           className="mt-[2px]"
+          /* THE PERSON'S OWN COLOUR, now that the bubble no longer carries it
+             (v2.106.61). Board frame 3c builds each sender's disc from one hue —
+             `linear-gradient(135deg, hsl(H 65% 62%), hsl(H+45 70% 42%))` with near-black
+             initials — and it comes from the SAME palette entry as their name, so the
+             disc, the name and the typing line cannot disagree about who is who.
+             Only the initials fallback is tinted: somebody with a real photo shows the
+             photo, exactly as the board's own first sender does. */
+          fallbackStyle={senderAvatarStyle({ isGroup: true, senderIdentityId })}
         />
       )}
     </span>
@@ -2550,7 +2561,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     exist in the first place. Only for a group, and only for somebody
                     else's message: my own bubbles are already unambiguous. */}
                 {isGroup && !mine && (
-                  <SenderThumb member={memberById.get(m.senderIdentityId)} show={!sameAsPrev} />
+                  <SenderThumb member={memberById.get(m.senderIdentityId)} show={!sameAsPrev} senderIdentityId={m.senderIdentityId} />
                 )}
                 {mine && (
                   <MessageMenu

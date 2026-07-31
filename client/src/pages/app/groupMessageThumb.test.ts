@@ -109,7 +109,26 @@ describe("v2.103.3 — the sender thumbnail", () => {
   });
 
   it("only for a group, and only for somebody else's message", () => {
-    expect(MSG).toMatch(/\{isGroup && !mine && \(\s*<SenderThumb member=\{memberById\.get\(m\.senderIdentityId\)\} show=\{!sameAsPrev\} \/>/);
+    /* REWRITTEN v2.106.61: this froze the mount's exact PROP LIST, so adding the sender's
+       identity (which is what tints the disc in their own colour, per board frame 3c) broke
+       it while saying nothing about the rule it stands for — that the gutter appears for a
+       group message somebody ELSE sent, and never on mine. Asserted as the condition plus
+       the props it must carry, so the next prop is free and a widened gate still bites. */
+    /* Anchored on the THUMB, not on the gate: `{isGroup && !mine && (` also opens the
+       sender NAME label earlier in the file, so anchoring on the gate read the wrong
+       element — caught by this assertion failing on correct source. */
+    const at = MSG.indexOf("<SenderThumb ");
+    expect(at).toBeGreaterThan(0);
+    const mount = MSG.slice(at, MSG.indexOf("/>", at) + 2);
+    // The gutter is inside the group-and-not-mine gate.
+    expect(MSG.slice(0, at)).toMatch(/\{isGroup && !mine && \([^)]*$/);
+    expect(mount).toContain("member={memberById.get(m.senderIdentityId)}");
+    expect(mount).toContain("show={!sameAsPrev}");
+    // Whose disc it is — without this the gutter cannot carry the person's colour.
+    expect(mount).toContain("senderIdentityId={m.senderIdentityId}");
+    // The gate is the real thing being pinned: a constant would put a gutter on my own
+    // messages and on every 1:1.
+    expect(MSG).not.toMatch(/\{true && !mine && \(/);
   });
 
   it("the roster memo keeps the number and avatar the old one discarded", () => {
