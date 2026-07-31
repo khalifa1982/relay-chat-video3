@@ -130,9 +130,20 @@ describe("the counts on each header", () => {
     expect(CONTACTS.slice(at - 500, at)).toMatch(/tabular-nums/);
   });
 
-  it("each number says what it means, for a screen reader and on hover", () => {
-    expect(CONTACTS).toMatch(/title=\{`\$\{total\} contacts`\}/);
-    expect(CONTACTS).toMatch(/title=\{`\$\{onlineCount\} of them online now`\}/);
+  it("each number says what it means — on screen, or failing that on hover", () => {
+    /* REWRITTEN (v2.106.41). This froze the two `title` strings, and a title is the WEAKEST
+       way to satisfy this property: a phone cannot show one. Board 1e puts the word on the
+       online count itself, which is strictly better and is what broke the pin.
+       THE PROPERTY: every rendered number is explained. The online count now says "N online"
+       in the row; the total keeps a title, because the section LABEL beside it already says
+       what is being counted. */
+    expect(CONTACTS, "the online count carries its own word").toMatch(/\{onlineCount\} online/);
+    expect(CONTACTS, "the total is explained on hover, beside a label that names it").toMatch(
+      /title=\{`\$\{total\} contacts`\}/,
+    );
+    expect(CONTACTS, "…and the all-online section's single number too").toMatch(
+      /title=\{`\$\{total\} online`\}/,
+    );
   });
 });
 

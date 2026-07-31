@@ -557,25 +557,34 @@ export default function ContactsPage() {
                         so it shows one green number rather than "5 · 5". Everywhere
                         else: total in muted, then the online count in green — and
                         only when it is non-zero, because a green 0 spends attention
-                        on the one answer that needs none. */}
+                        on the one answer that needs none.
+
+                        BOARD 1e SAYS THE ONLINE COUNT CARRIES THE WORD, and that is not
+                        decoration: rendered as two bare integers this header read "10 3",
+                        and what the second number means lived only in a `title`, which a
+                        phone has no way to show. `● 3 online` answers it on the row. The
+                        TOTAL stays a bare mono number, because the label right beside it
+                        already says what is being counted. */}
                     {section.allActive ? (
+                      /* …and this one does NOT take the word, because its own LABEL is
+                         "Online": "Online … 3 online" says it twice. Measured with the
+                         word in place and it read exactly like that. */
                       <span
-                        className="text-[11px] font-bold tabular-nums text-[color:var(--relay-green-text)]"
+                        className="flex shrink-0 items-center gap-1 font-mono text-[10px] font-bold tabular-nums text-[color:var(--relay-green-text)]"
                         title={`${total} online`}
                       >
+                        <span className="size-1.5 rounded-full bg-[color:var(--relay-online)]" />
                         {total}
                       </span>
                     ) : (
-                      <span className="flex shrink-0 items-baseline gap-1 tabular-nums">
-                        <span className="text-[11px] text-muted-foreground/70" title={`${total} contacts`}>
+                      <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] tabular-nums">
+                        <span className="text-muted-foreground/70" title={`${total} contacts`}>
                           {total}
                         </span>
                         {onlineCount > 0 && (
-                          <span
-                            className="text-[11px] font-bold text-[color:var(--relay-green-text)]"
-                            title={`${onlineCount} of them online now`}
-                          >
-                            {onlineCount}
+                          <span className="flex items-center gap-1 font-bold text-[color:var(--relay-green-text)]">
+                            <span className="size-1.5 rounded-full bg-[color:var(--relay-online)]" />
+                            {onlineCount} online
                           </span>
                         )}
                       </span>
@@ -734,12 +743,29 @@ function ContactRow({
   onSetCategory: (cat: Category) => void;
 }) {
   return (
+    /* BOARD 1e — TWO LINES, AND THE REASON IS A MEASUREMENT RATHER THAN THE FRAME.
+       At 390px the single-line row spent its width like this: 32px of list padding, 42px
+       of avatar, 114px of quick-action buttons, 33px of tag chip and the gaps between
+       them — leaving the NAME 119px of the 228 that "Abdulrahman Alhammadi" needs, and
+       49px of it at 320px. So the row was cut off at EVERY width, and it spent more of
+       itself on chrome than on the one thing a contact row is for. Measured before
+       touching it, and this is the most literal reading of the owner's "the contacts
+       section is not showing".
+       LINE 1 is avatar + name + badges + tag: the name now gets ~265px at 390 and fits.
+       LINE 2 carries the PIN, the presence line and the quick actions — the same shape
+       v2.99.39 gave the Messages rows after the owner reported this exact truncation
+       ("A…"), so the two lists answer it the same way.
+       AND IT BRINGS THE VIDEO BUTTON BACK ON EVERY PHONE: it was `hidden xs:grid`, and
+       `--breakpoint-xs` is 480px, so board 1e's third quick action was absent on every
+       iPhone with only a ⋮-menu fallback. Nothing is removed; the row is reorganised so
+       all three fit. */
     <li
       className={
-        "flex items-center gap-3 px-4 md:px-5 py-2.5 border-b border-border/60 last:border-b-0 hover:bg-muted/30 transition-colors " +
+        "flex flex-col gap-1.5 px-4 md:px-5 py-2.5 border-b border-border/60 last:border-b-0 hover:bg-muted/30 transition-colors " +
         (c.blocked ? "opacity-60" : "")
       }
     >
+      <div className="flex items-center gap-3">
       {/* Avatar is its own button (status ring → viewer / profile popup);
           it sits OUTSIDE the main-area button — nested buttons are invalid. */}
       <PeerAvatar
@@ -805,29 +831,10 @@ function ContactRow({
               ) : null;
             })()}
           </div>
-          {/* PIN on its own line, presence UNDER it (v2.99.66, owner screenshot).
-              They shared a line before, and with a 6-digit PIN plus "last seen
-              18h ago" there was never room: every row wrapped mid-phrase
-              ("last seen" / "18h ago" on separate lines) and read as broken.
-              Two short lines fit any width and let both be read at a glance. */}
-          <div className="text-xs text-muted-foreground font-mono mt-0.5" dir="ltr">
-            {c.number.length === 6 ? c.number.slice(0, 3) + "-" + c.number.slice(3) : c.number}
-          </div>
-          <div className="text-xs text-muted-foreground mt-0.5 truncate">
-            {c.blocked ? (
-              <span className="text-[#ff8d84]">blocked</span>
-            ) : c.presenceHidden ? null : c.inCall ? (
-              <span className="text-amber-500">on a call</span>
-            ) : c.isOnline && c.idle ? (
-              // Backgrounded (v2.99.92): "away", not "online" and definitely not
-              // "last seen 3s ago", which is what minimising used to produce.
-              <span className="text-muted-foreground">away</span>
-            ) : c.isOnline ? (
-              <span className="text-[color:var(--relay-online)]">online</span>
-            ) : (
-              <>last seen {relativeTime(c.lastSeenAt)}</>
-            )}
-          </div>
+          {/* The company/role line stays on LINE 1, under the name it belongs to.
+              The PIN and the presence line moved to LINE 2 (see below) — they are what
+              line 2 has room for, and keeping them here would leave line 1 three lines
+              tall while line 2 held nothing but buttons. */}
           {(c.company || c.jobTitle) && (
             <div className="text-[11px] text-muted-foreground/80 truncate mt-0.5">
               {[c.jobTitle, c.company].filter(Boolean).join(" · ")}
@@ -835,10 +842,39 @@ function ContactRow({
           )}
         </div>
       </button>
+      </div>
 
-      {/* Inline actions: Message / Video / Voice + overflow menu — circular
-          gradient tap targets (message orange, video blue, call green). */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      {/* LINE 2 — the PIN, the presence line and the quick actions.
+          `dir="ltr"` + bidi isolation on the PIN, because an Arabic display name above
+          it resolves the row to RTL and would otherwise reorder the digit groups
+          (v2.99.77). The presence text CAN shrink; the buttons cannot, so the actions
+          are `shrink-0` and `ms-auto` pins them to the trailing edge in both
+          directions. */}
+      <div className="flex items-center gap-2 ps-[54px]">
+        <span
+          className="shrink-0 font-mono text-xs text-muted-foreground [unicode-bidi:isolate]"
+          dir="ltr"
+        >
+          {c.number.length === 6 ? c.number.slice(0, 3) + "-" + c.number.slice(3) : c.number}
+        </span>
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
+          {c.blocked ? (
+            <span className="text-[#ff8d84]">blocked</span>
+          ) : c.presenceHidden ? null : c.inCall ? (
+            <span className="text-amber-500">on a call</span>
+          ) : c.isOnline && c.idle ? (
+            // Backgrounded (v2.99.92): "away", not "online" and definitely not
+            // "last seen 3s ago", which is what minimising used to produce.
+            <span className="text-muted-foreground">away</span>
+          ) : c.isOnline ? (
+            <span className="text-[color:var(--relay-online)]">online</span>
+          ) : (
+            <>last seen {relativeTime(c.lastSeenAt)}</>
+          )}
+        </span>
+        {/* Inline actions: Message / Video / Voice + overflow menu — circular
+            gradient tap targets (message orange, video blue, call accent). */}
+        <div className="ms-auto flex items-center gap-1.5 shrink-0">
         <button
           type="button"
           aria-label="Message"
@@ -859,7 +895,11 @@ function ContactRow({
           title="Video call"
           onClick={onVideo}
           disabled={c.blocked}
-          className="hidden xs:grid place-items-center size-[34px] rounded-full shrink-0 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+          /* NO LONGER `hidden xs:grid`. `--breakpoint-xs` is 480px, so board 1e's third
+             quick action was absent on every iPhone, reachable only from the ⋮ menu — a
+             deliberate trade back when all four controls shared line 1 with the name.
+             Line 2 has the room, so the trade is off. */
+          className="grid place-items-center size-[34px] rounded-full shrink-0 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
             background: "linear-gradient(160deg, rgba(56,189,248,.26), rgba(56,189,248,.08))",
             color: "#38bdf8",
@@ -892,9 +932,9 @@ function ContactRow({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuItem onClick={onVideo} className="xs:hidden">
-              <Video className="size-4" /> Video call
-            </DropdownMenuItem>
+            {/* The video FALLBACK is gone with the breakpoint that made it necessary:
+                a duplicate of a control that is now always on screen is a second way to
+                do one thing, and the one that is harder to find. */}
             <DropdownMenuItem onClick={onToggleFavorite}>
               {c.favourite ? <><StarOff className="size-4" /> Unfavorite</> : <><Star className="size-4" /> Favorite</>}
             </DropdownMenuItem>
@@ -932,6 +972,7 @@ function ContactRow({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
       </div>
     </li>
   );

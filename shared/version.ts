@@ -4,4 +4,4 @@
  * The auto-update checker compares the client's BAKED version against the
  * server's RUNTIME version: after a new deploy they differ, which is how an
  * already-loaded tab learns a fresh version is live. Bump this on every release. */
-export const APP_VERSION = "2.106.40";
+export const APP_VERSION = "2.106.41";

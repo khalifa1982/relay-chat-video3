@@ -261,26 +261,31 @@ describe("4 — the away auto-reply is opt-in", () => {
 });
 
 describe("5 — contacts put last seen below the pin", () => {
-  it("the pin and the presence line are separate rows", () => {
-    const row = CONTACTS.slice(
-      CONTACTS.indexOf("PIN on its own line"),
-      CONTACTS.indexOf("PIN on its own line") + 1400
-    );
-    // The pin is its own element, LTR-isolated so an RTL name can't reorder it…
-    const pinDiv = row.indexOf('font-mono mt-0.5" dir="ltr"');
-    expect(pinDiv).toBeGreaterThan(-1);
+  /* RE-ANCHORED (v2.106.41). Both of these sliced 1400 characters from the COMMENT "PIN on
+     its own line" — the prose-anchor trap, and board 1e moved the PIN onto its own LINE 2
+     (measured: the single-line row left the name 119px of the 228 it needs), so the anchor
+     went with it. The property survives the move: the PIN is its own element, LTR-isolated,
+     never glued to the presence text with a middot, and every presence state still renders.
+     Anchored on the PIN'S OWN CODE now, which no comment can move. */
+  const pinRow = () => {
+    const at = CONTACTS.indexOf("{c.number.length === 6 ? c.number.slice(0, 3)");
+    expect(at, "the PIN element").toBeGreaterThan(-1);
+    return CONTACTS.slice(at - 400, at + 1400);
+  };
+
+  it("the pin and the presence line are separate elements", () => {
+    const row = pinRow();
+    const pin = row.indexOf('dir="ltr"');
+    expect(pin, "LTR-isolated, so an RTL name cannot reorder it").toBeGreaterThan(-1);
+    expect(row).toMatch(/\[unicode-bidi:isolate\]/);
     // …and the presence line is a LATER, separate element.
-    const presence = row.indexOf("last seen {relativeTime(c.lastSeenAt)}");
-    expect(presence).toBeGreaterThan(pinDiv);
+    expect(row.indexOf("last seen {relativeTime(c.lastSeenAt)}")).toBeGreaterThan(pin);
     // The old shape joined them on one line with a middot; that must be gone.
     expect(row).not.toMatch(/<> · last seen/);
   });
 
   it("keeps the blocked / on-a-call / online states it had", () => {
-    const row = CONTACTS.slice(
-      CONTACTS.indexOf("PIN on its own line"),
-      CONTACTS.indexOf("PIN on its own line") + 1400
-    );
+    const row = pinRow();
     for (const state of ["blocked", "on a call", "online"]) {
       expect(row, `${state} still rendered`).toContain(state);
     }

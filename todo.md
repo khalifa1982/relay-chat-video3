@@ -11278,6 +11278,61 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.41 — board 1e: the contact's name was cut off at every width (2026-07-31)
+
+The owner's *"Also the contacts section is not showing mmso many bugs"*, and the finding is
+arithmetic rather than a missing feature — which is why reading the source had not surfaced it.
+
+- [x] **The name was truncated at EVERY width.** Measured against the real built stylesheet at
+      390px, the single-line row spent 32px on list padding, 42 on the avatar, 114 on
+      quick-action buttons and 33 on the tag chip — leaving the NAME **119px of the 228** that
+      "Abdulrahman Alhammadi" needs, and **49px at 320**. The row spent more of itself on
+      chrome than on the one thing a contact row is for. Fixed with the shape v2.99.39 gave the
+      Messages rows after the owner reported the same truncation ("A…"): line 1 is the avatar,
+      name, badges and tag; line 2 carries the PIN, the presence line and the actions.
+      Re-measured across 320/390/430 in both themes: **228px and not truncated at 390 and
+      430**, 320's shortfall down from 179px to 53px, line 2 never overflowing, the PIN never
+      truncated, no sideways page scroll. The row is 104px tall against ~86 — the trade, and
+      the right direction on a list that scrolls.
+- [x] **The video quick action is back on every phone.** It was `hidden xs:grid` and
+      `--breakpoint-xs` is 30rem = 480px, wider than every iPhone — so board 1e's third action
+      was absent on every phone with only a ⋮-menu fallback. All four controls now fit at
+      320px, and the duplicate menu item is deleted (a second way to do one thing, and the
+      harder one to find). The breakpoint is read out of the stylesheet in the test, so the
+      claim "wider than a phone" cannot go stale.
+- [x] **Nothing was traded away for the room**, pinned by counting all four controls. Recorded
+      honestly: the board's 1e frame draws NO row actions at all (its right-hand slot is the
+      tag chip; the README's summary line paraphrases three). The frame is the source of truth
+      on look, but the owner asked for those actions in their own words, so the row is
+      reorganised rather than stripped.
+- [x] **The section header's second number says what it counts.** Two bare integers made a
+      header read "10 3", with the meaning living only in a `title` a phone cannot show. Now
+      `● 3 online` — the dot in the presence green, the words in the AA-measured
+      `--relay-green-text` (v2.99.86: the LED hue is 4.46:1 as small text). The ONLINE section
+      deliberately keeps a bare number, because measured with the word it read "Online … 3
+      online". Both counts still come from the one predicate the Online section uses.
+- [x] The PIN keeps its LTR isolation, which matters more under a name that may be Arabic —
+      verified on a real Arabic row. Line 2 uses `ps-`/`ms-`, never `pl-`/`ml-`, so the indent
+      and the trailing edge swap with the text direction.
+
+`client/src/app/contactsRowFrame.test.ts` (14). **All 12 tripwires verified by MUTATION** off a
+confirmed-green baseline from byte-exact backups, source byte-identical afterwards — including
+the row put back on one line, the video button re-hidden, the duplicate menu item reinstated,
+the count's word removed, and the counts made to diverge from the rows.
+
+**Three pre-existing pins rewritten to the property**, two of them the prose-anchor trap: they
+sliced 1400 characters from the comment "PIN on its own line", so moving the PIN to its own line
+moved the anchor with it. The third froze two `title` strings — the weakest way to satisfy its
+own property, since a phone cannot show a title — and broke the moment the better one shipped.
+**Two assertions of my own were wrong about the code**, both caught by failing on correct
+source: `title={`${total} online`}` legitimately contains the words a `not.toMatch` forbade, and
+so does the presence dot's `--relay-online` class name.
+
+**Not verified on a device**: every width is measured in a real browser against the real built
+stylesheet in both themes, but nobody has scrolled their own address book on the owner's phone —
+and this is on a branch, so it changes nothing they can see until PR #128 merges, which they
+asked me to hold. No schema change, no new dependency, no new env var. 4806 tests.
+
 ## v2.106.40 — board 1d: the play triangle nobody could see, and a tick vocabulary that was inverted (2026-07-31)
 
 Continuing the owner's *"You should check all my new designs and match it to the exsisting one"* on the
