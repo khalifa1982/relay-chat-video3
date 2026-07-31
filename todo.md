@@ -11278,6 +11278,57 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.43 — the contact PIN moves up so "last seen" shows in full (2026-07-31)
+
+Owner, with a screenshot of the just-deployed row: *"Move the pin for contact from below the
+name to after the badge and coloured green — why? because last seen doesn't show fully so keep
+it visible now."* Their screenshot shows every offline row reading `last seen …`, and their
+diagnosis was the arithmetic one.
+
+- [x] **The cause was the PIN's `shrink-0` on line 2.** The presence text was the only
+      shrinkable thing on that line, so the PIN's cell came out of its budget at every width.
+      Measured at their device width (375px, from the screenshot's 1125px at DPR 3): the
+      presence line got **72px of the 99** that `last seen 3h ago` needs.
+- [x] **Moved to line 1, after the badge.** Line 2 now owns the whole span between the indent
+      and the buttons — re-measured, `last seen 3h ago` is **not truncated at 375, 390 or
+      430** (99 needed, 99 given), in both themes.
+- [x] **320px is still 27px short**, said rather than glossed: four 34px controls plus the
+      indent leave 72px there. Every current iPhone is 375 or wider.
+- [x] **Green is not a new meaning** — which is why it does not collide with v2.106.42 moving a
+      pinned-thread marker OFF green one release earlier. That was a pin (not presence, not a
+      number). A 6-digit RELAY number in green is the app's own convention: the top bar has
+      rendered the viewer's own number in this exact token since v2.99.86, which is where the
+      token came from — the LED hue is 4.46:1 as small text and FAILS AA, so
+      `--relay-green-text` (5.92:1 light / 9.27:1 dark) exists for a number at this size. The
+      LED hue is forbidden here by test.
+- [x] **The cost, with numbers rather than buried**: the PIN is `shrink-0` on line 1, so the
+      name loses its cell — at 375px it goes **228px → 173px**, and a 21-character name
+      truncates by 55px where two releases ago it fitted. That is the trade the owner chose,
+      their reason is sound (a truncated *value* tells you nothing, a truncated *name* still
+      identifies the person), and it is recorded so it can be reversed knowingly.
+- [x] The bidi rule matters MORE after the move, not less: the PIN now sits inline with the
+      display name, so an Arabic name is a direct neighbour. Verified on a real Arabic row that
+      `dir=ltr`, `unicode-bidi: isolate` and the digit groups survive.
+
+`client/src/app/contactsRowFrame.test.ts` → 17. **All 7 tripwires verified by MUTATION** off a
+confirmed-green baseline, source byte-identical afterwards — including the PIN deleted, moved
+before the badge, given the LED hue, stripped of its isolation, made shrinkable, duplicated onto
+line 2, and the presence line made unshrinkable. A move that leaves a copy behind is pinned
+against specifically: that shape reads as done while the row prints the number twice AND line 2
+gets none of its cell back.
+
+**Three pre-existing pins rewritten to the property, two of them mine from one release
+earlier** — v2.106.41 asserted the PIN was `shrink-0` on line 2, i.e. it froze the defect within
+a release of shipping it. The v2.99.66 pair had frozen an arrangement now chosen twice in
+opposite directions; they assert the surviving property instead (the PIN and the presence line
+are distinct elements, never one concatenated run), and the describe is renamed, because a test
+whose title states the opposite of the code is worse than no title.
+
+**Deploy confirmed visually**: the screenshot is v2.106.42's two-line row running on the owner's
+phone — the first direct evidence the merge and rolling deploy reached the device. Not verified
+on a device for THIS change: measured in a real browser at 320/375/390/430 in both themes. No
+schema change, no new dependency, no new env var. 4817 tests.
+
 ## v2.106.42 — board 1c: the unread state was the least readable thing in the row (2026-07-31)
 
 The third screen of the owner's "check all my new designs and match it to the existing one" —
