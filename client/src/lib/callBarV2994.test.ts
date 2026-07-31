@@ -19,8 +19,10 @@ const CLIENT = fs.readFileSync(path.resolve(__dirname, "relayClient.ts"), "utf8"
 
 describe("control bar: labeled colored chips (v2.99.4)", () => {
   it("every bar button wraps its icon in .ctrl-ic and carries a .ctrl-lbl", () => {
-    // v2.99.36 (owner): moreBtn removed; recordBtn is now a bar chip instead.
-    for (const id of ["micBtn", "camBtn", "flipCamBtn", "screenBtn", "qualityBtn", "audioBtn", "pipBtn", "filterBtn", "addBtn", "hostBtn", "chatBtn", "recordBtn"]) {
+    /* v2.99.36 (owner): moreBtn removed. `recordBtn` was also in this list until
+       v2.106.53 — recording was an Egress job on the retired media server, so the
+       control had nothing behind it and a chip that cannot record is worse than none. */
+    for (const id of ["micBtn", "camBtn", "flipCamBtn", "screenBtn", "qualityBtn", "audioBtn", "pipBtn", "filterBtn", "addBtn", "hostBtn", "chatBtn"]) {
       const btn = RELAY_MARKUP.match(new RegExp(`<button[^>]*id="${id}"[^>]*>([\\s\\S]*?)</button>`));
       expect(btn, `#${id} must exist`).toBeTruthy();
       expect(btn![1], `#${id} needs the icon chip`).toContain('class="ctrl-ic"');
@@ -73,14 +75,19 @@ describe("v2.99.36 (owner): the ⋯ More menu + Diagnostics panel are REMOVED", 
     expect(RELAY_MARKUP).not.toMatch(/id="diagOverlay"/);
     expect(RELAY_MARKUP).not.toMatch(/Diagnostics/);
   });
-  it("Record survives as a normal labeled bar chip (feature kept, menu gone)", () => {
-    const rec = RELAY_MARKUP.match(/<button[^>]*id="recordBtn"[^>]*>([\s\S]*?)<\/button>/);
-    expect(rec).toBeTruthy();
-    expect(rec![0]).toMatch(/class="ctrl"/);
-    expect(rec![0]).toMatch(/style="display:none"/); // revealed only when recording is configured
-    expect(rec![1]).toContain("ctrl-lbl");
-    expect(rec![1]).toContain("Record");
-    expect(CLIENT).toMatch(/\$\("recordBtn"\) as HTMLElement \| null\)\?\.addEventListener\("click"/);
+  it("Record is gone entirely — control, indicator, CSS and wiring", () => {
+    /* v2.106.53. Recording was a room-composite Egress job on the hosted media
+       server; the owner cancelled that account, so there is nothing to start. A
+       control that is permanently hidden is dead weight, and one that is VISIBLE and
+       cannot record is worse — so the chip, the "● REC" header indicator, their CSS
+       and the click wiring all go together rather than leaving a stub. */
+    expect(RELAY_MARKUP).not.toMatch(/id="recordBtn"/);
+    expect(RELAY_MARKUP).not.toMatch(/id="recIndicator"/);
+    expect(RELAY_CSS).not.toMatch(/#recordBtn/);
+    expect(RELAY_CSS).not.toMatch(/\.rec-ind\b/);
+    expect(CLIENT).not.toMatch(/recordBtn/);
+    expect(CLIENT).not.toMatch(/toggleRecording/);
+    expect(CLIENT).not.toMatch(/recordingAvailable/);
   });
   it("the wiring, the toggleDiag panel and the '?' shortcut are gone", () => {
     expect(CLIENT).not.toMatch(/moreMenu/);

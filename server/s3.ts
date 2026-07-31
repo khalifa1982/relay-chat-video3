@@ -19,7 +19,7 @@
  * Version 4)"): the `examplebucket`/`test.txt` GET + PUT header examples and
  * the 86400s presigned-URL example, byte-for-byte.
  *
- * Config (read PER-CALL, like TURN_* and LIVEKIT_*, so ops can flip it
+ * Config (read PER-CALL, like TURN_*, so ops can flip it
  * without a rebuild):
  *   S3_BUCKET, S3_REGION, S3_ACCESS_KEY, S3_SECRET   — all four required
  *   S3_ENDPOINT           optional — non-AWS S3 (R2, MinIO, …)

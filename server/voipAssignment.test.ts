@@ -46,7 +46,7 @@ const NOW = 1_785_000_000_000;
 /** The two real nodes, as the brief measured them. */
 const A = (over: Partial<VoipNode> = {}): VoipNode => ({
   instanceId: "i-062022390e558ce74",
-  publicIp: "13.201.44.153",
+  publicIp: "192.0.2.10",
   privateIp: "10.0.1.192",
   az: "ap-south-1a",
   cores: 2,
@@ -58,7 +58,7 @@ const A = (over: Partial<VoipNode> = {}): VoipNode => ({
 });
 const B = (over: Partial<VoipNode> = {}): VoipNode => ({
   instanceId: "i-0dce71f5056f73ce6",
-  publicIp: "13.203.219.67",
+  publicIp: "198.51.100.20",
   privateIp: "10.0.2.246",
   az: "ap-south-1b",
   cores: 2,
@@ -71,58 +71,40 @@ const B = (over: Partial<VoipNode> = {}): VoipNode => ({
 
 describe("planning a room's transport composes the two halves so they cannot disagree", () => {
   it("a usable node yields mediasoup AND the assignment for it", () => {
-    const p = planRoomTransport({ nodes: [A()], nowMs: NOW, livekitEnabled: true });
+    const p = planRoomTransport({ nodes: [A()], nowMs: NOW });
     expect(p.transport).toBe("mediasoup");
     expect(p.voip).toEqual({
       instanceId: A().instanceId,
       publicIp: A().publicIp,
+      /* BOTH PLANES, each named for its own: the client is told `publicIp` for media and the
+         app posts signaling to `privateIp`. Recording only the public one leaves a later
+         signaling caller nothing else to reach the node by, so it would be used. */
+      privateIp: A().privateIp,
       az: A().az,
       assignedAt: NOW,
     });
   });
 
-  it("no nodes at all falls back to LiveKit with a NULL assignment", () => {
-    const p = planRoomTransport({ nodes: [], nowMs: NOW, livekitEnabled: true });
-    expect(p.transport).toBe("livekit");
+  it("no usable node falls back to the MESH rather than refusing the call", () => {
+    /* The floor, and the reason this function cannot answer "nothing": the mesh needs no
+       server at all, so a Redis blip or an unreachable node degrades the call's QUALITY and
+       never removes the ability to place it. There used to be a rung between these two — a
+       hosted SFU — and the owner cancelled that account, so the mesh is now what EVERY
+       fallback lands on and its 6-participant cap is the real ceiling. */
+    const p = planRoomTransport({ nodes: [], nowMs: NOW });
+    expect(p.transport).toBe("mesh");
     expect(p.voip, "a non-mediasoup verdict must not carry an address").toBeNull();
   });
 
-  it("nothing configured falls back to the MESH rather than refusing the call", () => {
-    /* The floor, and the reason this function cannot answer "nothing": the mesh needs no
-       server at all, so a Redis blip or an unconfigured SFU degrades the call's QUALITY and
-       never removes the ability to place it. */
-    const p = planRoomTransport({ nodes: [], nowMs: NOW, livekitEnabled: false });
+  it("the kill switch diverts without stranding the call, and spends no assignment", () => {
+    const p = planRoomTransport({ nodes: [A()], nowMs: NOW, mediasoupEnabled: false });
     expect(p.transport).toBe("mesh");
     expect(p.voip).toBeNull();
   });
 
-  it("the kill switch diverts without stranding the call, and spends no assignment", () => {
-    const withLk = planRoomTransport({
-      nodes: [A()],
-      nowMs: NOW,
-      livekitEnabled: true,
-      mediasoupEnabled: false,
-    });
-    expect(withLk.transport).toBe("livekit");
-    expect(withLk.voip).toBeNull();
-    const withoutLk = planRoomTransport({
-      nodes: [A()],
-      nowMs: NOW,
-      livekitEnabled: false,
-      mediasoupEnabled: false,
-    });
-    expect(withoutLk.transport).toBe("mesh");
-    expect(withoutLk.voip).toBeNull();
-  });
-
   it("the A/B override does the same with a perfectly healthy node available", () => {
-    const p = planRoomTransport({
-      nodes: [A()],
-      nowMs: NOW,
-      livekitEnabled: true,
-      forceLivekit: true,
-    });
-    expect(p.transport).toBe("livekit");
+    const p = planRoomTransport({ nodes: [A()], nowMs: NOW, forceMesh: true });
+    expect(p.transport).toBe("mesh");
     expect(p.voip).toBeNull();
   });
 
@@ -141,24 +123,16 @@ describe("planning a room's transport composes the two halves so they cannot dis
     let sawMediasoup = false;
     let sawFallback = false;
     for (const nodes of nodeSets) {
-      for (const livekitEnabled of [true, false]) {
-        for (const forceLivekit of [true, false, undefined]) {
-          for (const mediasoupEnabled of [true, false, undefined]) {
-            const p = planRoomTransport({
-              nodes,
-              nowMs: NOW,
-              livekitEnabled,
-              forceLivekit,
-              mediasoupEnabled,
-            });
-            const label = `${nodes.length} nodes lk=${livekitEnabled} force=${forceLivekit} enabled=${mediasoupEnabled}`;
-            if (p.transport === "mediasoup") {
-              sawMediasoup = true;
-              expect(isVoipAssignment(p.voip), `mediasoup with no assignment: ${label}`).toBe(true);
-            } else {
-              sawFallback = true;
-              expect(p.voip, `${p.transport} carrying an assignment: ${label}`).toBeNull();
-            }
+      for (const forceMesh of [true, false, undefined]) {
+        for (const mediasoupEnabled of [true, false, undefined]) {
+          const p = planRoomTransport({ nodes, nowMs: NOW, forceMesh, mediasoupEnabled });
+          const label = `${nodes.length} nodes force=${forceMesh} enabled=${mediasoupEnabled}`;
+          if (p.transport === "mediasoup") {
+            sawMediasoup = true;
+            expect(isVoipAssignment(p.voip), `mediasoup with no assignment: ${label}`).toBe(true);
+          } else {
+            sawFallback = true;
+            expect(p.voip, `${p.transport} carrying an assignment: ${label}`).toBeNull();
           }
         }
       }
@@ -172,7 +146,7 @@ describe("planning a room's transport composes the two halves so they cannot dis
        different node. The expected answer is derived from `rankNodes` rather than restated,
        so this cannot go stale if the ordering is ever retuned. */
     const nodes = [A({ consumers: 40 }), B({ consumers: 4 })];
-    const p = planRoomTransport({ nodes, nowMs: NOW, livekitEnabled: true });
+    const p = planRoomTransport({ nodes, nowMs: NOW });
     expect(p.voip?.instanceId).toBe(rankNodes(nodes, { nowMs: NOW })[0].instanceId);
     expect(p.voip?.instanceId).toBe(B().instanceId);
   });
@@ -181,7 +155,6 @@ describe("planning a room's transport composes the two halves so they cannot dis
     const p = planRoomTransport({
       nodes: [A({ consumers: 2 }), B({ consumers: 2 })],
       nowMs: NOW,
-      livekitEnabled: true,
       preferAz: "ap-south-1b",
     });
     expect(p.voip?.az).toBe("ap-south-1b");
@@ -194,7 +167,6 @@ describe("planning a room's transport composes the two halves so they cannot dis
     const p = planRoomTransport({
       nodes: [A(), B()],
       nowMs: NOW,
-      livekitEnabled: true,
       pending: { [A().instanceId]: 6 },
     });
     expect(p.voip?.instanceId).toBe(B().instanceId);
@@ -207,16 +179,14 @@ describe("planning a room's transport composes the two halves so they cannot dis
     const p = planRoomTransport({
       nodes: [A()],
       nowMs: NOW,
-      livekitEnabled: true,
       excludeInstanceIds: [A().instanceId],
     });
-    expect(p.transport).toBe("livekit");
+    expect(p.transport).toBe("mesh");
     expect(p.voip).toBeNull();
     // With a second healthy node it degrades to that node rather than off the SFU entirely.
     const p2 = planRoomTransport({
       nodes: [A(), B()],
       nowMs: NOW,
-      livekitEnabled: true,
       excludeInstanceIds: [A().instanceId],
     });
     expect(p2.transport).toBe("mediasoup");
@@ -227,7 +197,7 @@ describe("planning a room's transport composes the two halves so they cannot dis
     /* Two reads of `Date.now()` inside one decision is how an assignment ends up stamped a
        few milliseconds after the freshness it was judged against — small, and exactly the
        kind of thing that makes a later comparison unreproducible. */
-    const p = planRoomTransport({ nodes: [A()], nowMs: NOW, livekitEnabled: true });
+    const p = planRoomTransport({ nodes: [A()], nowMs: NOW });
     expect(p.voip?.assignedAt).toBe(NOW);
   });
 });
@@ -270,11 +240,33 @@ describe("an existing assignment is re-validated on the ONE thing that can betra
     expect(assignmentStillValid(live, [A({ updatedAt: NOW - 60_000 })], NOW)).toBe(false);
   });
 
-  it("a SATURATED node invalidates it too", () => {
-    /* Deliberately the same `isNodeUsable` the selection uses. Two definitions of "can this
-       node take work" is how a room gets kept on a node the selector would refuse. */
-    expect(assignmentStillValid(live, [A({ cpuLoad: NODE_CPU_CEILING })], NOW)).toBe(false);
-    expect(assignmentStillValid(live, [A({ routers: NODE_MAX_ROUTERS })], NOW)).toBe(false);
+  it("a SATURATED node KEEPS its rooms — admission is not liveness", () => {
+    /* THIS ASSERTION USED TO SAY THE OPPOSITE, and it froze a real defect with a comment
+       arguing for it: "deliberately the same `isNodeUsable` the selection uses. Two
+       definitions of 'can this node take work' is how a room gets kept on a node the
+       selector would refuse."
+
+       That reasoning is correct about ADMISSION and wrong here, because this function asks a
+       different question. `routers >= NODE_MAX_ROUTERS` means the node is holding forty LIVE
+       rooms — the ceiling is reached BECAUSE they exist — so answering "is this room still
+       on a good node?" with the admission answer declared all forty invalid, i.e. the
+       ceiling evicting exactly the calls it was added to protect, at the moment the node is
+       busiest. Same for the CPU ceiling. It was latent only because nothing calls this yet.
+
+       The property is: withhold NEW work from a full node, and never take away work it is
+       already doing. */
+    expect(assignmentStillValid(live, [A({ cpuLoad: NODE_CPU_CEILING })], NOW)).toBe(true);
+    expect(assignmentStillValid(live, [A({ routers: NODE_MAX_ROUTERS })], NOW)).toBe(true);
+    // …and the other half of the same property, so this cannot rot into "always valid".
+    expect(selectVoipNode([A({ cpuLoad: NODE_CPU_CEILING })], { nowMs: NOW })).toBeNull();
+    expect(selectVoipNode([A({ routers: NODE_MAX_ROUTERS })], { nowMs: NOW })).toBeNull();
+  });
+
+  it("a DRAINING node keeps its rooms too, which is the whole point of draining", () => {
+    /* If this returned false, marking a node draining would tear down the live calls that
+       draining exists to let finish — the feature destroying its own purpose. */
+    expect(assignmentStillValid(live, [A({ draining: true })], NOW)).toBe(true);
+    expect(selectVoipNode([A({ draining: true })], { nowMs: NOW })).toBeNull();
   });
 
   it("a node a few milliseconds ahead of us keeps its rooms", () => {
@@ -286,7 +278,8 @@ describe("an existing assignment is re-validated on the ONE thing that can betra
 describe("an assignment read back off the wire is validated field by field", () => {
   const good: VoipAssignment = {
     instanceId: "i-062022390e558ce74",
-    publicIp: "13.201.44.153",
+    publicIp: "192.0.2.10",
+    privateIp: "198.51.100.10",
     az: "ap-south-1a",
     assignedAt: NOW,
   };
@@ -311,6 +304,18 @@ describe("an assignment read back off the wire is validated field by field", () 
       { ...good, publicIp: "256.1.1.1" },
       { ...good, publicIp: "" },
       { ...good, az: "" },
+      /* THE PRIVATE ADDRESS IS AS LOAD-BEARING AS THE PUBLIC ONE, and its cases were
+         missing — found by mutation, where dropping the check entirely survived the whole
+         suite. An assignment that validates without it hands the next signaling caller
+         `undefined` for the address it must POST to, and the only other address in the
+         record is the one reserved for media, so that is what gets used: the two planes
+         crossed by an omission rather than a decision. */
+      { ...good, privateIp: undefined },
+      { ...good, privateIp: "" },
+      { ...good, privateIp: "not-an-ip" },
+      { ...good, privateIp: "10.0.1" },
+      { ...good, privateIp: "256.1.1.1" },
+      { ...good, privateIp: 5 },
       { ...good, assignedAt: 0 },
       { ...good, assignedAt: -1 },
       { ...good, assignedAt: Number.NaN },
@@ -332,31 +337,31 @@ describe("a HYDRATED room's transport is the pre-feature answer when the record 
        carries no transport and no assignment, so reading it as mediasoup hands the room to a
        node that has never heard of it — and a rolling deploy serves both bundles for about a
        minute, which is long enough for that to happen to real calls. */
-    expect(transportForHydratedRoom({}, { livekitEnabled: true })).toBe("livekit");
-    expect(transportForHydratedRoom({}, { livekitEnabled: false })).toBe("mesh");
-    expect(transportForHydratedRoom(null, { livekitEnabled: true })).toBe("livekit");
-    expect(transportForHydratedRoom(undefined, { livekitEnabled: false })).toBe("mesh");
+    expect(transportForHydratedRoom({})).toBe("mesh");
+    expect(transportForHydratedRoom(null)).toBe("mesh");
+    expect(transportForHydratedRoom(undefined)).toBe("mesh");
   });
 
   it("a recorded transport is honoured exactly", () => {
-    for (const t of ["mediasoup", "livekit", "mesh"] as const) {
-      expect(transportForHydratedRoom({ transport: t }, { livekitEnabled: true })).toBe(t);
+    for (const t of ["mediasoup", "mesh"] as const) {
+      expect(transportForHydratedRoom({ transport: t })).toBe(t);
     }
-    // Even with LiveKit switched off: the room is ALREADY on that transport and saying
-    // otherwise would move a live call's media mid-flight.
-    expect(transportForHydratedRoom({ transport: "livekit" }, { livekitEnabled: false })).toBe(
-      "livekit",
-    );
+  });
+
+  it("a record naming the RETIRED hosted SFU reads as mesh", () => {
+    /* The one value worth its own case (v2.106.53): such a record is real — a room
+       assigned before the account was cancelled — and the only thing it tells us is
+       that the room is not on one of our nodes. The mesh is the transport that needs
+       no server to be true, so that is the honest answer; reading it as mediasoup
+       would hand the room to a node that has never heard of it. */
+    expect(transportForHydratedRoom({ transport: "livekit" })).toBe("mesh");
   });
 
   it("an UNRECOGNISED transport degrades rather than being trusted", () => {
     // A value from a future build, or a corrupted record. Either way it is not something this
     // build can route, so it must read as "we do not know" and take the safe answer.
     for (const t of ["sfu", "", 1, null, {}, "MEDIASOUP"]) {
-      expect(
-        transportForHydratedRoom({ transport: t }, { livekitEnabled: true }),
-        JSON.stringify(t),
-      ).toBe("livekit");
+      expect(transportForHydratedRoom({ transport: t }), JSON.stringify(t)).toBe("mesh");
     }
   });
 });

@@ -102,7 +102,6 @@ describe("mesh remote audio has its own element", () => {
     expect(body).toMatch(/peers\[pin\]\.audioEl/);
     // The <video>s stay collected — they still need play() re-kicked for VIDEO.
     expect(body).toMatch(/querySelector\("video"\)/);
-    expect(body).toMatch(/for \(const a of lkAudioEls\)/);
   });
 
   it("the frameless consent track still reaches the video element", () => {
@@ -155,12 +154,21 @@ describe("the msid-less merge accumulates on the entry, not the video element", 
   });
 });
 
-describe("the SFU path is untouched (it already attached per track)", () => {
-  it("remote SFU audio still attaches detached and is tracked for sink routing", () => {
-    // v2.106.50's fix. The mesh change makes the two transports agree; it must not
-    // alter the SFU side, which was already correct.
+describe("there is exactly ONE route to remote audio", () => {
+  it("collectAudioEls is the only collector, and nothing else gathers media elements", () => {
+    /* THIS REPLACES A PARITY PIN. The hosted SFU attached per track and was
+       structurally immune to the defect this file is about; that transport is gone
+       (v2.106.53), so what is left to protect is the SINGLE FUNNEL. `applyAudioSink`
+       (the output-device picker), `armAudioUnlock`'s tap-to-recover and the forced
+       loudspeaker route ALL reach remote audio through `collectAudioEls` — so an
+       element missing from it is three shipped features silently not covering it. */
     const code = codeOnly(CLIENT);
-    expect(code).toMatch(/const audioEl = track\.attach\(\) as HTMLMediaElement;/);
-    expect(code).toMatch(/lkAudioEls\.push\(audioEl\)/);
+    const collectors = code.match(/function collectAudioEls\(/g) || [];
+    expect(collectors.length).toBe(1);
+    for (const consumer of ["applyAudioSink", "armAudioUnlock", "routeElToLoudspeaker"]) {
+      expect(code, consumer).toContain(consumer);
+    }
+    // The retired transport's own element list is gone with it.
+    expect(code).not.toMatch(/lkAudioEls/);
   });
 });

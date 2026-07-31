@@ -6,10 +6,11 @@ import { RELAY_CSS, RELAY_MARKUP } from "./relayAssets";
 /**
  * Regression guards for two live-call fixes (v2.32):
  *  - Multi-party camera: the audio-only tile must hide its <video> with
- *    `visibility:hidden`, NEVER `display:none`. LiveKit's adaptiveStream pauses
- *    inbound video for any element whose computed `display` is none, so a
- *    display:none here stalls remote cameras when audio subscribes before video
- *    (common with 3+ parties). Pin it so it can't regress.
+ *    `visibility:hidden`, NEVER `display:none`. An SFU that samples element
+ *    visibility to decide what to send will PAUSE inbound video for any element
+ *    whose computed `display` is none, so a display:none here stalls remote
+ *    cameras when audio subscribes before video (common with 3+ parties). Pinned
+ *    because that hazard belongs to any SFU, not to one vendor.
  *  - Mobile screen share: the button must NOT be blanket-hidden on phones; it's
  *    capability-gated in JS instead. And it must default to hidden in markup.
  */

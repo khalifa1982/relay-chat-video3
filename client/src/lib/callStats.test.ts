@@ -304,15 +304,19 @@ describe("v2.105.21 — the readout is wired without a second poller", () => {
     expect(CLIENT).not.toMatch(/setInterval\(\s*collectCallQuality/);
   });
 
-  it("collects from BOTH transports, so their numbers are comparable", () => {
+  it("collects every leg through the ONE shared summarizer", () => {
+    /* The second collector went with the retired transport (v2.106.53). What the
+       pin is FOR survives and is the reason the summarizer is shared at all: any
+       transport added later must reduce through `summarizeStats` rather than
+       computing its own numbers, or the two cannot be compared and "is this one
+       worse?" has no answer. */
     const fn = CLIENT.slice(CLIENT.indexOf("async function collectCallQuality()"));
     const body = fn.slice(0, fn.indexOf("\n  function toggleCallStats"));
-    expect(body).toMatch(/peers\[pin\]\.pc\.getStats\(\)/); // mesh
-    expect(body).toMatch(/getRTCStatsReport/); // LiveKit
-    // LOCAL publications as well as remote: reading only remotes would report a
-    // call with no upstream at all, and the candidate pair lives on the publisher.
-    expect(body).toMatch(/localParticipant/);
-    expect(body).toMatch(/remoteParticipants/);
+    expect(body.length, "the slice must be real").toBeGreaterThan(120);
+    expect(body).toMatch(/peers\[pin\]\.pc\.getStats\(\)/);
+    // EVERY leg, and one reduction: a per-transport summary is the thing to avoid.
+    expect(body).toMatch(/summarizeStats\(/);
+    expect((body.match(/summarizeStats\(/g) || []).length).toBe(1);
   });
 
   it("goes through the ONE shared summarizer, never a private copy of the maths", () => {
@@ -391,33 +395,35 @@ describe("v2.105.21 — the readout cannot break the control bar it sits above",
   });
 });
 
-describe("v2.105.21 — degradationPreference finally reaches the SFU path", () => {
-  it("is set in publishDefaults, not only in the mesh-only function", () => {
-    // v2.99.84 reasoned that 'balanced' beats the default maintain-framerate on a
-    // throttled phone and then applied it ONLY inside applyMeshVideoCaps(), which
-    // opens with `if (livekitEnabled) return` — so all three of its occurrences
-    // were unreachable on the transport the fleet actually runs.
-    expect(CLIENT).toMatch(/const pubDefaults: Record<string, unknown> = \{ degradationPreference: "balanced" \}/);
-  });
+describe("degradationPreference reaches every sender", () => {
+  it("'balanced' is applied, and it is reachable rather than behind a dead gate", () => {
+    /* THE ORIGINAL DEFECT, worth keeping stated: v2.99.84 reasoned that 'balanced'
+       beats the camera default of maintain-framerate on a throttled phone — which
+       holds fps and sheds RESOLUTION, precisely backwards on a phone whose uplink
+       tightens the moment a second track starts — and then applied it ONLY inside a
+       function that opened `if (sfuEnabled) return`, so every occurrence was
+       unreachable on the transport the fleet actually ran. It is now applied on the
+       one path there is, and this pin exists so a future transport gate cannot make
+       it unreachable again.
 
-  it("the mesh path still has its own, unchanged", () => {
-    /* BOUNDED BY THE FUNCTION'S OWN END, not by a character count. My first cut
-       sliced +2600 and missed the line it was looking for, which is the fixed-slice
-       fragility this repo has hit repeatedly (v2.99.78, v2.99.94, v2.105.8) — a
-       window that silently shrinks as the code above it grows. */
+       BOUNDED BY THE FUNCTION'S OWN END rather than a character count — the
+       fixed-slice fragility this repo has hit repeatedly (v2.99.78, v2.99.94,
+       v2.105.8): a window that silently shrinks as the code above it grows. */
     const at = CLIENT.indexOf("function applyMeshVideoCaps()");
     expect(at).toBeGreaterThan(-1);
     const end = CLIENT.indexOf("\n  function ", at + 10);
     expect(end).toBeGreaterThan(at);
     const mesh = CLIENT.slice(at, end);
     expect(mesh).toMatch(/degradationPreference = "balanced"/);
-    // …and it is still MESH-only, so this release did not widen it by accident.
-    expect(mesh.slice(0, 100)).toMatch(/if \(livekitEnabled\) return;/);
+    // No early return can strand it.
+    expect(mesh.slice(0, 120)).not.toMatch(/\breturn;/);
   });
 
-  it("the audio preset stays a SEPARATE conditional assignment", () => {
-    // Folding it into the object literal would mean an older livekit-client without
-    // the enum takes degradationPreference down with it.
-    expect(CLIENT).toMatch(/if \(AudioPresetsEnum\?\.speech\) pubDefaults\.audioPreset = AudioPresetsEnum\.speech;/);
+  it("it is set in its OWN setParameters call, never folded in with the caps", () => {
+    /* A top-level field some engines reject outright, and a rejected setParameters
+       discards the ENTIRE object — so folding it in would silently lose the bitrate
+       AND framerate caps on exactly the browsers that most need them. */
+    const calls = CLIENT.match(/setParameters\(/g) || [];
+    expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 });

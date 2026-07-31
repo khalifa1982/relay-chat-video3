@@ -45,9 +45,15 @@ describe("voice improvements", () => {
 });
 
 describe("video improvements", () => {
-  it("unpublishes camera video on the SFU for a voice-only call instead of sending it disabled", () => {
-    expect(CLIENT).toMatch(/async function syncLivekitVideoPublication/);
-    expect(CLIENT).toMatch(/if \(camOn && \(videoApproved \|\| callIsGroup\)\) \{\s*\n\s*for \(const t of send\.getVideoTracks\(\)\) await publishSafe\(t, "camera"\);/);
+  it("a voice-only call sends no camera at all, rather than sending it disabled", () => {
+    /* The SFU form UNPUBLISHED the track (a disabled MediaStreamTrack still occupies
+       a publication and every subscriber's bandwidth). v2.106.44 made the stronger
+       version true one step earlier and it is what survives: a voice call never
+       ACQUIRES a camera, so there is nothing to send or unpublish — and the camera
+       is reacquired if the call is later upgraded. */
+    expect(CLIENT).toMatch(/async function reacquireCameraForPublish/);
+    expect(CLIENT).toMatch(/wantVideo/);
+    expect(CLIENT).toMatch(/consentOk \? \(sendStream\.getVideoTracks\(\)\[0\] \|\| null\) : null/);
   });
 
   it("caps screen-share resolution/framerate separately from the camera", () => {

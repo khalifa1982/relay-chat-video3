@@ -35,8 +35,9 @@
  * @param {number} o.routers     live router count (one per room on this node)
  * @param {number} o.consumers   live consumer count — the load signal the app ranks on
  * @param {number} o.cpuLoad     0..1 per core; the app EXCLUDES a saturated node
- * @param {number} o.nowMs       the node's own clock; the app judges freshness on this
- * @returns {{instanceId:string,publicIp:string,privateIp:string,az:string,cores:number,routers:number,consumers:number,cpuLoad:number,updatedAt:number}}
+ * @param {number} o.nowMs      the node's own clock; the app judges freshness on this
+ * @param {boolean} [o.draining] being retired: no NEW rooms, existing ones keep flowing
+ * @returns {{instanceId:string,publicIp:string,privateIp:string,az:string,cores:number,routers:number,consumers:number,cpuLoad:number,updatedAt:number,draining:boolean}}
  */
 export function buildNodeRecord(o) {
   return {
@@ -54,6 +55,11 @@ export function buildNodeRecord(o) {
     // deciding what is too hot is the app's. Clamping here would hide saturation.
     cpuLoad: Math.max(0, Number.isFinite(o.cpuLoad) ? o.cpuLoad : 0),
     updatedAt: o.nowMs,
+    /* ALWAYS PRESENT and always a real boolean, so the app never has to distinguish "this
+       node says it is serving" from "this node is too old to have an opinion". `=== true`
+       rather than truthy for the same reason the app decodes it that way: a flag written by
+       a shell can arrive as the STRING "false", and a truthy test would retire the node. */
+    draining: o.draining === true,
   };
 }
 

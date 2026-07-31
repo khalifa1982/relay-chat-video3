@@ -22,15 +22,36 @@ costs a deploy:
 
 ## The two nodes (Mumbai, one per AZ)
 
-| zone | instance | private | public |
-|---|---|---|---|
-| ap-south-1a | `i-062022390e558ce74` | 10.0.1.192 | 13.201.44.153 |
-| ap-south-1b | `i-0dce71f5056f73ce6` | 10.0.2.246 | 13.203.219.67 |
+| zone | instance | private (signaling) | public (media) | EIP allocation |
+|---|---|---|---|---|
+| ap-south-1a | `i-062022390e558ce74` | 10.0.1.192 | 13.207.213.126 | `eipalloc-0f635fd71c037d3a2` |
+| ap-south-1b | `i-0dce71f5056f73ce6` | 10.0.2.246 | 13.203.36.154 | `eipalloc-0359c2389f4a474f8` |
 
-**Those public IPs are auto-assigned, not Elastic.** They change if an instance is stopped
-and started. Nothing in this repo may hardcode them: the agent reads its own address from
-IMDSv2 at boot (and re-reads it every 60s), publishes it to the registry, and the app reads
-the registry. The table above is for humans checking a node by hand.
+**Those public IPs are now ELASTIC and stable** (2026-07-31; the quota increase landed, both
+allocations tagged `DoNotDelete=true`). They previously auto-assigned and changed on
+stop/start.
+
+**Stable does not make hardcoding acceptable, and nothing in this repo hardcodes them.** The
+agent reads its own address from IMDSv2 at boot, re-reads it on a timer, publishes it to the
+registry, and the app reads the registry. Three reasons that stays true now the addresses are
+pinned:
+
+1. The registry is what makes node 3+ plug-and-play — it launches with its own EIP and simply
+   registers. A config list would need editing and deploying for every new node.
+2. An EIP can still be re-associated, and `announcedAddress` is immutable per transport
+   (v2.106.34), which is why an address change makes the agent deregister and exit for systemd
+   to restart it (v2.106.35) rather than announce an address that no longer reaches it.
+3. **The swap itself proved the path.** Associating the EIPs was used as the live test: on both
+   nodes IMDS reported the new address and mediasoup announced it with no config change
+   (`IP_CHANGE_PROOF_PASSED`, both instances). That is the scenario the self-discovery design
+   exists for, demonstrated in production rather than argued.
+
+The table is for humans checking a node by hand. **Signaling stays on the PRIVATE addresses
+(TCP 4443); the public ones are for media announcement only** — do not cross the two.
+
+Test fixtures deliberately use RFC 5737 documentation ranges (192.0.2.0/24, 198.51.100.0/24)
+rather than these addresses, so an infrastructure change can never require a test edit — and
+so no routable production address sits in a public repository.
 
 An Elastic IP per node is still worth having — it makes the address survive a stop/start and
 lets a DNS name point at it — and is blocked on an EIP quota increase (request
@@ -206,6 +227,71 @@ so the second case cannot happen silently, but check `journalctl` first.
 
 The registry is the app's only read path; there is no health endpoint to poll. A node that
 stops heartbeating disappears from selection within `NODE_TTL_MS` (15s) on its own.
+
+## Scaling: adding a node is an infrastructure step, and that is the whole design
+
+There is **no host list anywhere in the app**. Selection reads the registry, so:
+
+```
+launch a node  →  it reads its own address from IMDSv2  →  it registers itself
+               →  the next room can be assigned to it
+```
+
+No deploy, no config edit, no restart of anything. A node that registered a moment ago is
+eligible within one refresh (~5s — the app caches the registry on the node heartbeat cadence,
+because room creation is synchronous and must never wait on a Redis round trip).
+
+**Adding capacity does NOT make a single call faster.** One call's latency is distance plus
+its weakest link. More nodes raise **concurrency** — how many simultaneous rooms the fleet
+carries. Load-test first; the signal to add one is below.
+
+### Knowing when to add one
+
+The app logs the reason its pool has nothing to offer, and the five reasons are deliberately
+distinct because they call for different actions:
+
+| log line | what it means | what to do |
+|---|---|---|
+| `MEDIA POOL SATURATED` | live nodes at their CPU or room ceiling | **add a node** |
+| `NO MEDIA NODE REGISTERED` | nothing is in the registry | start the agent / check Redis |
+| `ALL … STALE` | registered, not heartbeating | check the agents and their clocks |
+| `ALL … DRAINING` | somebody retired them all | clear a drain flag, or add a node |
+| `ALL … EXCLUDED` | heartbeating but failing signaling | wrong `VOIP_NODE_SECRET` |
+
+Only the first is a capacity problem. Being told to add a node when the agent is not running
+would have you launch a second box that also fails to register, which is why these are never
+collapsed into one "unhealthy" message.
+
+Counts are also on `GET /api/health` (`media.voipPool`, unauthenticated so counts only), and
+the per-node detail — address, zone, rooms, consumers, CPU, age — is in the admin panel's
+**Call media** card.
+
+### Retiring a node without cutting live calls
+
+```bash
+# stop taking NEW rooms; existing calls run to their natural end
+sudo touch /etc/relay-voip/draining
+
+# watch them drain — `routers` is the live room count on this node
+journalctl -u relay-voip -f          # logs the transition, not every beat
+redis-cli -u "$REDIS_URL" get relay:voip:node:<instance-id>
+
+# once routers is 0, stopping is safe
+sudo systemctl stop relay-voip
+
+# changed your mind? back in rotation within one heartbeat, no restart
+sudo rm /etc/relay-voip/draining
+```
+
+A **file** rather than an env var on purpose: changing an env var means restarting the agent,
+and restarting is the precise thing draining exists to avoid — you cannot tell a node holding
+live calls to stop taking work by killing it. The flag also survives the agent restarting for
+some unrelated reason, so a half-finished retirement is not silently undone by systemd.
+Override the path with `VOIP_DRAIN_FILE`. Any error reading it means **not draining**, because
+losing a healthy node from a two-node fleet over an unreadable file is the worse mistake.
+
+A draining node is **alive**, not dead: it keeps serving its rooms and its existing
+assignments stay valid. Only new-room selection skips it.
 
 ## Ports: one pair per core, taken from the bottom of the range
 

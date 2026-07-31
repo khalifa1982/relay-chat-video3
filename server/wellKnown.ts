@@ -7,7 +7,7 @@
  * renders the TWA FULL-SCREEN (no URL bar) — the "real app" experience.
  *
  * Config (env, read per-request so the operator can set them without a code
- * change — same contract as the TURN_ / LIVEKIT_ vars):
+ * change — same contract as the TURN_ vars):
  *   TWA_PACKAGE_NAME          — Android applicationId
  *                               (default: org.yourchat.relay — must match
  *                               mobile/android/app/build.gradle)

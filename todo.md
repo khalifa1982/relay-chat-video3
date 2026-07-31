@@ -11278,6 +11278,229 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.54 — adding a media node becomes an infrastructure step (2026-07-31)
+
+Owner doc: when nodes are added later, the app must use them with **no code change and no
+redeploy**. Not about adding capacity now — about making "add a node" cost no engineering
+time at the moment of need.
+
+- [x] **THE AUDIT CAME FIRST AND CHANGED THE SCOPE.** The doc opens *"it does not exist yet —
+      verified: Redis holds only `relay:leader`"*. The KEYS are absent because the agents are
+      not running; the CODE mostly exists — `voipRegistry.ts` (594 lines) + `voip-node/`
+      already do self-registration (TTL 15s / beat 5s, IMDSv2 address, never hardcoded),
+      load ranking on consumers-per-core, an AZ tiebreak with an explicit threshold, and
+      `planRoomTransport` composing selection with the transport so they cannot disagree.
+      All DORMANT: nothing in `relay.ts` or the client imports it. Same correction as
+      v2.106.46, where a doc said the node agent did not exist and it was 677 lines.
+- [x] **FOUR GENUINE GAPS, so those are what this builds.**
+- [x] **(1) DRAINING did not exist, and the trap is which predicate it belongs to.**
+      `touch /etc/relay-voip/draining` and a node takes no new rooms while its live calls run
+      to their end. A FILE rather than an env var deliberately: changing an env var means
+      restarting the agent, and restarting is the precise thing draining exists to avoid.
+      Checked per heartbeat, logged on the TRANSITION only, fails toward SERVING.
+- [x] **(2) SATURATION WAS SILENT AND INDISTINGUISHABLE FROM AN EMPTY POOL.** `rankNodes`
+      returned `[]` for five different situations. Logging "add a node" on an empty registry
+      sends an operator to launch a second box that also fails to register — the v2.105.10
+      false-alarm class. New `PoolReason` funnel names the stage that ate the last candidate
+      (`no-nodes` / `all-stale` / `all-draining` / `all-excluded` / `all-saturated`), each
+      with its own message and its own action. ONE filter feeds both the selector and the
+      warning, or the two come to disagree about whether the pool is full.
+- [x] **(3) NOTHING WAS OBSERVABLE.** New `server/voipPool.ts` reads the registry on the node
+      heartbeat cadence, caches it for the synchronous dial path, and reports. Counts on
+      `/api/health` (UNAUTHENTICATED, so counts only — the line v2.105.22 drew for the SFU
+      URL); per-node detail behind `requireAdmin`. Warning on transition + a 5-minute
+      cooldown, and RECOVERY logged too so the story has an end.
+- [x] **(4) THE ASSIGNMENT CARRIED NO PRIVATE ADDRESS.** The rule is signaling over private,
+      public for media announcement only. An assignment recording just the public IP leaves
+      the next signaling caller nothing else to reach the node by, so it would be used —
+      the two planes crossed by omission rather than decision.
+- [x] **A LATENT DEFECT THE AUDIT FOUND IN CODE ALREADY WRITTEN, and it is the sharpest thing
+      here.** `assignmentStillValid` — "is this room's node still good?" — called
+      `isNodeUsable`, which includes the two ADMISSION ceilings. `routers >= 40` means the
+      node holds forty LIVE rooms, so it declared all forty invalid: the ceiling evicting
+      exactly the calls it was added to protect, at the moment the node is busiest. Latent
+      only because nothing calls it yet. Split into `isNodeLive` (freshness) and
+      `isNodeEligible` (freshness + draining + ceilings) — two questions, two predicates.
+- [x] **A PRE-EXISTING TEST PINNED THAT DEFECT** with a comment arguing for it (*"deliberately
+      the same `isNodeUsable` the selection uses"*). That reasoning is right about admission
+      and wrong about liveness. Rewritten to the property, and made STRONGER: it now asserts
+      both halves — a full node keeps its rooms AND takes no new one.
+- [x] **THE POOL DEGRADES RATHER THAN MISLEADS**: dormant with no `REDIS_URL`; a Redis blip
+      keeps the last known list instead of dumping every call onto the mesh; a persistent
+      outage lets it age out; and the freshness check runs at USE time with the caller's
+      clock, so a stale cache degrades to the mesh and never to "send media to a dead box".
+- [x] **ONE DEVIATION FROM THE DOC, STATED RATHER THAN QUIETLY IMPLEMENTED**: it says three
+      times that saturation should fall back to the hosted SFU. That account was cancelled
+      and the code deleted in v2.106.53 on the owner's own instruction, so the fallback is
+      the MESH. The later instruction wins.
+- [x] **SCOPE, said plainly**: this is the mechanism and its observability. Wiring the
+      selector into the live call path is the mediasoup cutover (client adapter, transport
+      negotiation, produce/consume) and stays there. Nothing in `relay.ts` calls this yet.
+- [x] `server/voipScaling.test.ts` (37) drives the doc's own five verification steps against
+      a fake Redis with the REAL reader and selector — a source pin cannot tell you whether a
+      third node becomes eligible without a deploy, which is the whole feature.
+      **17 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+      backups, the mutator aborting unless its target occurs exactly once, all three sources
+      byte-identical afterwards.
+- [x] **THREE SURVIVORS, ALL REAL GAPS IN MY OWN TESTS, each fixed then re-verified.** Every
+      draining test built its node IN MEMORY, so `decodeNode` hardcoding `draining: false` —
+      which makes the feature a total silent no-op — passed all of them; now driven through
+      the whole agent → JSON → Redis → decode → select path. The mirror direction survived
+      too (the AGENT publishing a hardcoded false), so the parity test now asserts BOTH
+      states rather than only the default — the v2.99.71 two-languages class. And dropping
+      the `privateIp` check from the wire validator survived, because its refusal cases had
+      no private-address entries at all.
+- [x] **ONE MORE PIN OF MINE FROZE A SHAPE**, from earlier the same day: it asserted the
+      literal `media: { mesh: true }` and broke the moment the media block grew. Rewritten to
+      the property, plus a NEW sweep that the pool summary on the unauthenticated endpoint
+      carries no address, zone or instance id — mutation-verified by leaking node IPs into it.
+- [x] `voip-node/README.md` gains the scaling and drain runbook, including the table of which
+      log line means add a node and which means fix the agent.
+- [x] `pnpm verify` EXIT=0 — 277 files, 4918 passed / 1 skipped. No schema change, no new
+      dependency, no new required env var (`VOIP_DRAIN_FILE` is an optional path override).
+
+## v2.106.53 — the hosted SFU is deleted (2026-07-31)
+
+Owner, stated twice: *"Remove completely … I cancel my account … I will only rely on media soup, which
+is on my servers."* Cancelled infrastructure, so the code is DELETED rather than disabled.
+
+- [x] **This was behaviour-neutral by construction, which is what made a 1,400-line removal from the
+      call path safe in one commit.** v2.106.52 had already made the config function return
+      `{enabled:false}` unconditionally, reading no env var — so every branch deleted here was
+      ALREADY unreachable on every deploy. Nothing about how a call behaves changes.
+- [x] **Removed**: 19 functions and all their state from `relayClient.ts` (−1,211 lines), the config
+      reader / token mint / device-addressed token push (11 call sites) / 26 wire fields / the
+      `refresh-livekit` case from `relay.ts` (−273), the transport tier from `voipRegistry.ts`,
+      the `/api/health` field, the admin diagnostics half, the markup + CSS, and both npm packages.
+      Source sweep for the name across `client/src server shared voip-node scripts` returns NOTHING,
+      and nothing matches in `package.json`, the lockfile, `.github/` or `ecosystem.config.cjs`.
+- [x] **RECORDING WENT WITH IT, and that is a real loss stated rather than buried.** `recording.ts`
+      was Egress in its entirety — its own header said recording *requires* the SFU — so the module,
+      its test, `reg.recordings`, both signaling cases, the in-call Record chip and the ● REC badge
+      are all gone. Re-adding it means a mediasoup recording path, which is different work.
+- [x] **THE LADDER LOST ITS MIDDLE RUNG, so the mesh cap is now the real ceiling.**
+      `mediasoup → mesh`. Four copies of `enabled ? 10 : 6` in `relay.ts` collapse into one exported
+      `ROOM_MAX = 6`, and the client keeps `transportMax()` as a FUNCTION rather than a bare constant
+      because every reader — the group picker, the invite guard, `maxParticipants()` — has to agree
+      with the number the user was shown, and three copies of that ternary had to be consolidated
+      once already.
+- [x] **A hydrated room record naming the retired transport reads as MESH, never as the surviving
+      SFU.** All we know from such a record is that the room is not on one of our own nodes, and the
+      mesh is the transport that needs no server to be true.
+- [x] **`establishingLabel()` stays a function though it now has one branch**, with the reason
+      recorded in place: the label WAS a false claim (a caller already in an SFU room was told
+      "Securing connection…"), so whichever transport comes next must be able to say something truer
+      rather than inherit a sentence about a phase it is not in.
+- [x] **VERIFIED BY DRIVING REAL TWO-BROWSER CALLS against the built server**, not by reading:
+      voice — RTP both ways, `connectionState: connected` on both sides, and inbound
+      `totalAudioEnergy` **3.346 / 3.291 and still rising**, so v2.106.51's playout fix still holds;
+      video — energy **3.278 / 3.255** plus 513 pkts / 227 frames and 474 pkts / 230 frames inbound.
+      Zero page errors on either.
+- [x] **The mesh needs no counterpart to the SFU's tile-removal hold guard**, recorded in the test
+      rather than left looking like a gap: a hold FREEZES media and keeps the peer connection, and
+      both grace-timeout removals are gated on a peer whose media never arrived, so a holder is never
+      removed.
+- [x] **`mobile/native` IS NOT TOUCHED, deliberately, and the reasons matter**: it is a separate
+      package no test or typecheck here covers, it is built by codemagic (which I must not touch),
+      its SFU branch is ALREADY unreachable because the server no longer sends the flag, and
+      `@livekit/react-native-webrtc` is the MESH's own WebRTC binding — so "remove completely" cannot
+      be literally satisfied in that directory anyway. Offered as its own commit.
+- [x] **My own tooling cost two rounds and both are worth recording.** A brace-matching deleter took
+      a function's RETURN TYPE as its body and left a 15-line residue that broke the parse — the
+      `fnBody` trap this file records at v2.105.9 / v2.105.27 / v2.106.4, for the fourth time; and a
+      `not.toMatch` for the retired cap ternary matched MY OWN COMMENT quoting it, so it is asserted
+      on comment-stripped source. Four more of my new assertions were simply wrong about the code
+      (wrong constant name, wrong import name, a slice whose end preceded its start — caught only by
+      its own non-empty guard, and a deadline pin asserting a flag the function does not read; that
+      one is now stronger, asserting both halves of the real hand-over).
+- [x] **One sweep of mine flagged CORRECT code and was tightened rather than relaxed**: a ban on env
+      reads in `/api/health` flagged the legitimate `Boolean(process.env.REDIS_URL)`, so it now
+      requires every env read there to be REDUCED to a boolean and bans credential-shaped names —
+      which covers the variable somebody adds next.
+- [x] `pnpm verify` EXIT=0 — 276 files, 4879 passed / 1 skipped. No schema change, no new dependency,
+      two removed, no new env var.
+
+## v2.106.52 — LiveKit retired; the ring drops to 257ms (2026-07-31)
+
+Owner cancelled the LiveKit subscription and APIs: *"remove it completely, and I need the ring in one
+second, not three seconds"*.
+
+**A CORRECTION TO MYSELF FIRST, because it changed the diagnosis.** I had reported the mesh connecting
+in "3.4s", taken from `msFromAnswerToEstablished` in my own rig. That field is MISLABELLED — it is
+`estAt - T0` where `T0` is the PROCESS START (drive.mjs:105), so it included server boot, two browser
+launches, guest minting and registration. The real timeline was always: dial -> ringing **255ms**,
+answer -> connected **356ms**. The app was never slow. Every second of waiting was LiveKit.
+
+**THE FIX.** `livekitConfig()` now returns `{enabled:false, url:""}` unconditionally and reads no
+`LIVEKIT_*` variable. That boolean is stamped on every signaling frame as `livekit` and the client's
+entire SFU branch hangs off it, so false routes every call onto the mesh immediately.
+
+**Ignoring the env is load-bearing, not tidiness.** The alternative — asking an operator to unset three
+vars on two boxes — leaves a stale `LIVEKIT_URL` able to reinstate the ~20s wait (4.5s + 3x4s of
+watchdog before the v2.106.48 fallback could start rebuilding on the mesh). Not readable from the
+environment means not reachable by accident.
+
+**MEASURED with the vars deliberately left SET and pointing at a dead port** — the exact 20s condition:
+
+| | |
+|---|---|
+| dial -> ringing | **257 ms** |
+| answer -> connected | **340 ms** |
+| dial -> connected | **603 ms** |
+| peer connections | **1** (was 21) |
+| inbound audio energy | **2.052 / 2.216** both ways |
+
+**TWO REAL LOSSES, stated rather than discovered.** Call RECORDING is LiveKit Egress
+(`server/recording.ts` needs `LIVEKIT_*` on top of `RECORDING_S3_*`), so it died with the cancelled
+subscription, not with this commit. And the group cap goes **10 -> 6**, because the mesh runs N-1
+encoders on every phone. Both follow from the cancellation.
+
+**EIGHT TESTS BROKE AND ALL EIGHT WERE ASSERTING THE RETIRED BEHAVIOUR.** `relay.test.ts` required
+`enabled === true` with all three vars set — it would have forbidden the retirement — and now asserts
+the opposite plus that the body contains no `process.env.LIVEKIT`, with its own `beforeEach` setting
+all three vars so that a fully-populated environment yielding false IS the assertion. Five behavioural
+token-DELIVERY tests are deleted: there is no token to deliver.
+
+**The three survivors are the ones that still matter.** `claimPrimaryForCall` promotes the DIALLING
+device to primary, and that is a MESH concern — `signal` routes via `reg.clients.get(to)`, one socket
+per number, so without it a dial from a non-primary device is unreachable by its peer's offers.
+
+**NOT DONE.** The LiveKit code is still present and now permanently unreachable: 155 lines in
+`relayClient.ts`, 81 in `relay.ts`, `server/recording.ts`, the `livekit-client` dependency, the LiveKit
+tier in `voipRegistry.ts`. Deleting it changes no behaviour while `enabled` is false, so it is a
+separate commit rather than a 250-line refactor of the call path on the day it was repaired.
+
+**ALSO: the media nodes got stable Elastic IPs, and the swap proved the design.**
+
+The owner's EIP quota landed; both mediasoup nodes moved off auto-assigned addresses:
+
+| node | instance | private (signaling) | public (media) | allocation |
+|---|---|---|---|---|
+| relay-voip-a | `i-062022390e558ce74` | 10.0.1.192 | 13.207.213.126 | `eipalloc-0f635fd71c037d3a2` |
+| relay-voip-b | `i-0dce71f5056f73ce6` | 10.0.2.246 | 13.203.36.154 | `eipalloc-0359c2389f4a474f8` |
+
+**The association itself was the test.** On both instances IMDS reported the new address and
+mediasoup announced it with no config change (`IP_CHANGE_PROOF_PASSED`) — v2.106.46's IMDSv2
+re-read and v2.106.35's exit-on-address-change demonstrated in production rather than argued.
+`announcedAddress` is immutable per transport (v2.106.34), so a node that could not notice
+would announce an address that no longer reaches it while its heartbeat looked perfect.
+
+**Stable does not make hardcoding acceptable**, and nothing in the repo hardcodes them: the
+registry is what makes node 3+ plug-and-play, and an EIP can still be re-associated.
+
+**The fix for the stale literals is neither the old nor the new address.** Nine fixtures across
+four test files held the nodes' REAL public IPs, so an infrastructure change forced a test edit
+— a test knowing something about production it has no business knowing, and in a PUBLIC repo a
+routable production address published for no reason. They now use RFC 5737 documentation ranges
+(192.0.2.0/24, 198.51.100.0/24): valid IPv4, obviously synthetic, never routable. A standing
+guard fails if a `13.x.x.x` literal reappears in that suite, scoped to the Mumbai /8 so it
+cannot fire on an unrelated dotted number; verified to bite, source byte-identical afterwards.
+
+**Said plainly: this fixes nothing about audio.** It closes a different class — media candidates
+going stale after a node restart.
+
+No schema change, no new dependency, no new env var. 4927 tests.
+
 ## v2.106.51 — mesh remote audio was never played out on a call with no video (2026-07-31)
 
 **THE FOURTH INDEPENDENT WAY A CALL COULD CARRY NOTHING**, found by measurement an hour after

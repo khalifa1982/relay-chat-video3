@@ -92,11 +92,17 @@ describe("M46 — chat sender identity comes from the transport, not the frame",
     expect(dc).toMatch(/receiveChatFrame\(e\.data as string, pin\)/);
   });
 
-  it("the SFU path passes LiveKit's sending participant identity", () => {
-    expect(ENGINE).toMatch(
-      /RoomEventEnum\.DataReceived, \(payload: Uint8Array, participant\?: \{ identity\?: string \}\)/,
-    );
-    expect(ENGINE).toMatch(/receiveChatFrame\(new TextDecoder\(\)\.decode\(payload\), participant\?\.identity\)/);
+  it("there is no second, un-authenticated chat path", () => {
+    /* The SFU path used to fan chat over the media server's data channel and had to
+       pass ITS proven sender; that transport is retired (v2.106.53), so the per-peer
+       data channel above is the ONLY route in. Asserted as an absence because a new
+       fan-out that forgot to name a proven sender is exactly how a forged frame comes
+       to render as somebody else. */
+    // Every occurrence minus the declaration: exactly one CALL.
+    const all = ENGINE.match(/receiveChatFrame\(/g) || [];
+    expect(all.length, "declaration + one call site").toBe(2);
+    expect(ENGINE).toMatch(/function receiveChatFrame\(/);
+    expect(ENGINE).not.toMatch(/publishData/);
   });
 
   /** A forged frame must not be able to dictate who the message appears to be from. */

@@ -2,10 +2,10 @@
  * v2.97.1 — call-hold overhaul, client-side contract pins.
  *
  * THE BUG (owner: "when you answer the other call, the first call drops"):
- * on the SFU path, putting a call on hold tears down the holder's LiveKit
- * connection — the HELD party's client read that disconnect as "they left"
- * and ran the 1:1 auto-end, killing the parked call. The `peer-hold` signal
- * exists but was never consulted, and can even arrive AFTER the disconnect.
+ * putting a call on hold takes the holder's media away, and the HELD party's
+ * client read that quiet transport as "they left" and ran the 1:1 auto-end,
+ * killing the parked call. The `peer-hold` signal exists but was never
+ * consulted, and can even arrive AFTER the transport goes quiet.
  *
  * THE FIX, pinned here:
  *  - `peersHoldingUs` gates every auto-end path; the held tile stays (marked
@@ -31,11 +31,34 @@ const ASSETS = read("client/src/lib/relayAssets.ts");
 const SERVER = read("server/relay.ts");
 
 describe("held 1:1 must NOT drop (v2.97.1)", () => {
-  it("peersHoldingUs gates the SFU tile-removal auto-end (the reported drop)", () => {
+  it("peersHoldingUs gates the ONLY 1:1 auto-end, so a holder is never read as gone", () => {
+    /* v2.106.53 removed the SFU-specific tile remover this used to read, and the
+       property is now stronger for it: there is exactly ONE place a 1:1 can decide
+       the other side has left, and it consults `peersHoldingUs` before doing so.
+       Two paths were how the reported "answering a second call kills the first"
+       happened — a holder's transport going quiet on one of them read as a
+       departure. */
     expect(CLIENT).toMatch(/const peersHoldingUs = new Set<string>\(\);/);
-    const rm = CLIENT.slice(CLIENT.indexOf("function removeLkTile"));
-    expect(rm.slice(0, 700)).toMatch(/if \(peersHoldingUs\.has\(id\)\) \{/);
-    expect(rm.slice(0, 700)).toMatch(/classList\.add\("on-hold"\);\s*\n\s*layoutGrid\(\);\s*\n\s*return;/);
+    /* THE FUSE is the path a quiet transport takes, and it is the one that has to
+       consult the set: a holder's media stops without their leaving. */
+    const fuse = CLIENT.slice(
+      CLIENT.indexOf("function armSoloEndGrace("),
+      CLIENT.indexOf("}, 1600);"),
+    );
+    expect(fuse.length, "the fuse slice must be real").toBeGreaterThan(80);
+    expect(fuse).toMatch(/if \(peersHoldingUs\.size > 0\) return;/);
+    /* THE OTHER auto-end sits at `removePeer`'s tail and needs no such guard,
+       which is worth stating rather than leaving as an apparent gap: on the mesh a
+       hold FREEZES media and keeps the peer connection, so a holder is never
+       removed — the grace-timeout removals are all gated on `!peer.gotStream`,
+       i.e. a peer whose media never arrived at all. The guard that used to live
+       here was specific to a transport that removed a tile when its tracks went
+       away (v2.106.53). */
+    const graces = CLIENT.match(/removePeer\(pin\);/g) || [];
+    expect(graces.length).toBeGreaterThanOrEqual(2);
+    expect(CLIENT).toMatch(/if \(\(c2 === "failed" \|\| c2 === "disconnected"\) && !peer\.gotStream\)/);
+    // …and a departure that IS real still clears the state.
+    expect(CLIENT).toMatch(/peersHoldingUs\.delete\(pin\);/);
   });
   it("a bare solo-1:1 disconnect arms a grace fuse instead of ending instantly", () => {
     expect(CLIENT).toMatch(/function armSoloEndGrace\(nm: string\)/);
@@ -46,16 +69,16 @@ describe("held 1:1 must NOT drop (v2.97.1)", () => {
     // …and a landing peer-hold defuses it.
     expect(CLIENT).toMatch(/peersHoldingUs\.add\(pin\);\s*\n[\s\S]{0,120}cancelSoloEndGrace\(\);/);
   });
-  it("a late hold restores the removed tile — on EITHER transport", () => {
-    // v2.99.67 widened this. The original only healed the SFU race
-    // (`livekitEnabled && !getElementById(...) -> addLkTile`), so in a MESH
-    // conference the held peer's tile stayed gone: the owner reported hearing
+  it("a late hold restores the removed tile, whatever the transport", () => {
+    // v2.99.67 widened this. The original only healed one transport's race, so in a
+    // MESH conference the held peer's tile stayed gone: the owner reported hearing
     // someone whose picture had vanished. The property is unchanged and now
     // stronger — a hold always leaves a tile — but it is transport-agnostic,
     // and `ensurePlaceholderTile` is itself a no-op when a tile exists.
     const hold = CLIENT.slice(CLIENT.indexOf("function onPeerHold"), CLIENT.indexOf("function onRoleChange"));
     expect(hold).toMatch(/peersHoldingUs\.add\(pin\);[\s\S]{0,600}?ensurePlaceholderTile\(pin, nm\);/);
-    expect(hold).not.toMatch(/livekitEnabled && !document\.getElementById/);
+    // No transport gate may stand between a hold and its tile again.
+    expect(hold).not.toMatch(/if \(livekitEnabled/);
     // And the way BACK restores it too, which is the half that was missing.
     const back = hold.slice(hold.indexOf("peersHoldingUs.delete(pin);"));
     expect(back).toMatch(/ensurePlaceholderTile\(pin, nm\);/);
@@ -70,7 +93,9 @@ describe("held 1:1 must NOT drop (v2.97.1)", () => {
     const pl = CLIENT.slice(at, CLIENT.indexOf("\n      }", at));
     expect(pl.length, "the case slice must be real").toBeGreaterThan(80);
     expect(pl).toMatch(/peersHoldingUs\.delete\(goneP\);/);
-    expect(pl).toMatch(/if \(livekitEnabled && lkParticipantTiles\[goneP\]\) removeLkTile\(goneP\);/);
+    expect(pl).toMatch(/removePeer\(goneP\);/);
+    // The SFU's own tile remover is gone (v2.106.53); one removal path now.
+    expect(pl).not.toMatch(/removeLkTile/);
   });
   it("being-held state dies with the call (cleanup + destroy)", () => {
     expect(CLIENT).toMatch(/peersHoldingUs\.clear\(\);\s*\n\s*cancelSoloEndGrace\(\);\s*\n\s*stopHoldMusic\(\);/);

@@ -12,6 +12,7 @@
  * real node from this sandbox.
  */
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
 import {
   chooseCallTransport,
   decodeNode,
@@ -20,7 +21,8 @@ import {
   heartbeatVoipNode,
   isIpv4,
   isNodeFresh,
-  isNodeUsable,
+  isNodeEligible,
+  isNodeLive,
   NODE_CLOCK_SKEW_MS,
   NODE_CPU_CEILING,
   NODE_HEARTBEAT_MS,
@@ -40,7 +42,7 @@ const NOW = 1_785_000_000_000;
 /** The two real nodes, as the brief measured them. */
 const A = (over: Partial<VoipNode> = {}): VoipNode => ({
   instanceId: "i-062022390e558ce74",
-  publicIp: "13.201.44.153",
+  publicIp: "192.0.2.10",
   privateIp: "10.0.1.192",
   az: "ap-south-1a",
   cores: 2,
@@ -52,7 +54,7 @@ const A = (over: Partial<VoipNode> = {}): VoipNode => ({
 });
 const B = (over: Partial<VoipNode> = {}): VoipNode => ({
   instanceId: "i-0dce71f5056f73ce6",
-  publicIp: "13.203.219.67",
+  publicIp: "198.51.100.20",
   privateIp: "10.0.2.246",
   az: "ap-south-1b",
   cores: 2,
@@ -65,7 +67,10 @@ const B = (over: Partial<VoipNode> = {}): VoipNode => ({
 
 describe("a node record is validated because it decides where media goes", () => {
   it("round-trips a real record", () => {
-    expect(decodeNode(encodeNode(A()))).toEqual(A());
+    /* `draining` is NORMALISED to a real boolean on the way in, so a record built without
+       it round-trips as `false` rather than as absent — which is what lets every reader
+       treat it as a boolean without re-deciding what missing means. */
+    expect(decodeNode(encodeNode(A()))).toEqual({ ...A(), draining: false });
   });
 
   it("a garbage or truncated record is dropped WHOLE, never partially applied", () => {
@@ -83,7 +88,29 @@ describe("a node record is validated because it decides where media goes", () =>
       expect(decodeNode(encodeNode(A({ publicIp: ip as string }))), ip).toBeNull();
       expect(decodeNode(encodeNode(A({ privateIp: ip as string }))), ip).toBeNull();
     }
-    expect(isIpv4("13.201.44.153")).toBe(true);
+    expect(isIpv4("192.0.2.10")).toBe(true);
+  });
+
+  it("no fixture in this suite carries a REAL media-node address", () => {
+    /* v2.106.52. These fixtures used to hold the nodes' actual public IPs, and the
+       2026-07-31 move to Elastic IPs then required editing five test files — a test
+       edit forced by an infrastructure change, which means the tests knew something
+       about production they have no business knowing. Two costs, one guard:
+
+         1. It is churn with no value. The addresses are arbitrary here; every
+            assertion is about SHAPE (isIpv4) or about what a record resolves to.
+         2. This repository is PUBLIC, so a routable production address in a fixture
+            is a detail about the owner's infrastructure published for no reason.
+
+       RFC 5737 reserves 192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24 for exactly
+       this: addresses that are valid IPv4, obviously synthetic, and never routable.
+       Using them makes the fixtures immune to any future re-addressing.
+
+       Scoped to the Mumbai /8s the nodes actually live in, so this cannot fail on an
+       unrelated dotted number (a version, a port range, a timestamp). */
+    const src = fs.readFileSync(__filename, "utf8");
+    const suspicious = src.match(/\b13\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g) || [];
+    expect(suspicious, `use an RFC 5737 range instead: ${suspicious.join(", ")}`).toEqual([]);
     expect(isIpv4("0.0.0.0")).toBe(true);
   });
 
@@ -108,7 +135,7 @@ describe("freshness is judged on the node's own timestamp", () => {
        so it read as protecting something while the near-future half was fail-SHUT.
        `updatedAt` is the NODE's clock and `nowMs` the READER's, two machines compared to the
        millisecond. One millisecond of forward skew excluded a node; both nodes skewed forward
-       excluded the whole fleet and sent every call to LiveKit with nothing saying why — the
+       excluded the whole fleet and sent every call to the mesh with nothing saying why — the
        exact direction the module's own header says must never happen.
        Both halves now bite: a plausible skew is health, a broken clock is not. */
     expect(isNodeFresh(A({ updatedAt: NOW + 1 }), NOW), "1ms of skew is not a dead node").toBe(true);
@@ -126,12 +153,24 @@ describe("freshness is judged on the node's own timestamp", () => {
     expect(NODE_HEARTBEAT_MS * 3).toBeLessThanOrEqual(NODE_TTL_MS);
   });
 
-  it("a saturated node is UNUSABLE even while fresh", () => {
-    // Two independent reasons to skip a node, and they must not collapse into one.
+  it("a saturated node takes NO NEW ROOM even while fresh", () => {
+    // Two independent reasons to withhold new work, and they must not collapse into one.
     const hot = A({ cpuLoad: NODE_CPU_CEILING });
     expect(isNodeFresh(hot, NOW)).toBe(true);
-    expect(isNodeUsable(hot, NOW)).toBe(false);
-    expect(isNodeUsable(A({ cpuLoad: NODE_CPU_CEILING - 0.01 }), NOW)).toBe(true);
+    expect(isNodeEligible(hot, NOW)).toBe(false);
+    expect(isNodeEligible(A({ cpuLoad: NODE_CPU_CEILING - 0.01 }), NOW)).toBe(true);
+  });
+
+  it("…but it is still LIVE, so the rooms it already holds are not evicted", () => {
+    /* THIS PAIR IS THE POINT, and one shared predicate used to answer both. `cpuLoad` over
+       the ceiling means "give it nothing more", never "it has stopped working" — and the
+       router ceiling is reached precisely BECAUSE it is holding live rooms, so answering the
+       liveness question with the admission answer evicted the calls the ceiling protects. */
+    const hot = A({ cpuLoad: NODE_CPU_CEILING });
+    expect(isNodeLive(hot, NOW)).toBe(true);
+    expect(isNodeLive(A({ routers: 9_999 }), NOW)).toBe(true);
+    // Liveness is freshness and nothing else, so a dead node is still dead.
+    expect(isNodeLive(A({ updatedAt: NOW - 60_000 }), NOW)).toBe(false);
   });
 });
 
@@ -194,61 +233,49 @@ describe("selecting a node for a new room", () => {
 
 describe("the transport precedence FAILS OPEN — a call is always possible", () => {
   it("mediasoup when a node is usable", () => {
-    expect(chooseCallTransport({ mediasoupNode: A(), livekitEnabled: true })).toBe("mediasoup");
+    expect(chooseCallTransport({ mediasoupNode: A() })).toBe("mediasoup");
   });
 
-  it("LiveKit when no node is usable but LiveKit is configured", () => {
-    expect(chooseCallTransport({ mediasoupNode: null, livekitEnabled: true })).toBe("livekit");
-  });
-
-  it("the MESH when neither is available, because it needs no infrastructure", () => {
+  it("the MESH when no node is, because it needs no infrastructure", () => {
     /* This is the floor and the reason the function cannot return "nothing": a Redis
-       hiccup, an unconfigured SFU or a saturated fleet must degrade the call's QUALITY,
-       never remove the ability to place it. */
-    expect(chooseCallTransport({ mediasoupNode: null, livekitEnabled: false })).toBe("mesh");
+       hiccup, an unreachable node or a saturated fleet must degrade the call's QUALITY,
+       never remove the ability to place it.
+
+       THE LADDER LOST ITS MIDDLE RUNG in v2.106.53 — a hosted SFU sat here and the
+       owner cancelled that account — so this is now the ONLY fallback, which makes
+       its 6-participant cap the real ceiling whenever a node is unavailable. */
+    expect(chooseCallTransport({ mediasoupNode: null })).toBe("mesh");
   });
 
-  it("never answers with anything outside the three transports", () => {
+  it("never answers with anything outside the two transports", () => {
     const all = new Set<string>();
     for (const node of [A(), null]) {
-      for (const livekitEnabled of [true, false]) {
-        for (const forceLivekit of [true, false, undefined]) {
-          for (const mediasoupEnabled of [true, false, undefined]) {
-            all.add(
-              chooseCallTransport({ mediasoupNode: node, livekitEnabled, forceLivekit, mediasoupEnabled }),
-            );
-          }
+      for (const forceMesh of [true, false, undefined]) {
+        for (const mediasoupEnabled of [true, false, undefined]) {
+          all.add(chooseCallTransport({ mediasoupNode: node, forceMesh, mediasoupEnabled }));
         }
       }
     }
-    expect([...all].sort()).toEqual(["livekit", "mediasoup", "mesh"]);
+    expect([...all].sort()).toEqual(["mediasoup", "mesh"]);
   });
 
-  it("the A/B override sends a call to LiveKit even with a healthy node", () => {
+  it("the A/B override sends a call to the mesh even with a healthy node", () => {
     // Staged rollout and A/B need this: the two transports must be comparable on one
     // account with numbers, which is the only way "video degrades" gets an answer.
-    expect(
-      chooseCallTransport({ mediasoupNode: A(), livekitEnabled: true, forceLivekit: true }),
-    ).toBe("livekit");
+    expect(chooseCallTransport({ mediasoupNode: A(), forceMesh: true })).toBe("mesh");
   });
 
   it("the fleet kill switch does not strand the call", () => {
-    expect(
-      chooseCallTransport({ mediasoupNode: A(), livekitEnabled: true, mediasoupEnabled: false }),
-    ).toBe("livekit");
-    expect(
-      chooseCallTransport({ mediasoupNode: A(), livekitEnabled: false, mediasoupEnabled: false }),
-    ).toBe("mesh");
+    expect(chooseCallTransport({ mediasoupNode: A(), mediasoupEnabled: false })).toBe("mesh");
   });
 
-  it("an SFU raises the cap; the mesh keeps its six", () => {
+  it("mediasoup raises the cap; the mesh keeps its six", () => {
     /* On the mesh each phone runs N-1 encoders and N-1 decoders — v2.99.84 measured that
        as the biggest lever on call CPU and heat. An SFU decouples cost from party size,
-       so the SFU paths get 10. mediasoup is deliberately NOT given more than LiveKit: the
+       so it gets 10 — a number inherited rather than derived, and still provisional: the
        nodes are 2-core and the real ceiling has to come from load testing. */
     expect(transportCap("mesh")).toBe(6);
-    expect(transportCap("livekit")).toBe(10);
-    expect(transportCap("mediasoup")).toBe(transportCap("livekit"));
+    expect(transportCap("mediasoup")).toBe(10);
   });
 });
 

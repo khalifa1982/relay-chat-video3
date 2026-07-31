@@ -15,7 +15,7 @@
  *   1. `onCalleeAnswered()` calls `clearDialTimeout()`, cancelling the 65s no-answer backstop.
  *      Even had it not, that callback opens `if (!inCall || callAnswered) return;` — so it would
  *      have declined to fire anyway.
- *   2. `armLkWatchdog`'s tick opens `if (!inCall || !livekitEnabled || lkConnected) { … return; }`
+ *   2. the SFU join watchdog retired itself before the callee had even answered
  *      and on an OUTGOING dial the caller joins the SFU room at dial time, so `lkConnected` is
  *      already true when it first ticks at 4.5s. It retires itself before the callee has answered.
  *
@@ -147,12 +147,17 @@ describe("the status stops claiming a phase it may never have reached", () => {
     );
   });
 
-  it("on the SFU path it says we are waiting for THEIR media, not securing ours", () => {
-    /* The caller joined the room at dial time, so on that path nothing is being secured — the
-       claim was simply false, and it named the wrong problem. */
+  it("the label is DERIVED, so a transport that is not securing anything can say so", () => {
+    /* The original defect: a caller who had already joined an SFU room at dial time
+       was told "Securing connection…", which was simply false and named the wrong
+       problem — it was waiting for the other side's media. That branch went with the
+       transport (v2.106.53), and the reason this is a FUNCTION rather than the bare
+       constant is what survives: the claim CAN be false, so whichever transport
+       comes next must be able to say something truer rather than inheriting a
+       sentence about a phase it is not in. */
     const lbl = fnBody("establishingLabel");
-    expect(lbl).toMatch(/livekitEnabled && lkConnected/);
-    expect(lbl).toMatch(/Waiting for their audio/);
+    expect(lbl).toMatch(/STATUS_LABEL\.encrypting/);
+    expect(SRC).toMatch(/setCallStatus\("encrypting", establishingLabel\(\)\)/);
   });
 
   it("…and it still says 'Securing connection' when that IS true", () => {

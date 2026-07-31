@@ -108,7 +108,7 @@ interface Msg {
   fromName?: string;
   to?: string;
   roomId?: string;
-  // Host moderation / roles. (`on`/`by` are shared with the recording message
+  // Host moderation / roles. (`on`/`by` are shared with the peer-hold message
   // below, so they're not re-declared here.)
   role?: string | null;
   selfRole?: string | null;
@@ -119,10 +119,6 @@ interface Msg {
   data?: { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
   message?: string;
   code?: string;
-  // LiveKit SFU (optional). `livekit`/`livekitUrl` are advisory flags stamped on
-  // registered/joined/peer-joined; `token`+`url` arrive on a `livekit-token` push.
-  livekit?: boolean;
-  livekitUrl?: string;
   token?: string;
   url?: string;
   /** invite/ring: the caller dialed this as a VIDEO call (mutual-consent flow). */
@@ -144,9 +140,6 @@ interface Msg {
   cap?: string;
   /** rejoin: the room did not exist and was rebuilt from capabilities. */
   recreated?: boolean;
-  // Recording (LiveKit Egress). `recording` (boolean) on `registered` advertises
-  // availability; the `recording` status message carries `on` + `by`.
-  recording?: boolean;
   on?: boolean;
   by?: string;
   /** ring-cancel (v2.99.5, multi-device): why the ring ended on THIS device —
@@ -360,8 +353,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   let screenStream: MediaStream | null = null;       // active getDisplayMedia stream, or null
   let screenSharing = false;
-  let recordingAvailable = false; // server advertised egress+S3 are configured
-  let recordingOn = false;        // a recording is in progress for this room
   let inCall = false;
   let roomId: string | null = null;
   // Round 11 B: the capability for `roomId`, kept alongside it and refreshed by
@@ -423,7 +414,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // media element via setSinkId and RE-APPLY on devicechange so a Bluetooth
   // headset that connects mid-call is actually heard.
   let audioSinkId = (() => { try { return window.localStorage.getItem("relay_audio_sink") || ""; } catch { return ""; } })();
-  const lkAudioEls: HTMLMediaElement[] = []; // SFU detached <audio> playback elements
   const audioOutSupported = typeof HTMLMediaElement !== "undefined"
     && typeof (HTMLMediaElement.prototype as unknown as { setSinkId?: unknown }).setSinkId === "function";
   // ---------- active-speaker / spotlight view (v2.35) ----------
@@ -446,59 +436,27 @@ export function startRelay(root: HTMLElement): RelayHandle {
   const screenShareIds = new Set<string>();  // tile ids currently sharing a screen
   let compactView = false;                   // call container is "minimized" (small)
   let callResizeObs: ResizeObserver | null = null;
-  // Mesh-only active-speaker detection via Web Audio (the SFU uses LiveKit's
-  // ActiveSpeakersChanged instead). Lazily created on the first remote stream.
+  // Active-speaker detection via Web Audio, on the REMOTE streams. Lazily
+  // created on the first one.
   let meshAudioCtx: AudioContext | null = null;
   const meshAnalysers: Record<string, { node: AnalyserNode; src: MediaStreamAudioSourceNode; data: Uint8Array<ArrayBuffer> }> = {};
   let speakerSampleT: ReturnType<typeof setInterval> | null = null;
-  // ---------- LiveKit SFU (optional; null on the mesh path) ----------
-  let livekitEnabled = false;
-  let livekitUrl: string | null = null;
-  // `Room` from livekit-client, lazy-imported only when actually joining a call.
-  let lkRoom: import("livekit-client").Room | null = null;
-  const lkParticipantTiles: Record<string, HTMLElement> = {};
-  let lkPendingToken: { roomId: string; token: string; url: string } | null = null;
-  let lkConnected = false; // true only AFTER a successful room.connect()+publish
-  let lkWatchdog: ReturnType<typeof setTimeout> | null = null;
-  let lkJoinTries = 0;
-  // WHY our media is not up, when it is not. Named rather than boolean because the two
-  // causes need DIFFERENT next steps and the generic "the media server is unreachable"
-  // message sends somebody hunting in the wrong place: a refused publish means the SFU
-  // was reached and this device failed to send, which is not a network problem at all.
-  // Null whenever media is up (or nothing has been attempted).
-  let mediaFault: null | "no-local-stream" | "no-local-audio-track" | "publish-refused" = null;
-  // Has the SFU proved, on this connection, that it cannot carry our media? Set once and
-  // never cleared for the life of the session, because the two things it protects both
-  // need it to be sticky — see the `livekitEnabled` assignment in handle().
-  let sfuUnusable = false;
-  // WHO ELSE IS IN THIS CALL, ACCORDING TO SIGNALING — pin -> display name.
+  // THE PARTY CAP. The mesh runs N-1 encoders and N-1 decoders on every phone, which
+  // v2.99.84 measured as the single biggest lever on call CPU and heat, so 6 is a
+  // measurement rather than a preference.
   //
-  // Deliberately NOT derived from `lkParticipantTiles`: those exist only once LiveKit
-  // media has ARRIVED, which is exactly what has failed when a fallback is needed. On the
-  // SFU path the caller's tile map is EMPTY at the moment the callee answers, because
-  // `onPeerJoined` returns before creating anything and only TrackSubscribed makes tiles —
-  // so a fallback keyed on tiles would find nobody and end the call, which is the very
-  // outcome it exists to prevent. The `room`/`joined`/`peer-joined` roster is
-  // authoritative on BOTH transports and arrives whether or not any media does.
-  const sigRoster = new Map<string, string>();
-  function recordSigRoster(members?: Array<{ pin: string; name?: string }>) {
-    (members || []).forEach(mem => { if (mem?.pin) sigRoster.set(mem.pin, mem.name || "Guest"); });
-  }
-  // Party caps. The mesh runs N-1 encoders and N-1 decoders on every phone, so it caps
-  // far below the SFU. ONE definition rather than the three copies of
-  // `livekitEnabled ? 10 : 6` this used to have, because `fallbackToMesh` is now a fourth
-  // reader and it MUST agree with the cap the group picker showed the user — a fallback
-  // that builds a party the mesh cannot carry half-connects and reads as our bug.
+  // ONE definition, and it is still a function rather than a bare constant: three copies
+  // of the old `sfuEnabled ? 10 : 6` had to be consolidated once already, and every
+  // reader — the group picker, the invite guard, `maxParticipants()` — must agree with
+  // the number the user was shown when they chose who to call. A party built past the
+  // cap half-connects and reads as our bug.
   const MESH_MAX = 6;
-  const SFU_MAX = 10;
-  function transportMax(): number { return livekitEnabled ? SFU_MAX : MESH_MAX; }
-  // Has ANYONE joined this call yet? False while an outgoing dial is still
-  // RINGING. The SFU join watchdog must never tear down an unanswered call —
-  // it used to hangUp("livekit-join-timeout") ~16.5s after DIAL (the watchdog
-  // is armed by enterCallUI, which runs at "Calling…"), so any caller whose SFU
-  // connect was slow/failing had every outgoing call die after a few seconds
-  // while it was still ringing. Set by acceptInvite/createPeer/addLkTile (any
-  // evidence a second party is in the call); reset by hangUp.
+  function transportMax(): number { return MESH_MAX; }
+  // Has ANYONE joined this call yet? False while an outgoing dial is still RINGING.
+  // Set by acceptInvite/createPeer (any evidence a second party is in the call);
+  // reset by hangUp. It exists because a media-establishment timer must never tear
+  // down a call nobody has answered yet — a caller whose media was slow used to have
+  // every outgoing call die a few seconds into the ring.
   let callAnswered = false;
   // ── mutual-consent video (1:1 protocol) ──────────────────────────────────
   // Video transmits ONLY once BOTH parties have agreed, per call:
@@ -583,17 +541,16 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function unlockApprovedVideo() {
     videoApproved = true;
     clearVideoReq();
-    if (!camOn) setCam(true); // flips enabled + self tile (+ SFU sync)
-    if (livekitEnabled) void syncLivekitVideoPublication(true);
-    else { const t = currentCameraVideoTrack(); if (t) void replaceVideoEverywhere(t).then(() => syncCamEnabled()); }
+    if (!camOn) setCam(true); // flips enabled + self tile
+    const t = currentCameraVideoTrack();
+    if (t) void replaceVideoEverywhere(t).then(() => syncCamEnabled());
   }
   // Consent can arrive BEFORE the transport exists (the callee's video-accept
   // often beats peer-joined/ICE). Re-assert "approved video is actually
   // flowing" whenever a connection settles — fills any mesh sender that was
-  // negotiated as a null slot pre-consent, and republishes on the SFU.
+  // negotiated as a null slot pre-consent.
   function ensureApprovedVideoFlowing() {
     if (!inCall || !camOn || !(videoApproved || callIsGroup) || screenSharing) return;
-    if (livekitEnabled) { void syncLivekitVideoPublication(true); return; }
     const t = currentCameraVideoTrack();
     if (!t) return;
     const someoneMissingOurVideo = Object.values(peers).some(
@@ -666,13 +623,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
    * Once the callee ANSWERS, nothing bounded how long the caller could sit on
    * "Securing connection…" — two independent mechanisms guaranteed it:
    *
-   *   1. `onCalleeAnswered()` calls `clearDialTimeout()`, cancelling the 65s
-   *      no-answer backstop outright; and even if it did not, that callback
-   *      early-returns on `callAnswered`, so it would decline to fire anyway.
-   *   2. `armLkWatchdog`'s tick early-returns while `lkConnected` — and on an
-   *      OUTGOING dial the caller joins the SFU room at dial time, so
-   *      `lkConnected` is already true when it first ticks at 4.5s. It retires
-   *      itself before the callee has even answered.
+   * `onCalleeAnswered()` calls `clearDialTimeout()`, cancelling the 65s no-answer
+   * backstop outright; and even if it did not, that callback early-returns on
+   * `callAnswered`, so it would decline to fire anyway.
    *
    * So the state "we are in the room, they answered, and no remote media ever
    * arrived" had no timer, no error and no way out but the End button. That is
@@ -956,151 +909,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
       armEstablishDeadline();
     }
   }
-  function clearLkWatchdog() { if (lkWatchdog) { clearTimeout(lkWatchdog); lkWatchdog = null; } lkJoinTries = 0; }
-  // Reliability net for the SFU path: if media isn't up a few seconds after the
-  // call UI opens (token mint failed, SSE frame dropped, or connect() failed),
-  // re-request a fresh token; after a few tries, surface an error + hang up
-  // instead of sitting on a silent, media-less call forever.
-  function armLkWatchdog() {
-    clearLkWatchdog();
-    const tick = () => {
-      if (!inCall || !livekitEnabled || lkConnected) { lkWatchdog = null; return; }
-      // THE ROOM CAN BE UP WITH NOTHING PUBLISHED, and a fresh token cannot fix that:
-      // the token authorizes JOINING and we have already joined — it is the publish that
-      // failed. So retry the publish itself first, on every tick, before falling through
-      // to re-minting. (Without this, `joinLivekit`'s own double-connect guard
-      // `if (lkRoom) return` makes a re-minted token a complete no-op.)
-      if (lkRoom) void republishToSfu();
-      if (!callAnswered) {
-        // Still ringing — NEVER give up here. Ring-timeout / reject / cancel
-        // govern an unanswered call; we just keep the token fresh so media can
-        // come up instantly when (if) they answer.
-        diag("livekit: ringing — keeping token fresh, not counting down");
-        sendWS({ type: "refresh-livekit" });
-        lkWatchdog = setTimeout(tick, 4000);
-        return;
-      }
-      lkJoinTries++;
-      if (lkJoinTries > 3) {
-        lkWatchdog = null;
-        // Before ending the call, try to CARRY it instead: the mesh needs no media
-        // infrastructure at all, so it is the one transport a broken SFU cannot take away.
-        if (fallbackToMesh(mediaFault || "join-timeout")) return;
-        // NAME THE CAUSE. These two failures need different next steps, and telling
-        // somebody the media server is unreachable when their own device refused to send
-        // its microphone sends them to check their network instead of their microphone.
-        toast(
-          mediaFault
-            ? "Call media couldn't start — this device didn't manage to send its microphone. Close anything else using it, then try again."
-            : "Call media couldn't connect — the media server is unreachable from this network. Please try again.",
-          true,
-        );
-        hangUp(mediaFault ? "livekit-publish-failed" : "livekit-join-timeout");
-        return;
-      }
-      diag("livekit: media not up — re-requesting token (try " + lkJoinTries + ")");
-      sendWS({ type: "refresh-livekit" });
-      lkWatchdog = setTimeout(tick, 4000);
-    };
-    lkWatchdog = setTimeout(tick, 4500);
-  }
-  /**
-   * Publish any local track the SFU currently holds no publication for, and only then
-   * call our media up. This is the recovery for a room that is CONNECTED while carrying
-   * NOTHING — the state `joinLivekit` used to record as success.
-   *
-   * It reacquires the local stream when there isn't one, because that is one of the two
-   * ways to arrive here: with `send` falsy there was never anything to publish, so
-   * retrying the publish alone would fail identically forever.
-   *
-   * Idempotent by construction (it publishes only what is missing) because the watchdog
-   * ticks it repeatedly, and it never throws — its caller is the call path.
-   */
-  async function republishToSfu(): Promise<boolean> {
-    const room = lkRoom;
-    if (!room || !inCall) return false;
-    let stream = processedStream || localStream;
-    if (!stream) {
-      try { stream = await ensureMedia(camOn); }
-      catch { diag("livekit: republish — no local media to send"); return false; }
-      // The call may have ended or moved to a different room while we were acquiring.
-      if (!inCall || lkRoom !== room) return false;
-    }
-    const lp = (room as unknown as { localParticipant?: Record<string, any> }).localParticipant;
-    if (!lp) return false;
-    const hasKind = (kind: "audio" | "video"): boolean => {
-      try {
-        const pubs: any[] = typeof lp.getTrackPublications === "function" ? lp.getTrackPublications() : [];
-        return pubs.some(p => (p?.kind === kind || p?.track?.kind === kind) && p?.track);
-      } catch { return false; }
-    };
-    let ok = hasKind("audio");
-    if (!ok) {
-      for (const t of stream.getAudioTracks()) {
-        try { await lp.publishTrack(t); ok = true; break; }
-        catch { diag("livekit: republish microphone failed"); }
-      }
-      if (!inCall || lkRoom !== room) return false;
-    }
-    if (ok) {
-      // Our uplink is genuinely carrying audio now, so the watchdog has nothing left to
-      // do. markEstablished is deliberately NOT called here: the connect path already
-      // decided what the user sees, and claiming "connected" off our OWN uplink is the
-      // dishonesty this release removes — a remote track is what proves a call.
-      mediaFault = null;
-      lkConnected = true;
-      clearLkWatchdog();
-      diag("livekit: microphone republished — our media is up");
-    }
-    if (camOn && (videoApproved || callIsGroup) && !hasKind("video")) {
-      try { await syncLivekitVideoPublication(true); } catch { /* video is never fatal */ }
-    }
-    return ok;
-  }
-  /**
-   * LAST RESORT: give up on the SFU and carry this call on the peer-to-peer mesh instead.
-   *
-   * WHY THIS EXISTS. When the fleet advertises LiveKit the client NEVER builds a peer
-   * connection, so an SFU that cannot carry media does not degrade calling — it REMOVES
-   * it, for everybody, on every call, with our own signaling working perfectly (ring,
-   * accept and roster all succeed, which is why it presents as "it connects and there is
-   * no audio and no video"). The terminal action used to be hangUp(), so a single
-   * unusable media vendor meant nobody could call anybody.
-   *
-   * `voipRegistry.ts` already states the principle for the SERVER's transport choice —
-   * mediasoup → LiveKit → mesh, "the mesh last precisely because it depends on no
-   * infrastructure". This is that same ladder at RUNTIME, which is the half that was
-   * missing: the server can only choose a transport it believes works.
-   *
-   * It replaces a hang-up and nothing else, so it can only ever improve the outcome.
-   * Returns false when the mesh genuinely cannot serve this call, in which case the
-   * caller ends it honestly rather than pretending.
-   */
-  function fallbackToMesh(why: string): boolean {
-    if (!livekitEnabled || !inCall) return false;
-    // From SIGNALING, never from the SFU's tiles — see `sigRoster`.
-    const members = Array.from(sigRoster.keys());
-    // Nobody else is here (an unanswered dial, or a room we joined alone): there is
-    // nothing to build a mesh TO, so there is no fallback to make.
-    if (!members.length) return false;
-    // The mesh caps at 6 INCLUDING us. Building a mesh we know cannot carry the party is
-    // worse than failing honestly, because it would half-connect and look like our bug.
-    if (members.length > MESH_MAX - 1) {
-      diag("livekit: cannot fall back — " + members.length + " others exceeds the mesh cap");
-      return false;
-    }
-    const names: Record<string, string> = {};
-    for (const pin of members) names[pin] = sigRoster.get(pin) || peerNamesSeen[pin] || "Guest";
-    diag("livekit: giving up (" + why + ") — falling back to the peer-to-peer mesh");
-    sfuUnusable = true; // set BEFORE teardown, so nothing re-enables the SFU underneath us
-    teardownLivekit();
-    livekitEnabled = false;
-    // Consent is NOT re-gated on the way down: this call already settled it (v2.81), and
-    // re-asking would black out cameras that are legitimately live.
-    for (const pin of members) if (!peers[pin]) callPeer(pin, names[pin]);
-    toast("Switching to a direct connection…");
-    return true;
-  }
   // Numbers this user has BLOCKED (pushed by the host app from their contact
   // list). An incoming ring from any of them is silently declined — same
   // treatment as Do-Not-Disturb, but per-number.
@@ -1229,13 +1037,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   // True when we're in a call but no remote party is present yet — used to
-  // decide whether a `rejected`/`busy`/error should tear the call down. On the
-  // mesh path that's "no peers"; on the LiveKit path it's "no remote tiles" (so
-  // a declined add-invite in a group call doesn't kill the whole call).
+  // decide whether a `rejected`/`busy`/error should tear the call down, so that
+  // a declined add-invite in a group call doesn't kill the whole call.
   function aloneInCall(): boolean {
-    return livekitEnabled
-      ? Object.keys(lkParticipantTiles).length === 0
-      : Object.keys(peers).length === 0;
+    return Object.keys(peers).length === 0;
   }
 
   // True when we're in a PARKED room — a group call or a party line (server
@@ -1251,21 +1056,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
   // ---------- protocol ----------
   function handle(m: Msg) {
-    // Capture the advisory LiveKit flag whenever the server stamps it
-    // (registered / joined / peer-joined), so we know our media path up front.
-    if (typeof m.livekit === "boolean") {
-      // `sfuUnusable` is STICKY for the session, and this is the assignment that makes it
-      // load-bearing: it runs on `peer-joined` and `joined` as well as `registered`, so
-      // without the guard the very next frame would silently put a fallen-back call back
-      // onto the SFU mid-call. It also means the SECOND call doesn't pay another ~16s to
-      // relearn what the first one established about this network.
-      livekitEnabled = m.livekit && !sfuUnusable;
-      livekitUrl = m.livekitUrl || livekitUrl;
-    }
-    if (typeof m.recording === "boolean" && m.type === "registered") {
-      recordingAvailable = m.recording;
-      updateRecordBtnVisibility();
-    }
     // Round 11 B: every envelope that puts us IN a room carries a fresh
     // capability for it. Captured in one place rather than in each handler, so a
     // room ack added later inherits the recovery path for free.
@@ -1287,11 +1077,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
         if (inCall && roomId && roomCap) armRecreate({ roomId, cap: roomCap });
         break;
       }
-      case "recording":      onRecordingStatus(m); break;
-      case "recording-error":
-        toast(m.message || "Recording failed.", true);
-        recordingOn = false; updateRecordingUI();
-        break;
       case "room":
         roomId = m.roomId || null;
         // M37 (v2.99.47): this ack answers OUR OWN invite, so this room is the
@@ -1338,7 +1123,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
       case "resumed":      void onResumed(m); break;
       case "merged":       onMerged(m); break;
       case "peer-joined":  onPeerJoined(m); break;
-      case "livekit-token": onLivekitToken(m); break;
       case "rejected":
         toast(nameOf(m.from!) + " declined.");
         // Group dial: note the decline; the LAST one ends the dial (see
@@ -1364,13 +1148,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
         // fully hangs up releases the held room → this very message), so the
         // hold banner/music clear and the normal end logic applies (v2.97.1).
         const goneP = m.pin!;
-        sigRoster.delete(goneP); // they are gone: a fallback must not dial them back
         peersHoldingUs.delete(goneP);
         updateOnHoldState();
         removePeer(goneP);
-        // SFU: the peer lives as an lk tile, not a mesh entry — route the
-        // removal (and its 1:1 auto-end) there too.
-        if (livekitEnabled && lkParticipantTiles[goneP]) removeLkTile(goneP);
         break;
       }
       // v2.99.57: a moderation frame names the room it was issued for. Ignore one
@@ -1489,13 +1269,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
   }
 
-  // A LiveKit join token was pushed for `roomId`. Stash it and, if we're already
-  // the active room and not yet connected, connect to the SFU now.
-  function onLivekitToken(m: Msg) {
-    if (!m.roomId || !m.token) return;
-    lkPendingToken = { roomId: m.roomId, token: m.token, url: m.url || livekitUrl || "" };
-    if (livekitEnabled && roomId === m.roomId && !lkRoom) void joinLivekit(m.roomId);
-  }
 
   // ---------- registration ----------
   function register() {
@@ -1729,7 +1502,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const v = peers[pin].el?.querySelector("video") as HTMLMediaElement | null;
       if (v) els.push(v);
     }
-    for (const a of lkAudioEls) els.push(a);
     return els;
   }
   // Mobile autoplay belt-and-suspenders: if a remote element's play() is blocked
@@ -2175,8 +1947,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // ── local-track death watch ──────────────────────────────────────────────
   // The OS can kill a LIVE local track mid-call: a phone-call interrupt, a
   // Bluetooth headset connecting/disconnecting (the mic moves devices), or
-  // another app claiming the camera. LiveKit just MUTES a dead user-provided
-  // track (no event we handled) and the mesh keeps a dead sender — the user
+  // another app claiming the camera. The mesh keeps a dead sender — the user
   // stayed permanently one-way muted / black with zero feedback ("completely
   // muted" in the 6-party QA). Watch every local track and self-heal.
   function watchLocalTracks(stream: MediaStream) {
@@ -2214,22 +1985,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
             if (sender) await sender.replaceTrack(at);
           } catch { /* per-peer best effort */ }
         }
-        // SFU: swap the published audio in place (or republish).
-        if (lkRoom) {
-          const lp: any = (lkRoom as any).localParticipant;
-          const pubs: any[] = typeof lp.getTrackPublications === "function"
-            ? lp.getTrackPublications()
-            : (lp.audioTrackPublications ? Array.from(lp.audioTrackPublications.values()) : []);
-          let swapped = false;
-          for (const pub of pubs) {
-            const lt = pub?.track;
-            if ((pub?.kind === "audio" || lt?.kind === "audio") && lt) {
-              if (typeof lt.replaceTrack === "function") { await lt.replaceTrack(at); swapped = true; break; }
-              if (lt.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack, false); } catch { /* */ } }
-            }
-          }
-          if (!swapped) await lp.publishTrack(at);
-        }
         toast("Microphone reconnected.");
       } catch {
         toast("Your microphone was lost — check the device, then tap mute/unmute to retry.", true);
@@ -2239,12 +1994,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // Video: reuse the per-path camera reacquire flows. If the camera is OFF
     // there's nothing to do now — the next enable reacquires anyway.
     if (!camOn) return;
-    if (livekitEnabled) {
-      await syncLivekitVideoPublication(true);
-    } else {
-      const track = await reacquireCameraForPublish();
-      if (track) { await replaceVideoEverywhere(track); syncCamEnabled(); }
-    }
+    const track = await reacquireCameraForPublish();
+    if (track) { await replaceVideoEverywhere(track); syncCamEnabled(); }
   }
   /**
    * Release the local camera + mic (and the filter pipeline wrapping them) in
@@ -2424,41 +2175,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
                     || pc.getTransceivers().find(tr => tr.mid !== null && !tr.sender.track && tr.receiver?.track?.kind === "video")?.sender
                     || null;
         if (sender) await sender.replaceTrack(track);
-      } catch { /* */ }
-    }
-    if (lkRoom) {
-      try {
-        // LiveKit types are dynamically imported (any); prefer the SDK's
-        // in-place replaceTrack, else fall back to unpublish + publish.
-        const lp: any = (lkRoom as any).localParticipant;
-        const pubs: any[] = typeof lp.getTrackPublications === "function"
-          ? lp.getTrackPublications()
-          : (lp.videoTrackPublications ? Array.from(lp.videoTrackPublications.values()) : []);
-        if (!track) {
-          // No replacement (e.g. stopping screen share in an audio-only call) —
-          // drop any published video so no orphan publication lingers.
-          for (const pub of pubs) {
-            const lt = pub?.track;
-            const isVideo = pub?.kind === "video" || lt?.kind === "video";
-            if (lt && isVideo && lt.mediaStreamTrack) {
-              try { await lp.unpublishTrack(lt.mediaStreamTrack); } catch { /* */ }
-            }
-          }
-        } else {
-          let swapped = false;
-          for (const pub of pubs) {
-            const lt = pub?.track;
-            const isVideo = pub?.kind === "video" || lt?.kind === "video";
-            if (lt && isVideo) {
-              if (typeof lt.replaceTrack === "function") { await lt.replaceTrack(track); swapped = true; break; }
-              if (lt.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack); } catch { /* */ } }
-            }
-          }
-          // Publish a FRESH video publication only when video should actually
-          // be flowing (camera on, or an active screen share) — an unguarded
-          // publish here could push a disabled/black track during a voice call.
-          if (!swapped && (camOn || screenSharing)) await lp.publishTrack(track);
-        }
       } catch { /* */ }
     }
     syncCamEnabled();
@@ -3076,22 +2792,21 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
 
   // Call-waiting HOLD state: the OTHER call we've parked while we talk on the
-  // active one. On the mesh path we keep its peer connections alive but FROZEN
-  // (no media flowing, tiles detached) so a swap-back is instant; on the SFU path
-  // we drop the LiveKit connection (the server keeps room membership) and rejoin
-  // on resume. At most one held call (a 3rd concurrent caller is rejected).
+  // active one. Its peer connections stay alive but FROZEN (no media flowing,
+  // tiles detached) so a swap-back is instant. At most one held call (a 3rd
+  // concurrent caller is rejected).
   let heldRoomId: string | null = null;
   const heldPeers: Record<string, PeerEntry> = {};
   let heldLabel: string | null = null;
 
   /* ── being HELD (v2.97.1) ────────────────────────────────────────────
-     Peers who put US on hold (peer-hold on). This set is the guard that keeps
-     a held 1:1 ALIVE on the SFU path: holding tears down the holder's LiveKit
-     connection, which the held side used to read as "they left" → 1:1
-     auto-end — the reported "answering a second call kills the first call".
+     Peers who put US on hold (peer-hold on). This set is the guard that keeps a
+     held 1:1 ALIVE: a holder's transport going quiet used to read as "they left"
+     → 1:1 auto-end, which is the reported "answering a second call kills the
+     first call".
      Cleared on peer-hold off, on a REAL leave (peer-left), and at call end. */
   const peersHoldingUs = new Set<string>();
-  // peer-hold can arrive a beat AFTER the holder's SFU disconnect, so a bare
+  // peer-hold can arrive a beat AFTER the holder's transport drops, so a bare
   // 1:1 disconnect never ends the call instantly — it arms this short fuse,
   // and a peer-hold (or the peer coming back) defuses it.
   let soloEndT: ReturnType<typeof setTimeout> | null = null;
@@ -3239,9 +2954,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
       heldPeers[id] = e;
       delete peers[id];
     }
-    // SFU: the server keeps our membership; drop the live connection and rejoin
-    // it when we resume (mesh peers stay connected, so this is a no-op there).
-    if (livekitEnabled) teardownLivekit();
     updateHeldBar();
   }
   // Tear down whatever is in `heldPeers` (held call ended or merged away).
@@ -3304,7 +3016,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const e = peers[id]; parkingLabel = parkingLabel || e.name;
       freezePeerMedia(e); parking[id] = e; delete peers[id];
     }
-    if (livekitEnabled) teardownLivekit();
     // Promote the held peers to active.
     for (const id in heldPeers) { peers[id] = heldPeers[id]; delete heldPeers[id]; }
     const resumingRoom = heldRoomId;
@@ -3362,7 +3073,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (peers[id].el && peers[id].el!.parentNode) peers[id].el!.parentNode!.removeChild(peers[id].el!);
       delete peers[id];
     }
-    if (livekitEnabled) teardownLivekit();
     sendWS({ type: "end-active" });
     addSysMsg("Ended this line — resuming your held call…");
     // FAIL CLOSED (v2.99.36, owner: "I cannot even have another call"). This
@@ -3403,23 +3113,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
     videoApproved = true; // resuming an established call — consent already settled
     enterCallUI("In call");
     recordMemberDevices(m.members);
-    recordSigRoster(m.members);
     recordMemberRoles(m.members);
     captureSelfRole(m);
-    if (livekitEnabled) {
-      if (m.iceServers && m.iceServers.length) iceConfig = buildIceConfig(m.iceServers);
-      // Pre-create roster tiles (see onJoined) so a resumed SFU call shows all parties.
-      (m.members || []).forEach(mem => addLkTile(mem.pin, mem.name || "Guest"));
-      // The server pushed a fresh token; reconnect to the resumed SFU room.
-      if (lkPendingToken && lkPendingToken.roomId === rid && !lkRoom) void joinLivekit(rid);
-    } else {
-      // Mesh: the resumed peers are FROZEN in `peers` (moved there by swapCall) —
-      // thaw each so media flows and tiles re-appear. Any member the server lists
-      // that we DON'T have a live peer for (e.g. it died during hold) is re-dialed.
-      if (m.iceServers && m.iceServers.length) iceConfig = buildIceConfig(m.iceServers);
-      for (const id in peers) thawPeerMedia(peers[id]);
-      (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
-    }
+    // The resumed peers are FROZEN in `peers` (moved there by swapCall) — thaw each
+    // so media flows and tiles re-appear. Any member the server lists that we DON'T
+    // have a live peer for (e.g. it died during hold) is re-dialed.
+    if (m.iceServers && m.iceServers.length) iceConfig = buildIceConfig(m.iceServers);
+    for (const id in peers) thawPeerMedia(peers[id]);
+    (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
     updateHeldBar();
     layoutGrid();
     playCue("resume");
@@ -3431,12 +3132,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // in mergeCall; this reconciles anyone the server moved that we lack).
   function onMerged(m: Msg) {
     if (m.roomId) roomId = m.roomId;
-    if (!livekitEnabled) {
-      (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
-    } else {
-      // SFU: pre-create tiles for the merged-in members (see onJoined).
-      (m.members || []).forEach(mem => addLkTile(mem.pin, mem.name || "Guest"));
-    }
+    (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
     heldRoomId = null; heldLabel = null;
     updateHeldBar();
     layoutGrid();
@@ -3689,31 +3385,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       if (!m.members || m.members.length === 0) markEstablished();
     }
     recordMemberDevices(m.members);
-    recordSigRoster(m.members);
     recordMemberRoles(m.members);
     captureSelfRole(m);
-    if (livekitEnabled && roomId) {
-      // SFU path: media goes through LiveKit, not the mesh. Don't build peers;
-      // connect to the room (if the token already arrived — otherwise the
-      // `livekit-token` push will trigger joinLivekit).
-      diag("livekit: joined room " + roomId + " (SFU path)");
-      // Pre-create a tile for every member on the authoritative roster NOW, so all
-      // N participants show a proportioned tile immediately — LiveKit's
-      // ParticipantConnected does NOT fire for members already in the room when we
-      // connect, so without this the 5th/6th feed only appears on TrackSubscribed
-      // (late, or black under the audio-before-video race) → looked like "only 4".
-      // addLkTile dedups on lkParticipantTiles; m.members excludes self.
-      (m.members || []).forEach(mem => addLkTile(mem.pin, mem.name || "Guest"));
-      // Apply the room's freshly-minted TURN credentials on THIS path too. The SFU does
-      // not need them, but `fallbackToMesh` does, and it can fire at any moment during
-      // this call — without this it would build peer connections from the register-time
-      // set, which on a long-lived session can be hours old and past its TTL, i.e. the
-      // fallback would gather no relay candidates on exactly the strict networks that
-      // most need them.
-      if (m.iceServers && m.iceServers.length) iceConfig = buildIceConfig(m.iceServers);
-      if (lkPendingToken && lkPendingToken.roomId === roomId) void joinLivekit(roomId);
-      return;
-    }
     // Apply the fresh, per-peer TURN/STUN credentials the server minted for
     // this room BEFORE building any peer connections, so every RTCPeerConnection
     // gathers relay candidates from our coturn (not the stale register-time set).
@@ -3758,9 +3431,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     roomId = rid;
     inCall = true;
     videoApproved = true; // resuming an established call — consent already settled
-    enterCallUI("In call");          // shows the call screen + arms the SFU watchdog
+    enterCallUI("In call");
     recordMemberDevices(m.members);
-    recordSigRoster(m.members);
     recordMemberRoles(m.members);
     captureSelfRole(m);
     // Restore the mic/cam state the user had BEFORE the reload (default = both on,
@@ -3771,16 +3443,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     }
     clearPendingRejoin();
     toast("Rejoined the call");
-    if (livekitEnabled) {
-      diag("rejoin: livekit room " + rid);
-      // Pre-create roster tiles (see onJoined) so every party shows on rejoin too.
-      (m.members || []).forEach(mem => addLkTile(mem.pin, mem.name || "Guest"));
-      // The server pushed a fresh token right after this message; onLivekitToken
-      // will joinLivekit. If it already arrived (race), join now.
-      if (lkPendingToken && lkPendingToken.roomId === rid && !lkRoom) void joinLivekit(rid);
-      return;
-    }
-    // Mesh: re-offer to each existing member (glare-free — we're the newcomer).
+    // Re-offer to each existing member (glare-free — we're the newcomer).
     if (m.iceServers && m.iceServers.length) iceConfig = buildIceConfig(m.iceServers);
     (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
   }
@@ -3789,21 +3452,14 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (m.pin && m.flag) { peerFlags[m.pin] = m.flag; setTileFlag("tile-" + m.pin, m.flag); }
     if (m.pin && m.role) { peerRoles[m.pin] = m.role as string; setTileRole("tile-" + m.pin, m.role as string); }
     refreshHostPanel();
-    // The server's peer-joined is the AUTHORITATIVE "they answered" signal on
-    // BOTH media paths. It must drive the answer transition here — NOT the
-    // LiveKit events (addLkTile) alone: when the SFU is slow or unreachable,
-    // no LiveKit event ever fires, and the caller previously sat at "Ringing…"
-    // forever (its watchdog stuck in the gentle keep-token-fresh loop) while
-    // the callee's side died with "couldn't connect media" — a zombie solo
-    // room that auto-rejoin then resurrected. With callAnswered set here, the
-    // caller's watchdog escalates properly and both sides fail (or recover)
-    // together.
-    if (m.pin) sigRoster.set(m.pin, m.name || "Guest");
+    // The server's peer-joined is the AUTHORITATIVE "they answered" signal, and it
+    // must drive the answer transition here rather than any media event: a media
+    // event that never fires used to leave the caller at "Ringing…" forever while
+    // the callee's side died with "couldn't connect media" — a zombie solo room
+    // that auto-rejoin then resurrected. With callAnswered set here, both sides
+    // fail (or recover) together.
     callAnswered = true;
     onCalleeAnswered();
-    // On the SFU path, LiveKit's own ParticipantConnected/TrackSubscribed events
-    // drive remote tiles — the mesh offer/answer dance is skipped entirely.
-    if (livekitEnabled) return;
     if (peers[m.pin!]) return;
     // Same as onJoined: adopt the fresh relay creds before creating the peer.
     if (m.iceServers && m.iceServers.length) {
@@ -3813,392 +3469,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
     createPeer(m.pin!, m.name || "Guest", false);
   }
 
-  // ---------- LiveKit SFU media path ----------
-  // Connect to the LiveKit room (= the relay roomId), publish our processed
-  // stream, and render remote participants into the existing #videoGrid tiles.
-  // Lazy-imports livekit-client so the bundle cost is only paid on a real call.
-  async function joinLivekit(rid: string) {
-    if (lkRoom) return; // never double-connect
-    const tok = lkPendingToken;
-    if (!tok || tok.roomId !== rid || !tok.url || !tok.token) {
-      diag("livekit: waiting for token");
-      return;
-    }
-    let RoomCtor, RoomEventEnum, TrackEnum, AudioPresetsEnum;
-    try {
-      const lk = await import("livekit-client");
-      RoomCtor = lk.Room; RoomEventEnum = lk.RoomEvent; TrackEnum = lk.Track;
-      AudioPresetsEnum = (lk as unknown as { AudioPresets?: { speech?: unknown } }).AudioPresets;
-    } catch (e) {
-      diag("livekit: failed to load client");
-      console.warn("livekit-client load failed", e);
-      return;
-    }
-    // Default publish audio preset = "speech" (Opus tuned for voice) instead of
-    // the library default "music" (48 kbps) — clearer voice at lower bitrate for
-    // weak/mobile connections. DTX + RED are already on by default. On the ctor
-    // (not the publish call) so it doesn't disturb the pinned publishTrack test.
-    // pauseVideoInBackground OFF: the default pauses every remote video ~5s
-    // after the tab is backgrounded — which froze the auto-PiP composite (the
-    // whole point of PiP is watching the call WHILE backgrounded) and left
-    // tiles frozen for a beat on return. Bandwidth is still adapted per-tile
-    // by element size/visibility; only the hidden-tab blanket pause is off.
-    const roomOpts: Record<string, unknown> = {
-      adaptiveStream: { pauseVideoInBackground: false },
-      dynacast: true,
-    };
-    /* v2.105.21 (owner: "slowness … when the voice and video started together", on
-       LiveKit Cloud) — `degradationPreference: "balanced"` reaches the SFU path at
-       last.
-       v2.99.84 reasoned this out and then applied it ONLY to the mesh, because that
-       release's report was a mesh conference: `applyMeshVideoCaps()` opens with
-       `if (livekitEnabled) return`, so all three of its `degradationPreference`
-       lines are unreachable here. The default for a camera track is
-       maintain-framerate, which holds fps and sheds RESOLUTION under pressure —
-       precisely backwards on a phone whose uplink tightens the moment a second
-       track starts, and the moment being described.
-       SAID PLAINLY: this is a plausible fit for the symptom, not a proven cause.
-       Two earlier hypotheses about this path (that audio was unprioritised, and
-       that the speech preset downgraded it) were both REFUTED by reading
-       livekit-client — it sets `networkPriority: 'high'` itself and the speech
-       preset carries no priority to override it. The stats readout added in the
-       same release is what will actually decide it. */
-    const pubDefaults: Record<string, unknown> = { degradationPreference: "balanced" };
-    // Audio: 24 kbps speech rather than the 48 kbps music default. Kept as a
-    // separate assignment because a preset enum absent in an older livekit-client
-    // must not take the degradationPreference down with it.
-    if (AudioPresetsEnum?.speech) pubDefaults.audioPreset = AudioPresetsEnum.speech;
-    roomOpts.publishDefaults = pubDefaults;
-    // A throwing Room constructor must NEVER kill the dial path (joinLivekit is
-    // retried by the watchdog, so a persistent throw = every call dies) — fall
-    // back to the known-good minimal options before giving up.
-    let room: import("livekit-client").Room;
-    try {
-      room = new RoomCtor(roomOpts);
-    } catch (e) {
-      diag("livekit: Room options rejected — retrying with defaults");
-      console.warn("livekit Room ctor failed with options, retrying bare:", e);
-      try { room = new RoomCtor({ adaptiveStream: true, dynacast: true }); }
-      catch (e2) { diag("livekit: Room construction failed"); console.warn(e2); return; }
-    }
-    lkRoom = room;
 
-    const isScreenPub = (pub: unknown): boolean => {
-      const src = (pub as { source?: unknown } | null)?.source;
-      // LiveKit Track.Source.ScreenShare === "screen_share".
-      return String(src) === "screen_share" || src === TrackEnum.Source?.ScreenShare;
-    };
-    room.on(RoomEventEnum.TrackSubscribed, (track, _pub, participant) => {
-      addLkTile(participant.identity, participant.name || participant.identity);
-      // First REMOTE media flowing = the call is genuinely connected. This is
-      // what flips an outgoing SFU dial from "Connecting…" to the full in-call
-      // UI (room.connect() alone can't — the caller connects while ringing).
-      if (!establishedOnce) markEstablished();
-      const el = lkParticipantTiles[participant.identity];
-      // AUDIO MUST NOT DEPEND ON A VIDEO TILE EXISTING. This used to be a shared
-      // `if (!el) return;` guarding BOTH branches — but remote audio plays from a
-      // DETACHED element and needs no tile at all, so whenever `addLkTile` had not
-      // produced one (it dedups and can early-return, and the grid may not be
-      // mounted yet) the track ARRIVED and was then silently dropped: a call with a
-      // live inbound audio track and no sound, which is unfalsifiable from the UI.
-      // The tile is the render target for VIDEO only, so the guard belongs there.
-      if (track.kind === TrackEnum.Kind.Video) {
-        if (!el) return;
-        const vEl = el.querySelector("video") as HTMLVideoElement | null;
-        if (vEl) track.attach(vEl);
-        bindLkPlaceholder(el, true);
-        // A screen-share video → mark the tile so layout auto-focuses it (and
-        // the video is letterboxed, not cropped). The tile id is "tile-<identity>".
-        if (isScreenPub(_pub)) { screenShareIds.add(el.id); el.classList.add("screen"); }
-        // Resume playback + re-layout once the real frame dimensions arrive (and
-        // after paint), so a new (esp. screen-share) video shows without needing
-        // a device rotation — parity with the self-share path.
-        if (vEl) {
-          void vEl.play().catch(() => {});
-          vEl.addEventListener("loadedmetadata", () => { void vEl.play().catch(() => {}); layoutGrid(); }, { once: true });
-        }
-        layoutGrid();
-        if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutGrid());
-      } else if (track.kind === TrackEnum.Kind.Audio) {
-        const audioEl = track.attach() as HTMLMediaElement; // detached <audio> for playback
-        // Track it so the chosen output device (speaker/earpiece/BT) applies, and
-        // route it to the current sink right away.
-        lkAudioEls.push(audioEl);
-        void applyAudioSink(audioEl);
-        // ANDROID ONLY: a DETACHED <audio> element doesn't reliably initialize the
-        // WebRTC audio output pipeline on Android Chrome (incoming SFU audio stays
-        // silent). Insert it (hidden) into the scoped call root so playback inits,
-        // and kick play() with a one-tap fallback. iOS works WITHOUT DOM insertion
-        // and a 2nd gated media element there can hurt, so we leave iOS untouched.
-        if (IS_ANDROID) {
-          try {
-            audioEl.style.display = "none";
-            root.appendChild(audioEl);
-            void audioEl.play?.().catch(() => armAudioUnlock());
-          } catch { /* */ }
-        } else {
-          // ALL other platforms too: attach()'s internal play() can be
-          // rejected by autoplay policy (desktop Safari especially — the
-          // track arrives seconds after the accept gesture) and LiveKit only
-          // emits an event we never handled — that participant stayed SILENT
-          // until some unrelated tap. Kick play() ourselves and arm the
-          // one-tap unlock on rejection.
-          void (audioEl as HTMLMediaElement).play?.().catch(() => armAudioUnlock());
-        }
-        // Don't flip the tile to audio-only (which hides the video) if this
-        // participant is ALSO publishing camera video — audio commonly
-        // subscribes first, and marking audio-only here is what stalls their
-        // camera on the SFU. Keep video visible when a video publication exists.
-        // Guarded, because this is now the ONLY line in the audio path that wants a
-        // tile — and a missing tile must cost a placeholder, never the sound.
-        if (el) bindLkPlaceholder(el, lkHasVideo(participant));
-      }
-    });
-    room.on(RoomEventEnum.TrackUnsubscribed, (track, _pub, participant) => {
-      let detached: HTMLMediaElement[] = [];
-      try { detached = (track.detach() as HTMLMediaElement[] | HTMLMediaElement) as HTMLMediaElement[]; } catch { /* */ }
-      // Drop any detached audio elements from the sink-tracking list, and pull
-      // them out of the DOM (the Android path inserts hidden <audio> nodes into
-      // the call root — without this they accumulated for the whole call).
-      const arr = Array.isArray(detached) ? detached : (detached ? [detached] : []);
-      arr.forEach(d => {
-        const i = lkAudioEls.indexOf(d);
-        if (i >= 0) lkAudioEls.splice(i, 1);
-        try { d.remove(); } catch { /* not in the DOM — fine */ }
-      });
-      const el = lkParticipantTiles[participant.identity];
-      if (el && track.kind === TrackEnum.Kind.Video) {
-        if (isScreenPub(_pub)) {
-          screenShareIds.delete(el.id);
-          el.classList.remove("screen");
-          // The screen + camera shared one <video>; detaching the screen left it
-          // blank. Re-attach the participant's still-live camera so their tile
-          // shows their face again (not a frozen black frame).
-          const cam = lkCameraTrack(participant);
-          const vid = el.querySelector("video") as HTMLVideoElement | null;
-          if (cam?.attach && vid) { try { cam.attach(vid); } catch { /* */ } }
-        }
-        bindLkPlaceholder(el, lkHasVideo(participant));
-        layoutGrid();
-      }
-    });
-    // A remote CAMERA video going quiet must flip the tile to the avatar, not
-    // freeze on the last frame. Two distinct signals cover it:
-    //  - TrackMuted/TrackUnmuted: the publisher disabled their camera (or
-    //    their uplink died) — with no handler the tile froze and testers read
-    //    it as "their camera is dead".
-    //  - TrackStreamStateChanged: adaptiveStream PAUSES a subscription whose
-    //    <video> is tiny/offscreen (our 46px spotlight thumbs, minimized
-    //    2-up) — a paused-but-subscribed stream also froze silently, and only
-    //    for SOME viewers (whoever had that tile small), which is exactly the
-    //    sporadic per-viewer "camera failure" a multi-party test reports.
-    const isRemoteCameraVideo = (pub: unknown): boolean => {
-      const p = pub as { kind?: string; track?: { kind?: string } } | null;
-      return (p?.kind === "video" || p?.track?.kind === "video") && !isScreenPub(pub);
-    };
-    if (RoomEventEnum.TrackMuted) {
-      room.on(RoomEventEnum.TrackMuted, (pub: any, participant: any) => {
-        if (!isRemoteCameraVideo(pub)) return;
-        const el = lkParticipantTiles[participant?.identity];
-        if (el) bindLkPlaceholder(el, false);
-      });
-    }
-    if (RoomEventEnum.TrackUnmuted) {
-      room.on(RoomEventEnum.TrackUnmuted, (pub: any, participant: any) => {
-        if (!isRemoteCameraVideo(pub)) return;
-        const el = lkParticipantTiles[participant?.identity];
-        if (!el) return;
-        const v = el.querySelector("video") as HTMLVideoElement | null;
-        if (v && pub?.track?.attach) { try { pub.track.attach(v); } catch { /* */ } }
-        void v?.play?.().catch(() => {});
-        bindLkPlaceholder(el, lkHasVideo(participant));
-      });
-    }
-    if (RoomEventEnum.TrackStreamStateChanged) {
-      room.on(RoomEventEnum.TrackStreamStateChanged, (pub: any, state: any, participant: any) => {
-        if (!isRemoteCameraVideo(pub)) return;
-        const el = lkParticipantTiles[participant?.identity];
-        if (!el) return;
-        if (String(state) === "paused") bindLkPlaceholder(el, false);
-        else {
-          const v = el.querySelector("video") as HTMLVideoElement | null;
-          void v?.play?.().catch(() => {});
-          bindLkPlaceholder(el, lkHasVideo(participant));
-        }
-      });
-    }
-    // SFU active-speaker: LiveKit reports speakers loudest-first. Map them to
-    // tile ids, drop ourselves (we don't auto-spotlight self), and relayout so
-    // the spotlight follows whoever's talking.
-    if (RoomEventEnum.ActiveSpeakersChanged) {
-      room.on(RoomEventEnum.ActiveSpeakersChanged, (speakers: Array<{ identity?: string }>) => {
-        const ids = (speakers || [])
-          .map(s => s?.identity)
-          .filter((id): id is string => !!id && id !== me.pin)
-          .map(id => "tile-" + id)
-          .filter(id => !!document.getElementById(id));
-        speakerOrder = ids;
-        const next = ids[0] || null;
-        if (next !== activeSpeakerId) { activeSpeakerId = next; layoutGrid(); }
-      });
-    }
-    room.on(RoomEventEnum.ParticipantConnected, p => addLkTile(p.identity, p.name || p.identity));
-    room.on(RoomEventEnum.ParticipantDisconnected, p => removeLkTile(p.identity));
-    // The room-level "audio playback is blocked" signal (autoplay policy
-    // rejected our elements) — arm the one-tap unlock so the FIRST touch
-    // anywhere restores every remote voice.
-    if ((RoomEventEnum as any).AudioPlaybackStatusChanged) {
-      room.on((RoomEventEnum as any).AudioPlaybackStatusChanged, () => {
-        try { if ((room as any).canPlaybackAudio === false) armAudioUnlock(); } catch { /* */ }
-      });
-    }
-    // M46: LiveKit hands us the SENDING participant; its identity is the pin
-    // from the server-minted join token, so it's authenticated. Prefer it over
-    // whatever the frame claims about itself.
-    room.on(RoomEventEnum.DataReceived, (payload: Uint8Array, participant?: { identity?: string }) => {
-      try {
-        receiveChatFrame(new TextDecoder().decode(payload), participant?.identity);
-      } catch { /* */ }
-    });
-    // LiveKit drives its OWN reconnection (Reconnecting → Reconnected), and its
-    // retry window is longer than our 10s mesh window. So on the SFU path we
-    // only surface the status — we must NOT arm our hard timer, or it would race
-    // and kill LiveKit's working reconnection. A terminal `Disconnected` (after
-    // LiveKit has exhausted its retries) is the single source of teardown.
-    if (RoomEventEnum.Reconnecting) {
-      room.on(RoomEventEnum.Reconnecting, () => { if (lkRoom === room) setSfuReconnectingUI(); });
-    }
-    if (RoomEventEnum.Reconnected) {
-      room.on(RoomEventEnum.Reconnected, () => { if (lkRoom === room) markEstablished(); });
-    }
-    room.on(RoomEventEnum.Disconnected, () => {
-      if (lkRoom !== room || !inCall) return;
-      // PRE-ESTABLISHMENT the caller sits ALONE in the SFU room while the
-      // callee is still being rung — a Disconnected here (network blip, server
-      // room churn right after a redial) is transient, NOT the end of the
-      // call. Killing the dial made redials "drop within two seconds, before
-      // it even rings". Ditch this Room object and re-request a token; the lk
-      // watchdog keeps retrying while ringing, and the dial's own no-answer /
-      // ring-timeout bounds still limit the call's lifetime.
-      if (!establishedOnce) {
-        lkRoom = null;
-        lkConnected = false;
-        diag("livekit: disconnected pre-establishment — retrying, not hanging up");
-        sendWS({ type: "refresh-livekit" });
-        return;
-      }
-      // Terminal: LiveKit already gave the call its (longer) reconnect window and gave
-      // up — which is exactly the shape of an SFU that cannot serve this network at all,
-      // so try to CARRY the call on the mesh before ending it. Only if the mesh can't
-      // (nobody else here, or too many for it) do we end it rather than show a
-      // misleading countdown.
-      if (fallbackToMesh("livekit-disconnected")) return;
-      hangUp("livekit-disconnected");
-    });
-
-    try {
-      await room.connect(tok.url, tok.token);
-      // Render everyone ALREADY in the room right now — ParticipantConnected only
-      // fires for people who join AFTER us, so without this the parties present at
-      // connect time only appear once their tracks subscribe (late/black). This is
-      // LiveKit's recommended pattern; addLkTile dedups. (Some client versions
-      // expose `participants` instead of `remoteParticipants`.)
-      try {
-        const remotes = (room as unknown as {
-          remoteParticipants?: Map<string, { identity: string; name?: string }>;
-          participants?: Map<string, { identity: string; name?: string }>;
-        });
-        const map = remotes.remoteParticipants || remotes.participants;
-        map?.forEach((p) => addLkTile(p.identity, p.name || p.identity));
-      } catch { /* enumeration best-effort */ }
-      // Publish the SAME processed stream the mesh sends, so filters/blur survive.
-      const send = processedStream || localStream;
-      // A failed publish used to be swallowed by the outer catch — the user
-      // sat in the call with a dead camera/mic and ZERO feedback ("4 of 6
-      // cameras worked"). Retry once, then say it plainly.
-      const publishSafe = async (t: MediaStreamTrack, what: "camera" | "microphone") => {
-        for (let i = 0; i < 2; i++) {
-          try { await room.localParticipant.publishTrack(t); return true; }
-          catch { diag("livekit: publish " + what + " failed" + (i ? " (giving up)" : " — retrying")); await new Promise(r => setTimeout(r, 600)); }
-        }
-        toast(
-          what === "microphone"
-            ? "Couldn't send your microphone — others may not hear you. Toggle mute to retry."
-            : "Couldn't send your camera — others may not see you. Toggle the camera to retry.",
-          true,
-        );
-        return false;
-      };
-      // Whether our own MICROPHONE actually reached the SFU is TRACKED rather than
-      // assumed, because of what used to happen when it hadn't — see the gate below.
-      let audioUp = false;
-      const audioTracks = send ? send.getAudioTracks() : [];
-      if (send) {
-        // A VOICE call (camOn already false here — set before enterCallUI) must
-        // not publish a video track at all: an unconditional publish meant every
-        // "voice-only" call still occupied a video publication/subscription on
-        // the SFU (just disabled), wasting bandwidth and showing peers a black
-        // tile instead of a clean voice-call UI.
-        // Mutual-consent gate: a 1:1 VIDEO DIALER's camera is live locally
-        // (self-preview) but must NOT transmit until the callee consents —
-        // video-accept unlocks the publication (unlockApprovedVideo).
-        if (camOn && (videoApproved || callIsGroup)) {
-          for (const t of send.getVideoTracks()) await publishSafe(t, "camera");
-        }
-        for (const t of audioTracks) { if (await publishSafe(t, "microphone")) audioUp = true; }
-      }
-      // ── `lkConnected` MUST MEAN OUR MEDIA IS ACTUALLY UP ──────────────────────────
-      // Both of these lines used to run UNCONDITIONALLY, and that is the one place in
-      // the call path where TOTAL media failure was recorded as SUCCESS: a room that
-      // connected and published NOTHING — a publishTrack refused twice, or a join that
-      // ran before the local stream existed, which makes `send` falsy and the whole
-      // block above a silent no-op — got `lkConnected = true` AND `clearLkWatchdog()`,
-      // i.e. the only thing watching was switched off. The result is a call that is
-      // permanently mute AND black in both directions, with no error and no retry.
-      //
-      // THE MICROPHONE IS THE TEST, and deliberately not the camera: audio is the one
-      // publication that is unconditional, while a 1:1 caller legitimately publishes no
-      // video until the callee consents (v2.81) and a voice call has no camera track at
-      // all — so gating on video would refuse to call correct calls connected.
-      if (audioUp) {
-        mediaFault = null;
-        lkConnected = true;
-        clearLkWatchdog();
-      } else {
-        mediaFault = !send
-          ? "no-local-stream"
-          : audioTracks.length === 0 ? "no-local-audio-track" : "publish-refused";
-        diag("livekit: connected but the microphone did NOT publish (" + mediaFault + ") — watchdog stays armed");
-        // Re-arm rather than leave it cleared, so the recovery below actually gets a tick.
-        armLkWatchdog();
-      }
-      // Our own SFU uplink being ready does NOT mean the CALL is connected:
-      // an outgoing caller joins the room alone while the callee is still
-      // ringing. Only mark established when a second party is (or already
-      // was) in — otherwise the top bar claimed "Connected" mid-ring and the
-      // full in-call UI appeared before anyone answered. The still-ringing
-      // case establishes later: answer → onCalleeAnswered ("Connecting…") →
-      // first TrackSubscribed → markEstablished.
-      if (!outgoingDial || callAnswered) markEstablished();
-      else diag("livekit: uplink ready — waiting for the callee to answer");
-      ensureApprovedVideoFlowing(); // consent may have landed before connect
-      diag("livekit: connected + published");
-    } catch (e) {
-      // Connect/publish failed (expired token, transient SFU/network fault).
-      // Clear the half-built room so the double-connect guard doesn't block a
-      // retry, and drop the (maybe-expired) token so the watchdog's
-      // refresh-livekit mints a fresh one. No-op if the call already ended.
-      diag("livekit: connect failed");
-      console.warn("livekit connect failed", e);
-      try { void room.disconnect(); } catch { /* */ }
-      if (lkRoom === room) lkRoom = null;
-      lkConnected = false;
-      lkPendingToken = null;
-    }
-  }
-
-  // Remote-participant tile shims that reuse the existing #videoGrid DOM/CSS
-  // (keyed by LiveKit participant.identity, which equals the 6-digit pin).
+  // Remote-participant tiles reuse the existing #videoGrid DOM/CSS, keyed by the
+  // peer's 6-digit pin.
   // Five rainbow bars that animate (equaliser) only while the tile is .speaking.
   const SOUND_WAVE_HTML = '<div class="sound-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>';
   // Placeholder (avatar + full name, shown when the camera is off) + an info
@@ -4327,9 +3600,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const el = document.getElementById(tileId);
     el?.querySelectorAll(".nm-flag").forEach(s => { (s as HTMLElement).textContent = flag; });
   }
-  // Remember (and display) each member's device type + flag. Works for both
-  // paths: the maps are read at LiveKit tile creation, and the live setters
-  // update mesh tiles.
+  // Remember (and display) each member's device type + flag: the maps are read when
+  // a tile is created, and the live setters update tiles already on screen.
   function recordMemberDevices(members?: Array<{ pin: string; device?: string; flag?: string }>) {
     (members || []).forEach(mem => {
       if (mem.device) {
@@ -4617,37 +3889,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // Self: outbound bitrate (from any one peer connection — same encode).
     const anyPeer = Object.values(peers)[0];
     if (anyPeer) void sampleOneStats("out-self", "tile-self", anyPeer.pc, true);
-    // SFU: best-effort per-participant inbound via the track's own stats report.
-    // LiveKit's stats API is loosely typed and varies by version, so this block
-    // is intentionally `any` and fully guarded.
-    if (livekitEnabled && lkRoom) {
-      try {
-        const remotes = (lkRoom as unknown as { remoteParticipants?: Map<string, unknown> }).remoteParticipants;
-        remotes?.forEach((pp: unknown) => {
-          const p = pp as { identity?: string; getTrackPublications?: () => unknown[] };
-          const identity = p.identity;
-          if (!identity || typeof p.getTrackPublications !== "function") return;
-          const pubs = p.getTrackPublications() as Array<{ track?: { getRTCStatsReport?: () => Promise<RTCStatsReport> } }>;
-          for (const pub of pubs) {
-            const track = pub?.track;
-            if (!track || typeof track.getRTCStatsReport !== "function") continue;
-            void track.getRTCStatsReport().then((report) => {
-              let bytes = 0;
-              report.forEach((r: { type?: string; bytesReceived?: number }) => {
-                if (r.type === "inbound-rtp") bytes += r.bytesReceived ?? 0;
-              });
-              const key = "lk-" + identity, now = Date.now(), prev = statsPrev[key];
-              statsPrev[key] = { bytes, ts: now };
-              if (prev && now > prev.ts) {
-                const bits = (bytes - prev.bytes) * 8, secs = (now - prev.ts) / 1000;
-                if (bits >= 0 && secs > 0) setTileSpeed("tile-" + identity, formatMbps(bits / secs));
-              }
-            }).catch(() => {});
-            break; // one video pub is enough
-          }
-        });
-      } catch { /* */ }
-    }
   }
   /* ── CALL QUALITY READOUT (v2.105.21) ──────────────────────────────────────
    * Owner: "I feel slowness in the voice and video calls." There was no way to
@@ -4691,9 +3932,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
       tone === "good" ? "call-qual is-good" : tone === "warn" ? "call-qual is-warn" : "call-qual";
   }
 
-  /** Gather every leg's stats report — mesh peer connections AND LiveKit tracks —
-   *  and reduce them through the ONE shared summarizer, so the two transports
-   *  produce comparable numbers. That comparability is the whole point. */
+  /** Gather every leg's stats report and reduce them through the ONE shared
+   *  summarizer. Sharing it is the point: a second transport's numbers have to be
+   *  directly comparable to these, or "is this one worse?" has no answer. */
   async function collectCallQuality() {
     if (!statsShown || !inCall) return;
     const { entriesOf, summarizeStats, formatCallStats, callStatsVerdict, callQualityTone } =
@@ -4702,32 +3943,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     for (const pin in peers) {
       try { reports.push(entriesOf(await peers[pin].pc.getStats())); }
       catch { /* one dead peer must not lose the rest */ }
-    }
-    if (livekitEnabled && lkRoom) {
-      // Both directions: the LOCAL publications carry the outbound picture (and the
-      // candidate pair), the remote ones the inbound. Reading only remotes would
-      // report a call with no upstream at all.
-      const tracks: Array<{ getRTCStatsReport?: () => Promise<RTCStatsReport> }> = [];
-      try {
-        const lp = (lkRoom as unknown as { localParticipant?: { getTrackPublications?: () => unknown[] } }).localParticipant;
-        if (typeof lp?.getTrackPublications === "function") {
-          for (const pub of lp.getTrackPublications() as Array<{ track?: { getRTCStatsReport?: () => Promise<RTCStatsReport> } }>) {
-            if (pub?.track?.getRTCStatsReport) tracks.push(pub.track);
-          }
-        }
-        const remotes = (lkRoom as unknown as { remoteParticipants?: Map<string, unknown> }).remoteParticipants;
-        remotes?.forEach((pp: unknown) => {
-          const p = pp as { getTrackPublications?: () => unknown[] };
-          if (typeof p.getTrackPublications !== "function") return;
-          for (const pub of p.getTrackPublications() as Array<{ track?: { getRTCStatsReport?: () => Promise<RTCStatsReport> } }>) {
-            if (pub?.track?.getRTCStatsReport) tracks.push(pub.track);
-          }
-        });
-      } catch { /* the shape varies by livekit-client version — best effort */ }
-      for (const t of tracks) {
-        try { reports.push(entriesOf(await t.getRTCStatsReport!())); }
-        catch { /* skip this track */ }
-      }
     }
     try {
       const { stats, sample } = summarizeStats(reports, { prev: qualPrev, nowMs: Date.now() });
@@ -4758,114 +3973,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (statsSampleT) { clearInterval(statsSampleT); statsSampleT = null; }
     for (const k in statsPrev) delete statsPrev[k];
   }
-
-  function addLkTile(id: string, name: string) {
-    if (name) peerNamesSeen[id] = name;
-    if (lkParticipantTiles[id]) return;
-    dropPlaceholderTile(id);
-    callAnswered = true; // a second party exists — the join watchdog may enforce media
-    onCalleeAnswered();  // outgoing dial: "Ringing…" → the real connecting sequence
-    if (Object.keys(lkParticipantTiles).length >= 1) callIsGroup = true; // 2nd remote → conference
-    const grid = $("videoGrid"); if (!grid) return;
-    const t = document.createElement("div");
-    t.className = "relay-tile"; t.id = "tile-" + id;
-    const v = document.createElement("video");
-    v.autoplay = true; v.playsInline = true;
-    t.appendChild(v);
-    t.insertAdjacentHTML("beforeend", tileContentHTML(name, peerDevices[id] || "", peerFlags[id] || "", id));
-    t.insertAdjacentHTML("beforeend", '<div class="connecting">connecting…</div>');
-    lkParticipantTiles[id] = t;
-    grid.appendChild(t);
-    layoutGrid();
-  }
-  // True if a LiveKit participant currently publishes a (non-muted) camera video
-  // track — even if it hasn't been SUBSCRIBED yet. Used so an audio-first
-  // subscription doesn't wrongly mark the tile audio-only. LiveKit objects are
-  // dynamically-imported `any`, so probe defensively.
-  function lkHasVideo(participant: { getTrackPublications?: () => unknown[]; videoTrackPublications?: Map<string, unknown> }): boolean {
-    try {
-      const pubs: any[] = typeof participant.getTrackPublications === "function"
-        ? participant.getTrackPublications()
-        : (participant.videoTrackPublications ? Array.from(participant.videoTrackPublications.values()) : []);
-      return pubs.some((p: any) =>
-        (p?.kind === "video" || p?.track?.kind === "video" || p?.source === "camera") && p?.isMuted !== true);
-    } catch {
-      return false;
-    }
-  }
-  // A participant's live CAMERA video track (not their screen share), if any.
-  // Used to RE-ATTACH the camera after a screen share ends — on the SFU a
-  // participant's camera + screen are two publications that share one tile/video
-  // element, so detaching the screen track leaves the element blank otherwise.
-  function lkCameraTrack(participant: { getTrackPublications?: () => unknown[]; videoTrackPublications?: Map<string, unknown> }): { attach?: (el: HTMLMediaElement) => void } | null {
-    try {
-      const pubs: any[] = typeof participant.getTrackPublications === "function"
-        ? participant.getTrackPublications()
-        : (participant.videoTrackPublications ? Array.from(participant.videoTrackPublications.values()) : []);
-      const cam = pubs.find((p: any) =>
-        (p?.source === "camera" || (p?.kind !== "audio" && String(p?.source) !== "screen_share"))
-        && p?.track && p?.isMuted !== true && p?.track?.kind === "video");
-      return cam?.track ?? null;
-    } catch {
-      return null;
-    }
-  }
-  function bindLkPlaceholder(el: HTMLElement, hasVideo: boolean) {
-    const ph = el.querySelector(".ph") as HTMLElement | null;
-    if (ph) ph.style.display = hasVideo ? "none" : "flex"; // keep the avatar for audio-only
-    el.classList.toggle("audio-only", !hasVideo);
-    // Any subscribed track means the participant is connected — clear the
-    // "connecting…" overlay regardless of video (else audio-only tiles show it
-    // forever, since no Video track ever arrives to flip the state).
-    const c = el.querySelector(".connecting") as HTMLElement | null;
-    if (c) c.style.display = "none";
-    el.dataset.state = "connected";
-  }
-  function removeLkTile(id: string) {
-    // HELD, not gone (v2.97.1): putting us on hold tears the holder's SFU
-    // connection down — that disconnect must NOT read as "they left" (it was
-    // the reported "answering a second call kills the first call"). Keep the
-    // tile, mark it on-hold, and let the hold banner/music own the UX.
-    if (peersHoldingUs.has(id)) {
-      lkParticipantTiles[id]?.classList.add("on-hold");
-      layoutGrid();
-      return;
-    }
-    const el = lkParticipantTiles[id];
-    const nm = el?.querySelector(".nm")?.textContent || peerNamesSeen[id] || "Someone";
-    el?.remove();
-    delete lkParticipantTiles[id];
-    // Drop any spotlight/active state pinned to the gone tile.
-    const goneId = "tile-" + id;
-    if (spotlightId === goneId) { spotlightId = null; manualSpotlight = false; }
-    if (activeSpeakerId === goneId) activeSpeakerId = null;
-    screenShareIds.delete(goneId);
-    speakerOrder = speakerOrder.filter(s => s !== goneId);
-    layoutGrid();
-    if (!inCall) return;
-    if (callIsGroup || !callAnswered || !aloneInCall()) {
-      // Parity with the mesh path's removePeer — plus a visible toast (the
-      // chat drawer is closed by default during a call).
-      addSysMsg(nm + " left the call.");
-      toast(nm + " left the call.");
-      return;
-    }
-    // Solo 1:1 disconnect: it may be the SFU face of a HOLD whose peer-hold
-    // signal is still in flight — give it a short grace window instead of
-    // ending instantly (armSoloEndGrace re-checks everything when it fires).
-    armSoloEndGrace(nm);
-  }
-  // Tear down the LiveKit room + its tiles. Safe to call when not on the SFU path.
-  function teardownLivekit() {
-    clearLkWatchdog();
-    lkConnected = false;
-    if (lkRoom) { try { void lkRoom.disconnect(); } catch { /* */ } lkRoom = null; }
-    for (const id in lkParticipantTiles) { lkParticipantTiles[id].remove(); delete lkParticipantTiles[id]; }
-    lkPendingToken = null;
-    // Drop the SFU audio-element refs here too (not just hangUp), so a call-waiting
-    // "Switch" that keeps the call alive doesn't retain the old room's elements.
-    lkAudioEls.length = 0;
-  }
   // Clear a peer's slow-connect timer and revert the placeholder text/class.
   function clearSlowConnect(peer: PeerEntry) {
     if (peer.slowT) { clearTimeout(peer.slowT); peer.slowT = null; }
@@ -4889,7 +3996,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // same report: a thermally throttled phone starves its AUDIO encoder too, which
   // is heard as choppy, unclear sound. Capping video is what protects voice.
   function applyMeshVideoCaps() {
-    if (livekitEnabled) return;
     const n = Object.keys(peers).length;
     const maxBitrate = n <= 1 ? 1_200_000 : n <= 3 ? 700_000 : 350_000;
     const scale = n <= 3 ? 1 : 2;
@@ -5480,9 +4586,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
    * text is derived from what is really true.
    */
   function establishingLabel(): string {
-    if (livekitEnabled && lkConnected) return "Waiting for their audio…";
-    // Mesh, or the SFU room still coming up: a transport genuinely in the
-    // ICE/DTLS phase, which is what the original wording describes.
+    // The transport really is in the ICE/DTLS phase here, which is what the wording
+    // describes. It is a function rather than the constant because it was ONCE a
+    // claim that could be false — a caller already inside an SFU room is not
+    // "securing" anything, it is waiting on the other side's media — and whichever
+    // transport comes next must be able to say so again rather than inheriting a
+    // sentence that no longer applies to it.
     return STATUS_LABEL.encrypting;
   }
   function runConnSequence() {
@@ -5529,8 +4638,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   // We reached a live media connection. Cancel any reconnect window and show it.
   // This is the AUTHORITATIVE "the call is actually connected" signal — it fires
-  // from the peer-connection state machine (mesh) and LiveKit connect/reconnect
-  // (SFU), not a timer. So it's the one reliable place to (a) silence the ring
+  // from the peer-connection state machine, not a timer. So it's the one reliable
+  // place to (a) silence the ring
   // and (b) flip the phase to "in-call". Without this the OUTGOING caller stayed
   // in phase "dialing" for the whole call, and on iOS (Safari throttles the
   // timer-driven stopRingtone in the background) the ring/animation persisted
@@ -5568,11 +4677,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
       void loudspeakerEnable().then(ok => { if (ok) updateAudioBtn(); });
     }
   }
-  // MESH reconnect: WE own recovery (ICE restarts + signaling), so we run a
-  // hard 10s window with a visible countdown and tear the call down if it
-  // doesn't recover. NOT used on the SFU path — see setSfuReconnectingUI().
+  // WE own recovery (ICE restarts + signaling), so we run a hard 10s window with a
+  // visible countdown and tear the call down if it doesn't recover. An SFU that
+  // drives its own, longer retry loop must NOT be given this timer — racing it kills
+  // a reconnection that was working — so a future transport needs its own path here
+  // rather than reusing this one.
   function enterReconnecting() {
-    if (!inCall || !establishedOnce || livekitEnabled) return;
+    if (!inCall || !establishedOnce) return;
     if (reconnectHardT) return; // already counting down
     // Re-open signaling ONLY if it's actually unhealthy (don't tear down a
     // working SSE channel on a transient media blip), then kick ICE restarts.
@@ -5595,14 +4706,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
       hangUp("connection-lost");
     }, RECONNECT_WINDOW_MS);
   }
-  // SFU reconnect: LiveKit owns its OWN retry loop (which is longer than 10s),
-  // so we must NOT arm our hard timer — that would race and kill LiveKit's
-  // working reconnection. We only surface the status; the terminal LiveKit
-  // `Disconnected` event is the single source of teardown.
-  function setSfuReconnectingUI() {
-    if (!inCall || !establishedOnce) return;
-    setCallStatus("reconnecting");
-  }
   function exitReconnecting() {
     if (reconnectHardT) { clearTimeout(reconnectHardT); reconnectHardT = null; }
     if (reconnectTickT) { clearInterval(reconnectTickT); reconnectTickT = null; }
@@ -5613,7 +4716,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // still shows "reconnecting…" on the tile) so brief blips don't flap the UI or
   // tear down signaling.
   function evaluateMeshHealth() {
-    if (livekitEnabled || !inCall || !establishedOnce) return;
+    if (!inCall || !establishedOnce) return;
     const ps = Object.values(peers);
     if (ps.length === 0) return; // alone — nothing to reconnect to
     const anyConnected = ps.some(p => p.pc.connectionState === "connected");
@@ -5645,9 +4748,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
       exitPreConnect(); // never carry a stale dial card into a non-dial entry
       runConnSequence();
     }
-    // On the SFU path, start the join watchdog so a failed/slow token or connect
-    // recovers (re-request) or surfaces an error instead of a silent dead call.
-    if (livekitEnabled) armLkWatchdog();
     if (label && /in call/i.test(label)) emitPhase("in-call");
     // NOTE: the top-bar label is now owned by setCallStatus() (live status),
     // so we deliberately do NOT write `label` into #callRoomLbl here.
@@ -5958,7 +5058,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
 
   // ---------- mesh active-speaker (Web Audio level metering) ----------
   function ensureMeshSpeakerMonitor() {
-    if (livekitEnabled) return;
     if (!meshAudioCtx) {
       try {
         const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -5970,7 +5069,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     if (!speakerSampleT) speakerSampleT = setInterval(sampleMeshSpeakers, 400);
   }
   function registerMeshAnalyser(pin: string, stream: MediaStream) {
-    if (livekitEnabled || meshAnalysers[pin]) return;
+    if (meshAnalysers[pin]) return;
     if (!stream.getAudioTracks().length) return;
     ensureMeshSpeakerMonitor();
     if (!meshAudioCtx) return;
@@ -6032,7 +5131,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // A muted mic that's still "hot" — or the reverse, a forgotten mute — is
   // invisible without this: a small accent pulse on #micBtn whenever YOUR voice
   // is detected, so it's obvious before a peer has to say "you're on mute".
-  // Independent of livekitEnabled/meshAudioCtx (which only taps REMOTE streams).
+  // Independent of meshAudioCtx, which only taps REMOTE streams.
   let localLevelCtx: AudioContext | null = null;
   let localLevelAnalyser: { src: MediaStreamAudioSourceNode; node: AnalyserNode; data: Uint8Array<ArrayBuffer> } | null = null;
   let localLevelT: ReturnType<typeof setInterval> | null = null;
@@ -6503,11 +5602,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
    * pin). In a call about anything sensitive that is a convincing forgery, and on
    * a party line it can be aimed at everyone at once.
    *
-   * Both transports already know who actually sent the bytes: the mesh has one
-   * data channel PER PEER (so `setupDC`'s `pin` is authenticated by the channel
-   * itself), and LiveKit hands `DataReceived` the sending participant, whose
-   * identity comes from the server-minted join token. Use that, and take the
-   * display name from the roster (`nameOf`) rather than the payload. `senderPin`
+   * The transport already knows who actually sent the bytes: there is one data
+   * channel PER PEER, so `setupDC`'s `pin` is authenticated by the channel itself.
+   * Use that, and take the display name from the roster (`nameOf`) rather than
+   * from the payload — a frame's self-declared sender is a claim, not a fact, and
+   * rendering it would let any participant publish as anybody. `senderPin`
    * is optional so any future/legacy caller without a proven identity still
    * degrades to the old behaviour rather than dropping messages.
    */
@@ -6535,13 +5634,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     // `pin` (v2.99.4) lets receivers render the sender's number + avatar in the
     // chat's glass identity chip. Old clients ignore unknown fields.
     const p = JSON.stringify({ name: me.name, text, id, pin: me.pin || undefined });
-    if (livekitEnabled && lkRoom) {
-      // SFU path: there are no per-peer datachannels — fan out over LiveKit data.
-      try {
-        void lkRoom.localParticipant.publishData(new TextEncoder().encode(p), { reliable: true });
-        return 1;
-      } catch { return 0; }
-    }
     let delivered = 0;
     for (const id2 in peers) {
       const dc = peers[id2].dc;
@@ -6728,14 +5820,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   // Set the camera on/off explicitly (shared by the toggle button and the
   // voice-call start path, which begins with the camera off). The track actually
-  // SENT to peers/SFU is the PROCESSED (canvas) track, so toggle THAT to truly
-  // stop outgoing video; also toggle the raw input so the physical camera
-  // capture/light reflects the off state. Works on BOTH mesh and SFU.
-  // Publish/unpublish the camera video track on the SFU to match `enabled` — a
-  // disabled MediaStreamTrack still occupies a LiveKit publication (and every
-  // subscriber's bandwidth) unless we explicitly unpublish it. No-op on the mesh
-  // (which only ever has `enabled` toggling — no separate publish step) and
-  // while screen-sharing (that publication is owned by toggleScreenShare).
+  // SENT to peers is the PROCESSED (canvas) track, so toggle THAT to truly stop
+  // outgoing video; also toggle the raw input so the physical camera capture/light
+  // reflects the off state.
   // Defensive: if the local camera track has genuinely died, grab a fresh one and
   // swap it into localStream (+ the filter pipeline) so we can publish a LIVE
   // track. Returns the track to publish (processed when a filter is on), or null.
@@ -6773,43 +5860,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
       return v;
     } catch { return null; }
   }
-  async function syncLivekitVideoPublication(enabled: boolean) {
-    if (!lkRoom || screenSharing) return;
-    try {
-      const lp: any = (lkRoom as any).localParticipant;
-      const pubs: any[] = typeof lp.getTrackPublications === "function"
-        ? lp.getTrackPublications()
-        : (lp.videoTrackPublications ? Array.from(lp.videoTrackPublications.values()) : []);
-      const videoPubs = pubs.filter((pub: any) => pub?.kind === "video" || pub?.track?.kind === "video");
-      if (enabled && videoPubs.length === 0) {
-        // Mutual-consent choke point: NO fresh camera publication in an
-        // un-approved 1:1 call, whoever asks (toggle, recovery, filter swap).
-        if (!videoApproved && !callIsGroup) return;
-        const track = currentCameraVideoTrack();
-        // Re-acquire if the camera track died (e.g. an OS/policy stop), so we
-        // never republish a dead track = a permanently black tile.
-        const live = track && track.readyState !== "ended" ? track : await reacquireCameraForPublish();
-        if (live) await lp.publishTrack(live);
-        else {
-          // No camera obtainable — be HONEST instead of showing an "on" camera
-          // button that transmits nothing (testers read that as "the system
-          // doesn't recognize my video input").
-          camOn = false;
-          $("camBtn")?.classList.add("off");
-          const st = $("tile-self"); if (st && !screenSharing) st.classList.add("audio-only");
-          toast("Camera unavailable — check that RELAY has camera permission and no other app is using it.", true);
-        }
-      } else if (!enabled && videoPubs.length > 0) {
-        for (const pub of videoPubs) {
-          const lt = pub?.track;
-          // stopOnUnpublish = FALSE: LiveKit stops the track by default, which
-          // left the camera DEAD so re-enabling republished a black track ("can't
-          // turn the camera back on"). Keep it alive so re-enable just republishes.
-          if (lt?.mediaStreamTrack) { try { await lp.unpublishTrack(lt.mediaStreamTrack, false); } catch { /* */ } }
-        }
-      }
-    } catch { /* best-effort — mute/unmute (track.enabled) below already happened */ }
-  }
   function setCam(on: boolean) {
     if (!localStream) return;
     camOn = on;
@@ -6819,18 +5869,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("camBtn")?.classList.toggle("off", !camOn);
     // Don't flip the self-tile to audio-only while a screen share occupies it.
     const s = $("tile-self"); if (s && !screenSharing) s.classList.toggle("audio-only", !camOn);
-    if (livekitEnabled) {
-      // Upgrading voice→video republishes tracks on the SFU, which can recreate
-      // the remote audio elements and drop a previously-chosen output (a picked
-      // sink, or Android's forced loudspeaker). Re-apply the routing once the
-      // publication settles so the call doesn't silently jump back to the
-      // earpiece mid-call. Both re-appliers are idempotent/guarded.
-      void syncLivekitVideoPublication(camOn).then(() => { if (camOn) reapplyAudioRouting(); });
-    } else if (camOn) {
-      // MESH: enabling with NO live camera track (denied/absent at join, or the
-      // OS killed it) must REACQUIRE. v2.72 gave the SFU this path; the mesh
-      // had none, so for exactly the "my camera is never recognized" users the
-      // camera button silently did nothing forever. The fresh track rides into
+    if (camOn) {
+      // Enabling with NO live camera track (denied/absent at join, or the OS killed
+      // it) must REACQUIRE — without this, for exactly the "my camera is never
+      // recognized" users the camera button silently did nothing forever. The fresh track rides into
       // each peer's video sender (guaranteed by createPeer's null-track
       // transceiver) via replaceTrack — no renegotiation.
       const haveLive = localStream.getVideoTracks().some(t => t.readyState === "live");
@@ -6897,11 +5939,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
       );
       return;
     }
-    // Mesh path can only hot-swap into an EXISTING video sender (no
-    // renegotiation). An audio-only call (no camera) has none, so screen share
-    // would silently reach no one — block it with a clear message. The SFU path
-    // publishes a fresh track, so it's fine there.
-    if (!livekitEnabled && Object.keys(peers).length > 0) {
+    // We can only hot-swap into an EXISTING video sender (no renegotiation). An
+    // audio-only call (no camera) has none, so screen share would silently reach
+    // no one — block it with a clear message rather than appearing to work.
+    if (Object.keys(peers).length > 0) {
       const haveVideoSlot = Object.values(peers).some(p =>
         p.pc.getSenders().some(s => (s.track && s.track.kind === "video") || !s.track));
       if (!haveVideoSlot) {
@@ -6993,30 +6034,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenBusy = false;
     toast("Stopped screen sharing");
   }
-  // ---------- recording (LiveKit Egress → operator S3) ----------
-  function updateRecordBtnVisibility() {
-    const b = $("recordBtn");
-    if (b) b.style.display = recordingAvailable ? "" : "none";
-  }
-  function updateRecordingUI() {
-    $("recordBtn")?.classList.toggle("on", recordingOn);
-    const ind = $("recIndicator");
-    if (ind) ind.style.display = recordingOn ? "flex" : "none";
-  }
-  function onRecordingStatus(m: Msg) {
-    const was = recordingOn;
-    recordingOn = !!m.on;
-    updateRecordingUI();
-    if (recordingOn && !was) toast("Recording started");
-    else if (!recordingOn && was) toast("Recording stopped");
-  }
-  function toggleRecording() {
-    if (!recordingAvailable) { toast("Recording isn't set up on this server.", true); return; }
-    if (!inCall) { toast("Start a call first.", true); return; }
-    // Optimistic; the server broadcasts the authoritative `recording` status.
-    if (recordingOn) sendWS({ type: "stop-recording" });
-    else sendWS({ type: "start-recording" });
-  }
   function toggleChat() {
     const p = $("chatPanel"); if (!p) return;
     p.classList.toggle("open");
@@ -7084,11 +6101,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const pin = addInputValue();
     if (!/^\d{6}$/.test(pin)) { toast("Enter a 6-digit number.", true); return; }
     if (pin === me.pin) { toast("That's your own number.", true); return; }
-    const here = livekitEnabled ? !!lkParticipantTiles[pin] : !!peers[pin];
-    if (here) { toast("Already in the call.", true); return; }
-    // 10-way only on the SFU; the mesh fallback stays capped at 6.
+    if (peers[pin]) { toast("Already in the call.", true); return; }
+    // The ONE cap, so this can never disagree with what the group picker showed.
     const cap = transportMax();
-    const n = livekitEnabled ? Object.keys(lkParticipantTiles).length : Object.keys(peers).length;
+    const n = Object.keys(peers).length;
     if (n >= cap - 1) { toast(`Call is full (${cap} people max).`, true); return; }
     addInviting = true;
     // Already in a call: the mode is whatever this call is in, so adding a
@@ -7123,7 +6139,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     clearDialTimeout(); // an ended call must never fire a stale "No answer."
     clearEstablishDeadline(); // …nor a stale "couldn't connect the audio"
     clearFailDial(); // an explicit End during the failure card mustn't re-fire
-    sigRoster.clear(); // a stale roster would have a later fallback dial a stranger
     videoApproved = false; callIsGroup = false; // consent is per-call
     videoOfferedForRoom = null; videoOfferPending = false; // M37 — the OFFER is per-call too
     clearVideoReq();
@@ -7140,11 +6155,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     waitingRing = null;
     hideCallWaiting();
     dropHeld();                        // a full hang-up drops any held call too
-    // Disconnect the SFU BEFORE stopping localStream/pipeline below, or LiveKit
-    // errors republishing a dead track during teardown. No-op on the mesh path.
-    // NOTE: keep `livekitEnabled` (it's a stable server-config flag captured at
-    // `registered`); only the room/tiles/token are per-call and get cleared.
-    teardownLivekit();
     for (const id in peers) {
       try { peers[id].pc.close(); } catch { /* */ }
       if (peers[id].el) peers[id].el!.remove();
@@ -7154,7 +6164,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     for (const k in peerDevices) delete peerDevices[k];
     for (const k in peerFlags) delete peerFlags[k];
     for (const k in peerRoles) delete peerRoles[k];
-    lkAudioEls.length = 0;
     myRole = null; roomHostPin = null;
     closeHostPanel(); closeAudioMenu(); closeTileMenu(); updateHostUI();
     unprimeAutoPip(); void exitPip(); // leave PiP + stop priming when the call ends
@@ -7187,9 +6196,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     screenSharing = false;
     screenBusy = false;
     $("screenBtn")?.classList.remove("on");
-    // The server stops the egress when the room empties; just reset local UI.
-    recordingOn = false;
-    updateRecordingUI();
     // Release the camera + mic through the ONE helper (v2.99.36) so the device
     // indicator goes out the moment the call ends and the next call / another
     // app can acquire them.
@@ -7380,11 +6386,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const sb = $("screenBtn") as HTMLElement | null;
     if (sb) sb.style.display = "";
   }
-  // Record is a normal bar chip now (v2.99.36: the ⋯ More menu + Diagnostics
-  // panel were removed at the owner's request).
-  ($("recordBtn") as HTMLElement | null)?.addEventListener("click", () => {
-    toggleRecording();
-  });
   ($("qualityBtn") as HTMLElement | null)?.addEventListener("click", toggleQuality);
   // v2.105.21 — the call-quality readout. Reflect the remembered state on mount so a
   // session left with it ON shows the line as soon as a call opens, rather than
@@ -7448,15 +6449,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // into the page cache, so the auto-rejoin snapshot is written on mobile too.
   window.addEventListener("pagehide", onUnload);
   // Local network loss (Wi-Fi drop, tunnel, airplane toggle) is the clearest
-  // "you're disconnected" signal. On the MESH path we own recovery, so show the
-  // reconnect window and, when the radio returns, re-open signaling + kick ICE
-  // restarts. On the SFU path LiveKit detects and drives this itself (its
-  // Reconnecting/Reconnected events), so we stay out of its way.
+  // "you're disconnected" signal. We own recovery, so show the reconnect window
+  // and, when the radio returns, re-open signaling + kick ICE restarts.
   const onOffline = () => {
-    if (inCall && establishedOnce && !livekitEnabled) enterReconnecting();
+    if (inCall && establishedOnce) enterReconnecting();
   };
   const onOnline = () => {
-    if (!inCall || livekitEnabled) return;
+    if (!inCall) return;
     if (!ws || ws.readyState !== 1 /* EventSource.OPEN */) {
       try { ws?.close(); } catch { /* */ }
       if (!destroyed) connectWS();
@@ -7513,14 +6512,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
       for (const id in peers) {
         if (/^\d{6}$/.test(id)) out.push({ pin: id, name: peers[id].name || "Guest" });
       }
-      try {
-        lkRoom?.remoteParticipants?.forEach((p) => {
-          const pin = p.identity || "";
-          if (/^\d{6}$/.test(pin) && !out.some((r) => r.pin === pin)) {
-            out.push({ pin, name: p.name || "Guest" });
-          }
-        });
-      } catch { /* roster is best-effort */ }
       return out;
     },
     getPin() { return me.pin; },
@@ -7628,8 +6619,6 @@ export function startRelay(root: HTMLElement): RelayHandle {
       clearConnSeq();
       clearEstablishDeadline();
       exitReconnecting();
-      // Disconnect the SFU before stopping local tracks (no-op on the mesh path).
-      teardownLivekit();
       try { ws?.close(); } catch { /* */ }
       ws = null;
       // close peer connections (active + any held call)

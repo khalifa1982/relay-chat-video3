@@ -48,8 +48,12 @@ describe("issue 1 — pre-ring dial drops", () => {
     expect(CLIENT).toMatch(/pendingRing && Date\.now\(\) - \(pendingRing\.at \|\| 0\) > 70_000/);
   });
 
-  it("pre-establishment LiveKit Disconnected RETRIES the SFU join instead of killing the dial", () => {
-    expect(CLIENT).toMatch(/if \(!establishedOnce\) \{\s*\n\s*lkRoom = null;\s*\n\s*lkConnected = false;\s*\n\s*diag\("livekit: disconnected pre-establishment — retrying, not hanging up"\);\s*\n\s*sendWS\(\{ type: "refresh-livekit" \}\);\s*\n\s*return;/);
+  it("a pre-establishment transport drop RETRIES instead of killing the dial", () => {
+    /* v2.106.53 removed the SFU form of this. The mesh equivalent is the ICE-restart
+       ladder plus the grace timer: a peer whose media never arrived is retried and
+       only given up on after the restarts are spent, never on the first drop. */
+    expect(CLIENT).toMatch(/if \(peer\.iceRestarts < MAX_ICE_RESTARTS\) \{/);
+    expect(CLIENT).toMatch(/if \(\(c2 === "failed" \|\| c2 === "disconnected"\) && !peer\.gotStream\)/);
   });
 
   it("a failed dial presents its outcome ON the dial card (failDial) before tearing down", () => {

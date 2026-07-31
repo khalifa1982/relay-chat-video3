@@ -2,13 +2,12 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import crypto from "crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { codeOnly } from "./testing/codeOnly";
 import {
   createRegistry,
   handleMessage,
   leaveRoom,
   iceServers,
-  livekitConfig,
-  mintLivekitToken,
   type RelayRegistry,
   type RelaySocket,
 } from "./relay";
@@ -1322,47 +1321,54 @@ function header(type: number, len: number, txid: Buffer) {
   }, 14000);
 });
 
-describe("relay — LiveKit SFU token minting", () => {
-  const SAVE = {
-    url: process.env.LIVEKIT_URL,
-    key: process.env.LIVEKIT_API_KEY,
-    secret: process.env.LIVEKIT_API_SECRET,
-  };
-  beforeEach(() => {
-    process.env.LIVEKIT_URL = "wss://example.livekit.cloud";
-    process.env.LIVEKIT_API_KEY = "APItestkey";
-    process.env.LIVEKIT_API_SECRET = "test-secret-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-  });
-  afterEach(() => {
-    for (const [k, v] of [
-      ["LIVEKIT_URL", SAVE.url],
-      ["LIVEKIT_API_KEY", SAVE.key],
-      ["LIVEKIT_API_SECRET", SAVE.secret],
-    ] as const) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
+describe("relay — the SFU is retired: nothing mints a media-server token", () => {
+  /* THE PROPERTY, NOT THE ABSENCE OF A NAME. The hosted SFU is gone (the owner
+     cancelled the account), so no join token is minted for anything — and the
+     dangerous way for that to regress is not somebody re-adding a function with
+     the old name, it is a NEW token minter appearing, or the token-bearing
+     `livekit-server-sdk` coming back as a dependency and being wired to a stale
+     env var. So this asserts what must stay true of the module and the manifest
+     rather than pinning a spelling.
+
+     THE PIN THIS REPLACES HAD FROZEN THE DEFECT, which is why it is worth
+     recording: it asserted `livekitConfig().enabled === true` with all three env
+     vars set, i.e. it REQUIRED the ~20s connect wait the owner had been living
+     with, and would have forbidden the fix. */
+  const SRC = fs.readFileSync(path.resolve(__dirname, "relay.ts"), "utf8");
+  const PKG = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8"));
+
+  it("the signaling module reads no SFU env var and imports no SFU SDK", () => {
+    expect(SRC).not.toMatch(/process\.env\.LIVEKIT/);
+    expect(SRC).not.toMatch(/livekit-server-sdk/);
+    expect(SRC).not.toMatch(/AccessToken/);
   });
 
-  it("livekitConfig().enabled is true only when all three vars are set", () => {
-    expect(livekitConfig().enabled).toBe(true);
-    expect(livekitConfig().url).toBe("wss://example.livekit.cloud");
-    delete process.env.LIVEKIT_API_SECRET;
-    expect(livekitConfig().enabled).toBe(false);
+  it("neither SFU package is a dependency any more", () => {
+    const deps = { ...(PKG.dependencies || {}), ...(PKG.devDependencies || {}) };
+    expect(Object.keys(deps)).not.toContain("livekit-client");
+    expect(Object.keys(deps)).not.toContain("livekit-server-sdk");
   });
 
-  it("mints a scoped, short-lived join token (identity=pin, room, publish+subscribe, 60s, no admin)", async () => {
-    const jwt = await mintLivekitToken("123456", "Alice", "rabc123");
-    expect(typeof jwt).toBe("string");
-    const payload = JSON.parse(Buffer.from(jwt.split(".")[1], "base64url").toString());
-    expect(payload.sub).toBe("123456"); // identity = caller's own pin
-    expect(payload.video.room).toBe("rabc123");
-    expect(payload.video.roomJoin).toBe(true);
-    expect(payload.video.canPublish).toBe(true);
-    expect(payload.video.canSubscribe).toBe(true);
-    expect(payload.video.roomAdmin).toBeFalsy(); // never admin
-    expect(payload.video.roomRecord).toBeFalsy(); // never recorder
-    expect(payload.exp - payload.nbf).toBe(60); // 60s TTL
+  it("no signaling frame carries a media-server URL or token", () => {
+    /* The URL is the field a client's SFU branch hangs off, and the token is a
+       publish credential. Neither may appear on the wire: a frame that still
+       stamped one would put a rolling-deploy client back onto a transport that
+       does not exist. */
+    expect(SRC).not.toMatch(/livekitUrl/);
+    expect(SRC).not.toMatch(/type: "livekit-token"/);
+    expect(SRC).not.toMatch(/case "refresh-livekit"/);
+  });
+
+  it("the participant cap is ONE constant, so no site can disagree with the picker", () => {
+    expect(SRC).toMatch(/export const ROOM_MAX = 6;/);
+    /* On COMMENT-STRIPPED source: the comment above `ROOM_MAX` quotes the old
+       expression in order to say it is gone, and matching your own prose is the
+       trap this repo has paid for repeatedly. */
+    const code = codeOnly(SRC);
+    expect(code).not.toMatch(/\? 10 : 6/);
+    // Every cap read goes through the constant.
+    const caps = code.match(/\bROOM_MAX\b/g) || [];
+    expect(caps.length).toBeGreaterThanOrEqual(5); // 1 declaration + >=4 readers
   });
 });
 

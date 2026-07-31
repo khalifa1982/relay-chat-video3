@@ -65,7 +65,7 @@ function reg2(reg: RelayRegistry, cid: string, name: string, pin?: string) {
   return c;
 }
 
-describe("the SFU join token reaches the device that is actually in the call", () => {
+describe("LiveKit is retired: no join token is ever pushed, and the dial still works", () => {
   let reg: RelayRegistry;
   const prev = {
     url: process.env.LIVEKIT_URL,
@@ -76,8 +76,10 @@ describe("the SFU join token reaches the device that is actually in the call", (
 
   beforeEach(() => {
     reg = createRegistry();
-    // Mirror the fleet: LiveKit configured AND multi-device ring on, which is
-    // what ecosystem.config.cjs bakes in.
+    // The three LIVEKIT_* vars are set ON PURPOSE: v2.106.52 retired LiveKit at
+    // `livekitConfig()`, which ignores the env entirely, so a fully-populated
+    // environment producing NO token is exactly the property under test. A stale
+    // var left in /home/relay/.env must not be able to bring the SFU back.
     process.env.LIVEKIT_URL = "wss://sfu.example.test";
     process.env.LIVEKIT_API_KEY = "APIkeytest";
     process.env.LIVEKIT_API_SECRET = "secrettestsecrettestsecrettest00";
@@ -94,42 +96,6 @@ describe("the SFU join token reaches the device that is actually in the call", (
 
   /** The token is minted asynchronously, so let the microtask queue drain. */
   const settle = () => new Promise(r => setTimeout(r, 0));
-
-  it("a dial from the NON-PRIMARY device delivers the token to THAT device", async () => {
-    // Two devices on one number. The laptop registers LAST, so it is primary —
-    // which is what an idle background tab reconnecting does in production.
-    const phone = reg2(reg, "cid-phone", "Owner", "777777");
-    const laptop = reg2(reg, "cid-laptop", "Owner", "777777");
-    expect(phone.pin).toBe("777777");
-    expect(laptop.pin).toBe("777777");
-    expect(reg.clients.get("777777")!.cid).toBe("cid-laptop");
-
-    const callee = reg2(reg, "cid-callee", "Callee", "555555");
-    expect(callee.pin).toBe("555555");
-
-    // Dial from the PHONE.
-    handleMessage(reg, phone.asConn(), { type: "invite", to: "555555" });
-    await settle();
-
-    // The room ack went to the phone (this was always right)…
-    expect(phone.has("room")).toBe(true);
-    // …and so must the join token. THE BUG: it went to the laptop.
-    expect(phone.has("livekit-token"), "the dialling device must get its token").toBe(true);
-    expect(laptop.has("livekit-token"), "the idle device must NOT get it").toBe(false);
-  });
-
-  it("the token names the room the dialling device was actually given", async () => {
-    const phone = reg2(reg, "cid-phone", "Owner", "777777");
-    reg2(reg, "cid-laptop", "Owner", "777777");
-    reg2(reg, "cid-callee", "Callee", "555555");
-    handleMessage(reg, phone.asConn(), { type: "invite", to: "555555" });
-    await settle();
-    const room = phone.ofType("room")[0];
-    const tok = phone.ofType("livekit-token")[0];
-    expect(tok.roomId).toBe(room.roomId);
-    expect(String(tok.token || "").length).toBeGreaterThan(20);
-    expect(tok.url).toBe("wss://sfu.example.test");
-  });
 
   it("dialling promotes the device to primary, so the mesh signal relay reaches it too", async () => {
     // `signal` routes via reg.clients.get(to) — one socket per number — so the
@@ -169,69 +135,18 @@ describe("the SFU join token reaches the device that is actually in the call", (
     expect(reg.clients.get("777777")!.cid).toBe("cid-laptop");
   });
 
-  it("the ANSWERING device gets its own token, not the number's primary (v2.99.5, re-pinned)", async () => {
-    const caller = reg2(reg, "cid-caller", "Caller", "111222");
-    // The callee's two devices; the laptop is primary.
-    const cPhone = reg2(reg, "cid-cphone", "Callee", "555555");
-    const cLaptop = reg2(reg, "cid-claptop", "Callee", "555555");
-    expect(reg.clients.get("555555")!.cid).toBe("cid-claptop");
-
-    handleMessage(reg, caller.asConn(), { type: "invite", to: "555555" });
-    await settle();
-    const rid = String(caller.ofType("room")[0].roomId);
-
-    // Answer on the PHONE.
-    handleMessage(reg, cPhone.asConn(), { type: "accept", roomId: rid, from: "111222" });
-    await settle();
-    expect(cPhone.has("joined")).toBe(true);
-    expect(cPhone.has("livekit-token"), "the answering device must get its token").toBe(true);
-    // The laptop is told the call was answered elsewhere, and gets no token.
-    expect(cLaptop.has("livekit-token")).toBe(false);
-  });
-
-  it("both parties end up with a token for the SAME room", async () => {
-    const caller = reg2(reg, "cid-caller", "Caller", "111222");
-    reg2(reg, "cid-claptop", "Callee", "555555");
-    const cPhone = reg2(reg, "cid-cphone", "Callee", "555555");
-    handleMessage(reg, caller.asConn(), { type: "invite", to: "555555" });
-    await settle();
-    const rid = String(caller.ofType("room")[0].roomId);
-    handleMessage(reg, cPhone.asConn(), { type: "accept", roomId: rid, from: "111222" });
-    await settle();
-    // Without both of these the SFU room has one participant and nobody hears
-    // anybody — the reported symptom.
-    expect(caller.ofType("livekit-token").some(m => m.roomId === rid)).toBe(true);
-    expect(cPhone.ofType("livekit-token").some(m => m.roomId === rid)).toBe(true);
-  });
-
-  it("refresh-livekit re-mints to the ASKING device, not to the primary", async () => {
-    // This is the client's only recovery when a token is lost, so sending it to
-    // the wrong device made the failure permanent rather than transient.
-    const phone = reg2(reg, "cid-phone", "Owner", "777777");
-    const laptop = reg2(reg, "cid-laptop", "Owner", "777777");
-    reg2(reg, "cid-callee", "Callee", "555555");
-    handleMessage(reg, phone.asConn(), { type: "invite", to: "555555" });
-    await settle();
-    const before = laptop.ofType("livekit-token").length;
-
-    handleMessage(reg, phone.asConn(), { type: "refresh-livekit" });
-    await settle();
-    expect(phone.ofType("livekit-token").length).toBeGreaterThanOrEqual(2);
-    expect(laptop.ofType("livekit-token").length).toBe(before);
-  });
-
   it("a single-device number is completely unaffected", async () => {
     const solo = reg2(reg, "cid-solo", "Solo", "777777");
     reg2(reg, "cid-callee", "Callee", "555555");
     handleMessage(reg, solo.asConn(), { type: "invite", to: "555555" });
     await settle();
     expect(solo.has("room")).toBe(true);
-    expect(solo.has("livekit-token")).toBe(true);
+    // Retired: the dial succeeds and no SFU token is minted for anyone.
+    expect(solo.has("livekit-token")).toBe(false);
     expect(reg.clients.get("777777")!.cid).toBe("cid-solo");
   });
 
-  it("with LiveKit unconfigured no token is pushed at all, and the dial still works", async () => {
-    delete process.env.LIVEKIT_URL;
+  it("NO token is pushed even with all three vars set, and the dial still works", async () => {
     const phone = reg2(reg, "cid-phone", "Owner", "777777");
     reg2(reg, "cid-laptop", "Owner", "777777");
     reg2(reg, "cid-callee", "Callee", "555555");
@@ -261,7 +176,7 @@ describe("the SFU join token reaches the device that is actually in the call", (
     reg2(reg, "cid-callee", "Callee", "555555");
     handleMessage(reg, phone.asConn(), { type: "invite", to: "555555" });
     await settle();
-    expect(phone.has("livekit-token")).toBe(true);
+    expect(phone.has("livekit-token")).toBe(false);
     expect(laptop.has("livekit-token")).toBe(false);
     // And the claim is a no-op on this path: register already owns the decision.
     expect(reg.clients.get("777777")!.cid).toBe("cid-phone");
@@ -318,53 +233,27 @@ describe("the token addressing itself, pinned in source because behaviour cannot
     return body;
   }
 
-  it("pushLivekitToken sends to its `socket` parameter and never to a registry lookup", () => {
-    const body = fnBody("function pushLivekitToken(");
-    expect(body).toMatch(/safeSend\(socket, \{ type: "livekit-token"/);
-    // The defect: resolving the destination from the registry at send time.
-    expect(body).not.toMatch(/safeSend\(c\.socket/);
-    expect(body).not.toMatch(/safeSend\(client\.socket/);
-    expect(body).not.toMatch(/safeSend\(reg\.clients/);
-  });
+  it("nothing pushes a per-device media credential any more", () => {
+    /* THE FOUR TESTS THIS REPLACES pinned the ADDRESSING of an SFU join token: it
+       used to be sent to `reg.clients.get(pin).socket` — the NUMBER's primary —
+       while every call site sat directly after a `safeSend(<a specific socket>, …)`.
+       A number can hold several devices and `reg.clients` holds exactly one, so a
+       call placed from a non-primary device had its token delivered elsewhere:
+       total, deterministic media failure while ring, accept and roster all
+       succeeded.
 
-  it("the socket is REQUIRED, so a forgotten site is a compile error not a dead call", () => {
-    expect(code).toMatch(
-      /function pushLivekitToken\(\s*reg: RelayRegistry,\s*pin: string,\s*roomId: string,\s*socket: RelaySocket,?\s*\)/,
-    );
-    // A default would silently preserve the bug at any site somebody forgets, so
-    // the ban is scoped to THIS signature (an unrelated `const socket: RelaySocket
-    // = {` legitimately exists elsewhere in the file).
-    const sig = code.slice(code.indexOf("function pushLivekitToken("));
-    const upTo = sig.slice(0, sig.indexOf(")") + 1);
-    expect(upTo).not.toMatch(/socket: RelaySocket\s*=/);
-    expect(upTo).not.toMatch(/socket\?: RelaySocket/);
-  });
-
-  it("EVERY call site names a socket — the count is the guard against a twelfth", () => {
-    const calls = code.match(/pushLivekitToken\(reg,[^)]*\)/g) || [];
-    expect(calls.length).toBeGreaterThanOrEqual(11);
-    for (const c of calls) {
-      // reg, pin, room, socket — four arguments, so three commas.
-      expect((c.match(/,/g) || []).length, `must name a socket: ${c}`).toBe(3);
-      expect(c, `the 4th argument must be a socket: ${c}`).toMatch(/[Ss]ocket\)$/);
-    }
-  });
-
-  it("no call site re-derives its socket from the registry, INCLUDING via `self`", () => {
-    const calls = code.match(/pushLivekitToken\(reg,[^)]*\)/g) || [];
-    for (const c of calls) {
-      expect(c, `a registry lookup defeats the point: ${c}`).not.toMatch(/reg\.clients/);
-      // `self` IS `reg.clients.get(conn.pin)` — the same primary record under
-      // another name, and the whole defect is that it can be a DIFFERENT device
-      // from the connection we are answering. Found because a mutation swapping
-      // `conn.socket` for `self.socket` in refresh-livekit SURVIVED the
-      // behavioural tests: by then the dial has promoted this device to primary,
-      // so the two are the same object and no behaviour can separate them.
-      expect(c, `\`self\` is the primary record, not this connection: ${c}`).not.toMatch(/self\.socket/);
-    }
-    // `pc.socket` IS registry-derived and is CORRECT: that one is the merge
-    // fan-out to OTHER members, where their primary is the only answer we have.
-    expect(code).toMatch(/pushLivekitToken\(reg, p, activeRid, pc\.socket\)/);
+       The token is gone with the hosted SFU (v2.106.53), so the addressing bug
+       cannot recur in that shape. What CAN recur is the shape itself — a new
+       per-device credential pushed to a number rather than to a socket — so this
+       asserts the absence rather than being deleted, and the promotion tests below
+       stay because they are a MESH concern: `signal` still routes through
+       `reg.clients.get(to)`. */
+    expect(code).not.toMatch(/pushLivekitToken/);
+    expect(code).not.toMatch(/mintLivekitToken/);
+    expect(code).not.toMatch(/type: "livekit-token"/);
+    // No frame carries a token or a media-server URL to a device at all.
+    expect(code).not.toMatch(/\btoken\b\s*[,:]/);
+    expect(code).not.toMatch(/livekitUrl/);
   });
 
   it("claimPrimaryForCall yields to a primary that is mid-call, and bumps no epoch", () => {

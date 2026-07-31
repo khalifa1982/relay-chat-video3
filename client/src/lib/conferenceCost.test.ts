@@ -6,9 +6,8 @@
    length of the sound to be very clear and good latency for both video and
    voice."
 
-   THE TRANSPORT MATTERS AND IT IS THE MESH. LiveKit needs three env vars an
-   operator sets, and it appears in this repo only as a commented-out optional in
-   the deploy doc — so the fleet runs the WebRTC mesh, where every phone in an
+   THE TRANSPORT MATTERS AND IT IS THE MESH — unconditionally since v2.106.53,
+   when the hosted SFU that had been the alternative was retired. Every phone in an
    N-party call runs N-1 INDEPENDENT VIDEO ENCODERS and N-1 decoders. At the
    6-participant cap that is five of each, on a handset. That is the heat.
 

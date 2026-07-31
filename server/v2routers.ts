@@ -226,7 +226,8 @@ import { createRateLimiter, clientIpOf, trustedProxyHops } from "./rateLimit";
 // serves signaling, and the Redis mirror (`relay:busypins`/`relay:plcounts`)
 // when it's an API-tier instance behind the scale-out ALB (REDIS_URL set, no
 // local relay clients). Single-instance deploys are byte-identical.
-import { pinsInCallAsync, partyLineLiveCountsAsync, liveRoomFor, partyLineRosterFor, livekitConfig, iceServers } from "./relay";
+import { pinsInCallAsync, partyLineLiveCountsAsync, liveRoomFor, partyLineRosterFor, iceServers } from "./relay";
+import { poolState } from "./voipPool";
 
 /**
  * #121 — the leading group of an account's 6-digit number, for the sign-in screen
@@ -5764,45 +5765,29 @@ export const v2AdminRouter = router({
   /**
    * WHICH MEDIA STACK THIS FLEET IS ACTUALLY USING (v2.105.22).
    *
-   * Owner: *"make sure livekit details is already in your system"*, while diagnosing
-   * *"slowness … when the voice and video started together"*.
+   * Owner, while diagnosing *"slowness … when the voice and video started together"*:
+   * make sure the media details are visible in the system.
    *
-   * `/api/health` already answers WHETHER LiveKit is configured (v2.105.20), as a
-   * bare boolean — but that cannot tell an operator WHICH LiveKit project the fleet
-   * is pointed at, and "the credentials are set" is not the same claim as "they are
-   * the right ones". Until now the only way to find out was to open a call and read
-   * `livekitUrl` out of the `registered` frame in devtools.
+   * WHAT IT REPORTS NARROWED IN v2.106.53, and the reason is worth recording rather
+   * than leaving the block looking half-finished: the hosted SFU whose project host
+   * this used to name is gone, so every call runs the WebRTC mesh and there is no
+   * project to identify. What remains is the half that still has an answer — the
+   * relays, which is also what the v2.105.21 in-call readout points an operator at:
+   * when a call reports "via TURN relay", the next question is immediately which
+   * relays are advertised and whether TLS is among them.
    *
-   * ADMIN-GATED RATHER THAN ADDED TO `/api/health`, and that placement is the whole
-   * decision. v2.105.20 deliberately made health report a boolean and never the URL;
-   * widening an UNAUTHENTICATED endpoint to name the fleet's media infrastructure one
-   * release later would undo that for the sake of a convenience. The URL is not
-   * secret — every signed-in browser already receives it — but "not secret" and
-   * "worth publishing to anonymous callers" are different questions.
+   * ADMIN-GATED RATHER THAN ADDED TO `/api/health`, and that placement is still the
+   * decision even now that it is only relays. v2.105.20 deliberately made health
+   * report booleans and never a URL; widening an UNAUTHENTICATED endpoint to
+   * enumerate the fleet's relay hosts would undo that for the sake of a convenience.
    *
-   * THE HOST ONLY, NEVER A CREDENTIAL. The API key and secret are what actually
-   * matter, they live in `/home/relay/.env`, and nothing here reads them: the key is
-   * reported as a boolean and the secret is not touched at all. The TURN block
-   * likewise reports URL SHAPES with the minted username/credential stripped, since
-   * `iceServers()` returns live short-lived credentials and echoing them back would
-   * hand an admin screen a working relay credential for no reason.
-   *
-   * TURN IS REPORTED BESIDE LIVEKIT because of what the v2.105.21 readout is looking
-   * for: if a call shows "via TURN relay", the next question is immediately which
-   * relays are being advertised and whether TLS is among them.
+   * NEVER A CREDENTIAL. `iceServers()` returns LIVE short-lived TURN credentials, so
+   * only the URL SHAPES are read back — echoing the minted username/credential would
+   * hand an admin screen a working relay credential for no reason — and `TURN_SECRET`
+   * is reported as a boolean without its value ever being touched.
    */
   mediaDiagnostics: publicProcedure.query(async ({ ctx }) => {
     await requireAdmin(ctx);
-    const lk = livekitConfig();
-    let livekitHost: string | null = null;
-    try {
-      // Parsed rather than string-sliced, so a URL with a port or a path cannot be
-      // mis-reported as a hostname — and a malformed value yields null instead of
-      // a confident wrong answer.
-      if (lk.url) livekitHost = new URL(lk.url).host || null;
-    } catch {
-      livekitHost = null;
-    }
     /* The relay list EXACTLY as a client is told it, so this cannot drift from what
        calls actually use — the parity lesson of v2.99.71, where a checker and the
        server disagreed about which endpoints existed. A throwaway pin is passed
@@ -5818,15 +5803,54 @@ export const v2AdminRouter = router({
       urls = [];
     }
     return {
-      livekit: {
-        /** All three of URL + key + secret present. False means calls run the MESH. */
-        enabled: lk.enabled,
-        /** e.g. "your-project.livekit.cloud" — host only, no scheme, path or query. */
-        host: livekitHost,
-        /** Whether a key is set. The VALUE is never returned, and the secret is never read. */
-        apiKeySet: !!process.env.LIVEKIT_API_KEY,
-        cloud: !!livekitHost && livekitHost.endsWith(".livekit.cloud"),
-      },
+      /**
+       * The transport every call uses. A literal rather than a read, because there
+       * is nothing left to read: the mesh is what the ladder degrades to and the
+       * only rung that needs no infrastructure to be true.
+       */
+      transport: "mesh" as const,
+      /**
+       * THE MEDIA-NODE POOL, per node — so saturation is observable BEFORE it bites.
+       *
+       * Behind `requireAdmin` and not on `/api/health`, which is unauthenticated: that one
+       * gets counts, this one gets addresses and instance ids. Same line v2.105.22 drew
+       * when it kept the SFU URL out of health — a node's public IP is not secret (a client
+       * in a call is told it) but the fleet's media topology is not something an anonymous
+       * caller needs.
+       *
+       * `reason` is what an operator should read first: it names WHICH stage of the funnel
+       * emptied the pool, so "add a node" is distinguishable from "the agent is not
+       * running", which are the same empty list and completely different jobs.
+       */
+      voipPool: (() => {
+        const p = poolState();
+        const now = Date.now();
+        return {
+          configured: p.configured,
+          reason: p.reason,
+          ageMs: p.ageMs,
+          total: p.total,
+          eligible: p.eligible.length,
+          saturated: p.saturated,
+          drainingCount: p.draining,
+          /** Per node. No secret exists in a node record, so this is the whole thing. */
+          nodes: p.live.map((n) => ({
+            instanceId: n.instanceId,
+            az: n.az,
+            publicIp: n.publicIp,
+            privateIp: n.privateIp,
+            cores: n.cores,
+            routers: n.routers,
+            consumers: n.consumers,
+            cpuLoad: Math.round(n.cpuLoad * 100) / 100,
+            draining: n.draining === true,
+            /* Freshness as the READER sees it, since that is what selection acts on — a
+               record can be present and too old to believe, and an operator staring at a
+               node that "is in the registry" needs to see that distinction. */
+            ageMs: now - n.updatedAt,
+          })),
+        };
+      })(),
       /** What clients are told about relays — url shapes only, never a credential. */
       turn: {
         stun: urls.filter((u) => u.startsWith("stun:")).length,

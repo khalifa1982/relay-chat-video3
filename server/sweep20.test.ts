@@ -23,7 +23,7 @@ const INBOUND = fs.readFileSync(path.join(ROOT, "server/emailInbound.ts"), "utf8
    SSE stream. Consequences the panel confirmed: inbound dials fan to the
    squatter's socket (MULTI_DEVICE_RING is baked on fleet-wide), a ring already in
    flight is handed over by `deliverPendingRing`, `sendRejoinIfInRoom` drops the
-   squatter into a still-live call with the member list and a LiveKit token, and
+   squatter into a still-live call with the member list and its media credentials, and
    the ring card renders the VICTIM's name/avatar/badge because the callee resolves
    the caller by pin.
 
@@ -78,8 +78,8 @@ describe("R-GENPIN — an unverified registration cannot impersonate a number", 
   });
 
   it("a rejoin and a pending ring require a PROVEN pin", () => {
-    // A rejoin hands over the room id, member list, ICE servers and a LiveKit
-    // publish token; a pending ring hands over a live call.
+    // A rejoin hands over the room id, the member list and ICE servers; a pending
+    // ring hands over a live call.
     expect(RELAY).toMatch(
       /const provenPin = verifiedClaim\(pin\) \|\| \(!!effectiveOwned && pin === effectiveOwned\)/,
     );

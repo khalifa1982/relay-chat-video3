@@ -43,12 +43,16 @@ describe("multi-call engine fixes (source-pinned)", () => {
 
   it("§4b: group dial clamps to the transport cap (mesh 6 / SFU 10)", () => {
     // The cap comes from ONE definition (v2.106.48 consolidated three copies of
-    // `livekitEnabled ? 10 : 6`, because fallbackToMesh became a fourth reader and a
+    // a per-transport ternary, because every reader must agree with the cap and a
     // fallback that disagrees with the cap the user was shown is its own bug). So the
     // property is the VALUES and the single source, not the expression's old spelling.
     expect(engine).toMatch(/const MESH_MAX = 6;/);
-    expect(engine).toMatch(/const SFU_MAX = 10;/);
-    expect(engine).toMatch(/function transportMax\(\): number \{ return livekitEnabled \? SFU_MAX : MESH_MAX; \}/);
+    /* v2.106.53: one rung, so one number. It stays a FUNCTION rather than becoming a
+       bare constant, because three copies of the old per-transport ternary had to be
+       consolidated once already and every reader must agree with the cap the picker
+       showed the user. */
+    expect(engine).not.toMatch(/SFU_MAX/);
+    expect(engine).toMatch(/function transportMax\(\): number \{ return MESH_MAX; \}/);
     expect(engine).toMatch(/const cap = transportMax\(\);/);
     expect(engine).toMatch(/deduped\.slice\(0, cap\)/);
     // The handle still exposes the cap for the picker, through the same definition.

@@ -43,8 +43,12 @@ describe("Android incoming-audio fixes", () => {
     expect(CLIENT).toMatch(/src\.connect\(loudspeakerCtx\.destination\);[\s\S]*?loudspeakerMutedEls\.add\(el\);[\s\S]*?el\.muted = true;/);
   });
 
-  it("LiveKit detached <audio> is inserted into the DOM on Android only", () => {
-    expect(CLIENT).toMatch(/if \(IS_ANDROID\) \{[\s\S]*?root\.appendChild\(audioEl\)/);
+  it("every remote <audio> element is IN the document", () => {
+    /* Android Chrome does not treat a DETACHED media element as a reliable playout
+       path, which is why the retired SFU path inserted its own (v2.106.53 removed
+       that path; the mesh's per-peer element is appended to the peer's tile, so the
+       property now holds for the only transport there is). */
+    expect(CLIENT).toMatch(/entry\.el\.appendChild\(ae\)/);
   });
 
   it("stopRingtone() drains scheduled oscillator/gain nodes, not just the interval", () => {
@@ -69,12 +73,10 @@ describe("v2.66 communication reliability (verified)", () => {
   it("in-call chat frames carry an id and duplicates are dropped on reconnect/redelivery", () => {
     expect(CLIENT).toMatch(/const seenChatIds = new Set<string>\(\);/);
     expect(CLIENT).toMatch(/function markChatSeen\(id: string\): boolean/);
-    // Both receive paths funnel through the dedup guard. v2.99.43 (M46) also
-    // threads the TRANSPORT-PROVEN sender into each call — the mesh channel's
-    // own pin, and LiveKit's sending participant — so a frame can no longer
-    // declare who it came from.
+    // The receive path funnels through the dedup guard. v2.99.43 (M46) also threads
+    // the TRANSPORT-PROVEN sender in — the per-peer channel's own pin — so a frame
+    // can no longer declare who it came from.
     expect(CLIENT).toMatch(/dc\.onmessage = e => receiveChatFrame\(e\.data as string, pin\)/);
-    expect(CLIENT).toMatch(/receiveChatFrame\(new TextDecoder\(\)\.decode\(payload\), participant\?\.identity\)/);
   });
 
   it("sendChat warns when a message reached no peers (delivery feedback)", () => {
@@ -83,9 +85,17 @@ describe("v2.66 communication reliability (verified)", () => {
     expect(CLIENT).toMatch(/if \(delivered === 0 && Object\.keys\(peers\)\.length > 0\)/);
   });
 
-  it("audio routing is re-applied on a voice→video upgrade (survives setCam)", () => {
+  it("audio routing survives a voice→video upgrade", () => {
+    /* The re-applier exists because republishing tracks could recreate the remote
+       audio elements and drop a chosen output (a picked sink, or Android's forced
+       loudspeaker) — the call silently jumping back to the earpiece mid-call. The
+       republish that made that happen belonged to the retired SFU (v2.106.53); on
+       the mesh the elements survive a `replaceTrack`, so what is pinned now is that
+       the re-applier still EXISTS and is still reachable, since the same hazard
+       returns with any transport that republishes. */
     expect(CLIENT).toMatch(/function reapplyAudioRouting\(\)/);
-    expect(CLIENT).toMatch(/syncLivekitVideoPublication\(camOn\)\.then\(\(\) => \{ if \(camOn\) reapplyAudioRouting\(\); \}\)/);
+    const calls = CLIENT.match(/reapplyAudioRouting\(\)/g) || [];
+    expect(calls.length, "declaration + at least one caller").toBeGreaterThanOrEqual(2);
   });
 
   it("accepting a call arms the audio unlock on the tap gesture", () => {
@@ -169,17 +179,17 @@ describe("camera QA fixes (verified)", () => {
 });
 
 describe("v2.70 multi-party grid + exit + quality (verified)", () => {
-  it("SFU pre-creates a tile for every roster member (fixes 'only 4 tiles for 5-6')", () => {
-    // onJoined / onRejoin / onResumed / onMerged all seed tiles from m.members,
-    // and joinLivekit enumerates already-present remotes after connect.
-    const matches = CLIENT.match(/\(m\.members \|\| \[\]\)\.forEach\(mem => addLkTile\(mem\.pin, mem\.name \|\| "Guest"\)\)/g) || [];
-    expect(matches.length).toBeGreaterThanOrEqual(4);
-    expect(CLIENT).toMatch(/remoteParticipants \|\| [\s\S]*?\.participants[\s\S]*?addLkTile\(p\.identity/);
+  it("every roster member gets a tile, from every envelope that carries a roster", () => {
+    /* onJoined / onRejoin / onResumed / onMerged each build a peer for every member
+       the server lists, which is what fixed "only 4 tiles for 5-6": a tile must not
+       wait on that member's media arriving. */
+    const matches = CLIENT.match(/\(m\.members \|\| \[\]\)\.forEach\(mem => \{? ?if \(!peers\[mem\.pin\]\) callPeer/g) || [];
+    expect(matches.length).toBeGreaterThanOrEqual(3);
+    expect(CLIENT).toMatch(/\(m\.members \|\| \[\]\)\.forEach\(mem => callPeer\(mem\.pin, mem\.name\)\)/);
   });
 
   it("a participant exit surfaces a visible toast (not just a chat system message)", () => {
-    expect(CLIENT).toMatch(/toast\(\(nm \|\| "Someone"\) \+ " left the call\."\)/); // mesh removePeer
-    expect(CLIENT).toMatch(/toast\(nm \+ " left the call\."\)/); // SFU removeLkTile
+    expect(CLIENT).toMatch(/toast\(\(nm \|\| "Someone"\) \+ " left the call\."\)/);
   });
 
   it("an established peer that drops shows 'reconnecting…' instead of freezing silently", () => {
@@ -194,37 +204,47 @@ describe("v2.70 multi-party grid + exit + quality (verified)", () => {
   it("published camera/screen tracks carry a contentHint; SFU uses the speech Opus preset", () => {
     expect(CLIENT).toMatch(/contentHint = "motion"/);
     expect(CLIENT).toMatch(/contentHint = "detail"/);
-    /* REWRITTEN v2.105.21 to the PROPERTY. This froze the whole publishDefaults
-       object as one literal, so it broke the moment a SECOND publish default was
-       added (`degradationPreference`) while saying nothing about what it was for —
-       that the SFU publishes audio with the 24 kbps speech preset rather than the
-       48 kbps music default. Asserted as the assignment, so the object may grow. */
-    expect(CLIENT).toMatch(/pubDefaults\.audioPreset = AudioPresetsEnum\.speech/);
-    expect(CLIENT).toMatch(/roomOpts\.publishDefaults = pubDefaults/);
-    // …and the preset stays CONDITIONAL on the enum existing, or an older
-    // livekit-client would publish `audioPreset: undefined`.
-    expect(CLIENT).toMatch(/if \(AudioPresetsEnum\?\.speech\) pubDefaults\.audioPreset/);
+    /* The SFU half of this — a 24 kbps speech Opus preset instead of the 48 kbps
+       music default — belonged to the retired transport (v2.106.53). On the mesh the
+       equivalent lever is the sender parameters, and the one that matters is that
+       AUDIO is never rate-capped while video is: a throttled phone must shed video
+       and keep the voice. */
+    expect(CLIENT).toMatch(/if \(s\.track\.kind === "audio"\)/);
+    expect(CLIENT).toMatch(/networkPriority/);
   });
 });
 
 describe("v2.70.1 — dial disconnect hotfix (verified)", () => {
-  it("the SFU join watchdog NEVER tears down a still-ringing (unanswered) call", () => {
-    // It used to hangUp("livekit-join-timeout") ~16.5s after DIAL — the watchdog
-    // is armed by enterCallUI at "Calling…" — so a slow/failing caller-side SFU
-    // connect killed every outgoing call while it was still ringing.
+  it("no media timer tears down a still-RINGING (unanswered) call", () => {
+    /* The original defect: a media-establishment watchdog armed by `enterCallUI` at
+       "Calling…" hung up ~16s later, so a caller whose media was slow had every
+       outgoing dial die while it was still ringing. `callAnswered` is the guard, and
+       the property is that every such deadline consults it. */
     expect(CLIENT).toMatch(/let callAnswered = false;/);
-    expect(CLIENT).toMatch(/if \(!callAnswered\) \{[\s\S]*?refresh-livekit[\s\S]*?return;\s*\}/);
+    /* TWO fuses, and they cover different halves. The NO-ANSWER backstop reads
+       `callAnswered` directly, so it declines to fire once somebody picks up. The
+       MEDIA deadline cannot fire during a ring at all, because it is only ever armed
+       from `onCalleeAnswered` — which is the structural version of the same
+       guarantee, and stronger than a re-check. */
+    const noAnswer = CLIENT.slice(
+      CLIENT.indexOf("function armDialTimeout("),
+      CLIENT.indexOf("}, 65_000);"),
+    );
+    expect(noAnswer.length, "the no-answer slice must be real").toBeGreaterThan(80);
+    expect(noAnswer).toMatch(/if \(!inCall \|\| callAnswered\) return;/);
+    const arms = CLIENT.match(/armEstablishDeadline\(\)/g) || [];
+    expect(arms.length, "declaration + exactly one arming site").toBe(2);
+    const answered = CLIENT.slice(
+      CLIENT.indexOf("function onCalleeAnswered("),
+      CLIENT.indexOf("function onCalleeAnswered(") + 900,
+    );
+    expect(answered).toMatch(/armEstablishDeadline\(\)/);
   });
 
   it("callAnswered flips on any second-party evidence and resets on hangUp", () => {
     const matches = CLIENT.match(/callAnswered = true;/g) || [];
-    expect(matches.length).toBeGreaterThanOrEqual(3); // acceptInvite + createPeer + addLkTile
+    expect(matches.length).toBeGreaterThanOrEqual(3);
     expect(CLIENT).toMatch(/inCall = false; roomId = null; callAnswered = false;/);
-  });
-
-  it("a throwing LiveKit Room constructor falls back to bare options (never kills dialing)", () => {
-    expect(CLIENT).toMatch(/room = new RoomCtor\(roomOpts\);\s*\} catch/);
-    expect(CLIENT).toMatch(/room = new RoomCtor\(\{ adaptiveStream: true, dynacast: true \}\); \}/);
   });
 });
 
@@ -241,9 +261,13 @@ describe("v2.72 — mobile call QA fixes (verified)", () => {
     expect(CLIENT).toMatch(/await acquireFlippedCameraWithRetry\(facingMode\)/);
   });
 
-  it("#3 SFU camera toggle unpublishes WITHOUT stopping the track (re-enable works)", () => {
-    expect(CLIENT).toMatch(/lp\.unpublishTrack\(lt\.mediaStreamTrack, false\)/);
+  it("#3 a camera toggle can always re-enable, because a dead track is reacquired", () => {
+    /* The SFU form of this unpublished without STOPPING the track, so a re-enable
+       had something to republish. On the mesh the equivalent is that enabling with no
+       live track REACQUIRES rather than silently doing nothing — which is what the
+       "my camera is never recognized" users were hitting. */
     expect(CLIENT).toMatch(/async function reacquireCameraForPublish\(\)/);
+    expect(CLIENT).toMatch(/const haveLive = localStream\.getVideoTracks\(\)\.some\(t => t\.readyState === "live"\);/);
   });
 
   it("#5 iOS filters probe for a live frame and fall back to the raw camera if dead", () => {
