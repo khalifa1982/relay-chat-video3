@@ -71,8 +71,13 @@ describe("board 3d — the fields and chips", () => {
   });
 
   it("a selected member is an ACCENT chip, not a neutral grey pill", () => {
-    expect(sheet()).toMatch(/rgba\(var\(--rb-rgb, 63, 224, 197\), 0\.14\)/);
-    expect(sheet()).toMatch(/color: "var\(--rb, #3FE0C5\)"/);
+    /* REWRITTEN in v2.106.31: this froze the chip's inline `.14` fill AND
+       `color: var(--rb)` — the second of which is the defect, not the design. That pair was
+       a hand-rolled duplicate of `.rchip-accent`'s own values differing only in missing its
+       light-theme text colour, so the chip's own digits measured 1.47:1 in the theme the app
+       defaults to. THE PROPERTY is that a picked member is an ACCENT chip rather than a
+       neutral grey pill — which the class delivers, at 5.17:1. */
+    expect(sheet()).toMatch(/rchip-accent/);
     expect(sheet()).not.toMatch(/rounded-full bg-muted px-2\.5 py-1 text-xs font-mono/);
   });
 

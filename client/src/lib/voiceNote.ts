@@ -165,30 +165,64 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
     levelBuf = null;
   };
 
+  /* `done` MUST ALWAYS SETTLE, AND IT USED TO BE ABLE NOT TO.
+   *
+   * It resolved ONLY inside `rec.onstop`. There was no `onerror`, and the duration cap
+   * below calls `rec.stop()` — which itself depends on `onstop` firing. So a recorder that
+   * went inactive WITHOUT firing it (an iOS call/Siri interruption, mic contention with
+   * another tab, a MediaRecorder `error` event) left this promise pending forever.
+   *
+   * WHAT THAT COST THE USER IS OUT OF ALL PROPORTION TO THE CAUSE. In `Messages.tsx`,
+   * `setRecording(false)` lives only in that promise's `.finally()`, and while `recording`
+   * is true the whole composer is REPLACED by the recording bar — no text field, no send
+   * button — and both of that bar's exits (Discard and Send) call `stop()`, which is a
+   * no-op on an already-inactive recorder. So both ways out were dead and the only escape
+   * was navigating away. The mic is also the DEFAULT primary button while the field is
+   * empty, i.e. exactly what somebody taps first. That is a complete, silent lock-out of
+   * sending, which is what the owner reported.
+   *
+   * So the resolver is hoisted out and made IDEMPOTENT, and there are now four paths to it:
+   * a normal stop, a recorder error, an already-inactive recorder, and a hard deadline.
+   * Whichever fires first wins and the rest are no-ops. */
+  let settle: (v: { blob: Blob; ext: string; durationMs: number } | null) => void = () => {};
+  let settled = false;
+  let deadlineT: ReturnType<typeof setTimeout> | null = null;
+
+  const finish = (opts?: { discard?: boolean }) => {
+    if (settled) return;
+    settled = true;
+    if (capT) clearTimeout(capT);
+    if (deadlineT) clearTimeout(deadlineT);
+    if (runStartedAt != null) {
+      accumulatedMs += Date.now() - runStartedAt;
+      runStartedAt = null;
+    }
+    releaseAudio();
+    stream.getTracks().forEach((t) => t.stop()); // mic LED off, always — every path
+    if (opts?.discard || cancelled || chunks.length === 0) {
+      settle(null);
+      return;
+    }
+    // Use the recorder's actual mimeType (browsers sometimes substitute one).
+    const finalMime = rec.mimeType || pick.mimeType || "application/octet-stream";
+    settle({
+      blob: new Blob(chunks, { type: finalMime }),
+      ext: pick.ext,
+      durationMs: accumulatedMs,
+    });
+  };
+
   const done = new Promise<{ blob: Blob; ext: string; durationMs: number } | null>((resolve) => {
+    settle = resolve;
     rec.ondataavailable = (e) => {
       if (e.data.size > 0) chunks.push(e.data);
     };
-    rec.onstop = () => {
-      if (capT) clearTimeout(capT);
-      if (runStartedAt != null) {
-        accumulatedMs += Date.now() - runStartedAt;
-        runStartedAt = null;
-      }
-      releaseAudio();
-      stream.getTracks().forEach((t) => t.stop()); // mic LED off, always
-      if (cancelled || chunks.length === 0) {
-        resolve(null);
-        return;
-      }
-      // Use the recorder's actual mimeType (browsers sometimes substitute one).
-      const finalMime = rec.mimeType || pick.mimeType || "application/octet-stream";
-      resolve({
-        blob: new Blob(chunks, { type: finalMime }),
-        ext: pick.ext,
-        durationMs: accumulatedMs,
-      });
-    };
+    rec.onstop = () => finish();
+    /* A recorder ERROR settles with whatever was captured rather than discarding it: the
+       chunks already collected are real audio, and losing a recording somebody made is
+       worse than sending a slightly short one. If nothing was captured, `finish` resolves
+       null on its own. */
+    rec.onerror = () => finish();
   });
 
   try {
@@ -206,15 +240,32 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
       } catch {
         /* already stopped */
       }
+      // …and settle even if that stop produced no `onstop`. Without this the duration cap
+      // was itself a way to hang: it asked the recorder to stop and then trusted an event.
+      finish();
     }, opts.maxMs);
   }
 
+  /* THE BACKSTOP. Every other path depends on the recorder behaving; this one does not.
+     Generous — the cap plus a wide margin, or a flat ceiling when there is no cap — because
+     its job is to make "pending forever" impossible, not to enforce a limit. A recording cut
+     short by this is a bad outcome; a composer nobody can escape is a worse one. */
+  const DEADLINE_MS = (opts?.maxMs && opts.maxMs > 0 ? opts.maxMs : 5 * 60_000) + 30_000;
+  deadlineT = setTimeout(() => finish(), DEADLINE_MS);
+
   const safeStop = () => {
     try {
-      if (rec.state !== "inactive") rec.stop();
+      if (rec.state !== "inactive") {
+        rec.stop(); // `onstop` → finish()
+        return;
+      }
     } catch {
-      /* already stopped */
+      /* fall through and settle directly */
     }
+    /* ALREADY INACTIVE, so `stop()` fires nothing. This is the case that locked the
+       composer: the bar's Discard and Send both routed here, both were no-ops, and neither
+       button did anything ever again. Settling directly is what makes them work. */
+    finish();
   };
   return {
     stop: safeStop,

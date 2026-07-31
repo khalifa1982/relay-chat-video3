@@ -44,7 +44,7 @@ const C = (number: string, displayName: string, extra: Partial<SuggestableContac
 });
 
 const BOOK: SuggestableContact[] = [
-  C("777777", "Khalifa Alhammadi", { favorite: true }),
+  C("777777", "Khalifa Alhammadi", { favourite: true }),
   C("735680", "Khaloud Alhammadi"),
   C("601586", "Mohamed Idris", { isOnline: true }),
   C("235680", "Sara Nunez"),
@@ -183,6 +183,26 @@ describe("what the list refuses to offer", () => {
     const hits = suggestContacts(BOOK, "", 3).map((c) => c.displayName);
     expect(hits[0]).toBe("Khalifa Alhammadi"); // favourite
     expect(hits[1]).toBe("Mohamed Idris"); // online
+  });
+
+  /* THIS CASE EXISTS BECAUSE THE ONE ABOVE PASSED FOR YEARS AGAINST A SHAPE THE
+     SERVER NEVER SENDS. Its fixture seeded `favorite` (American) while the wire and
+     the schema column are `favourite`, so `!!c.favourite` was false for every real
+     contact and the tiebreak was a permanent no-op — and it went red the moment the
+     source was corrected, which is the proof it had been vacuous.
+
+     So the property is asserted where it BITES rather than only at position 0: with
+     `.slice(0, limit)` a mis-ranked favourite is not merely low, it is DROPPED, and
+     the favourite here is deliberately the worst case for both other sort terms —
+     offline, and alphabetically last. Ranked correctly it survives a limit of one;
+     ranked on the wrong key it disappears from the picker entirely. */
+  it("a starred contact is not DROPPED by the limit, even offline and alphabetically last", () => {
+    const book = [
+      C("111222", "Aaron Early", { isOnline: true }),
+      C("333444", "Bea Middle", { isOnline: true }),
+      C("555666", "Zoe Last", { favourite: true }),
+    ];
+    expect(suggestContacts(book, "", 1).map((c) => c.displayName)).toEqual(["Zoe Last"]);
   });
 
   it("the limit is honoured", () => {

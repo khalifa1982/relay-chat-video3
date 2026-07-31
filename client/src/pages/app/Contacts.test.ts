@@ -67,9 +67,22 @@ describe("Contacts — category grouping", () => {
     expect(PAGE).toMatch(/label: "Favorites"/);
   });
 
-  it("the dialog has a category picker wired into the save payload", () => {
-    expect(PAGE).toMatch(/const \[category, setCategory\] = useState<Category \| null>/);
-    expect(PAGE).toMatch(/category,\s*\n\s*\}\)\s*\n\s*\}\s*\n\s*disabled=\{number\.length !== 6 \|\| saving\}/);
+  it("the dialog's label picker is wired into the save payload — and sends the WHOLE set", () => {
+    /* REWRITTEN, because the shape it froze was the bug. The dialog held one
+       `Category | null` and saved `category` alone; `contactUpdateKeys` couples the two
+       columns, so that single value re-derived `tags` FROM itself and destroyed every
+       other label the contact had. Saving somebody's phone number dropped them out of
+       their sections and changed their row chip, silently.
+       The picker is multi-select over the real 0..n model now, and what this pin protects
+       is unchanged and stronger: the picker's state is what the save payload carries. */
+    expect(PAGE).toMatch(/const \[tags, setTags\] = useState<ContactTag\[\]>/);
+    expect(PAGE, "the picker toggles the list rather than replacing it").toMatch(
+      /setTags\(toggleContactTag\(tags, cat\)\)/,
+    );
+    expect(PAGE).toMatch(/tags,\s*\n\s*\}\)\s*\n\s*\}\s*\n\s*disabled=\{number\.length !== 6 \|\| saving\}/);
+    expect(PAGE, "the mirror must not be the thing written").not.toMatch(
+      /birthday: birthday\.trim\(\) \|\| null,\s*\n\s*category,/,
+    );
   });
 
   it("the page fills the shell with flex-1 (no stale pb-24; docked nav since v2.73)", () => {

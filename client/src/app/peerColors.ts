@@ -122,6 +122,29 @@ export function bubbleStyleFor(opts: {
 }
 
 /**
+ * The colour for a GLYPH that sits on a WHITE control placed on top of the bubble —
+ * the voice-note play disc, today.
+ *
+ * The bubble's own DARKER gradient stop, so the control borrows the bubble's identity
+ * rather than introducing another colour, and so it is legible by construction on every
+ * hue the palette can hand out. Measured on a white disc across all 36 surfaces (own,
+ * peer and the 16 group hues, both stops of each): 4.92:1 at worst, none failing AA.
+ *
+ * This exists because `.rchip-accent` — a CARD recipe — was being used here, and on a
+ * saturated bubble it measured 1.16:1 at worst and failed on 30 of those 36. A recipe is
+ * only valid on the surface it was measured against.
+ */
+export function bubbleGlyphColor(opts: {
+  mine: boolean;
+  isGroup: boolean;
+  senderIdentityId: number | null | undefined;
+}): string {
+  if (opts.mine) return "#c2410c";       // the own gradient's dark stop
+  if (!opts.isGroup) return "#1d4ed8";   // the 1:1 blue's dark stop
+  return GROUP_PALETTE[peerPaletteIndex(opts.senderIdentityId)].to;
+}
+
+/**
  * The text colour for a person's NAME — used by the typing line and the group
  * sender label, so a bubble and the name above it read as the same person.
  * A light tint rather than the bubble's own gradient, because this sits on the

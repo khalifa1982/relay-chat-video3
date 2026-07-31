@@ -220,20 +220,24 @@ describe("1b History", () => {
 });
 
 describe("1c Messages / 1d Conversation", () => {
-  it("a READ receipt takes the accent and DELIVERED stays grey", () => {
-    // "accent = read, grey = delivered" (board 1c) — the state change the owner asked
-    // to see at a glance, now in the app's one accent rather than a fixed blue.
+  it("a READ receipt is visually distinct from DELIVERED, from ONE expression", () => {
     const at = MESSAGES_CODE.indexOf("function Receipt(");
     expect(at).toBeGreaterThan(0);
     const body = MESSAGES_CODE.slice(at, at + 1200);
-    /* ONE expression decides the colour, both arms named — so a change that collapses
-       read and delivered into one appearance fails, which a pin on the read arm alone
-       does NOT catch: the first cut set a grey class and overrode it inline for read, and
-       the mutation run showed the class could be deleted with no visible change. */
-    expect(body).toMatch(
-      /const tickStyle = \{ color: read \? "var\(--rb\)" : "rgba\(255, ?255, ?255, ?0\.7\)" \}/
-    );
-    expect(body).not.toMatch(/#4db6ff/);
+    /* REWRITTEN (v2.106.40). This asserted the accent, which was right on a CARD and wrong
+       here: measured on the own bubble's own pale stop the accent read 1.34:1 against
+       delivered's 1.77:1, so the accent made the MORE important state the FAINTER one. The
+       accent is still this app's read-vs-delivered vocabulary everywhere it sits on a card
+       (the thread row, Message info); the bubble is the one surface it cannot be seen on, so
+       the strength ordering is what this pins and `deliveryReceipts.test.ts` owns the arms.
+       ONE expression decides the colour, both arms named — so a change that collapses read
+       and delivered into one appearance fails, which a pin on the read arm alone does NOT
+       catch: the first cut set a grey class and overrode it inline for read, and the
+       mutation run showed the class could be deleted with no visible change. */
+    const m = body.match(/const tickStyle = \{ color: read \? (".+?") : (".+?") \}/);
+    expect(m).toBeTruthy();
+    expect((m as RegExpMatchArray)[1]).not.toBe((m as RegExpMatchArray)[2]);
+    expect(body, "the pre-accent fixed blue must not come back either").not.toMatch(/#4db6ff/);
   });
 
   it("the day divider is mono/.26em AND still opaque and above the bubbles", () => {
@@ -268,9 +272,20 @@ describe("1c Messages / 1d Conversation", () => {
 });
 
 describe("1e Contacts", () => {
-  it("the A-Z section letter takes the accent at .26em", () => {
+  it("the section label takes the accent VOCABULARY at .26em — not the raw variable", () => {
+    /* REWRITTEN TO THE PROPERTY. This froze `color: "var(--rb)"`, which is the DEFECT
+       rather than the design: the raw accent as text measures 1.59:1 on the light card
+       against AA's 4.5, so every section heading (ONLINE / FAVORITES / FAMILY / FRIENDS /
+       TEAM) was invisible in the theme the app defaults to — the literal reading of the
+       owner's "the contacts section is not showing".
+       `text-primary` IS the accent: v2.106.4 repointed `--primary` at `--rb` inside
+       `.dark.relay-v2`, so the dark look is unchanged and only light becomes legible
+       (4.59:1). The board asks for the accent and the .26em mono tracking; both hold. */
     const label = elementWith(CONTACTS_CODE, "{section.label}");
-    expect(label).toMatch(/color: "var\(--rb\)"/);
+    expect(label).toMatch(/text-primary/);
+    expect(label, "the raw variable in a colour position is what failed AA").not.toMatch(
+      /color:\s*"?var\(--rb\)/,
+    );
     expect(label).toMatch(/letterSpacing: "\.26em"/);
     expect(label).toMatch(/font-mono/);
   });

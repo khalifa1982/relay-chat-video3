@@ -145,7 +145,12 @@ export function PeerAvatar({
   size = 42,
   rounded = "rounded-full",
   className = "",
-  fallbackClassName = "bg-primary/15 text-primary",
+  /* `.ravatar-fallback`, not `bg-primary/15 text-primary`: measured as rendered, the
+     initials were 3.77:1 in light theme because the accent tint darkens the background out
+     from under `--primary`. The class carries the measured light colour (5.15:1) and is
+     byte-identical in dark. Callers that pass their own tint (History's per-tone discs)
+     are untouched. */
+  fallbackClassName = "ravatar-fallback",
   clickable = true,
   children,
 }: {

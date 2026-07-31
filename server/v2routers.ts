@@ -143,6 +143,7 @@ import {
   pushReachable,
   type PresenceLite,
 
+  canRingIdentity,
 } from "./v2db";
 import { adminPurgeIdentity, guestDaysLeft } from "./purgeIdentity";
 import {
@@ -1202,12 +1203,33 @@ export const v2DirectoryRouter = router({
           role: null as IdentityRole | null, // a line is not a person — no badge
           inCall: false,
           partyLine: true,
+          // A line is always reachable: joining rings nobody, you just land on the
+          // room — so an empty line must stay joinable, which is the point of a line.
+          reachable: true,
           memberCount,
         };
       }
       const id = await getIdentityByNumber(input.number);
       if (!id) return null;
       const [pres] = await getPresenceForIds([id.id]);
+      /* CAN A CALL TO THEM RING ANYTHING? Presence answers "is a socket open", which
+         is NOT the same question and is the wrong one to gate a call on: presence is
+         bound to a live socket session, so backgrounding the app or locking the phone
+         drops it — and a backgrounded phone is precisely what a VoIP push wakes.
+         Reachability is therefore `a live socket OR a device we can push a ring to`.
+
+         Emitted ALONGSIDE `isOnline`, never instead of it — an older client ignores
+         the field and keeps today's behaviour, and presence stays what it always was
+         for showing status.
+
+         REPORTED HONESTLY EVEN WHEN PRESENCE IS SUPPRESSED, deliberately. The v2.95
+         privacy rule hides whether somebody is online RIGHT NOW; this says only that
+         a call could reach a device. Withholding it would refuse calls to exactly the
+         long-inactive guests the suppression protects, which is the bug rather than
+         the privacy. Nothing new is disclosed either: this endpoint already returns
+         their name, avatar, badge and tier for any number, so "has the app" is
+         already implied — and it stays behind `directoryGate`'s throttle. */
+      const reachable = (pres?.isOnline ?? false) || (await canRingIdentity(id.id));
       // Privacy: a guest inactive >24h shows NO status at all.
       const hidden = isGuestPresenceHidden({
         isGuest: id.isGuest,
@@ -1238,6 +1260,7 @@ export const v2DirectoryRouter = router({
         profileStatus: hidden ? null : normalizeProfileStatus(id.profileStatus),
         statusNote: hidden ? null : normalizeStatusNote(id.statusNote),
         presenceHidden: hidden,
+        reachable,
         verified: id.verified,
         // Three-tier badge (v2.99.6): guest / registered / admin.
         role: ((await getRolesByIdentityIds([id.id])).get(id.id) ??
@@ -1574,7 +1597,18 @@ export const v2ContactsRouter = router({
     const me = requireIdentity(ctx);
     const rows = await listContacts(me.id);
     // Resolve every contact's identity in ONE query (was N+1: one per contact).
-    const idents = await getIdentitiesByNumbers(rows.map((r) => r.number));
+    /* GUARDED for the same reason the presence and busy-line reads below are, and this one
+     * was missed on the first pass — `getIdentitiesByNumbers` is `db.select()` with no
+     * try/catch of its own, so a rejection propagated out of the resolver and the owner's
+     * ENTIRE directory became "We couldn't load your contacts". `identities` is a different
+     * table from `presence`, so it is an independent failure source with identical reach.
+     *
+     * It qualifies by the same test its siblings passed: every field the row itself shows —
+     * displayName, number, favourite, blocked, notes — comes from `rows` (listContacts).
+     * `idents` supplies only the LIVE decorations: the search-only live name, the current
+     * avatar, the role and the verified flag. Losing those costs a photo and a badge.
+     * `listContacts` above stays unguarded deliberately: that read IS the content. */
+    const idents = await getIdentitiesByNumbers(rows.map((r) => r.number)).catch(() => []);
     const idByNumber = new Map(idents.map((i) => [i.number, i.id]));
     // Track which identities are guests (userId == null) for presence privacy.
     const isGuestById = new Map(idents.map((i) => [i.id, i.userId == null]));
@@ -1593,10 +1627,26 @@ export const v2ContactsRouter = router({
     // one person was searchable on one screen and not another.
     const liveNameByNumber = new Map(idents.map((i) => [i.number, i.displayName]));
     const ids = idents.map((i) => i.id);
-    const presList = await getPresenceForIds(ids);
-    const presByIdentity = new Map(presList.map((p) => [p.identityId, p]));
+    /* EVERY DECORATION READ ON THIS RESOLVER FAILS SOFT, and these two were the
+     * exceptions. `getRolesByIdentityIds` above already swallows its own failure by
+     * design — it backs a badge — but `getPresenceForIds` has no try/catch of its own,
+     * so one hiccup on the `presence` table threw out of the resolver and the caller
+     * got NOTHING: the whole address book replaced by "We couldn't load your contacts",
+     * which is the owner's "the contacts section is not showing" with a cause nobody
+     * could see from the screen.
+     *
+     * A contact row is worth serving without its green dot. The projection below is
+     * already written for the absent case throughout (`pres?.isOnline ?? false`,
+     * `inCallSet.has(...)`), so an empty answer degrades to "nobody shown as online"
+     * rather than to a broken screen — and that is the correct direction, because a
+     * missing LED costs a glance while a missing directory costs the feature. */
+    const presByIdentity = await getPresenceForIds(ids)
+      .then((rows) => new Map(rows.map((p) => [p.identityId, p])))
+      .catch(() => new Map<number, Awaited<ReturnType<typeof getPresenceForIds>>[number]>());
     // Busy line (v2.88): which saved numbers are on a call right now.
-    const inCallSet = await pinsInCallAsync(idents.map((i) => i.number));
+    const inCallSet = await pinsInCallAsync(idents.map((i) => i.number)).catch(
+      () => new Set<string>(),
+    );
     return rows.map((r) => {
       const ident = idByNumber.get(r.number);
       const pres = ident != null ? presByIdentity.get(ident) : undefined;

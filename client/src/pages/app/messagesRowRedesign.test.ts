@@ -89,8 +89,14 @@ describe("v2.99.37 — every element the owner listed is present", () => {
     // last element is pushed right and stays tabular, either way.
     expect(ROW).toMatch(/t\.pinned \? "shrink-0 pl-1\.5 " : "ms-auto shrink-0 pl-1 "/);
     expect(ROW).toMatch(/text-\[11\.5px\] tabular-nums/);
-    expect(ROW).toMatch(/\{t\.pinned && \(\s*\n\s*<Pin/);
-    expect(ROW).toMatch(/className="ms-auto size-3\.5 shrink-0/);
+    /* RE-ANCHORED (v2.106.42): this required the `<Pin` to be the very next thing after
+       `{t.pinned && (`, so a COMMENT between them broke it — while saying nothing about the
+       property, which is only that the marker renders under that gate and claims `ms-auto`. */
+    const gate = ROW.indexOf("{t.pinned && (");
+    expect(gate).toBeGreaterThan(-1);
+    const marker = ROW.indexOf("<Pin", gate);
+    expect(marker, "the marker renders inside the pinned gate").toBeGreaterThan(gate);
+    expect(ROW.slice(marker, marker + 200)).toMatch(/className="ms-auto size-3\.5 shrink-0/);
   });
   it("unread reads as colour + weight, not a heavy pill", () => {
     expect(ROW).toMatch(/\{t\.unreadCount > 99 \? "99\+" : t\.unreadCount\} new/);

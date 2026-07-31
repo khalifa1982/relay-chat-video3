@@ -365,11 +365,25 @@ describe("v2.105.21 — the readout cannot break the control bar it sits above",
     expect(rule).toMatch(/pointer-events:none/);
   });
 
-  it("adds NO backdrop-filter over live video", () => {
+  it("adds NO backdrop-filter over live video — in ANY of its rules", () => {
     // v2.99.84 measured 36 such layers over live video and removed all of them on
     // phones; adding one back for a debug line would undo that.
-    const css = ASSETS.slice(ASSETS.indexOf(".relay-root .call-qual{"));
-    expect(css.slice(0, css.indexOf("}"))).not.toMatch(/backdrop-filter/);
+    //
+    // WIDENED (board 5c): this read only the FIRST rule
+    // (`css.slice(0, css.indexOf("}"))`), so the state rules 5c adds — and any rule
+    // added later — could have carried a blur with this test green. It now sweeps
+    // every rule whose selector mentions the class. The rest of the 5c state-rule
+    // guards (no z-index, no animation, hue vocabulary, the writer cross-check)
+    // live in `callQualityTone.test.ts`.
+    expect(ASSETS).toContain(".relay-root .call-qual{");
+    const re = /[^{}]*\.call-qual[^{}]*\{([^}]*)\}/g;
+    let seen = 0;
+    for (let m = re.exec(ASSETS); m; m = re.exec(ASSETS)) {
+      seen += 1;
+      expect(m[1]).not.toMatch(/backdrop-filter/);
+    }
+    // A sweep that matched nothing would pass for the wrong reason.
+    expect(seen).toBeGreaterThanOrEqual(2);
   });
 
   it("the numbers are LTR-isolated, since an RTL locale would reorder them", () => {

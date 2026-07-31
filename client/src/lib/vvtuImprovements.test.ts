@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { codeOnly } from "../../../server/testing/codeOnly";
 
 /**
  * v2.63 voice/video/UI-UX improvement batch — static guards pinning the
@@ -99,6 +100,23 @@ describe("UI/UX improvements", () => {
 
   it("the empty Contacts state uses the shared Empty component with a CTA", () => {
     expect(CONTACTS).toMatch(/import \{ Empty, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription, EmptyContent \} from "@\/components\/ui\/empty"/);
-    expect(CONTACTS).toMatch(/<EmptyTitle>\{search \? "No matches" : "No contacts yet"\}<\/EmptyTitle>/);
+    /* REWRITTEN TO THE PROPERTY (v2.106.25). This froze the exact two-way expression
+       `{search ? "No matches" : "No contacts yet"}`, so it forbade telling a THIRD kind
+       of empty apart — a list narrowed by a label chip, which used to claim the whole
+       directory was empty. The property is that the shared primitives are used and a
+       first-run user is offered the way in, which is what this release keeps; the exact
+       copy is not, and `notShowing.test.ts` pins the honesty of each branch. */
+    /* On comment-stripped source: the error arm's own comment quotes
+       `filtered.length === 0` to explain what used to be reached, so a raw `indexOf`
+       lands on the prose and reads the WRONG EmptyTitle — the prose-anchor trap, hit
+       here from another file's comment. */
+    const code = codeOnly(CONTACTS);
+    const title = code.slice(code.indexOf("filtered.length === 0")).match(
+      /<EmptyTitle>[\s\S]{0,240}?<\/EmptyTitle>/,
+    );
+    expect(title).toBeTruthy();
+    expect(title![0]).toMatch(/search \?/);
+    expect(title![0]).toMatch(/No contacts yet/);
+    expect(code).toMatch(/<EmptyContent>[\s\S]{0,400}?Add a contact/);
   });
 });

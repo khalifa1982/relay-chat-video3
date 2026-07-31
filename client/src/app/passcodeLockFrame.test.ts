@@ -275,7 +275,11 @@ describe("board 2f — structure", () => {
     // ...and the claim it rests on: the shell's own canvas is inside Inner,
     // which PasscodeGate wraps.
     const shell = codeOnly(readFileSync("client/src/app/AppShell.tsx", "utf8"));
-    expect(shell).toMatch(/<PasscodeGate>[\s\S]*<Inner>/);
+    // Matched on the ELEMENT, not `<Inner>` exactly: `Inner` legitimately took a prop
+    // in v2.106.25 (the route's own tab, so both navs share one active-tab value), and
+    // the property here is only that the canvas-owning component is nested inside the
+    // gate — not that it is propless.
+    expect(shell).toMatch(/<PasscodeGate>[\s\S]*<Inner[\s>]/);
     const inner = fnBody(shell, "Inner");
     expect(inner).toMatch(/<RelayBackground \/>/);
     expect(CODE.match(/<RelayBackground/g)).toHaveLength(1);

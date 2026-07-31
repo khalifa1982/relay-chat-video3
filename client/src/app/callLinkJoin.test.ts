@@ -62,16 +62,54 @@ describe("OnboardingGate — focused call-link join UI", () => {
 
 describe("v2.99.15 — a guest can't call an OFFLINE user from a call link", () => {
   const GATE = read("client/src/app/OnboardingGate.tsx");
-  it("blocks the join when the callee is offline or the number is unknown (party lines exempt)", () => {
-    expect(GATE).toMatch(/const calleeOffline = inviteResolved && !isPartyLine && !!invitee && !invitee\.isOnline/);
+  it("blocks the join only when the callee cannot be RUNG (party lines exempt)", () => {
+    /* REWRITTEN FROM PRESENCE TO REACHABILITY, and the old pin is why this needed
+       saying: it froze `!invitee.isOnline`, i.e. it pinned the defect. Presence is
+       bound to a live socket session, so a backgrounded or locked phone reads
+       offline — and that is exactly the phone a VoIP push wakes (verified in
+       production: APNs 200, full-screen CallKit with the app not in the
+       foreground). Gating a call on presence therefore refused calls to most of
+       the user base most of the time, for a limitation that no longer exists.
+
+       What survives is the ONE honest guard: somebody with no device to ring at
+       all still cannot be called, because a guest has no thread to leave a message
+       on and a call that wakes nothing must not be offered. */
+    expect(GATE).toMatch(
+      /const calleeUnreachable =\s*inviteResolved && !isPartyLine && !!invitee && !\(invitee\.reachable \?\? true\)/,
+    );
     expect(GATE).toMatch(/const numberNotFound = inviteResolved && !isPartyLine && !invitee/);
-    expect(GATE).toMatch(/const joinBlocked = numberNotFound \|\| calleeOffline/);
+    expect(GATE).toMatch(/const joinBlocked = numberNotFound \|\| calleeUnreachable/);
     expect(GATE).toMatch(/disabled=\{!name\.trim\(\) \|\| startGuestPending \|\| joinBlocked\}/);
+  });
+  it("no longer gates the call on presence anywhere in this screen", () => {
+    // The property the rewrite exists for, asserted as an ABSENCE so it cannot
+    // creep back: `isOnline` may be DISPLAYED (the card shows a presence dot) but
+    // must never decide whether the join is allowed.
+    const code = GATE.replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+    expect(code).not.toMatch(/joinBlocked[^\n]*isOnline/);
+    expect(code).not.toMatch(/isOnline[^\n]*&&[^\n]*joinBlocked/);
+    // ...and the block must be derived from `reachable`, not from anything else.
+    expect(code).toMatch(/calleeUnreachable[\s\S]{0,120}reachable/);
+  });
+  it("FAILS OPEN when the server predates the reachable field", () => {
+    // A rolling deploy serves both bundles for ~60s. `?? true` is what stops that
+    // window becoming a calling outage: no field ⇒ offer the call and let the dial
+    // report the truth, which is the behaviour that shipped before this change.
+    expect(GATE).toMatch(/invitee\.reachable \?\? true/);
   });
   it("fails OPEN on a lookup error so a transient hiccup never strands a real caller", () => {
     expect(GATE).toMatch(/invite\.isFetched && !invite\.isError/);
   });
-  it("tells an offline-blocked guest they can reach them once back online", () => {
-    expect(GATE).toMatch(/They're offline — can't call/);
+  it("tells a blocked guest why, without promising something nothing can keep", () => {
+    /* The old copy said "you can reach them once they're back online". For the state
+       that remains — no device at all — coming online is not what would change it,
+       so that sentence was a promise nothing can keep. It now names the real
+       condition, and the word "offline" is gone from this branch entirely, because
+       an offline-but-installed phone IS callable now. */
+    expect(GATE).toMatch(/Can't be reached/);
+    expect(GATE).toMatch(/no device we can ring/);
+    expect(GATE).not.toMatch(/They're offline — can't call/);
+    expect(GATE).not.toMatch(/once they're back online/i);
   });
 });

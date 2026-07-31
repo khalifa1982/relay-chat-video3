@@ -67,11 +67,19 @@ describe("1 — last seen carries the time on every dated branch", () => {
 });
 
 describe("2a — one + replaces the media and paperclip buttons", () => {
-  it("the composer row has a single attach control", () => {
-    const row = MESSAGES.slice(MESSAGES.indexOf('<div className="flex items-end gap-1.5">'));
-    const composer = row.slice(0, row.indexOf("<Input"));
-    expect(composer).toMatch(/<Plus className=/);
-    // The two icons it replaced must no longer be buttons in the row.
+  it("the composer has a single attach control", () => {
+    /* RE-ANCHORED (v2.106.40). This sliced from the composer row's opening div to `<Input`,
+       which located the control by its POSITION BESIDE THE FIELD — so board 1d moving it
+       INSIDE the field turned it red while saying nothing about the property. THE PROPERTY
+       is that there is exactly ONE attach affordance and the two icons it replaced are not
+       buttons anywhere in the composer, wherever the one control now sits. */
+    const composer = MESSAGES.slice(
+      MESSAGES.indexOf('<div className="flex items-end gap-1.5">'),
+      MESSAGES.indexOf('aria-label={recording ? "Stop" : "Record"}'),
+    );
+    expect(composer.length).toBeGreaterThan(500);
+    expect((composer.match(/<Plus className=/g) ?? []).length, "exactly one").toBe(1);
+    // The two icons it replaced must no longer be buttons in the composer.
     expect(composer).not.toMatch(/<ImageIcon className="size-5"/);
     expect(composer).not.toMatch(/<Paperclip className="size-5"/);
   });
@@ -94,10 +102,12 @@ describe("2a — one + replaces the media and paperclip buttons", () => {
   it("the + is a plain toggle — it no longer depends on recorder support", () => {
     // It used to open the menu only when a recorder existed and otherwise jump
     // straight to the library, which would now hide "Attach file" entirely.
-    const composer = MESSAGES.slice(MESSAGES.indexOf('<div className="flex items-end gap-1.5">'));
-    expect(composer.slice(0, composer.indexOf("<Input"))).toMatch(
-      /onClick=\{\(\) => setAttachMenuOpen\(\(v\) => !v\)\}/
+    const composer = MESSAGES.slice(
+      MESSAGES.indexOf('<div className="flex items-end gap-1.5">'),
+      MESSAGES.indexOf('aria-label={recording ? "Stop" : "Record"}'),
     );
+    expect(composer.length).toBeGreaterThan(500);
+    expect(composer).toMatch(/onClick=\{\(\) => setAttachMenuOpen\(\(v\) => !v\)\}/);
   });
 });
 
@@ -251,26 +261,31 @@ describe("4 — the away auto-reply is opt-in", () => {
 });
 
 describe("5 — contacts put last seen below the pin", () => {
-  it("the pin and the presence line are separate rows", () => {
-    const row = CONTACTS.slice(
-      CONTACTS.indexOf("PIN on its own line"),
-      CONTACTS.indexOf("PIN on its own line") + 1400
-    );
-    // The pin is its own element, LTR-isolated so an RTL name can't reorder it…
-    const pinDiv = row.indexOf('font-mono mt-0.5" dir="ltr"');
-    expect(pinDiv).toBeGreaterThan(-1);
+  /* RE-ANCHORED (v2.106.41). Both of these sliced 1400 characters from the COMMENT "PIN on
+     its own line" — the prose-anchor trap, and board 1e moved the PIN onto its own LINE 2
+     (measured: the single-line row left the name 119px of the 228 it needs), so the anchor
+     went with it. The property survives the move: the PIN is its own element, LTR-isolated,
+     never glued to the presence text with a middot, and every presence state still renders.
+     Anchored on the PIN'S OWN CODE now, which no comment can move. */
+  const pinRow = () => {
+    const at = CONTACTS.indexOf("{c.number.length === 6 ? c.number.slice(0, 3)");
+    expect(at, "the PIN element").toBeGreaterThan(-1);
+    return CONTACTS.slice(at - 400, at + 1400);
+  };
+
+  it("the pin and the presence line are separate elements", () => {
+    const row = pinRow();
+    const pin = row.indexOf('dir="ltr"');
+    expect(pin, "LTR-isolated, so an RTL name cannot reorder it").toBeGreaterThan(-1);
+    expect(row).toMatch(/\[unicode-bidi:isolate\]/);
     // …and the presence line is a LATER, separate element.
-    const presence = row.indexOf("last seen {relativeTime(c.lastSeenAt)}");
-    expect(presence).toBeGreaterThan(pinDiv);
+    expect(row.indexOf("last seen {relativeTime(c.lastSeenAt)}")).toBeGreaterThan(pin);
     // The old shape joined them on one line with a middot; that must be gone.
     expect(row).not.toMatch(/<> · last seen/);
   });
 
   it("keeps the blocked / on-a-call / online states it had", () => {
-    const row = CONTACTS.slice(
-      CONTACTS.indexOf("PIN on its own line"),
-      CONTACTS.indexOf("PIN on its own line") + 1400
-    );
+    const row = pinRow();
     for (const state of ["blocked", "on a call", "online"]) {
       expect(row, `${state} still rendered`).toContain(state);
     }

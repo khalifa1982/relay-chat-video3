@@ -865,6 +865,33 @@ export function GroupInfoSheet({
                 so they WRAP under the name on a narrow phone rather than squeezing it. */}
             <section className={CARD}>
               <div className={LABEL}>Members{info.data ? ` · ${memberCount}` : ""}</div>
+              {/* A FAILED READ SAYS SO. This sheet read only `info.data`, so a failed
+                  `conversationInfo` degraded in the worst possible way: an unexplained
+                  card with no rows AND — because `iAmAdmin` derives from the same
+                  `info.data` and falls to false — the add-by-number row, the
+                  "all members can add" switch and the invite-link section all silently
+                  vanished from a REAL admin, who would reasonably conclude they had
+                  lost their adminship rather than that a query failed. Nothing else on
+                  screen says a read failed: `main.tsx` only console.errors.
+                  In flight it says loading rather than nothing, or an empty roster
+                  briefly asserts a group with no members in it. */}
+              {info.isError ? (
+                <div className="py-3 text-[12px] text-muted-foreground">
+                  Couldn&apos;t load the member list.{" "}
+                  <button
+                    type="button"
+                    onClick={() => void info.refetch()}
+                    className="font-semibold underline underline-offset-2"
+                  >
+                    Retry
+                  </button>
+                  <div className="mt-1 text-[11px]">
+                    Your controls are hidden until this loads — nothing has changed.
+                  </div>
+                </div>
+              ) : !info.data ? (
+                <div className="py-3 text-[12px] text-muted-foreground">Loading members…</div>
+              ) : null}
               <ul>
                 {(info.data?.members ?? []).map((m) => (
                   <li key={m.id} className="flex flex-wrap items-center gap-2 border-b border-white/[0.06] py-2 last:border-0">

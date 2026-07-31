@@ -618,6 +618,56 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // (and auto-rejoin could resurrect). Armed at dial, cleared on answer /
   // teardown.
   let dialTimeoutT: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * THE POST-ANSWER ESTABLISHMENT DEADLINE, and the hole it fills.
+   *
+   * Once the callee ANSWERS, nothing bounded how long the caller could sit on
+   * "Securing connection…" — two independent mechanisms guaranteed it:
+   *
+   *   1. `onCalleeAnswered()` calls `clearDialTimeout()`, cancelling the 65s
+   *      no-answer backstop outright; and even if it did not, that callback
+   *      early-returns on `callAnswered`, so it would decline to fire anyway.
+   *   2. `armLkWatchdog`'s tick early-returns while `lkConnected` — and on an
+   *      OUTGOING dial the caller joins the SFU room at dial time, so
+   *      `lkConnected` is already true when it first ticks at 4.5s. It retires
+   *      itself before the callee has even answered.
+   *
+   * So the state "we are in the room, they answered, and no remote media ever
+   * arrived" had no timer, no error and no way out but the End button. That is
+   * exactly the owner's report: 00:17 on "Securing connection…", callee shown
+   * online, previous attempt recorded as "no answer".
+   *
+   * This bounds it. Armed where the dial timeout is CANCELLED, so the coverage
+   * is continuous rather than leaving a gap between the two; cleared the moment
+   * media is real.
+   *
+   * IT ONLY EVER ENDS A CALL THAT ALREADY CANNOT WORK — it never stops a dial
+   * being placed, so it does not violate the fail-open rule this file follows on
+   * the call path. And 20s is deliberately generous: the SFU family gives up on
+   * a room CONNECTION after ~16.5s (4.5s + 3x4s), a legitimately slow publish +
+   * subscribe on a poor mobile network is seconds, and an UNANSWERED dial still
+   * gets its full 65s. A call that comes up at 19s is untouched.
+   */
+  const MEDIA_ESTABLISH_MS = 20_000;
+  let establishT: ReturnType<typeof setTimeout> | null = null;
+  function clearEstablishDeadline() {
+    if (establishT) { clearTimeout(establishT); establishT = null; }
+  }
+  function armEstablishDeadline() {
+    clearEstablishDeadline();
+    establishT = setTimeout(() => {
+      establishT = null;
+      // Re-check rather than trust the arm: a call that established, ended, or
+      // was never a dial must not be failed by a timer armed 20s ago.
+      if (!inCall || establishedOnce || !outgoingDial) return;
+      diag("establish deadline: answered but no media after " + MEDIA_ESTABLISH_MS + "ms");
+      /* THE REASON MUST NOT BE "no-answer". They DID answer — recording it as no
+         answer would write a false history row and would offer to "leave a voice
+         message", which is the wrong offer for somebody who picked up. This reason
+         is deliberately absent from failDial's voicemail-eligible set. */
+      failDial("Couldn't connect the audio — they answered but no sound came through.", "media-timeout");
+    }, MEDIA_ESTABLISH_MS);
+  }
   function clearDialTimeout() {
     if (dialTimeoutT) { clearTimeout(dialTimeoutT); dialTimeoutT = null; }
   }
@@ -856,7 +906,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
   function onCalleeAnswered() {
     clearDialTimeout();
     if (!outgoingDial) return;
-    if (!establishedOnce) runConnSequence();
+    if (!establishedOnce) {
+      runConnSequence();
+      // Coverage passes from the 65s no-answer backstop to the establishment
+      // deadline HERE, in the same breath as the cancel, so there is no window
+      // in which the call is bounded by nothing.
+      armEstablishDeadline();
+    }
   }
   function clearLkWatchdog() { if (lkWatchdog) { clearTimeout(lkWatchdog); lkWatchdog = null; } lkJoinTries = 0; }
   // Reliability net for the SFU path: if media isn't up a few seconds after the
@@ -4322,11 +4378,26 @@ export function startRelay(root: HTMLElement): RelayHandle {
   try { statsShown = localStorage.getItem("relay_call_stats") === "1"; } catch { /* private mode */ }
   let qualPrev: import("./callStats").ByteSample | null = null;
 
-  function renderCallQuality(text: string) {
+  /**
+   * Write the readout. `tone` picks the board-5c hue and defaults to neutral, so
+   * a caller with nothing measured yet ("measuring…") cannot accidentally claim a
+   * healthy call.
+   *
+   * The class is one of THREE COMPLETE LITERAL STRINGS, never composed: a
+   * runtime-assembled class name is invisible to every grep and every build step,
+   * and a rule for a class nobody sets renders nothing with all tests green.
+   */
+  function renderCallQuality(
+    text: string,
+    tone: import("./callStats").QualityTone = "neutral",
+  ) {
     const el = document.getElementById("callQual");
     if (!el) return;
     el.style.display = statsShown ? "" : "none";
-    if (statsShown) el.textContent = text;
+    if (!statsShown) return;
+    el.textContent = text;
+    el.className =
+      tone === "good" ? "call-qual is-good" : tone === "warn" ? "call-qual is-warn" : "call-qual";
   }
 
   /** Gather every leg's stats report — mesh peer connections AND LiveKit tracks —
@@ -4334,7 +4405,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
    *  produce comparable numbers. That comparability is the whole point. */
   async function collectCallQuality() {
     if (!statsShown || !inCall) return;
-    const { entriesOf, summarizeStats, formatCallStats, callStatsVerdict } = await import("./callStats");
+    const { entriesOf, summarizeStats, formatCallStats, callStatsVerdict, callQualityTone } =
+      await import("./callStats");
     const reports: import("./callStats").StatEntry[][] = [];
     for (const pin in peers) {
       try { reports.push(entriesOf(await peers[pin].pc.getStats())); }
@@ -4370,7 +4442,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const { stats, sample } = summarizeStats(reports, { prev: qualPrev, nowMs: Date.now() });
       qualPrev = sample;
       const v = callStatsVerdict(stats);
-      renderCallQuality((v === "relay" ? "⚠ " : v === "poor" ? "▲ " : "") + formatCallStats(stats));
+      renderCallQuality(
+        (v === "relay" ? "⚠ " : v === "poor" ? "▲ " : "") + formatCallStats(stats),
+        callQualityTone(stats),
+      );
     } catch { /* the readout is decoration — never let it disturb a call */ }
   }
 
@@ -5076,11 +5151,31 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   // Drive connecting → encrypting while the transport comes up; the real "live"
   // flip happens when a peer / the SFU actually connects.
+  /**
+   * What is ACTUALLY missing right now, in words the caller can act on.
+   *
+   * "Securing connection…" was announced on a 600ms timer with no relation to
+   * any DTLS or ICE state, so a stuck call reported a specific-sounding phase it
+   * may never have reached — and the owner staring at it for seventeen seconds
+   * had no way to tell what had failed. On the SFU path in particular the claim
+   * is simply false: the caller joined the room at dial time, so nothing is being
+   * "secured" — we are waiting for the other side's media to arrive, which is a
+   * different problem with a different fix.
+   *
+   * The STATE stays `encrypting` (it drives the `st-encrypting` styling); only the
+   * text is derived from what is really true.
+   */
+  function establishingLabel(): string {
+    if (livekitEnabled && lkConnected) return "Waiting for their audio…";
+    // Mesh, or the SFU room still coming up: a transport genuinely in the
+    // ICE/DTLS phase, which is what the original wording describes.
+    return STATUS_LABEL.encrypting;
+  }
   function runConnSequence() {
     clearConnSeq();
     setCallStatus("connecting");
     connSeqTimers.push(setTimeout(() => {
-      if (callStatus === "connecting") setCallStatus("encrypting");
+      if (callStatus === "connecting") setCallStatus("encrypting", establishingLabel());
     }, 600));
   }
   // Register the call with the OS media session. This (a) tells Android the tab
@@ -5128,6 +5223,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // even after the conversation was live. Both calls are idempotent.
   function markEstablished() {
     establishedOnce = true;
+    clearEstablishDeadline(); // media is real — the deadline has done its job
+
     exitPreConnect();        // ONLY now does the full in-call interface appear
     exitReconnecting();
     clearConnSeq();
@@ -6663,6 +6760,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
     $("ringOverlay")?.classList.remove("active");
     exitPreConnect(); // clear any in-flight dial card / pre-connect gating
     clearDialTimeout(); // an ended call must never fire a stale "No answer."
+    clearEstablishDeadline(); // …nor a stale "couldn't connect the audio"
     clearFailDial(); // an explicit End during the failure card mustn't re-fire
     videoApproved = false; callIsGroup = false; // consent is per-call
     videoOfferedForRoom = null; videoOfferPending = false; // M37 — the OFFER is per-call too
@@ -7166,6 +7264,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       waitingRing = null;
       clearFailDial();
       clearConnSeq();
+      clearEstablishDeadline();
       exitReconnecting();
       // Disconnect the SFU before stopping local tracks (no-op on the mesh path).
       teardownLivekit();

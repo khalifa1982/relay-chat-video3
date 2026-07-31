@@ -309,27 +309,58 @@ describe("green means ONLINE, and only online", () => {
     expect(bar).not.toMatch(/relay-online/);
   });
 
-  it("the voice-note play button is the accent (board 2f)", () => {
+  it("the voice-note play button is not the presence green (board 2f)", () => {
     const at = UI.indexOf('aria-label={playing ? "Pause" : "Play voice note"}');
     expect(at).toBeGreaterThan(0);
     const btn = UI.slice(at, at + 900);
-    expect(btn).toMatch(/rgba\(var\(--rb-rgb, 63, 224, 197\), 0\.16\)/);
+    /* REWRITTEN TWICE, and the second rewrite is the more interesting one.
+       v2.106.31 replaced a frozen inline `rgba(var(--rb-rgb),0.16)` fill with `.rchip-accent`
+       — right for a control on a CARD, and wrong here: this button sits on a SATURATED
+       BUBBLE, where that card recipe measures 1.16:1 at worst and fails AA on 30 of the 36
+       bubble surfaces the app can draw. So requiring the class froze a defect, exactly as
+       the inline fill had.
+       THE PROPERTY THIS FILE STANDS FOR is the vocabulary one and nothing more: green means
+       ONLINE, so a play control must not be painted in it. Which treatment is legible on a
+       bubble is a MEASURED question and is pinned in `conversationFrame.test.ts`, against
+       the real `bubbleGlyphColor`. */
     expect(btn).not.toMatch(/relay-online/);
+    expect(btn, "the presence green's own hex must not arrive by literal either").not.toMatch(
+      /#22c55e/i,
+    );
   });
 
   it("every REMAINING use of the presence green is about presence", () => {
-    /* THE STANDING GUARD. This exact violation has now been found four times in
-       four releases, always by measuring rather than by reading — so it gets a
-       sweep rather than a fourth one-off fix.
+    /* THE STANDING GUARD. This exact violation has now been found SIX times in
+       as many releases, always by measuring rather than by reading — so it gets a
+       sweep rather than another one-off fix.
        `typing…` is DELIBERATELY allowed: typing implies online (you cannot type
        from an offline client), it occupies the presence slot in the same header,
        and it is a STRONGER presence statement rather than a different kind of
-       fact. So green is carrying its one meaning there. */
+       fact. So green is carrying its one meaning there.
+
+       WIDENED (v2.106.42) TO BOTH GREEN TOKENS, and that gap is why there was a
+       sixth: this swept `--relay-online` only, and the PIN MARKER on a thread row
+       was painted with `--relay-green-text` — the AA-measured sibling v2.99.86
+       added for small text. Two spellings of one meaning, one of them unguarded,
+       so the guard read as covering the rule while covering half of it. A pinned
+       thread is not an online thread; the marker is muted now, deliberately not
+       the accent, because the accent means UNREAD in that same row. */
     const ALLOWED = [/typing…/, /\bonline\b/, /online now/];
-    const lines = UI.split("\n").filter((l) => l.includes("relay-online"));
-    for (const l of lines) {
+    const GREEN = /relay-online|relay-green-text/;
+    /* THE WINDOW IS THE ELEMENT, NOT THE LINE, and widening the token set is what exposed
+       that: a per-LINE sweep asked whether the className and the word sit on the same
+       source line, which for multi-line JSX they do not — the group header's perfectly
+       correct `{membersOnline} online` lives one line below its own class, and the first
+       run of the widened guard failed on it. A line is not the unit this rule is about. */
+    const all = UI.split("\n");
+    const hits = all
+      .map((l, i) => ({ l, i }))
+      .filter(({ l }) => GREEN.test(l));
+    expect(hits.length, "the sweep must not be vacuous").toBeGreaterThan(0);
+    for (const { l, i } of hits) {
+      const el = all.slice(i, i + 3).join(" ");
       expect(
-        ALLOWED.some((re) => re.test(l)),
+        ALLOWED.some((re) => re.test(el)),
         `presence green used for something that is not presence:\n  ${l.trim()}`
       ).toBe(true);
     }

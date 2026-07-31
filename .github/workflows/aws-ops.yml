@@ -190,6 +190,19 @@ jobs:
     env:
       AWS_REGION: ${{ inputs.region }}
       DOMAIN: ${{ inputs.domain }}
+      # A MEDIA NODE MUST NEVER BE WRITTEN TO, AND THE GUARD IS DEFINED ONCE HERE.
+      #
+      # Every SSM target below is `tag:Name=relay-app`, and whether the two mediasoup media
+      # nodes carry that tag cannot be established from this repo — nothing records what those
+      # instances were named. `/opt/relay-voip` is evidence the HOST ITSELF carries: an app box
+      # never has it, so it cannot go stale the way a tag list or an instance id would.
+      #
+      # Defined at the job level rather than pasted into each action because a copy per call
+      # site is exactly how one comes to be forgotten. It exits 0, so a media node in the
+      # target set costs nothing rather than failing a `--max-errors 0` command, and it says
+      # SKIP_MEDIA_NODE out loud — a command that quietly did nothing on one box is worse than
+      # one that says which box and why.
+      MEDIA_NODE_GUARD: 'if [ -d /opt/relay-voip ]; then echo SKIP_MEDIA_NODE; echo "this host runs the mediasoup media agent, not the app"; exit 0; fi'
     steps:
       - name: Detect auth method
         id: auth
@@ -758,7 +771,7 @@ jobs:
           C5="echo '== request production access =='; DOM=\$(echo $DOMAIN_B64 | base64 -d); RG=\$(echo $REGION_B64 | base64 -d); aws sesv2 put-account-details --production-access-enabled --mail-type TRANSACTIONAL --website-url \"https://\$DOM\" --contact-language EN --use-case-description \"\$(echo $DESC_B64 | base64 -d)\" --region \"\$RG\" 2>&1 && echo PROD_REQUEST_SUBMITTED || true"
           [ -n "$SES_EMAIL" ] || { C3="true"; C4="true"; }
           [ "$REQUEST_PROD" = "true" ] || C5="true"
-          PARAMS=$(jq -n --arg c1 "$C1" --arg c2 "$C2" --arg c3 "$C3" --arg c4 "$C4" --arg c5 "$C5" '{commands:[$c1,$c2,$c3,$c4,$c5]}')
+          PARAMS=$(jq -n --arg g "$MEDIA_NODE_GUARD" --arg c1 "$C1" --arg c2 "$C2" --arg c3 "$C3" --arg c4 "$C4" --arg c5 "$C5" '{commands:[$g,$c1,$c2,$c3,$c4,$c5]}')
           CMD=$(aws ssm send-command \
             --targets "Key=tag:Name,Values=relay-app" \
             --document-name AWS-RunShellScript \
@@ -800,7 +813,7 @@ jobs:
           # then refuses every allocation, which would silently break calls for
           # whoever gets steered to it.
           CMDLINE='cd /home/relay/app 2>/dev/null || cd /home/relay; set -a; . /home/relay/.env 2>/dev/null; set +a; node scripts/turn-check.mjs; echo "TURN_CHECK_EXIT=$?"'
-          PARAMS=$(jq -n --arg c "$CMDLINE" '{commands:[$c]}')
+          PARAMS=$(jq -n --arg g "$MEDIA_NODE_GUARD" --arg c "$CMDLINE" '{commands:[$g,$c]}')
           CMD=$(aws ssm send-command --targets "Key=tag:Name,Values=relay-app" \
             --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 1 \
             --parameters "$PARAMS" --query 'Command.CommandId' --output text) || {
@@ -852,7 +865,7 @@ jobs:
           # never drift from what clients are actually told to use.
           HOSTS=$(aws ssm send-command --targets "Key=tag:Name,Values=relay-app" \
             --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 1 \
-            --parameters 'commands=["set -a; . /home/relay/.env 2>/dev/null; set +a; echo TURNHOSTS=${TURN_HOSTS:-$TURN_HOST}"]' \
+            --parameters 'commands=["if [ -d /opt/relay-voip ]; then echo SKIP_MEDIA_NODE; exit 0; fi","set -a; . /home/relay/.env 2>/dev/null; set +a; echo TURNHOSTS=${TURN_HOSTS:-$TURN_HOST}"]' \
             --query 'Command.CommandId' --output text 2>/dev/null) || HOSTS=""
           RELAYS=""
           if [ -n "$HOSTS" ]; then
@@ -989,7 +1002,7 @@ jobs:
             echo "== attempt 2: instance role (via SSM) grants the deploy role =="
             P64=$(printf %s "$POLICY" | base64 -w0)
             CMDLINE="aws iam put-role-policy --role-name relay-github-deploy --policy-name relay-ses-ops --policy-document \"\$(echo $P64 | base64 -d)\" 2>&1 && echo IAM_GRANTED || true"
-            PARAMS=$(jq -n --arg c "$CMDLINE" '{commands:[$c]}')
+            PARAMS=$(jq -n --arg g "$MEDIA_NODE_GUARD" --arg c "$CMDLINE" '{commands:[$g,$c]}')
             CMD=$(aws ssm send-command --targets "Key=tag:Name,Values=relay-app" --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 0 --parameters "$PARAMS" --query 'Command.CommandId' --output text)
             for i in $(seq 1 20); do
               S=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
@@ -1050,7 +1063,8 @@ jobs:
             echo "Removing $ENV_KEY from /home/relay/.env on every relay-app instance…"
             UPSERT="grep -v '^${ENV_KEY}=' /home/relay/.env > /home/relay/.env.tmp 2>/dev/null || true; mv /home/relay/.env.tmp /home/relay/.env"
           fi
-          PARAMS=$(jq -n --arg u "sudo -u relay bash -c '$UPSERT'" '{commands:[
+          PARAMS=$(jq -n --arg g "$MEDIA_NODE_GUARD" --arg u "sudo -u relay bash -c '$UPSERT'" '{commands:[
+            $g,
             $u,
             "sudo -u relay bash -lc \"pm2 startOrReload /home/relay/ecosystem.config.cjs --update-env\"",
             "for i in 1 2 3 4 5 6 7 8 9 10; do sleep 3; curl -sf http://localhost:3000/api/health && echo HEALTH_OK && exit 0; done; echo HEALTH_FAILED; pm2 logs relay --lines 40 --nostream; exit 1"
@@ -1247,7 +1261,7 @@ jobs:
           fi
           echo "Running on $IID"
           CMDLINE="cd /home/relay/app 2>/dev/null || cd /home/relay; set -a; . /home/relay/.env 2>/dev/null; set +a; node scripts/recover-orphan-identity.mjs --number \"\$(echo $NUM_B64 | base64 -d)\" --email \"\$(echo $EMAIL_B64 | base64 -d)\"${FLAG}; echo \"RECOVER_EXIT=\$?\""
-          PARAMS=$(jq -n --arg c "$CMDLINE" '{commands:[$c]}')
+          PARAMS=$(jq -n --arg g "$MEDIA_NODE_GUARD" --arg c "$CMDLINE" '{commands:[$g,$c]}')
           CMD=$(aws ssm send-command --instance-ids "$IID" \
             --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 0 \
             --parameters "$PARAMS" --query 'Command.CommandId' --output text) || {
@@ -1353,7 +1367,7 @@ jobs:
           echo "Running on $IID"
           # ONE instance: this is a database mutation, so it runs exactly once.
           CMDLINE="cd /home/relay/app 2>/dev/null || cd /home/relay; set -a; . /home/relay/.env 2>/dev/null; set +a; node scripts/admin-tool.mjs --op \"$ADM_OP\" --email \"\$(echo $ADM_EMAIL_B64 | base64 -d)\" --number \"\$(echo $ADM_NUM_B64 | base64 -d)\" --to \"\$(echo $ADM_TO_B64 | base64 -d)\"${FLAG}; echo \"ADMIN_EXIT=\$?\""
-          PARAMS=$(jq -n --arg c "$CMDLINE" '{commands:[$c]}')
+          PARAMS=$(jq -n --arg g "$MEDIA_NODE_GUARD" --arg c "$CMDLINE" '{commands:[$g,$c]}')
           CMD=$(aws ssm send-command --instance-ids "$IID" \
             --document-name AWS-RunShellScript --max-concurrency 1 --max-errors 0 \
             --parameters "$PARAMS" --query 'Command.CommandId' --output text) || {

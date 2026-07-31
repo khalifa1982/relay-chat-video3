@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { contactTagsOf, sectionsFor, CONTACT_TAGS, TAG_COLOR, TAG_LABEL, type ContactTag } from "@shared/contactTags";
+import { contactTagsOf, sectionsFor, CONTACT_TAGS, TAG_LABEL, primaryTag, toggleContactTag, type ContactTag } from "@shared/contactTags";
+
 import { useLocation } from "wouter";
 import {
   Phone,
@@ -60,6 +61,15 @@ import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
 import { matchQuery } from "@/app/searchMatch";
+
+/** The four tag recipes in index.css. A STATIC map, never a composed string: the class
+ *  names have to exist literally somewhere the CSS can be found by, and this is that place. */
+const TAG_CLASS: Record<ContactTag, string> = {
+  vip: "rtag-vip",
+  family: "rtag-family",
+  friend: "rtag-friend",
+  team: "rtag-team",
+};
 
 /**
  * Is this contact reachable RIGHT NOW? (v2.99.97)
@@ -197,7 +207,12 @@ export default function ContactsPage() {
     jobTitle?: string;
     website?: string;
     birthday?: string;
-    category?: Category | null;
+    /* THE RESOLVED TAG SET, not the `category` mirror. The dialog used to carry
+       `category` alone and save it alone, which — because `contactUpdateKeys`
+       couples the two columns — re-derived `tags` from that ONE value and
+       destroyed every other label the contact had. Saving a contact's phone
+       number silently dropped them out of their sections. */
+    tags?: ContactTag[];
   } | null>(null);
 
   // Shared by the desktop icon button AND the mobile dropdown menu item, so the
@@ -214,7 +229,7 @@ export default function ContactsPage() {
       jobTitle: c.jobTitle ?? "",
       website: c.website ?? "",
       birthday: c.birthday ?? "",
-      category: c.category ?? null,
+      tags: contactTagsOf({ tags: c.tags?.join(",") ?? null, category: c.category ?? null }),
     });
   }
 
@@ -298,7 +313,12 @@ export default function ContactsPage() {
       const real = filtered.filter((c) => rowsByNumber.has(c.number));
       if (!real.length) continue;
       if (key === "other") {
-        out.push({ key: "other", label: "All contacts", icon: UsersIcon, tint: "text-muted-foreground", rows: real });
+        /* "Everyone else", NOT "All contacts". This bucket is `!favourite && no tags`, so
+           labelling it "All contacts" was a false claim about somebody's own directory —
+           a VIP, a favourite and anybody with a label are all EXCLUDED from it, which is
+           precisely the shape of "many things are not showing there". The key and the
+           shared module already call it "other"; only the label lied. */
+        out.push({ key: "other", label: "Everyone else", icon: UsersIcon, tint: "text-muted-foreground", rows: real });
       } else {
         out.push({ key, ...CATEGORY_META[key as Category], rows: real });
       }
@@ -366,21 +386,19 @@ export default function ContactsPage() {
                  unlike every other selection in the app. These four are fixed
                  identities (the board gives each its own hue and the row chips
                  use it), so lighting them all in one cycling accent would throw
-                 away the thing that makes a tag readable at a glance. Inline,
-                 because a runtime-composed Tailwind class is invisible to the
-                 JIT and comes out unstyled. */
-              style={
-                on
-                  ? {
-                      background: TAG_COLOR[t] + "22",
-                      border: "1px solid " + TAG_COLOR[t] + "73",
-                      color: TAG_COLOR[t],
-                    }
-                  : undefined
-              }
+                 away the thing that makes a tag readable at a glance.
+                 `.rtag-<tag>` rather than an inline style, and that is not tidying:
+                 the label MEASURED 1.53-1.71:1 on the light card against AA's 4.5,
+                 and the readable value differs per theme (the darker light value is
+                 ~2:1 on the dark chip), which an inline style cannot express. The
+                 class list is a LITERAL per tag — a runtime-composed Tailwind class
+                 is invisible to the JIT and comes out unstyled, but these are plain
+                 CSS rules in index.css, so a static lookup is safe. */
               className={
                 "shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition " +
-                (on ? "" : "bg-secondary/60 text-muted-foreground hover:text-foreground")
+                (on
+                  ? "rtag " + TAG_CLASS[t]
+                  : "bg-secondary/60 text-muted-foreground hover:text-foreground")
               }
             >
               {TAG_LABEL[t]}
@@ -389,7 +407,41 @@ export default function ContactsPage() {
         })}
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto md:rounded-2xl md:glass-surface-md">
-        {contacts.isLoading ? (
+        {/* A FAILED READ SAYS SO — IT IS NOT AN EMPTY ADDRESS BOOK.
+         *
+         * This is the owner's report ("the contact is not showing") and the mechanism
+         * was that there was no error arm at all: any failure of `contacts.list`
+         * fell through to `filtered.length === 0` and rendered "No contacts yet"
+         * with an "Add a contact" button — a confident false claim about somebody's
+         * own directory, and a persistent one, because once react-query's retries
+         * are spent `isLoading` is false and a background refetch never flips it
+         * back. Messages has rendered `threads.isError` first with a Retry since
+         * v2.99.x and that behaviour is pinned ("not blank-forever"); this screen
+         * simply never got it.
+         *
+         * THE ORDER IS LOAD-BEARING: the error arm comes BEFORE `isLoading`, because
+         * a background retry on an errored query sets `isFetching` and would
+         * otherwise drop the screen back to the skeleton, hiding the failure again
+         * on a loop. And the copy must never say the directory is empty — that
+         * wording is the whole defect. */}
+        {contacts.isError ? (
+          <Empty className="border-none p-10">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <AlertCircle />
+              </EmptyMedia>
+              <EmptyTitle>Couldn't load your contacts</EmptyTitle>
+              <EmptyDescription>
+                Your saved contacts are still there — this device just couldn't reach them.
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button size="sm" onClick={() => void contacts.refetch()}>
+                Retry
+              </Button>
+            </EmptyContent>
+          </Empty>
+        ) : contacts.isLoading ? (
           <ul>
             {Array.from({ length: 5 }).map((_, i) => (
               <li
@@ -410,14 +462,31 @@ export default function ContactsPage() {
               <EmptyMedia variant="icon">
                 <UserPlus />
               </EmptyMedia>
-              <EmptyTitle>{search ? "No matches" : "No contacts yet"}</EmptyTitle>
+              {/* THE EMPTY STATE HAS TO SAY WHICH KIND OF EMPTY IT IS. A narrowed
+                  list is not an empty directory, and saying "No contacts yet" when a
+                  filter chip is lit is a false statement about somebody's own address
+                  book — the same defect v2.106.2 fixed in Messages, where an unfiltered
+                  count made the page render `No conversations match ""`. The narrowing
+                  is recoverable in one tap (All, or the lit chip again), so what is
+                  needed is honest copy rather than a new control. */}
+              <EmptyTitle>
+                {search ? "No matches" : tagFilter ? "Nothing in this label" : "No contacts yet"}
+              </EmptyTitle>
               <EmptyDescription>
-                {search
-                  ? `Nobody matches "${search}".`
-                  : "Save someone's number to call or message them in one tap."}
+                {/* BOTH narrowings can be active at once, and the three-way version blamed
+                    the SEARCH alone — so it never mentioned the lit chip and never offered
+                    the one-tap recovery, leaving somebody retyping a query that was never
+                    the reason. Four cases, one expression. */}
+                {search && tagFilter
+                  ? `Nobody matching "${search}" is labelled ${TAG_LABEL[tagFilter]}. Tap All to search everyone.`
+                  : search
+                    ? `Nobody matches "${search}".`
+                    : tagFilter
+                      ? `None of your contacts are labelled ${TAG_LABEL[tagFilter]}. Tap All to see everyone.`
+                      : "Save someone's number to call or message them in one tap."}
               </EmptyDescription>
             </EmptyHeader>
-            {!search && (
+            {!search && !tagFilter && (
               <EmptyContent>
                 <Button
                   onClick={() =>
@@ -440,7 +509,12 @@ export default function ContactsPage() {
               // section heading and render nothing at all. That is a large part of
               // "the search doesn't detect 100%": the match was found and then
               // hidden. While a query is active, every section is open.
-              const isCollapsed = !searching && collapsed.has(section.key);
+              /* …and a TAG FILTER narrows exactly the same way, so it needs the same
+                 escape. Without it, tapping "Family" while the Family section happened
+                 to be collapsed rendered a header stating a count above nothing at all,
+                 with no empty state to explain it — the rows were found and then hidden,
+                 which is the same defect one filter along. */
+              const isCollapsed = !searching && !tagFilter && collapsed.has(section.key);
               // v2.99.97 (owner): "mention number of contacts in each category and
               // also mention number of online in each category … it will mention
               // total ten. On beside, it will show green color … to show that is
@@ -461,12 +535,21 @@ export default function ContactsPage() {
                       <ChevronDown className="size-3 shrink-0" strokeWidth={2.4} />
                     )}
                     <SIcon className={"size-3.5 shrink-0 " + section.tint} />
-                    {/* Board 1e: the section letter/label takes the ACCENT, and the
-                        board's .26em mono tracking — it is the strongest wayfinding cue
-                        on a long alphabetical list. */}
+                    {/* Board 1e: the section label takes the ACCENT and the board's .26em
+                        mono tracking — it is the strongest wayfinding cue on a long list.
+
+                        `text-primary`, NOT the raw `var(--rb)` this used to set. The owner's
+                        report was "the contacts section is not showing", and the section
+                        LABELS were the literal answer: measured 1.59:1 on the light card
+                        against AA's 4.5, i.e. ONLINE / FAVORITES / FAMILY / FRIENDS / TEAM
+                        were invisible in the theme the app defaults to. v2.106.4 repointed
+                        `--primary` at `--rb` inside `.dark.relay-v2` for exactly this, so
+                        the DARK look is byte-identical and only light changes (4.59:1).
+                        The heading sits on a plain surface, not on an accent tint, which is
+                        what makes `text-primary` the right half of the v2.106.31 rule. */}
                     <span
-                      className="flex-1 text-left font-mono text-[11px] font-semibold uppercase"
-                      style={{ color: "var(--rb)", letterSpacing: ".26em" }}
+                      className="flex-1 text-left font-mono text-[11px] font-semibold uppercase text-primary"
+                      style={{ letterSpacing: ".26em" }}
                     >
                       {section.label}
                     </span>
@@ -474,25 +557,34 @@ export default function ContactsPage() {
                         so it shows one green number rather than "5 · 5". Everywhere
                         else: total in muted, then the online count in green — and
                         only when it is non-zero, because a green 0 spends attention
-                        on the one answer that needs none. */}
+                        on the one answer that needs none.
+
+                        BOARD 1e SAYS THE ONLINE COUNT CARRIES THE WORD, and that is not
+                        decoration: rendered as two bare integers this header read "10 3",
+                        and what the second number means lived only in a `title`, which a
+                        phone has no way to show. `● 3 online` answers it on the row. The
+                        TOTAL stays a bare mono number, because the label right beside it
+                        already says what is being counted. */}
                     {section.allActive ? (
+                      /* …and this one does NOT take the word, because its own LABEL is
+                         "Online": "Online … 3 online" says it twice. Measured with the
+                         word in place and it read exactly like that. */
                       <span
-                        className="text-[11px] font-bold tabular-nums text-[color:var(--relay-green-text)]"
+                        className="flex shrink-0 items-center gap-1 font-mono text-[10px] font-bold tabular-nums text-[color:var(--relay-green-text)]"
                         title={`${total} online`}
                       >
+                        <span className="size-1.5 rounded-full bg-[color:var(--relay-online)]" />
                         {total}
                       </span>
                     ) : (
-                      <span className="flex shrink-0 items-baseline gap-1 tabular-nums">
-                        <span className="text-[11px] text-muted-foreground/70" title={`${total} contacts`}>
+                      <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] tabular-nums">
+                        <span className="text-muted-foreground/70" title={`${total} contacts`}>
                           {total}
                         </span>
                         {onlineCount > 0 && (
-                          <span
-                            className="text-[11px] font-bold text-[color:var(--relay-green-text)]"
-                            title={`${onlineCount} of them online now`}
-                          >
-                            {onlineCount}
+                          <span className="flex items-center gap-1 font-bold text-[color:var(--relay-green-text)]">
+                            <span className="size-1.5 rounded-full bg-[color:var(--relay-online)]" />
+                            {onlineCount} online
                           </span>
                         )}
                       </span>
@@ -517,8 +609,25 @@ export default function ContactsPage() {
                           onToggleBlock={() =>
                             upsert.mutate({ number: c.number, blocked: !c.blocked })
                           }
+                          /* SEND THE WHOLE FACT, not the mirror. `category` is the derived
+                             mirror of `tags[0]`, and `contactUpdateKeys` couples the two —
+                             so a category-only write re-derived `tags` FROM it and silently
+                             destroyed every tag after the first. Toggle "Family" on a
+                             contact tagged VIP + Family and they lost VIP, left the VIP
+                             section, and their row chip changed, with nothing saying so.
+                             `toggleContactTag` over the RESOLVED list is the same expression
+                             4a's profile chips already use, so both editors now agree. */
                           onSetCategory={(category) =>
-                            upsert.mutate({ number: c.number, category: c.category === category ? null : category })
+                            upsert.mutate({
+                              number: c.number,
+                              tags: toggleContactTag(
+                                contactTagsOf({
+                                  tags: c.tags?.join(",") ?? null,
+                                  category: c.category ?? null,
+                                }),
+                                category,
+                              ),
+                            })
                           }
                         />
                       ))}
@@ -634,12 +743,29 @@ function ContactRow({
   onSetCategory: (cat: Category) => void;
 }) {
   return (
+    /* BOARD 1e — TWO LINES, AND THE REASON IS A MEASUREMENT RATHER THAN THE FRAME.
+       At 390px the single-line row spent its width like this: 32px of list padding, 42px
+       of avatar, 114px of quick-action buttons, 33px of tag chip and the gaps between
+       them — leaving the NAME 119px of the 228 that "Abdulrahman Alhammadi" needs, and
+       49px of it at 320px. So the row was cut off at EVERY width, and it spent more of
+       itself on chrome than on the one thing a contact row is for. Measured before
+       touching it, and this is the most literal reading of the owner's "the contacts
+       section is not showing".
+       LINE 1 is avatar + name + badges + tag: the name now gets ~265px at 390 and fits.
+       LINE 2 carries the PIN, the presence line and the quick actions — the same shape
+       v2.99.39 gave the Messages rows after the owner reported this exact truncation
+       ("A…"), so the two lists answer it the same way.
+       AND IT BRINGS THE VIDEO BUTTON BACK ON EVERY PHONE: it was `hidden xs:grid`, and
+       `--breakpoint-xs` is 480px, so board 1e's third quick action was absent on every
+       iPhone with only a ⋮-menu fallback. Nothing is removed; the row is reorganised so
+       all three fit. */
     <li
       className={
-        "flex items-center gap-3 px-4 md:px-5 py-2.5 border-b border-border/60 last:border-b-0 hover:bg-muted/30 transition-colors " +
+        "flex flex-col gap-1.5 px-4 md:px-5 py-2.5 border-b border-border/60 last:border-b-0 hover:bg-muted/30 transition-colors " +
         (c.blocked ? "opacity-60" : "")
       }
     >
+      <div className="flex items-center gap-3">
       {/* Avatar is its own button (status ring → viewer / profile popup);
           it sits OUTSIDE the main-area button — nested buttons are invalid. */}
       <PeerAvatar
@@ -679,49 +805,36 @@ function ContactRow({
             {c.favourite && <Star className="size-3 shrink-0 text-amber-400 fill-amber-400" />}
             <RoleBadge role={roleFromFlags(c.role, c.verified)} size={14} />
             {c.blocked && <Ban className="size-3.5 shrink-0 text-[#ff8d84]" />}
-            {/* BOARD 3b — the tag chips, VIP gold at the board's 13% fill / 45%
-                border. Rendered beside the name rather than on their own line
-                because the row already carries three lines and a fourth would
-                make the list scroll for information that is one glance wide.
-                `shrink-0` so the NAME truncates rather than the chips: the chip
-                is the thing that stops being readable first. */}
-            {contactTagsOf({ tags: c.tags?.join(",") ?? null, category: c.category ?? null }).map((t) => (
-              <span
-                key={t}
-                className="shrink-0 rounded-md px-1.5 py-px text-[9.5px] font-bold uppercase tracking-wider"
-                style={{
-                  background: TAG_COLOR[t] + "21",
-                  border: "1px solid " + TAG_COLOR[t] + "73",
-                  color: TAG_COLOR[t],
-                }}
-              >
-                {TAG_LABEL[t]}
-              </span>
-            ))}
+            {/* BOARD 3b — the tag chip. `.rtag-<tag>` carries the board's 13% fill and
+                45% hairline plus a MEASURED light-theme text colour (the raw pastel is
+                1.53-1.71:1 on a light card).
+
+                THE ROW SHOWS THE PRIMARY TAG ONLY, and that is a layout decision rather
+                than a simplification: the chips are `shrink-0` and the name is the only
+                thing in this row that CAN shrink, so two chips ate the name on a 390px
+                phone — a contact labelled VIP + Family became a pair of chips with no
+                person attached to them. The contract already calls the first tag the row
+                chip; the full set is the profile's business (4a's editable chips). */}
+            {(() => {
+              const first = primaryTag(
+                contactTagsOf({ tags: c.tags?.join(",") ?? null, category: c.category ?? null }),
+              );
+              return first ? (
+                <span
+                  className={
+                    "rtag " + TAG_CLASS[first] +
+                    " shrink-0 !rounded-md px-1.5 py-px text-[9.5px] font-bold uppercase tracking-wider"
+                  }
+                >
+                  {TAG_LABEL[first]}
+                </span>
+              ) : null;
+            })()}
           </div>
-          {/* PIN on its own line, presence UNDER it (v2.99.66, owner screenshot).
-              They shared a line before, and with a 6-digit PIN plus "last seen
-              18h ago" there was never room: every row wrapped mid-phrase
-              ("last seen" / "18h ago" on separate lines) and read as broken.
-              Two short lines fit any width and let both be read at a glance. */}
-          <div className="text-xs text-muted-foreground font-mono mt-0.5" dir="ltr">
-            {c.number.length === 6 ? c.number.slice(0, 3) + "-" + c.number.slice(3) : c.number}
-          </div>
-          <div className="text-xs text-muted-foreground mt-0.5 truncate">
-            {c.blocked ? (
-              <span className="text-[#ff8d84]">blocked</span>
-            ) : c.presenceHidden ? null : c.inCall ? (
-              <span className="text-amber-500">on a call</span>
-            ) : c.isOnline && c.idle ? (
-              // Backgrounded (v2.99.92): "away", not "online" and definitely not
-              // "last seen 3s ago", which is what minimising used to produce.
-              <span className="text-muted-foreground">away</span>
-            ) : c.isOnline ? (
-              <span className="text-[color:var(--relay-online)]">online</span>
-            ) : (
-              <>last seen {relativeTime(c.lastSeenAt)}</>
-            )}
-          </div>
+          {/* The company/role line stays on LINE 1, under the name it belongs to.
+              The PIN and the presence line moved to LINE 2 (see below) — they are what
+              line 2 has room for, and keeping them here would leave line 1 three lines
+              tall while line 2 held nothing but buttons. */}
           {(c.company || c.jobTitle) && (
             <div className="text-[11px] text-muted-foreground/80 truncate mt-0.5">
               {[c.jobTitle, c.company].filter(Boolean).join(" · ")}
@@ -729,10 +842,39 @@ function ContactRow({
           )}
         </div>
       </button>
+      </div>
 
-      {/* Inline actions: Message / Video / Voice + overflow menu — circular
-          gradient tap targets (message orange, video blue, call green). */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      {/* LINE 2 — the PIN, the presence line and the quick actions.
+          `dir="ltr"` + bidi isolation on the PIN, because an Arabic display name above
+          it resolves the row to RTL and would otherwise reorder the digit groups
+          (v2.99.77). The presence text CAN shrink; the buttons cannot, so the actions
+          are `shrink-0` and `ms-auto` pins them to the trailing edge in both
+          directions. */}
+      <div className="flex items-center gap-2 ps-[54px]">
+        <span
+          className="shrink-0 font-mono text-xs text-muted-foreground [unicode-bidi:isolate]"
+          dir="ltr"
+        >
+          {c.number.length === 6 ? c.number.slice(0, 3) + "-" + c.number.slice(3) : c.number}
+        </span>
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
+          {c.blocked ? (
+            <span className="text-[#ff8d84]">blocked</span>
+          ) : c.presenceHidden ? null : c.inCall ? (
+            <span className="text-amber-500">on a call</span>
+          ) : c.isOnline && c.idle ? (
+            // Backgrounded (v2.99.92): "away", not "online" and definitely not
+            // "last seen 3s ago", which is what minimising used to produce.
+            <span className="text-muted-foreground">away</span>
+          ) : c.isOnline ? (
+            <span className="text-[color:var(--relay-online)]">online</span>
+          ) : (
+            <>last seen {relativeTime(c.lastSeenAt)}</>
+          )}
+        </span>
+        {/* Inline actions: Message / Video / Voice + overflow menu — circular
+            gradient tap targets (message orange, video blue, call accent). */}
+        <div className="ms-auto flex items-center gap-1.5 shrink-0">
         <button
           type="button"
           aria-label="Message"
@@ -753,7 +895,11 @@ function ContactRow({
           title="Video call"
           onClick={onVideo}
           disabled={c.blocked}
-          className="hidden xs:grid place-items-center size-[34px] rounded-full shrink-0 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+          /* NO LONGER `hidden xs:grid`. `--breakpoint-xs` is 480px, so board 1e's third
+             quick action was absent on every iPhone, reachable only from the ⋮ menu — a
+             deliberate trade back when all four controls shared line 1 with the name.
+             Line 2 has the room, so the trade is off. */
+          className="grid place-items-center size-[34px] rounded-full shrink-0 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
             background: "linear-gradient(160deg, rgba(56,189,248,.26), rgba(56,189,248,.08))",
             color: "#38bdf8",
@@ -786,9 +932,9 @@ function ContactRow({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuItem onClick={onVideo} className="xs:hidden">
-              <Video className="size-4" /> Video call
-            </DropdownMenuItem>
+            {/* The video FALLBACK is gone with the breakpoint that made it necessary:
+                a duplicate of a control that is now always on screen is a second way to
+                do one thing, and the one that is harder to find. */}
             <DropdownMenuItem onClick={onToggleFavorite}>
               {c.favourite ? <><StarOff className="size-4" /> Unfavorite</> : <><Star className="size-4" /> Favorite</>}
             </DropdownMenuItem>
@@ -797,7 +943,14 @@ function ContactRow({
             </DropdownMenuLabel>
             {CATEGORY_ORDER.map((cat) => {
               const CIcon = CATEGORY_META[cat].icon;
-              const active = c.category === cat;
+              /* Ticked from the RESOLVED tags, not the mirror. `category` is only
+                 `tags[0]`, so a contact tagged VIP + Family had Family sitting
+                 unticked in a menu whose row above it was rendering a Family chip
+                 and whose section header the row was sitting under said FAMILY. */
+              const active = contactTagsOf({
+                tags: c.tags?.join(",") ?? null,
+                category: c.category ?? null,
+              }).includes(cat);
               return (
                 <DropdownMenuItem key={cat} onClick={() => onSetCategory(cat)}>
                   <CIcon className={"size-4 " + CATEGORY_META[cat].tint} />
@@ -819,6 +972,7 @@ function ContactRow({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
       </div>
     </li>
   );
@@ -850,7 +1004,9 @@ function AddContactDialog({
     jobTitle?: string;
     website?: string;
     birthday?: string;
-    category?: Category | null;
+    /* The RESOLVED tag list. `category` is only its first slot, and saving through
+       the mirror destroyed the rest (see the state comment on `editing` above). */
+    tags?: ContactTag[];
   };
   onClose: () => void;
   onSave: (values: {
@@ -864,7 +1020,7 @@ function AddContactDialog({
     website: string | null;
     birthday: string | null;
     favourite?: boolean;
-    category?: Category | null;
+    tags?: ContactTag[];
   }) => void;
   saving: boolean;
   error: string | null;
@@ -878,7 +1034,11 @@ function AddContactDialog({
   const [jobTitle, setJobTitle] = useState(editing.jobTitle ?? "");
   const [website, setWebsite] = useState(editing.website ?? "");
   const [birthday, setBirthday] = useState(editing.birthday ?? "");
-  const [category, setCategory] = useState<Category | null>(editing.category ?? null);
+  /* MULTI-select over the real 0..n model, replacing a single-select picker that could
+     only ever express one label and, on save, wiped the rest. The store has held a list
+     since v2.106.14 and 4a's profile chips already toggle it; this dialog was the one
+     writer still speaking through the mirror. */
+  const [tags, setTags] = useState<ContactTag[]>(editing.tags ?? []);
   const [touchedName, setTouchedName] = useState(
     Boolean(editing.displayName)
   );
@@ -1145,12 +1305,13 @@ function AddContactDialog({
             <div className="flex flex-wrap gap-2">
               {CATEGORY_ORDER.map((cat) => {
                 const CIcon = CATEGORY_META[cat].icon;
-                const active = category === cat;
+                const active = tags.includes(cat);
                 return (
                   <button
                     key={cat}
                     type="button"
-                    onClick={() => setCategory(active ? null : cat)}
+                    aria-pressed={active}
+                    onClick={() => setTags(toggleContactTag(tags, cat))}
                     className={
                       "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors " +
                       (active
@@ -1184,7 +1345,7 @@ function AddContactDialog({
                 jobTitle: jobTitle.trim() || null,
                 website: website.trim() || null,
                 birthday: birthday.trim() || null,
-                category,
+                tags,
               })
             }
             disabled={number.length !== 6 || saving}

@@ -141,17 +141,39 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
           inCall: invitee.inCall,
         }
       : null;
-  // v2.99.15 — a guest may only call an ONLINE user from a call link. A guest
-  // has no persistent thread to leave a message on (unlike a signed-in caller's
-  // post-dial voicemail card), so an offline callee — or a number that doesn't
-  // exist — BLOCKS the join here instead of ringing into the void. Party lines
-  // are always joinable (they never ring anyone). We wait for the lookup to
-  // resolve and FAIL OPEN on a lookup error (isError ⇒ not "resolved"), so a
+  // v2.99.15, AS AMENDED: a guest may only call a callee we can actually REACH from
+  // a call link. The original rule said ONLINE, and its reason was sound at the time —
+  // a guest has no persistent thread to leave a message on (unlike a signed-in
+  // caller's post-dial voicemail card), so ringing into the void would strand them.
+  // What changed is that "offline" stopped meaning "cannot be rung": v2.105.12
+  // restored the VoIP push path, so a locked or backgrounded phone rings. The guard
+  // therefore moved to REACHABILITY and now fires only for somebody with no device at
+  // all. Party lines are always joinable (they never ring anyone). We wait for the
+  // lookup to resolve and FAIL OPEN on a lookup error (isError ⇒ not "resolved"), so a
   // transient hiccup never strands a legitimate caller.
   const inviteResolved = invite.isFetched && !invite.isError;
   const numberNotFound = inviteResolved && !isPartyLine && !invitee;
-  const calleeOffline = inviteResolved && !isPartyLine && !!invitee && !invitee.isOnline;
-  const joinBlocked = numberNotFound || calleeOffline;
+  /* GATED ON REACHABILITY, NOT ON PRESENCE — and that distinction is the whole fix.
+     Presence is bound to a live socket session, so backgrounding the app or locking
+     the phone drops it; a backgrounded phone is exactly what a VoIP push wakes, and
+     that is verified in production (APNs 200, full-screen CallKit while the app was
+     not in the foreground). Keying the gate on `isOnline` therefore refused calls to
+     most of the user base most of the time, for a limitation that no longer exists.
+
+     `reachable` is `a live socket OR a device we can push a ring to`. The comment
+     above still holds for the case it was written for — a guest genuinely has no
+     thread to leave a message on — so the block SURVIVES for somebody with nothing
+     to ring, which is the one honest guard here: a call that can wake nothing must
+     not be offered. It just no longer fires for the far larger group whose phone is
+     merely asleep.
+
+     `?? true` keeps the fail-open rule: a server that predates this field emits no
+     `reachable`, and the old behaviour for such a client was to offer the call and
+     let the dial report the truth. Refusing on a missing field would turn a rolling
+     deploy into a calling outage. */
+  const calleeUnreachable =
+    inviteResolved && !isPartyLine && !!invitee && !(invitee.reachable ?? true);
+  const joinBlocked = numberNotFound || calleeUnreachable;
 
   /* The redesigned entry page (RELAY_LOGIN_HANDOFF.md) owns the ORDINARY login.
      The `/i/<pin>` call-link join screen below is deliberately untouched: the
@@ -209,10 +231,10 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                     "Connecting…"
                   ) : numberNotFound ? (
                     "Number not found"
-                  ) : calleeOffline ? (
+                  ) : calleeUnreachable ? (
                     <>
                       <PhoneCall className="size-4" />
-                      They're offline — can't call
+                      Can't be reached
                     </>
                   ) : (
                     <>
@@ -221,9 +243,15 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                     </>
                   )}
                 </Button>
-                {calleeOffline && (
+                {/* The copy no longer says "offline", because that is not what this
+                    state means any more and saying it would be wrong twice over: an
+                    offline-but-installed phone IS callable now, and what is left here
+                    is somebody with no device to ring at all — for whom "once they're
+                    back online" would be a promise nothing can keep. */}
+                {calleeUnreachable && (
                   <p className="mt-2.5 text-center text-xs text-muted-foreground">
-                    You can reach {inviteeName || "them"} once they're back online.
+                    There's no device we can ring for {inviteeName || "them"} yet. Once they
+                    open RELAY on a phone, calls will reach them.
                   </p>
                 )}
               </form>

@@ -72,6 +72,19 @@ jobs:
         run: |
           aws s3 cp relay.tar.gz s3://$BUCKET/releases/${GITHUB_SHA}.tar.gz
           aws s3 cp relay.tar.gz s3://$BUCKET/releases/latest.tar.gz
+      # A MEDIA NODE MUST NEVER BE DEPLOYED TO, AND THIS GUARD DOES NOT DEPEND ON A TAG.
+      #
+      # The targeting below is `tag:Name=relay-app` with `--max-errors 0`, so if either
+      # mediasoup media node carries that tag this step would install the app on it, fail the
+      # `/api/health` probe there, and ABORT THE WHOLE FLEET DEPLOY. Whether they do carry it
+      # cannot be established from the repo — every EC2 call here filters on that one tag and
+      # nothing records what the media instances were named.
+      #
+      # So the guard is the first remote command rather than a narrower filter: `/opt/relay-voip`
+      # is evidence the HOST ITSELF carries, an app box never has it, and it cannot go stale the
+      # way a tag list or an instance id would. It exits 0, so a media node in the target set
+      # costs nothing instead of aborting the deploy, and it says SKIP_MEDIA_NODE out loud —
+      # a step that quietly did nothing on one box is worse than one that says so.
       - name: Rolling deploy via SSM (one server at a time)
         run: |
           CMD=$(aws ssm send-command \
@@ -79,6 +92,7 @@ jobs:
             --document-name AWS-RunShellScript \
             --max-concurrency 1 --max-errors 0 \
             --parameters 'commands=[
+              "if [ -d /opt/relay-voip ]; then echo SKIP_MEDIA_NODE; echo \"this host runs the mediasoup media agent, not the app - nothing deployed here\"; exit 0; fi",
               "aws s3 cp s3://relay-deploy-342494841476/releases/latest.tar.gz /tmp/relay.tar.gz --only-show-errors",
               "mkdir -p /home/relay/app && tar -xzf /tmp/relay.tar.gz -C /home/relay/app && rm -f /tmp/relay.tar.gz",
               "chown -R relay:relay /home/relay/app",

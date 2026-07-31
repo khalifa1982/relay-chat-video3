@@ -3,7 +3,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { ThemeProvider } from "./contexts/ThemeContext";
 import { AppShell } from "./app/AppShell";
 import { OnboardingGate } from "./app/OnboardingGate";
 import { RelayEngineProvider } from "./app/RelayEngine";
@@ -63,7 +62,7 @@ function ShellRoute({
     tab === "join" ? Join :
     Profile;
   return (
-    <AppShell>
+    <AppShell tab={tab}>
       <Suspense fallback={<RouteSpinner />}>
         <View {...(tab === "groups" ? { only: "groups" as const } : {})} />
       </Suspense>
@@ -143,24 +142,43 @@ function Router() {
 function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider defaultTheme="dark">
-        <TooltipProvider>
-          <Toaster />
-          {/* RelayEngineProvider hosts the call engine once for the whole /app
-              session (above the router, so it survives tab navigation) and
-              renders the fullscreen call/ring overlay. */}
-          <RelayEngineProvider>
-            {/* One presence heartbeat for the whole app (not one per
-                useIdentity() call site). */}
-            <PresenceManager />
-            <MessagePopups />
-            {/* Polls /api/version every 30s; silent reload mid-call, centered
-                refresh prompt when idle. */}
-            <UpdateChecker />
-            <Router />
-          </RelayEngineProvider>
-        </TooltipProvider>
-      </ThemeProvider>
+      {/* NO ThemeProvider HERE — main.tsx already wraps <App /> in the real one
+          (`defaultTheme="dark" switchable`), and a SECOND, nested provider was the root
+          cause of the app painting its live background over its own content. Two
+          failures compounded:
+
+          (1) THE INNER PROVIDER WAS NOT `switchable`, so it ignored localStorage and its
+              `theme` was permanently "dark". Everything below it — including `AppShell`
+              — read THAT, so `liveBackground = theme === "dark"` was true for a
+              LIGHT-theme user: the near-black canvas mounted and the shell was given
+              `bg-transparent`. Measured at 390px against the built bundle.
+
+          (2) BOTH providers ran the effect that toggles `.dark` on <html>, and React
+              flushes child effects before parent ones — so the inner one added the class
+              and the outer one removed it. CSS therefore said LIGHT while JS said DARK.
+              That is the disagreement v2.106.0's own comment warned about ("two theme
+              reads is how you get an opaque shell over a running canvas"); here the two
+              reads AGREED and both were wrong, because the context they read was not
+              the user's.
+
+          One provider, one answer — which also makes Profile's Appearance toggle
+          authoritative everywhere rather than only above this boundary. */}
+      <TooltipProvider>
+        <Toaster />
+        {/* RelayEngineProvider hosts the call engine once for the whole /app
+            session (above the router, so it survives tab navigation) and
+            renders the fullscreen call/ring overlay. */}
+        <RelayEngineProvider>
+          {/* One presence heartbeat for the whole app (not one per
+              useIdentity() call site). */}
+          <PresenceManager />
+          <MessagePopups />
+          {/* Polls /api/version every 30s; silent reload mid-call, centered
+              refresh prompt when idle. */}
+          <UpdateChecker />
+          <Router />
+        </RelayEngineProvider>
+      </TooltipProvider>
     </ErrorBoundary>
   );
 }

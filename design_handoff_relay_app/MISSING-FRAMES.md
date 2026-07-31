@@ -2,26 +2,56 @@
 
 Paste this into Claude Design. It lists only what is **not yet built to its own frame**.
 
-## Status (34 frames)
+## Status (42 frames)
 
-> **Updated 2026-07-30 (v2.106.22).** Fifteen more frames are now built: 2c story viewer ·
-> 2d notification center · **2e register sheet** · **the passcode lock** · 3b contact
-> categories · 3c group conversation · **3d new group** · 4a peer profile tags ·
-> **2h admin console** · **2i group info** · 4c message actions/reactions ·
-> 4d voice-note recording · 4e media viewer · 4g guest restore · **4j video message**. The two blocked data models from `DATA-CONTRACTS.md` are both built
-> (`shared/contactTags.ts`, `shared/reactions.ts` + the `message_reactions` table).
+> **Updated 2026-07-30 (v2.106.22). THE BOARD IS 42 FRAMES AND THIS FILE PREVIOUSLY SAID
+> 40 — that was my error, corrected here.** I audited the frame ids by grepping only the
+> `*.md` files in this directory, and the board itself is the two HTML files
+> (`relay-app-redesign-standalone.html`, `Relay App Redesign.dc.html`). Grepping those
+> finds **42 frame anchors**, `5f` and `5g` among them. Counting the notes instead of the
+> artefact is what produced the wrong total.
 >
-> **A NUMBERING COLLISION, named rather than left to be tripped over:** the board's own
-> frame labels and the README's Screens list disagree about 2f/2g — the board labels the
-> **passcode lock 2f** and the README lists *2f Voicemail / 2g Passcode lock*. The BOARD
-> is the source of truth (CLAUDE.md v2.106.11), so the passcode lock ships as 2f and the
-> table below, which follows the README, still lists it under 2g. Voicemail is the one
-> genuinely outstanding.
+> **AND THE 2f/2g COLLISION IS NOW RESOLVED FROM THE BOARD rather than left open**: the
+> board's own frame titles read **2f = Passcode lock**, **2g = Voicemail**. The table below
+> has them the other way round, so the TABLE is what is wrong, not the board. Read 2f as
+> the passcode lock (built) and 2g as voicemail (outstanding).
 >
-> Still outstanding: **voicemail** · plus the 5a–5h state frames (5a party lines,
-> 5b rejoin-live + knock, 5c call-quality readout, 5d sign-in switcher — 5e and 5h are
-> already built). All five are in flight.
-
+> **THE TWO FRAMES I HAD CALLED MISSING ARE BOTH ALREADY BUILT**, because they are the
+> state/detail frames for screens shipped in v2.106.22 and landed with them:
+> **5f Admin — account tools** (change type · delete confirm · push doctor · media route)
+> shipped with 2h, and **5g Group info — controls** (invite audience · permissions · group
+> ID & status · manage) shipped with 2i.
+>
+> **DONE — 34 of 42.** The twelve below, plus 2c story viewer · 2d notification center ·
+> 2e register sheet · **2f passcode lock** · 2h admin console · 2i group info · 3b contact
+> categories · 3c group conversation · 3d new group · 4a peer profile tags · 4c message
+> actions/reactions · 4d voice-note recording · 4e media viewer · 4g guest restore ·
+> 4j video message · 4k system alerts · **2g voicemail** · **5a party lines** ·
+> **5c call quality readout**, plus **5e lock & auth states**, **5f** and **5g**.
+> Both blocked data models from `DATA-CONTRACTS.md` exist (`shared/contactTags.ts`,
+> `shared/reactions.ts` + the `message_reactions` table).
+>
+> **OUTSTANDING — 8, of which 6 are in flight right now:**
+>
+> | frame | title | state |
+> |---|---|---|
+> | 1h | In-call · video | **partial** — bar, accent and tiles done; the frame's own chrome is not |
+> | 5h | Sheet states | **partial** — device approval, empty inbox and story→group done; the voicemail-recording state is not |
+> | 1j | Desktop — Messages | in flight |
+> > | 4b | Story composer | in flight |
+> | 4h | Group invite | in flight |
+> | 4i | Locked group | in flight |
+> > | 5b | Rejoin a live call | in flight |
+> > | 5d | Sign-in method switcher | in flight |
+>
+> **1h IS NOW UNBLOCKED**: it edits `lib/relayAssets.ts`, which 5c also edits — 5c has
+> landed, so 1h can be built next without a collision. 5h's missing quarter was the voicemail
+> recording state, which the 2g patch built — so 5h should now be re-checked and is
+> likely complete.
+>
+> **HOW TO COUNT THIS CORRECTLY NEXT TIME**: grep the board HTML, not this file's notes —
+> `grep -ohE 'href=.#[1-5][a-k]' relay-app-redesign-standalone.html | sort -u`.
+>
 - **Built to the frame (12):** 1a Dialer · 1b History · 1c Messages · 1d Conversation · 1e Contacts · 1f Profile · 1g Incoming call · 1i Desktop dialer · 2a Group call · 2b Voice call · 3a Matrix calling · 4f Share my number
 - **Partial (1):** 1h In-call video
 - **System only, layout still needed (21):** everything below

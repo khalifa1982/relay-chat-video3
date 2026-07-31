@@ -123,7 +123,28 @@ function formatNumber(n: string): string {
   return `${n.slice(0, 3)}-${n.slice(3)}`;
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+/** Which shell route this is. The ROUTE knows — `App.tsx` already names it when it
+ *  picks the view — so both navs read this ONE value rather than each re-deriving it
+ *  from the path (see `useActiveTab`). */
+export type ShellTab =
+  | "dialer"
+  | "history"
+  | "messages"
+  | "groups"
+  | "contacts"
+  | "profile"
+  | "admin"
+  | "join";
+
+export function AppShell({
+  children,
+  tab: routeTab,
+}: {
+  children: React.ReactNode;
+  /** Optional so any caller that predates it degrades to path derivation, i.e. to
+   *  exactly today's behaviour, rather than losing its highlight entirely. */
+  tab?: ShellTab;
+}) {
   // Apply the relay-v2 accent palette to <html>. We deliberately do
   // NOT toggle `.dark` here — ThemeProvider owns light/dark and the
   // user can flip from Profile.
@@ -149,13 +170,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <PasscodeGate>
       <OnboardingGate>
-        <Inner>{children}</Inner>
+        <Inner tab={routeTab}>{children}</Inner>
       </OnboardingGate>
     </PasscodeGate>
   );
 }
 
-function Inner({ children }: { children: React.ReactNode }) {
+function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: ShellTab }) {
   const { me } = useIdentity();
   // Shared sign-out flow (v2.88): AlertDialog confirm + full session/device
   // teardown, branching guest/member correctly (the old inline handler called
@@ -211,20 +232,83 @@ function Inner({ children }: { children: React.ReactNode }) {
   // shell with it. 100svh remains the CSS fallback until the first
   // measurement lands. An explicit px height also makes the whole flex
   // chain below unambiguously definite for Safari's layout engine.
+  //
+  // …AND THE ON-SCREEN KEYBOARD IS PART OF "THE VIEWPORT RIGHT NOW", which is what this
+  // used to get wrong. It listened to `visualViewport`'s resize and then wrote
+  // `window.innerHeight` — and on iOS the keyboard changes `visualViewport.height` and
+  // leaves `innerHeight` ALONE. So the handler fired and wrote an UNCHANGED value: a
+  // subscription that reads as handled while handling nothing.
+  //
+  // MEASURED, before the fix, at 390x844 with the visual viewport shrunk to 400: the
+  // shell stayed 844px tall and the message input's bottom edge stayed at 785 — 385px
+  // BELOW the keyboard. Tap the composer on a phone and the field you just tapped, and
+  // the Send button beside it, are underneath the keyboard. That is the owner's
+  // "I cannot send messages", and it is invisible on a desktop browser.
+  //
+  // It is worse here than in most apps for a reason THIS app chose: v2.76 locks document
+  // scrolling (`html/body.relay-app-lock`) to stop iOS shoving the whole app past its own
+  // end. That was right, and it also removed the browser's own scroll-the-focused-input
+  // -into-view rescue — so nothing was left to compensate. The lock stays; the missing
+  // half is a keyboard-aware height.
   useEffect(() => {
     const root = document.documentElement;
     const set = () => {
-      try { root.style.setProperty("--relay-vh", window.innerHeight + "px"); } catch { /* */ }
+      try {
+        const vv = window.visualViewport;
+        /* The VISIBLE height, not the layout height — and CONVERTED rather than discarded
+         * under a pinch-zoom.
+         *
+         * `visualViewport.height` is expressed in the ZOOMED viewport's own CSS pixels, so
+         * multiplying by `scale` recovers the visible height in LAYOUT pixels, which is the
+         * unit `--relay-vh` is consumed in. The first version bailed to Infinity whenever
+         * `scale > 1.01`, which sounds cautious and is not: bailing falls back to
+         * `window.innerHeight`, the value that does not shrink for the keyboard on iOS —
+         * so a pinch-zoom silently reinstated the exact bug this effect exists to fix, and
+         * a magnified page is precisely when somebody is typing carefully.
+         * At scale 1 this is byte-identical to reading `vv.height`. */
+        /* `+ vv.offsetTop`, AND THAT TERM IS WHAT MAKES THE `scroll` LISTENER BELOW DO
+         * ANYTHING AT ALL — a defect of mine, in the fix that added the listener.
+         *
+         * That listener carries a comment saying iOS MOVES the visual viewport as well as
+         * resizing it, and that a move with no resize still changes what is on screen.
+         * True — and `set()` read only `vv.height`, `vv.scale` and `window.innerHeight`,
+         * none of which a move changes. So the handler fired and wrote a BYTE-IDENTICAL
+         * value: an inert subscription under a comment claiming it handles the case, which
+         * is exactly the defect v2.106.29 was written to remove, reproduced one level down.
+         * (`grep -rn offsetTop client/src/` returned zero.)
+         *
+         * The visible band is [offsetTop, offsetTop + height] in LAYOUT pixels, and the
+         * scroll-locked shell starts at 0 — so its bottom must reach the band's bottom, not
+         * merely be as tall as the band. Without the term, a moved viewport leaves the shell
+         * short by exactly `offsetTop` and the composer sits below the fold while the tab
+         * bar, the LAST child, can still be on screen: the owner's screenshot.
+         * `offsetTop` is already in layout px per spec; `height` is in the zoomed viewport's
+         * px, which is why only `height` takes the `* scale`. */
+        const visible = vv ? vv.height * vv.scale + vv.offsetTop : Number.POSITIVE_INFINITY;
+        const measured = Math.round(Math.min(window.innerHeight, visible));
+        /* FLOOR ONLY AN IMPLAUSIBLE READING, not a small-but-real one. A hard 320 floor
+         * makes `--relay-vh` LARGER than the viewport in landscape with the keyboard up —
+         * where ~220px visible is genuine — and being taller than the visible area is how
+         * the composer ends up under the keyboard, i.e. the same failure again. A
+         * non-positive reading is the one that cannot be true, so that is what falls back;
+         * failing toward "too tall" there is still recoverable, while zero is a blank app. */
+        const h = measured > 0 ? measured : Math.max(320, window.innerHeight);
+        root.style.setProperty("--relay-vh", h + "px");
+      } catch { /* */ }
     };
     set();
     window.addEventListener("resize", set);
     window.addEventListener("orientationchange", set);
     const vv = window.visualViewport;
     vv?.addEventListener("resize", set);
+    // iOS moves the visual viewport as well as resizing it; a scroll without a resize
+    // still changes what is on screen.
+    vv?.addEventListener("scroll", set);
     return () => {
       window.removeEventListener("resize", set);
       window.removeEventListener("orientationchange", set);
       vv?.removeEventListener("resize", set);
+      vv?.removeEventListener("scroll", set);
       root.style.removeProperty("--relay-vh");
     };
   }, []);
@@ -264,7 +348,33 @@ function Inner({ children }: { children: React.ReactNode }) {
   // Universal Back: Profile is the one drill-in route off the tab bar (message
   // threads handle their own in-page back). Go back in history, or fall back to
   // the dialer if there's nowhere to go.
-  const isSubPage = location.startsWith("/app/profile");
+  /* WHICH TAB AM I ON — ONE ANSWER, READ BY BOTH NAVS.
+   *
+   * It was `location.startsWith(tab.path)`, computed independently in the bottom bar
+   * and in the desktop sidebar, and NO tab's path is a prefix of `/app` — so on `/app`
+   * and `/app/` nothing was lit in either nav: no accent label, no pill, no
+   * `aria-current`. That is the URL all five landing-page CTAs point at, so a visitor
+   * arriving from the marketing page met a navigation bar with nothing marked, which is
+   * squarely the owner's "many things is not showing".
+   *
+   * The route already knows — `App.tsx` writes `<ShellRoute tab="dialer" />` for both
+   * `/app` and `/app/dialer` — so the prop is the truth and the path derivation is only
+   * the fallback for a caller that does not pass it. Deriving it ONCE also removes the
+   * second copy of the rule, which is how the two navs could have come to disagree. */
+  const activeTab: ShellTab | null =
+    routeTab ??
+    (TABS.find((t) => location.startsWith(t.path))?.key as ShellTab | undefined) ??
+    (location === "/app" || location === "/app/" ? "dialer" : null);
+
+  /* A DRILL-IN IS ANY ROUTE THAT IS NOT ONE OF THE FIVE TABS, rather than a hardcoded
+   * `/app/profile` prefix. `/app/admin` is pushed from Profile and was rendering with
+   * NO Back arrow and no lit tab — reachable, but with no way to RETURN and an
+   * unrelated tab as its only exit, worst of all in an installed PWA where there is no
+   * browser back chrome. Deriving it means the next drill-in route gets its Back
+   * affordance for free instead of needing this string updated; `/app/join` gains one
+   * too, which is a deliberate consequence — `goBack` falls through to the dialer when
+   * there is no history to pop, so arriving cold on an invite link still has an exit. */
+  const isSubPage = activeTab != null && !TABS.some((t) => t.key === activeTab);
   const goBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) window.history.back();
     else navigate("/app/dialer");
@@ -475,7 +585,10 @@ function Inner({ children }: { children: React.ReactNode }) {
       {/* ── desktop / tablet sidebar ───────────────────────────── */}
       <aside
         className={
-          "relay-appshell-chrome hidden md:flex md:flex-col md:w-64 lg:w-72 shrink-0 " +
+          // `relative z-10` for the same reason as the scroll container below: this is
+          // unpositioned content, and the fixed background canvas at `z-index: 0`
+          // paints above unpositioned content.
+          "relay-appshell-chrome relative z-10 hidden md:flex md:flex-col md:w-64 lg:w-72 shrink-0 " +
           "border-r border-border/70 bg-sidebar/65 " +
           "supports-[backdrop-filter]:bg-sidebar/45 supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150"
         }
@@ -555,7 +668,7 @@ function Inner({ children }: { children: React.ReactNode }) {
         </div>
         <nav className="px-3 flex-1">
           {TABS.map((tab) => {
-            const active = location.startsWith(tab.path);
+            const active = tab.key === activeTab;
             const Icon = tab.icon;
             return (
               <Link
@@ -683,7 +796,12 @@ function Inner({ children }: { children: React.ReactNode }) {
           reach it). h-svh caps main at the viewport so every inner list scrolls
           within it and the composer stays pinned. Mobile keeps the measured
           --relay-vh height (flex-none) as before. */}
-      <main className="flex-1 max-md:flex-none flex flex-col min-w-0 min-h-svh md:h-svh md:overflow-hidden max-md:h-[var(--relay-vh,100svh)]">
+      {/* `max-md:min-h-0` IS LOAD-BEARING, and without it the keyboard fix above is a
+          NO-OP: `min-h-svh` applies at every width, and `min-height` WINS over `height`,
+          so shrinking `--relay-vh` to the keyboard-visible height would be overridden
+          back to ~100svh and the composer would stay underneath the keyboard. Measured
+          both ways. The desktop rule (`md:h-svh`) is untouched. */}
+      <main className="flex-1 max-md:flex-none flex flex-col min-w-0 min-h-svh max-md:min-h-0 md:h-svh md:overflow-hidden max-md:h-[var(--relay-vh,100svh)]">
         {/* mobile header */}
         <header
           className={
@@ -863,7 +981,20 @@ function Inner({ children }: { children: React.ReactNode }) {
             whereas height:100% against a flex-derived (non-explicit) height
             silently falls back to content height in Chrome and collapses
             short pages upward. */}
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">
+        {/* `relative z-10` PUTS CONTENT ABOVE THE BACKGROUND CANVAS, and that is a
+            correctness rule rather than styling. `RelayBackground`'s canvas is
+            `position: fixed; z-index: 0`, and per CSS painting order a POSITIONED
+            element with `z-index: 0` paints in the positioned-descendants step —
+            AFTER in-flow, non-positioned content. So any page whose content is not
+            inside a positioned ancestor is painted UNDER an opaque near-black canvas.
+            Measured in a real browser at 390px: Profile, Messages and Contacts were
+            covered (the canvas was the topmost element at the page centre, and hiding
+            it changed the painted pixel), while Dialer survived only because its keypad
+            happens to sit inside `relative` wrappers — i.e. three of five tabs were
+            broken by accident and two worked by accident.
+            Fixed HERE rather than per page, so a page added later cannot inherit the
+            bug: one wrapper above `{children}` settles it for every screen. */}
+        <div className="relative z-10 flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">
           {/* One-time "get call alerts" opt-in (Web Push) + iOS install tip.
               Renders nothing once granted / denied / dismissed. */}
           <PushBanner />
@@ -914,7 +1045,7 @@ function Inner({ children }: { children: React.ReactNode }) {
         >
           <div className="grid grid-cols-5">
             {TABS.map((tab) => {
-              const active = location.startsWith(tab.path);
+              const active = tab.key === activeTab;
               const Icon = tab.icon;
               return (
                 <Link

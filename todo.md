@@ -11278,6 +11278,1537 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.42 — board 1c: the unread state was the least readable thing in the row (2026-07-31)
+
+The third screen of the owner's "check all my new designs and match it to the existing one" —
+and the same class as v2.106.38's section headings: a colour that reads perfectly in DARK and
+fails AA in LIGHT, the theme the app defaults to, which is why it survives every review that
+looks at the board.
+
+Measured against the real built stylesheet in both themes, each colour painted into a 1×1
+canvas and composited over the surface it actually sits on:
+
+| surface | shipped | replacement |
+|---|---|---|
+| `#fb923c` on the card, light | **2.26:1 FAIL** | `text-primary` 4.85:1 PASS |
+| `#fb923c` on the card, dark | 8.30:1 | 11.16:1 |
+| orange glyph on its own .3 orange tint, light | **1.77:1 FAIL** | `.rchip-accent` |
+| the .3 tint against the card, light | **1.28:1** | — |
+| `var(--rb)` as text, light | **1.68:1** — worse than the orange | not used |
+
+- [x] **Five sites carried the failing orange**: the unread count, the unread timestamp, the
+      manual-unread dot, the section header's unread pip and the compose chip. All now the
+      accent via `text-primary` / `bg-primary` / `.rchip-accent`.
+- [x] **And the orange already meant something else** — the owner asked for orange on their own
+      BUBBLES by name (v2.99.85), so spending it on "unread" put two meanings on one colour.
+- [x] **`text-primary`, never `var(--rb)`**: the raw accent as text is 1.68:1 in light, worse
+      than what it replaced. v2.106.4 repointed `--primary` at `--rb` inside `.dark.relay-v2`
+      for exactly this, so dark keeps the cycling accent and only light becomes readable. That
+      indirection is pinned from the stylesheet rather than assumed.
+- [x] **The pinned marker is a VOCABULARY fix, not a contrast one.** It was legible and it was
+      green, and green means ONLINE here. Now `muted-foreground` — and deliberately NOT the
+      accent, because the accent means UNREAD in that same row and a pinned-but-read thread
+      must not read as unread. The pin's real effect is the sort; saying why is a quiet job.
+- [x] **The gap that made this the sixth occurrence is in my own standing guard**: it sweeps
+      `--relay-online` only, and the pin used `--relay-green-text` — the AA-measured sibling
+      v2.99.86 added for small text. Two spellings of one meaning, one unguarded, so the guard
+      read as covering the rule while covering half of it. Widened to both, with a non-vacuity
+      assertion.
+- [x] **Widening it failed on CORRECT code, which corrected its granularity**: it was a
+      per-LINE sweep, and the group header's proper `{membersOnline} online` sits one line
+      below its own className. It now reads the ELEMENT, so the violation is caught and the
+      legitimate site passes.
+
+**One audit finding refuted** rather than quietly dropped: Messages.tsx does NOT carry two
+hardcoded story-ring gradients duplicating `.rstoryring` — there is no `conic-gradient` in the
+file at all, because the ring goes through `PeerAvatar`, which already uses the shared class.
+
+**The orange sweep is scoped to the ROW**, with the exemptions named: the own bubble's own
+gradient and the "Direct" section icon's hex (one of four fixed section identities — Direct
+orange / Groups violet / Notes amber, a wayfinding hue rather than a state) are both correct
+and stay.
+
+`client/src/app/threadRowFrame.test.ts` (8). **All 10 tripwires verified by MUTATION** off a
+confirmed-green baseline, all three sources byte-identical afterwards — including each orange
+site reinstated, the pin returned to green, the pin given the accent (the wrong fix), the guard
+narrowed back, and `--primary` unhooked from the accent in dark. One pre-existing pin
+re-anchored (it required `<Pin` to be the very next thing after its gate, so a comment broke
+it). One assertion of my own was too broad and failing it was the point.
+
+**Not verified on a device**: every ratio is computed from pixels painted in a real browser, but
+nobody has looked at their own inbox on the owner's phone — and this is on a branch, so it
+changes nothing they can see until PR #128 merges, which they asked me to hold. No schema
+change, no new dependency, no new env var. 4814 tests.
+
+## v2.106.41 — board 1e: the contact's name was cut off at every width (2026-07-31)
+
+The owner's *"Also the contacts section is not showing mmso many bugs"*, and the finding is
+arithmetic rather than a missing feature — which is why reading the source had not surfaced it.
+
+- [x] **The name was truncated at EVERY width.** Measured against the real built stylesheet at
+      390px, the single-line row spent 32px on list padding, 42 on the avatar, 114 on
+      quick-action buttons and 33 on the tag chip — leaving the NAME **119px of the 228** that
+      "Abdulrahman Alhammadi" needs, and **49px at 320**. The row spent more of itself on
+      chrome than on the one thing a contact row is for. Fixed with the shape v2.99.39 gave the
+      Messages rows after the owner reported the same truncation ("A…"): line 1 is the avatar,
+      name, badges and tag; line 2 carries the PIN, the presence line and the actions.
+      Re-measured across 320/390/430 in both themes: **228px and not truncated at 390 and
+      430**, 320's shortfall down from 179px to 53px, line 2 never overflowing, the PIN never
+      truncated, no sideways page scroll. The row is 104px tall against ~86 — the trade, and
+      the right direction on a list that scrolls.
+- [x] **The video quick action is back on every phone.** It was `hidden xs:grid` and
+      `--breakpoint-xs` is 30rem = 480px, wider than every iPhone — so board 1e's third action
+      was absent on every phone with only a ⋮-menu fallback. All four controls now fit at
+      320px, and the duplicate menu item is deleted (a second way to do one thing, and the
+      harder one to find). The breakpoint is read out of the stylesheet in the test, so the
+      claim "wider than a phone" cannot go stale.
+- [x] **Nothing was traded away for the room**, pinned by counting all four controls. Recorded
+      honestly: the board's 1e frame draws NO row actions at all (its right-hand slot is the
+      tag chip; the README's summary line paraphrases three). The frame is the source of truth
+      on look, but the owner asked for those actions in their own words, so the row is
+      reorganised rather than stripped.
+- [x] **The section header's second number says what it counts.** Two bare integers made a
+      header read "10 3", with the meaning living only in a `title` a phone cannot show. Now
+      `● 3 online` — the dot in the presence green, the words in the AA-measured
+      `--relay-green-text` (v2.99.86: the LED hue is 4.46:1 as small text). The ONLINE section
+      deliberately keeps a bare number, because measured with the word it read "Online … 3
+      online". Both counts still come from the one predicate the Online section uses.
+- [x] The PIN keeps its LTR isolation, which matters more under a name that may be Arabic —
+      verified on a real Arabic row. Line 2 uses `ps-`/`ms-`, never `pl-`/`ml-`, so the indent
+      and the trailing edge swap with the text direction.
+
+`client/src/app/contactsRowFrame.test.ts` (14). **All 12 tripwires verified by MUTATION** off a
+confirmed-green baseline from byte-exact backups, source byte-identical afterwards — including
+the row put back on one line, the video button re-hidden, the duplicate menu item reinstated,
+the count's word removed, and the counts made to diverge from the rows.
+
+**Three pre-existing pins rewritten to the property**, two of them the prose-anchor trap: they
+sliced 1400 characters from the comment "PIN on its own line", so moving the PIN to its own line
+moved the anchor with it. The third froze two `title` strings — the weakest way to satisfy its
+own property, since a phone cannot show a title — and broke the moment the better one shipped.
+**Two assertions of my own were wrong about the code**, both caught by failing on correct
+source: `title={`${total} online`}` legitimately contains the words a `not.toMatch` forbade, and
+so does the presence dot's `--relay-online` class name.
+
+**Not verified on a device**: every width is measured in a real browser against the real built
+stylesheet in both themes, but nobody has scrolled their own address book on the owner's phone —
+and this is on a branch, so it changes nothing they can see until PR #128 merges, which they
+asked me to hold. No schema change, no new dependency, no new env var. 4806 tests.
+
+## v2.106.40 — board 1d: the play triangle nobody could see, and a tick vocabulary that was inverted (2026-07-31)
+
+Continuing the owner's *"You should check all my new designs and match it to the exsisting one"* on the
+conversation screen. Two of these are visible in their own screenshot and invisible in the source, because
+both are CONTRAST rather than layout.
+
+- [x] **The voice-note play control was a CARD recipe on a SATURATED BUBBLE.** `.rchip-accent` was measured
+      on `--card`. Measured across all 36 bubble surfaces the app can draw (own orange, peer blue, the 16
+      group hues, both gradient stops of each): **1.16:1 at worst, failing AA on 30 of 36**. The owner's
+      screenshot is six voice notes deep, so the primary control of what they were looking at was the
+      hardest thing on it to see. Fixed as a solid WHITE disc whose glyph is the bubble's OWN dark gradient
+      stop — legible on every hue by construction, **4.92:1 at worst** — plus a `ring-1 ring-black/10`
+      hairline, because a white disc on the orange's pale end is only 1.92:1 against it. New
+      `bubbleGlyphColor()` beside the palette; `mine` wins over the group branch, or my own bubble borrows a
+      stranger's hue (proven by mutation).
+- [x] **The ✓✓ was inverted, not merely faint.** Read = accent **1.34:1**, delivered = white 70% **1.77:1**
+      on the orange bubble's pale stop — the state the owner asked to see at a glance was the fainter one.
+      Read is now solid white (2.26:1), delivered white 55% (1.57:1), so the distinction rides opacity on a
+      surface built for white text. Said plainly: neither clears AA and neither can on a mid-tone fill; a
+      tick is a small indicator beside a label that names the state in words, and every alternative measured
+      worse. The accent stays the read-vs-delivered vocabulary everywhere it sits on a card.
+- [x] **The waveform (18 bars) replaces the progress track INSIDE the same element**, so `role="slider"`,
+      its aria values and `onClick={seek}` survive — losing them would remove the only way a screen reader
+      has to report or move the position.
+- [x] **The text field was the smallest thing in the row the screen is for**: 190px at 390px against the
+      board's 274. The attach clip moves INSIDE the field, recovering its whole 42px cell without removing a
+      control — **190px → 232px**, re-measured across the same 12 combinations as v2.106.38, still `gap=0`,
+      `belowNav=false`, `offscreen=false` in all twelve. Logical properties (`pe-`/`end-`), because this app
+      renders Arabic and the owner's own thread has an Arabic message in it.
+- [x] **Removed a claim the app cannot keep.** Every media viewer said *"Media is end-to-end encrypted"*
+      while `messages.body` is plain `text` and `server/v2db.ts` runs `like(messages.body, '%…%')`. Now
+      *"Encrypted in transit · stays in the app"*, which is what the v2.99.14 streaming proxy delivers.
+      Board 1d's centre chip asks for a second such claim; it is DECLINED, with the schema and the query
+      pinned as the reason.
+- [x] **`.rglass` painted nothing in the light theme**, and `Admin.tsx` had patched it at ONE of five call
+      sites. `background` as a SHORTHAND reset `background-color` to transparent; the hairline was white at
+      9%, invisible on light. Now `background-color: var(--card)` + `background-image:` +
+      `border: 1px solid var(--border)`; dark is unchanged, the four other consumers get the fix, and the
+      local `GLASS_SURFACE` workaround is deleted.
+- [x] **The 1:1 header's voice chip was `#22c55e` — the Registered badge's exact green, rendered ~40px to
+      its left.** One green, two meanings, side by side in the owner's screenshot. Now `.rchip-accent`, with
+      video before call per the board.
+- [x] **Typing was announced twice in a group** (the header arm and `TypingLine`) and the header arm also
+      dropped "5 members · 3 online" the moment anybody typed. The header arm now yields, because
+      `TypingLine` names WHO and colours them per person.
+- [x] Both bubble timestamp rows take the board's mono 9px, matching the day divider on the same screen.
+
+`client/src/app/conversationFrame.test.ts` (15). **All 18 tripwires verified by MUTATION** off a
+confirmed-green baseline from byte-exact backups, the mutator aborting unless its target occurs exactly
+once, sources byte-identical afterwards — including the card recipe reinstated on the bubble, the tick
+ordering inverted, the physical-property spelling and the end-to-end claim restored verbatim. One aborted
+at 0 occurrences on a needle of mine and bit once re-anchored.
+
+**Nine pre-existing pins rewritten to the property**, and the pattern is worth stating: three froze a tick
+colour, one froze the card recipe on the bubble, two located the attach control by its POSITION, one froze
+the player's whole prop list (so adding `glyph` broke it), one froze the header's exact typing condition,
+and one anchored on the untrue sentence. **And one filter was its own prose trap, which fired**:
+`deliveryReceipts.test.ts` forbade the old `✓✓` glyphs in CODE by dropping lines that START with `//`, `*`
+or `/*` — a block comment whose continuation lines begin with an ordinary word is dropped by none of those,
+so a new comment recording the measured contrast turned it red on correct code; it now uses the shared
+`codeOnly`, which strips comment SPANS.
+
+**Not verified on a device**, said plainly: every number is a contrast ratio computed from pixels painted in
+a real browser or a width measured against the real built stylesheet, but nobody has played a voice note on
+the owner's phone — and this is on a branch, so it changes nothing they can see until PR #128 merges, which
+they asked me to hold. No schema change, no new dependency, no new env var. 4792 tests.
+
+## v2.106.39 — the scroll listener I added did nothing, and a third unguarded read (2026-07-31)
+
+Both found by the design run's synthesis reading v2.106.38, both verified before being touched.
+
+**The inert listener.** v2.106.29 added a `visualViewport` `scroll` listener whose comment says iOS
+MOVES the viewport as well as resizing it — and `set()` read only height, scale and innerHeight, none
+of which a move changes. `grep -rn offsetTop client/src/` returned **zero**: the handler fired and
+wrote a byte-identical value. That is the same defect v2.106.29 was written to remove, one level
+down, in the fix for it. It is also the mechanism that matches the owner's screenshot: the visible
+band is `[offsetTop, offsetTop + height]` while the scroll-locked shell starts at 0, so without the
+term the shell is short by exactly `offsetTop` — composer below the fold, tab bar (the last child)
+still on screen.
+
+**A third unguarded read.** v2.106.38 wrapped presence and the busy line and left
+`getIdentitiesByNumbers` — a bare `db.select()`, so a rejection took the whole address book. Same
+blast radius, different table, decoration by the same test its siblings passed.
+
+17 tripwires, both new ones mutation-verified. **Not verified on a device**, and the check that would
+settle it: with the keyboard up, `offsetTop > 0` while `--relay-vh === innerHeight`. 4777 tests.
+
+## v2.106.38 — the fleet was serving v2.106.22, and four of the owner's complaints were fixed-but-undeployed (2026-07-31)
+
+Owner, with a screenshot of a DM with no composer at all: *"I told you see tge message section in
+not intagreted to the new design. And even i cant send message / You should check all my new designs
+and match it to the exsisting one / Also the contacts section is not showing mmso many bugs"*
+
+### The finding that is not a code finding
+`origin/main:shared/version.ts` reads **2.106.22**; the branch reads 2.106.37. 26 commits unmerged,
+and `main` auto-deploys on every push — so production was missing all four of these. Verified by
+diffing `origin/main` against the branch, not inferred:
+
+| Report | Live on `main` | Fixed in |
+|---|---|---|
+| "I cannot send messages" | `--relay-vh` from `window.innerHeight`, which does not shrink for the iOS keyboard (composer 385px below it) | v2.106.29 |
+| no composer at all | `voiceNote.ts` with **0** `onerror` handlers — the mic can replace the composer forever | v2.106.30 |
+| empty region showing the star canvas | **0** `relative z-10` in the shell, **3** `ThemeProvider` refs in `App.tsx` | v2.106.27 |
+| "contacts is not showing" | **0** `isError` arms in `Contacts.tsx` → any failed read says "No contacts yet" | v2.106.25 |
+
+PR #128 taken out of draft with a body that leads on those rows. **A deploy problem cannot be fixed
+by a test**, so it is said rather than worked around.
+
+### Measured, and it stopped a speculative rewrite
+The composer layout is SOUND in a real browser: 12 combinations (light/dark × 390/375/320 × ±34px
+home-indicator inset), composer immediately above the tab bar with a **0px gap in all twelve**, page
+scroller never scrolling. Three harness bugs of mine had to be fixed before that number meant
+anything — the theme key is `theme` not `relay_theme` (an earlier run measured dark twice), the tRPC
+stub takes a path not a Request (the app never booted and every reading was `undefined`), and the
+thread locator matched a name the stub does not use (so it measured the search field).
+
+### Fixed here, from a 12-designer audit + an adversarial verifier per cluster
+- **Contacts section headings**: raw accent as text, **1.59:1** on the light card → `text-primary`,
+  **4.59:1**. Dark byte-identical. This is the literal "not showing".
+- **The four tag chips**: **1.53–1.71:1** light / 5.5–6.1:1 dark → **4.65–4.81:1** via four
+  `.rtag-*` recipes with a per-theme override (the darker text is ~2:1 on the dark chip, so one
+  value cannot serve both and an inline style cannot branch).
+- **A presence hiccup took down the whole address book** — `getPresenceForIds` unguarded while both
+  its siblings fail soft.
+- **Both Contacts writers destroyed tags** — `category` alone, coupled to `tags`, so saving a phone
+  number dropped somebody out of their sections. Dialog is now a real multi-select.
+- "All contacts" → "Everyone else" (that bucket excludes favourites and everybody labelled).
+- Composer: flags cleared BEFORE the upload; mic reads `uploading`; a thread change discards the
+  recording; `shrink-0` on the composer and header; the column paints its own surface on mobile.
+- `--relay-vh`: a pinch-zoom no longer reverts to `innerHeight`; the 320 floor no longer exceeds a
+  genuine landscape-with-keyboard viewport.
+
+`client/src/app/cannotSendOrSee.test.ts` (16). All 16 mutation-verified; **one survived** — a real
+gap where a `[\s\S]{0,200}` window matched the NEXT statement's `.catch`. 7 pre-existing pins
+rewritten to the property (each had frozen a literal this release moves, one of them the data-loss
+bug itself). v2.106.31's debt-list staleness guard went red on its own and Contacts came off the list.
+
+**Not verified on a device.** 4776 tests.
+
+## v2.106.37 — an answered call that never connected had no timeout and no error (2026-07-31)
+
+Owner, with a screenshot: an outgoing voice call to a callee shown **"Online now"** sat on
+**"Securing connection…"** for **00:17**, with the previous attempt 27 seconds earlier recorded as
+"no answer". *"Its not connecting it seems the voice not yet ready"*.
+
+### Said plainly first: this is not the mediasoup work
+
+`grep -rln "voipRegistry|mediasoupSignaling|voip-node"` over `server/ client/ shared/` returns only
+those two modules referencing each other; `relay.ts` and `relayClient.ts` contain **zero**
+references. The new SFU cannot be involved, and attributing it there would have sent me hunting in
+the wrong file.
+
+### What the screenshot proves, before any speculation
+
+`STATUS_LABEL.encrypting` is "Securing connection…", and its only setter is `runConnSequence`, whose
+only caller on an outgoing dial is `onCalleeAnswered()`. **So the callee answered.** And the
+pre-connect dial card was still up, so `markEstablished()` never ran — **no media ever arrived.**
+
+### Why nothing bounded it — two independent guarantees
+
+1. `onCalleeAnswered()` calls `clearDialTimeout()`, cancelling the 65s no-answer backstop. Even had
+   it not, that callback opens `if (!inCall || callAnswered) return;` — it would have declined to
+   fire anyway.
+2. `armLkWatchdog`'s tick opens `if (!inCall || !livekitEnabled || lkConnected) { … return; }`, and
+   on an outgoing dial the caller joins the SFU room **at dial time** — so `lkConnected` is already
+   true when it first ticks at 4.5s. **It retires itself before the callee has even answered.**
+
+So "we are in the room, they answered, and no remote media arrived" was covered by nothing.
+
+### The fix
+
+- **The deadline is armed in the same breath as the cancel.** Arming it anywhere else leaves a
+  window in which the call is bounded by nothing, and that window is the bug.
+- Cleared the instant media is real, and on both teardown paths beside the sibling it takes over
+  from.
+- **It re-checks on fire** rather than trusting a world it last saw 20 seconds ago — a fuse acting
+  on a stale view is how a live call gets torn down by its own timer.
+- **It only ever ends a call that already cannot work**, so it does not violate the fail-open rule
+  this file follows: it never stops a dial being placed.
+- **20s is deliberately generous, and the bounds are pinned.** The SFU family gives up on a room
+  *connection* after ~16.5s (4.5s + 3×4s), so a post-answer media wait must be at least as patient;
+  an unanswered dial keeps its full 65s, because that is a different question.
+
+### The outcome must not be mislabelled — a data-integrity point, not a wording one
+
+Recording it as `no-answer` would write a false history row about somebody who picked up **and**
+would raise the "leave a voice message" card, which is the wrong offer for a person who answered. The
+reason is its own `media-timeout`, deliberately absent from `failDial`'s voicemail-eligible set. A
+mutation that relabels it bites.
+
+### The status was theatre
+
+"Securing connection…" was announced on a **600ms timer** with no relation to any DTLS or ICE state,
+so a stuck call reported a specific-sounding phase it may never have reached and the owner could not
+tell what failed. On the SFU path the claim is simply false — the caller joined the room at dial
+time, so nothing is being secured; we are waiting for the other side's media, which is a different
+problem with a different fix. It now says **"Waiting for their audio…"** there, and still says
+"Securing connection…" on the mesh where a transport really is in that phase. The *state* stays
+`encrypting`, so the styling is not collateral damage.
+
+### One hypothesis of mine, refuted by reading
+
+I suspected an expired TURN credential — signaling-fine-but-media-dead is classically a relay
+problem, and `iceServers()` mints `now + TTL` usernames. Refuted: the client rebuilds its ICE config
+from freshly-minted credentials on every `room`/`joined`/`peer-joined` ack
+(`relayClient.ts:3423-3505, 4810`), so a call cannot inherit a stale one.
+
+### A pre-existing pin had frozen the unbounded shape
+
+`callProgress.test.ts:51` asserted the exact one-liner `if (!establishedOnce) runConnSequence();` —
+it **forbade bounding the call** while saying nothing about the property it stands for. Rewritten to
+the property and made stricter (it now also requires the hand-over to the deadline), then
+re-verified to bite on the original defect.
+
+### Verification
+
+`client/src/lib/stuckConnecting.test.ts` (15). **All 7 tripwires verified by mutation** off a
+confirmed-green baseline — including the original unbounded shape reinstated verbatim, the fuse made
+to act on a stale world, the outcome relabelled as no-answer, and the deadline shortened to 5s.
+Source byte-identical afterwards.
+
+**Not verified on a call, said plainly:** no second browser here, so what is proven is that the state
+is now bounded and named, not that the owner's next call connects.
+
+**The root cause of why the media did not arrive is still open.** A 22-agent adversarial trace of the
+establishment path is mid-flight. This release bounds and names the failure either way — which is
+also what makes the next attempt diagnosable. 4760 tests.
+
+## v2.106.36 — the node's stats endpoint was handing out participants' IP addresses (2026-07-31)
+
+The removal plan listed three type questions I hadn't answered, and one was a live security question
+rather than a design detail: *does `WebRtcTransport.getStats()` include `iceSelectedTuple.remoteIp`?*
+
+**It does.** `WebRtcTransportStat.iceSelectedTuple` is a `TransportTuple`, and `TransportTuple`
+carries `remoteIp` and `remotePort` — each participant's real public address. The agent's
+`stats({roomId})` returned the raw report for **every transport in the room**, so one call handed out
+every participant's address together.
+
+### Why it mattered now rather than later
+
+The in-call quality readout is exactly what the coming increments wire to this, and a readout that
+forwards what it is handed makes one participant able to locate another. **This app already ruled the
+class out once**: v2.99.20 restricted `avatarUrl` to our own storage because a remote image URL had
+become *"a remote-fetch primitive aimed at other users"* — harvesting IP and User-Agent from a call
+nobody answered, *"squarely against this app's no-tracing goal"*. An SFU stat handing the address
+over directly is the same thing with fewer steps.
+
+### The fix
+
+- **Stripped at the source**, not in whatever forwards it: a filter in the caller is one a later
+  caller can forget, and this way the address never leaves the node.
+- **`protocol` is kept** — the one field of the tuple a readout genuinely needs (it says whether a
+  call fell back to TCP) and it identifies nobody. Stripping the whole tuple would take the answer
+  away with the address.
+- The node's own `localIp`/`localPort` go too. Not a participant's secret, but no reason to publish
+  the private address downstream.
+- **The array is mapped, not sanitized.** `getStats()` returns one stat *per transport*, so handing
+  the array to the strip would strip nothing and leave every address in place — the shape of a fix
+  that reads as done. A mutation doing exactly that bites.
+
+### A second security consequence, delivered by v2.106.35 as a side effect
+
+With per-transport listen, each transport took a port out of the worker's 10,000-port range, so a
+leaked transport was a denial-of-service clock — the plan asked how fast. Sharing one `WebRtcServer`
+per core removes the per-transport port entirely; a leak now costs memory and router CPU and can no
+longer make a node unable to accept calls.
+
+### Verification
+
+**Driven rather than pinned**, which is the point: the strip is a pure function and whether an
+address survives it is exactly what a source assertion cannot answer. The function is re-declared in
+the test against a real mediasoup stat carrying every field the tuple type declares, with a companion
+assertion pinning that the agent's body is still verbatim — the one weakness of a re-declared
+function being the original changing underneath it.
+
+`server/voipWebRtcServer.test.ts` → 20. **4 of 5 tripwires verified by mutation**, `agent.mjs`
+byte-identical afterwards.
+
+**The fifth is a non-defect, reported rather than counted as a gap:** dropping the
+`typeof !== "object"` guard is behaviourally equivalent — for a tuple-less stat `return stat` and
+`return rest` are deep-equal, and every shape that could carry an address (a string, an array, a
+falsy value) was checked and none leaks either way. The guard is kept, because relying on that
+equivalence would make the function correct only by reasoning about what mediasoup can return rather
+than by construction — the call v2.99.49 made about `s3Config`'s unreachable conjunct.
+
+**A syntax error of my own, caught by `node --check` rather than by review:** I inserted the function
+declaration inside the handlers object literal, which does not parse. Reverted and placed at module
+scope. 4745 tests.
+
+## v2.106.35 — one WebRtcServer per core, and the types forced a decision (2026-07-31)
+
+The media node moves off the deprecated per-transport listen. Every transport in a room is created
+on that room's `WebRtcServer`, so all of a core's transports share **one UDP + TCP port pair**
+instead of taking a port each out of the worker's range.
+
+- **The pair is recorded per room because it cannot be derived.** `createWebRtcServer` is on
+  `Worker`, not `Router`, and `Router` has no `worker` getter. Recording it per *room* rather than
+  per transport also makes it impossible for one room's transports to split across two servers —
+  which would put one participant's media on a different port pair from everybody else's and is
+  invisible until exactly one person cannot connect.
+- **Two `listenInfos` entries**, and this is the one most worth pinning: it is a *list*, so
+  supplying only the UDP entry ships a node with **no TCP candidate at all** — and the people that
+  fails are exactly those on a UDP-blocking network for whom every other candidate is also
+  unusable, while every reading on the box looks healthy.
+- `announcedAddress`, not the deprecated `announcedIp`. Server ports come from the bottom of the
+  range with each worker's own range starting above them, so a worker can never allocate a port a
+  server already holds — collision avoided by construction.
+
+### The decision the types forced
+
+`announcedAddress` is decided when the **server** is created and is immutable. So converting
+naively would have made the auto-assigned-IP story **worse** than what it replaced: today's
+per-transport listen reads the live value at call time, so a re-read fixes new rooms within one
+interval, whereas a boot-created server announces the old address for the rest of the process's
+life.
+
+Updating the cached address alone would then be the worst combination — the heartbeat reporting a
+healthy node at the new address while every transport it minted points at one that no longer
+reaches it — **and nothing could detect it, because this agent is the only source of that value**:
+`assignmentStillValid` would compare two copies of the same stale number, they agree, nothing looks
+wrong.
+
+So an address change now **deregisters and exits** for systemd to restart. Same reasoning and same
+machinery as the worker-death handler above it: every room here is already broken by the change,
+the deregister stops the app sending more, the TTL expires the node, its rooms are reassigned, and
+clients take the already-shipped rejoin path. Rebuilding the servers in place is strictly more code
+for the same outcome, because the rooms bound to the old servers have to be torn down either way.
+
+### A real bug my own conversion introduced, caught by its own test
+
+`workers` became a list of `{worker, webRtcServer, port}` and the shutdown loop still read
+`w.close()` — `undefined` on a pair — so a **planned** stop would have thrown on its way out,
+taking the clean deregister with it and making every restart wait out the full TTL.
+
+The address-change path also needed a second caller for the deregister, which had only ever existed
+inline inside the shutdown. Extracted: two copies of "how does a node leave the registry" is how one
+of them comes to leave a record behind.
+
+### Verification
+
+`server/voipWebRtcServer.test.ts` (13), pinned on **source** and honest about it — importing
+`agent.mjs` starts mediasoup workers, binds a port and connects to Redis. Function bodies are
+located by brace matching rather than a fixed character slice (the v2.99.78 fragility, hit six
+times), and comments are stripped because the file explains in prose exactly what it must not do.
+
+**11 of 11 tripwires verified by mutation** off a confirmed-green baseline — including the shutdown
+bug reinstated verbatim, the TCP listenInfo deleted, the listen and announce addresses swapped, and
+the exit removed. `agent.mjs` byte-identical afterwards.
+
+**Not verified against a node, said plainly:** no mediasoup worker has been started here, no
+transport created, no candidate gathered. The security group is deliberately left wider than it now
+needs to be, and why is recorded rather than left as an oversight. 4738 tests.
+
+## v2.106.34 — four mediasoup API facts, read off the declarations (2026-07-31)
+
+Three planning decisions rested on documentation. The packages are one `pnpm add` away, so these
+are the answers from the installed `.d.ts`.
+
+**1. `announcedAddress` is IMMUTABLE per transport.** It appears only inside
+`TransportListenInfo` — a creation option — with no setter anywhere in the type surface.
+
+**An Elastic IP attached to a RUNNING node therefore cannot be picked up by transports that already
+exist**: live calls on that node keep announcing the old address and their media stops arriving.
+This matters now, because the EIP quota increase is pending and attaching them is the next
+infrastructure step. **It has to be a maintenance window, or calls in progress break.**
+
+And the app *cannot detect* a stale address, which is the part worth recording: the agent is the
+sole source of that value, so a stale cache is published in the heartbeat too —
+`assignmentStillValid` compares the address it was given against the address the node reports, both
+are the same stale value, they agree, and nothing looks wrong. No second opinion exists to disagree
+with, so the only defence is reading it often enough. The re-read moves 60s → `NODE_TTL_MS`, which
+bounds the window to the one interval the app already reasons in. Reading IMDS at
+transport-creation time was rejected: that puts a round trip on the call-setup path.
+
+*A concern of mine that was unfounded, said rather than quietly "fixed":* I expected the agent to
+have cached its address at boot and never re-read it. It already re-reads on a timer and
+`createWebRtcTransport` reads the live value at call time — the code was right, only the interval
+was worth changing.
+
+**2. `listenInfos` and `webRtcServer` are still mutually exclusive** in 3.23 as in 3.19
+(`Either<Either<listenInfos, listenIps>, webRtcServer>`); `listenIps` and `announcedIp` are both
+`@deprecated`. A conversion must supply **two** entries — udp *and* tcp — or it silently ships
+UDP-only.
+
+**3. `createWebRtcServer` is on `Worker`, not `Router`,** and `Router` does not expose its worker,
+so a room must record the `{router, webRtcServer}` pair.
+
+**4. `producer.replaceTrack({track})` exists on the client**, so one video producer per participant
+can carry camera or screen — matching how RELAY's screen share already works
+(`replaceVideoEverywhere` swaps the track on the existing publication) rather than racing two video
+consumers over one tile.
+
+### The versions were already lying
+
+The live nodes were installed at **3.19.3**; a fresh install against `^3.19.3` today resolves to
+**3.23.2**. Four minor versions apart, a C++ worker compiled per install, and nothing that would
+surface the difference until a call behaved differently on one box. The deprecations above landed
+inside that range — precisely the drift a caret hides. Both dependencies are now pinned exactly.
+
+### `mediasoup-client` was installed, used, and removed again
+
+Deliberately, against the plan that said to keep it. Nothing imports it, so it was an unused package
+that would be installed on both app boxes on every deploy and shipped in no bundle — and this repo
+removed six of those in one release (v2.99.54) and hand-writes its SMTP client, S3 signer, FCM
+sender and GIF encoder rather than take a dependency at all. It returns in the increment that
+actually imports it; the fact it was installed to establish survives its removal.
+
+4722 tests.
+
+## v2.106.33 — the media nodes could have stopped every deploy (2026-07-31)
+
+The 28-agent LiveKit-removal plan flagged this as *"check before the next deploy, not after"*, and it
+is the sharpest item in the whole document.
+
+### The hazard
+
+`deploy.yml` runs on **every push to `main`** and targets `tag:Name=relay-app` with
+`--max-errors 0`. If either mediasoup media node carries that tag, the deploy installs the app on it,
+fails the `/api/health` probe there, and **aborts the whole fleet deploy** — a push to main would
+simply stop deploying, and the failure would be a health check on a box nobody was thinking about.
+
+**Whether they carry it cannot be established from the repo.** Every EC2 call in every workflow
+filters on that one tag, nothing records what those instances were named, and this sandbox has no
+AWS CLI and no credentials — so the check the plan asked for was not available to me.
+
+### The guard, which needs no AWS read
+
+```sh
+if [ -d /opt/relay-voip ]; then echo SKIP_MEDIA_NODE; exit 0; fi
+```
+
+Evidence the **host itself** carries. An app box never has it, so it cannot go stale the way a tag
+list or a hardcoded instance id would. First remote command, so nothing is even downloaded onto a box
+that is not an app server.
+
+**One guard, two correct behaviours** — treating the two kinds of command alike would have been a bug:
+
+| command | on a media node | why |
+|---|---|---|
+| `deploy`, `env-set`, `ses-ssm` | silent skip, exit 0 | fleet-wide; a media node in the target set must cost nothing |
+| `admin-tool`, `recover-identity` | the step **FAILS** | they pick ONE instance from the same tag filter, so a media node can be the one picked; both require a printed `ADMIN_EXIT=0` / `RECOVER_EXIT=0` and the guard prints neither, so a skip can never be mistaken for a completed database operation |
+
+Defined **once** at the job level rather than pasted per action — a copy per call site is how the
+sixth comes to be forgotten. The pin is a **sweep**: every `ssm send-command` in the file is read and
+each tag-targeted one must be guarded, so the next action is covered rather than exempt.
+
+**One site is deliberately unguarded and says so:** the coturn probe selects relay hosts by matching
+`TURN_HOSTS` against SSM-managed IPs, so a media node can never be selected, and it is read-only.
+
+**The guard's own safety is asserted**, because the dangerous failure is the opposite one: if the
+discriminator could be true on a real app server, every deploy would silently skip the fleet and
+report success. The test pins that it keys on that directory *and* that the agent's systemd unit
+really installs there — a guard checking a path nothing creates is a guard checking nothing.
+
+### Two defects in my own work, both caught by an assertion failing
+
+- A python patch asserted its needle occurred once, found **four**, and aborted **before writing** —
+  so an earlier edit in the same script was discarded and had to be redone. The assertion protected
+  the file and cost a round trip, which is the right trade.
+- My reference **count was wrong**: five where the workflow has six. Now derived from the `jq`
+  builders themselves rather than frozen as a literal that goes stale on the seventh.
+
+`server/awsOps.test.ts` → 49. **5 tripwires verified by mutation** off a confirmed-green baseline,
+including the guard removed outright and the guard made to exit non-zero; sources byte-identical
+afterwards.
+
+**Still owner-side, and worth doing anyway:** tag those two instances `relay-voip`. The guard makes a
+mis-tag harmless; a correct tag is what makes `verify`'s instance table readable and stops aws-ops
+reporting a media node as part of the app fleet. 4722 tests.
+
+## v2.106.32 — hardening the dormant SFU registry, and a fail-shut defect I shipped four hours earlier (2026-07-31)
+
+A 26-agent design pass over v2.106.28's mediasoup work chose this as **increment zero** because it
+is zero-risk: `grep -rln "voipRegistry|mediasoupSignaling" server/ client/ shared/` returns only
+tests plus the two modules referencing each other, so nothing in `relay.ts` or the client imports
+either, and every function is pure or takes an injected client.
+
+### The defect — a two-machine clock comparison that failed SHUT
+
+`isNodeFresh` was `age >= 0 && age <= ttlMs`, where `updatedAt` is the **node's** clock and `nowMs`
+is the **reader's**. One millisecond of forward skew excluded that node; both nodes skewed forward
+excluded the whole fleet and sent every call to LiveKit with nothing saying why — the exact
+direction the module's own header says must never happen. Two hosts on NTP sit within a few
+milliseconds, which is why it would have looked perfect and then bitten once during a clock step.
+Bounded by `NODE_CLOCK_SKEW_MS` (2s) rather than removed: a timestamp a *minute* ahead is still
+evidence something is broken and must not read as health.
+
+**The pin that existed had frozen the defect.** It asserted only the far-future half, which `>= 0`
+satisfies — so it read as protecting something while the near-future half was fail-shut. Rewritten
+to the property so both halves bite, rather than deleted.
+
+### Three lagging-signal gaps
+
+- `cpuLoad` is `loadavg()[0]`, a **one-minute** average, and `consumers` only rises once people have
+  joined — so fifty dials in three seconds all read one snapshot and land on one node.
+- `routers` moves the instant a room is assigned, which makes it the only fast brake. Now a hard
+  ceiling that **excludes** (`NODE_MAX_ROUTERS`) rather than ranking last, for the same reason the
+  CPU ceiling excludes: a node past its limit degrades for everybody already on it.
+- `nodeLoadScore` takes `pendingRooms` — the app correcting for what it has itself just done, inside
+  one refresh window, with no extra state to keep in sync because the caller already knows what it
+  assigned.
+
+### The composition is the point
+
+`planRoomTransport` picks the node **and** decides the transport in one place, because two callers
+each doing half is how a client is told "mediasoup" while the server holds no assignment, or holds
+an assignment it then routes past. Both are calls that cannot connect and neither is visible in
+either half alone. The invariant is structural — mediasoup always carries a `voip`, everything else
+always `null` — asserted as a property over every combination, with a guard that both branches were
+actually reached.
+
+- `assignmentStillValid` compares the **public IP**, and that check is only possible because the IPs
+  are auto-assigned rather than Elastic: a node whose record is fresh but whose address has changed
+  has been stopped and started, so its workers are new processes and every router the room depended
+  on is gone. The changed address is the only evidence of that.
+- `transportForHydratedRoom` reads an **absent** transport as the pre-feature answer and never as
+  mediasoup. A rolling deploy serves both bundles for ~60s, long enough for real calls to be handed
+  to a node that has never heard of them.
+
+### The fail-open link the review found missing
+
+Give one node the wrong `VOIP_NODE_SECRET` and it heartbeats **happily** — the heartbeat is a Redis
+write it makes about itself, not a request anybody signs — while answering 401 to every operation.
+So the plan keeps selecting it, every call fails, and nothing degrades because the registry says the
+fleet is fine. `mediasoupSignaling` now records outcomes and `planRoomTransport` takes
+`excludeInstanceIds`, and the failures are deliberately **not** equivalent:
+
+| reason | effect | why |
+|---|---|---|
+| `unauthorized` | excludes on the FIRST failure, longest cooldown | a wrong secret needs a human; one is all the evidence there will ever be |
+| `timeout` / `unreachable` | needs THREE | excluding a healthy node halves a two-node fleet, which is worse than the blip |
+| `node-error` / `bad-response` | NEVER excludes | the node answered and the *operation* failed; excluding would let one malformed payload take the fleet out |
+| `unconfigured` | never excludes | not about the node at all |
+
+A success clears the record outright rather than decaying — a node that just answered works. **It may
+exclude every node, deliberately:** if both really are refusing, the right answer is LiveKit or the
+mesh, and a "never exclude the last one" rule would keep routing calls into a fleet that cannot carry
+them. The **call** fails open, not the SFU. Recording is a separate named function
+(`callNodeTracked`) rather than folded into `callNode`, because `callNode` is also how a health probe
+talks to a node, and a probe that changes routing as a side effect of looking is its own bug.
+
+### Verification
+
+`server/voipAssignment.test.ts` (41) + `voipRegistry.test.ts` → 30 + `mediasoupSignaling.test.ts`
+→ 38. **18 tripwires verified by mutation** off a confirmed-green baseline, sources byte-identical
+afterwards.
+
+- **Two survivors were real gaps in my own tests, both the coincidence class.** The mismatched-zone
+  case used two hosts with the match at index 0, and pushing the match first *preserves* that order —
+  so identity and a reorder gave the same answer and dropping the length guard survived (rewritten
+  with three hosts and the match at index 1, where unguarded it answers `["b","a","c"]`). And the
+  exclusion-reason case sat under an assertion whose own `unhealthyNodeIds` call had already **pruned**
+  the expired entry, so the reader answered null because the record was gone rather than because of
+  its own time check.
+- **One survivor is a non-defect, reported rather than counted:** dropping `|| !node` survives the
+  suite and fails `tsc` with three TS18047 errors, and `pnpm verify` typechecks *before* it tests —
+  so that property is guarded by the compiler, which is stronger than an assertion.
+- **One bad mutation of mine, reported rather than counted:** removing an `if` left a dangling
+  `else if`, i.e. a syntax error, so the file failed to *load* and the harness's test-count guard
+  caught it. A broken mutation is not a result; re-run as a genuine change, it bit.
+- The **ES5 iteration trap** bit for the fourth time (v2.99.72, v2.99.98, v2.105.21): `for…of` over a
+  `Map` needs `downlevelIteration` and failed the build with TS2802. Now `.forEach`, with deletions
+  collected rather than made mid-walk.
+
+**Not verified against a node, said plainly:** nothing in the app imports any of this yet, no media
+has flowed, and nobody has watched a call land on a real node. No schema change, no new dependency,
+no new env var. 4716 tests.
+
+## v2.106.31 — the accent as text fails AA in the theme the app defaults to (2026-07-31)
+
+Working the owner's *"they do not match the new design"* on the message screens. Measured as
+rendered at 390px against the real built stylesheet, not reasoned about:
+
+| | light | dark |
+|---|---|---|
+| raw accent as text, plain card | **1.59** FAIL | 7.12 |
+| raw accent as text, on its own .16 tint | **1.46** FAIL | 5.94 |
+| `text-primary`, plain card | 4.59 PASS | 7.12 |
+| `text-primary`, on the .16 tint | **4.20 STILL FAILS** | 5.94 |
+| `.rchip-accent`, on the .14 tint | 5.17 PASS | 8.59 |
+
+**THE FOURTH ROW IS THE FINDING.** `text-primary` — the fix v2.106.26 used and the one
+anybody would reach for — is NOT sufficient on an accent-tinted surface, because the tint
+darkens the effective background out from under it. A single find-and-replace would have
+shipped as "fixed" with half of it still failing. So the rule has two halves: plain surface →
+`text-primary`; the accent's own tint → `.rchip-accent`, the recipe v2.106.25 built with a
+measured light colour for exactly this.
+
+Dark passes everywhere, which is why it survived: the board is a dark design and the app
+ships light.
+
+**Two of the four sites were hand-rolled duplicates of `.rchip-accent`** carrying its own
+values (a .14 fill, a .40 border) and differing only in missing its light-theme colour. A
+copy of a recipe is how the copy misses the fix the original received.
+
+**The composer's mic and Send were on two different colour systems.** They occupy the same
+position and swap on the first keystroke, and the mic was still the fixed cyan v2.106.7
+retired while Send used `.rcta` — so the hue visibly jumped as you typed. Now `.rcta`
+(10.08:1 light, 9.85:1 dark), and not while recording, when it is the destructive stop.
+
+**And the sweep found a pre-existing app-wide failure this release did not introduce.**
+`PeerAvatar`'s initials fallback was `bg-primary/15 text-primary` — accent text on an accent
+tint — at **3.77:1**. That is every avatar without a photo, on every surface, in the default
+theme. New `.ravatar-fallback` measures 4.98–5.32 light / 8.28–8.59 dark, re-measured as
+rendered. No border: a hairline round an avatar reads as the unseen-story ring.
+
+**The guard is app-wide because the one that existed was not** — v2.106.26 fixed three sites
+and left its assertion reading a single file, so Messages.tsx carried four more and nothing
+looked.
+
+**What the sweep found is reported rather than overclaimed:** raw-accent-as-text is in **ten
+more files** and the retired cyan in **nine more**. Each needs the same per-site judgement —
+is the surface theme-switchable, is the text on a plain background or a tint — so they are
+enumerated as debt in a list that may shrink freely and may never grow, with a companion
+assertion that no entry is stale. `relayAssets.ts` is called out as probably not a defect at
+all: the call surfaces carry their own near-black theme, so accent text there is 7–11:1.
+
+- [x] `client/src/pages/app/Messages.tsx` (4 sites), `client/src/app/PeerOverlays.tsx`,
+      `client/src/index.css` (the new `.ravatar-fallback`).
+- [x] `client/src/app/accentAsText.test.ts` (12), including an assertion that the sweep is
+      not VACUOUS and one that it does not flag a FILL — the accent's correct use.
+- [x] **All 6 tripwires mutation-verified** off a confirmed-GREEN baseline.
+- [x] **Two harness bugs of my own, caught by reading the numbers**: my background walker
+      composited alpha over a WHITE base, so in dark theme it reported a near-white surface
+      and a nonsense 2.48:1; and I first measured the first three `.text-primary` elements
+      anywhere rather than the sites I had changed.
+- [x] **Two pre-existing pins rewritten, both having frozen the inline shape the class
+      replaces** — one froze the play button's fill, the other the chip's
+      `color: var(--rb)`, which IS the defect rather than the design.
+- [x] **STILL OPEN**: the 10 + 9 enumerated files above, and the message screens' remaining
+      design gaps against board frames 1c/1d/1j/3c/4c (the 36-agent audit is mid-flight).
+- [x] No schema change, no new dependency, no new env var. 4658 tests.
+
+## v2.106.30 — the mic button could lock you out of sending entirely (2026-07-31)
+
+Found by the 36-agent design-vs-built run on the message screens, whose send-path tracer
+read the code rather than the styling. Four of its findings are **certain from the code**
+and all four are fixed here. The first matches the owner's report better than v2.106.29 did.
+
+**(1) THE LOCK-OUT.** `voiceNote.ts`'s `done` promise resolved ONLY inside `rec.onstop`.
+There was no `rec.onerror`, and the duration cap called `rec.stop()` — which itself depends
+on `onstop` firing. A recorder that went inactive without firing it (an iOS call or Siri
+interruption, mic contention with another tab, a MediaRecorder `error`) left the promise
+pending forever.
+
+What that cost is out of all proportion to the cause: `setRecording(false)` lived only in
+that promise's `.finally()`, and while `recording` is true the whole composer is **replaced**
+by the recording bar — no text field, no send button — and **both** of that bar's exits
+called `stop()`, a no-op on an already-inactive recorder. Both ways out were dead; the only
+escape was navigating away. And the mic is the **default primary button while the field is
+empty**, i.e. exactly what somebody taps first.
+
+The resolver is hoisted out and made idempotent, with **four** paths to it — a normal stop,
+a recorder error, an already-inactive recorder, and a hard deadline that trusts the recorder
+for nothing. The cap settles directly instead of asking and hoping. Discard resets the flag
+unconditionally, because relying on one mechanism is how "there is no way out of this
+screen" happened in the first place.
+
+**(2) ONE SHARED MUTATION LET A STUCK VOICE NOTE DISABLE TEXT SENDING.** The text send and
+the fire-and-forget voice send shared `sendMutation`, and Send is disabled on
+`sendMutation.isPending` — so a voice request that never settled left the accent Send button
+drawn, looking live, and permanently dead. Two independent operations must not share one
+in-flight flag.
+
+**(3) THE VOICE NOTE FAILED 100% SILENTLY.** That mutation had no `onError`: upload
+succeeded, send failed, blob discarded, no toast, no retry, an orphaned attachment row.
+`main.tsx` only `console.error`s.
+
+**(4) THE SERVER'S REAL REASON WAS DISCARDED.** `send()` ended in a bare `catch` reporting
+"check your connection" for every failure — and the failures that actually happen there are
+not connection failures: a block ("You can't message this person."), a non-membership, a
+stale `replyToId` rehydrated from a saved draft, an attachment that is not yours, a lost
+identity. All read as a network blip, and **tapping send again never helped**. Being told to
+retry something that can never succeed is precisely "I cannot send messages". Every other
+mutation in the file already surfaced `e.message`.
+
+- [x] `client/src/lib/voiceNote.ts` — one idempotent teardown, four settle paths, a deadline
+      backstop, and a stop that works on an inactive recorder.
+- [x] `client/src/pages/app/Messages.tsx` — a separate voice mutation with its own
+      `onError`, the server's real message on a failed send, and an unconditional Discard.
+- [x] `client/src/lib/voiceNoteSettle.test.ts` (10), **driven** — whether a promise settles
+      is exactly what a source pin cannot answer.
+- [x] **6 of 6 tripwires mutation-verified**, including the original hang reinstated
+      verbatim. **Two survived the first run, both real gaps in my own tests**: the deadline
+      case passed `maxMs: 1_000`, so the CAP settled it and deleting the deadline still
+      passed; and the idempotency case asserted the resolved value, but `Promise.resolve` is
+      itself idempotent, so removing the `settled` guard changed nothing observable — it now
+      counts mic stops and requires exactly one.
+- [x] **Three defects in my own test before that**, each failing on correct code: I drove
+      `recordFromStream`, which lives in `videoNote.ts`; and `pickAudioMime` reads
+      `window.MediaRecorder` while the suite runs in the `node` environment, so stubbing the
+      bare global left the module correctly reporting "not supported".
+- [x] **Two pre-existing pins rewritten, and both had frozen the shape of the defect**: one
+      sliced from `rec.onstop = () => {` and required the teardown INSIDE that handler — the
+      very arrangement that made a missing `onstop` leave the mic open — and the other froze
+      `resolve(null)` in the same place. Both now assert one teardown funnel that every exit
+      reaches, which is stronger than the count they replaced.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: the misbehaving recorder is a fake, which
+      is the mechanism, but nobody has had Siri interrupt a real voice note on a phone.
+- [x] No schema change, no new dependency, no new env var. 4646 tests.
+
+## v2.106.29 — "I cannot send messages": the keyboard was covering the composer (2026-07-31)
+
+The owner: *"I went inside the message screens and I cannot send messages; they do not
+match the new design."*
+
+**SENDING ITSELF IS FINE, AND ESTABLISHING THAT FIRST IS WHAT MADE THE REAL CAUSE
+FINDABLE.** The built bundle was driven at 390px with a stubbed tRPC layer and one real
+thread: the composer is present, hit-testable (`elementFromPoint` returns the input
+itself), typing updates the value, the send button appears and is reachable,
+`messages.send` fires with the correct payload, three bubbles render, no horizontal
+overflow, no page errors. A fix aimed at the send path would have been aimed at nothing.
+
+**THE CAUSE IS PHONE-ONLY, WHICH IS WHY NO DESKTOP MEASUREMENT COULD SEE IT.** `AppShell`
+sizes the mobile shell from a measured `--relay-vh` rather than a CSS viewport unit
+(v2.78, because `dvh` reported the toolbar-collapsed height on a real iPhone). It **did**
+subscribe to `visualViewport`'s resize — and then wrote **`window.innerHeight`**, which on
+iOS does not change when the keyboard opens. So the handler fired and wrote an unchanged
+value: a subscription that reads as handled while handling nothing.
+
+**MEASURED, with the visual viewport shrunk to 400 to simulate the keyboard:**
+
+|  | `--relay-vh` | `<main>` | input bottom |
+|---|---|---|---|
+| keyboard closed | 844px | 844 | 785 |
+| keyboard open, BEFORE | 844px (unchanged) | 844 | **785 — 385px under the keyboard** |
+| keyboard open, AFTER | 400px | 400 | **341 — 59px of clearance** |
+
+`handlerChangedAnything: false` before, `true` after. You tap the composer and the field
+you just tapped, and Send beside it, are underneath the keyboard.
+
+**IT IS WORSE IN THIS APP THAN IN MOST FOR A REASON THIS APP CHOSE ON PURPOSE**: v2.76
+locks document scrolling (`html/body.relay-app-lock`) to stop iOS shoving the whole app
+past its own end. That was right, and it also removed the browser's own
+scroll-the-focused-input-into-view rescue, so nothing was left to compensate. The lock
+stays; the missing half was a keyboard-aware height.
+
+**`max-md:min-h-0` IS LOAD-BEARING AND WITHOUT IT THE FIX IS A NO-OP.** `min-h-svh`
+carries no breakpoint prefix so it applies on a phone too, and **`min-height` wins over
+`height`** — shrinking the var would have been overridden straight back to ~100svh.
+Measured both ways. That is the second time in three releases a fix would have silently
+done nothing without a second change beside it.
+
+**THE ZOOM GUARD IS NOT DEFENSIVENESS**: `visualViewport.height` also shrinks under a
+pinch-zoom, so trusting it unconditionally would shrink the app because somebody magnified
+it — the visible height is used only while `scale <= 1.01`. **THE FLOOR PICKS A FAILURE
+DIRECTION**: failing toward "too tall" is recoverable by scrolling, failing toward "no
+height" is a blank app, so it is floored at 320. A visual-viewport **scroll** is now
+listened for as well as a resize, because iOS moves the visual viewport as well as
+resizing it and a move with no resize still changes what is on screen.
+
+**A PRE-EXISTING PIN HAD FROZEN THE DEFECT ITSELF** — the sharpest version of this
+recurring problem. `appShellNav.test.ts` asserted the exact expression
+`setProperty("--relay-vh", window.innerHeight + "px")`: it forbade the fix while asserting
+the bug. It is now the property, with the keyboard rule pinned in its own file.
+
+**A DEFECT IN MY OWN HARNESS, reported rather than counted as a finding**: the first probe
+run rendered the thread row as "Unknown" and could not open a conversation — which looks
+exactly like a production bug and is not one. The DB layer's `ThreadSummary` uses `other*`
+while the wire projection renames them `peer*`, and my stub used the DB names.
+
+- [x] `client/src/app/AppShell.tsx` — the visible-viewport height, the zoom guard, the
+      floor, the scroll listener, and `max-md:min-h-0`.
+- [x] `client/src/app/keyboardViewport.test.ts` (8); **all 4 tripwires mutation-verified**
+      off a confirmed-GREEN baseline, including the original bug reinstated verbatim.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: the keyboard is simulated by overriding
+      `visualViewport.height` in a real browser, which is the mechanism, but nobody has
+      typed into the composer on the owner's iPhone.
+- [x] **ALSO**: `server/mediasoupSignaling.ts` — the app→node client (HMAC-signed POST to
+      the node's PRIVATE address, bounded timeout, every failure a closed-set reason and
+      never a throw, since the caller is the call path). The signer is IMPORTED from the
+      node's own module rather than reimplemented, so there is one implementation and
+      parity is structural; a TypeScript copy was rejected as the v2.99.71 shape.
+      `server/mediasoupSignaling.test.ts` (20) drives the real signer against the agent's
+      real verifier over a real HTTP server. **Four defects in my own test, one cause:**
+      the round-trip cases signed with a hardcoded date five days from the real clock,
+      which the replay window correctly refused — the window rejecting my own test.
+- [x] No schema change, no new app dependency, no new required env var. 4636 tests.
+
+## v2.106.28 — mediasoup becomes the primary media transport: the registry and the node agent (2026-07-30)
+
+The owner, having stood up two mediasoup nodes in Mumbai: *"do it asap .. inplace of
+livekit ... make livekit fallback option"*.
+
+**THIS IS INCREMENT 1 OF SEVERAL, AND SAYING SO PLAINLY MATTERS MORE THAN USUAL: NO CALL
+CHANGES TRANSPORT YET.** What ships is the part that decides *which* node a room goes to and
+*which* transport a call uses, plus the agent that runs on a media node — all of it dormant,
+because nothing calls it. The signaling exchange and the browser adapter come next, and every
+increment must leave mesh and LiveKit calling byte-identical while mediasoup is unconfigured.
+
+**THE DECISIVE CONSTRAINT WAS A PACKAGING ONE, AND IT SHAPED THE WHOLE DIRECTORY LAYOUT.**
+The server bundle is built with `esbuild --packages=external`, and `deploy.yml` has every app
+instance run `pnpm install --frozen-lockfile` on **every** deploy. So a root `mediasoup`
+dependency would make each app box fetch or compile a ~9.7 MB C++ worker binary it never
+executes, on every release. The agent therefore gets its **own package** (`voip-node/`), and
+that is pinned in both directions: `mediasoup` must be absent from the root `package.json` and
+present in the agent's, and the release tar must not contain `voip-node`.
+
+**THE NODES' PUBLIC IPs ARE AUTO-ASSIGNED, NOT ELASTIC — so a configured host list is not
+merely inelegant, it is a value that goes silently wrong.** The account hit its EIP quota (an
+increase is pending), and an auto-assigned IP changes on stop/start. A stale entry in a config
+file would point media at an address nobody is listening on, and a call that never connects
+with nothing in any log saying why. So each node **self-reports** its current address from
+IMDSv2 and signaling reads a registry; when the quota lands, Elastic IPs attach with no code
+change, because nothing was ever written down. Nothing in this repo hardcodes a node IP.
+
+**MEDIA CANNOT SIT BEHIND THE LOAD BALANCER**, and that is why the shape is what it is: media
+is a live UDP flow that must reach the *exact* host holding that room's router, so a balancer
+would spray packets across hosts and break the stream — true of every SFU, LiveKit included.
+Signaling keeps one endpoint (the existing ALB); the media plane fans out beneath it, one
+public IP per node, each room **pinned** to one node. No `PipeTransport`, no room splitting,
+no MCU, no Auto Scaling group, and coturn plus `/api/relay/ice` are untouched.
+
+**THE LOAD SIGNAL IS CONSUMERS PER CORE, DELIBERATELY NOT `cpuLoad`, AND THE DISTINCTION IS
+THE WHOLE OF THE CHOICE.** cpuLoad is the real constraint but it is a noisy lagging sample, so
+ranking on it makes selection **flap** between nodes as two samples cross — which on a
+per-room assignment means consecutive rooms bouncing for no reason. Consumers per core is
+monotonic in the work actually asked of the node and moves only when somebody really joined or
+left. cpuLoad keeps a job, and a better-suited one: it **excludes** a saturated node outright
+(`NODE_CPU_CEILING = 0.85`) rather than ranking it last, because mediasoup is CPU-bound and a
+saturated node does not degrade gracefully — it drops frames for every room it *already*
+holds, so adding one more punishes people already in a call. Per *core* rather than absolute,
+so a bigger node correctly attracts more rooms.
+
+**ZONE PREFERENCE IS A TIEBREAK, NOT AN OVERRIDE**, and the threshold is explicit rather than
+implied: it applies only when two nodes are within a quarter of a consumer per core of each
+other. Above that gap load wins, because a room placed in the right zone on a node carrying
+twice as much work is a worse call than a room one zone away. A stable final tiebreak on
+`instanceId` stops an idle two-node fleet alternating arbitrarily on every room.
+
+**A CLOCK THAT HAS RUN BACKWARDS READS AS STALE, NOT AS INFINITELY FRESH**, because the
+failure that matters is believing a dead node is alive. Freshness is judged on the record's own
+`updatedAt` rather than on Redis key expiry alone — a key can be present and stale (a
+partition, or a TTL refreshed by something other than a real heartbeat), and "the key exists"
+is a weaker claim than "the node said this recently". The two mechanisms cover each other: the
+TTL makes a crashed node disappear with nothing having to notice the death, and `isNodeFresh`
+makes a record that outlives its usefulness unusable.
+
+**THE TRANSPORT CHOICE CANNOT RETURN "NOTHING", AND THAT IS THE POINT RATHER THAN A
+CONVENIENCE.** It decides whether a call can be placed, and the rule this repo keeps
+re-learning is that such a decision must **fail open**: a Redis hiccup, an unconfigured SFU or
+a saturated fleet must degrade a call's *quality*, never remove the ability to make it. So the
+order is mediasoup → LiveKit → mesh, with the mesh last precisely because it depends on no
+infrastructure at all. `forceLivekit` exists for staged rollout and A/B, because the two
+transports have to be comparable on the same account with numbers — the only way the owner's
+"video degrades during the call" report gets an answer rather than an opinion. `mediasoupEnabled`
+is a fleet-wide kill switch that needs no deploy. mediasoup is **not** given a higher cap than
+LiveKit (both 10, mesh 6) on purpose: the nodes are 2-core and the real ceiling has to come
+from load-testing the actual subscription pattern rather than from a number chosen in advance.
+
+**THE AGENT'S OWN CHOICES, EACH FOR A REASON THE OWNER'S COMPLAINT NAMES.** Simulcast on
+publish with server-side per-consumer layer switching, so a weak *receiver* drops to a lower
+spatial layer while the sender keeps publishing all three — one bad connection no longer drags
+everybody's quality down, which is the mechanism behind "starts fine, degrades mid-call". VP8
+and H.264 only, never VP9/AV1 by default, for mobile decode. Opus at 32 kbps with `ptime: 20`,
+DTX and inband FEC, plus an `audioLevelObserver` per room. Consumers start **paused** and the
+client resumes when its receiving element is ready, or the first packets arrive before anything
+can decode them and the join looks like a frozen tile. `maxIncomingBitrate` honoured at
+1.5 Mbps.
+
+**A DEAD WORKER MAKES THE AGENT EXIT RATHER THAN LIMP ON**, and the systemd unit's
+`Restart=always` is load-bearing rather than boilerplate: a dead worker means its routers are
+gone, so the rooms pinned to them cannot be renegotiated. The honest move is to go away, let
+the 15s registry TTL stop the app assigning rooms here, and let clients take the rejoin path
+they already have. A process that stayed up would keep advertising capacity it does not have,
+which is the failure nobody can diagnose. SIGTERM deregisters, so a *planned* restart leaves
+rotation immediately instead of waiting out the TTL; a crash needs no equivalent.
+
+**THE PARITY TEST IS THE LOAD-BEARING GUARD, AND IT EXISTS BECAUSE THIS REPO HAS A RECORDED
+PRODUCTION CASE OF EXACTLY THIS DRIFTING.** The agent is plain `.mjs` run by bare node on a
+media node; the registry is TypeScript inside the app bundle on a different machine — two
+implementations of one rule, in two languages. v2.99.71 is the precedent: `turn-check.mjs` vs
+`iceServers()` diverged and the checker would have reported two relays permanently DOWN
+forever. No string check catches the *next* divergence, so the fix there was comparing actual
+**output**, and that is what happens here: the agent's real `buildNodeRecord` is fed through
+the app's real `decodeNode`. If it goes red, the agent is publishing something the app will
+silently refuse, which presents as "the SFU has no nodes" with nothing in any log saying why.
+The same release also records the reason `record.mjs` is split from `agent.mjs`: importing
+`turn-check.mjs` used to run a health check and `process.exit(0)`, killing the test runner, so
+the record shape lives in a module that is importable and side-effect-free — and a test forbids
+the `mediasoup` import, `process.exit` and any `listen(` from ever appearing in it.
+
+**A MIS-SAMPLED COUNTER CANNOT TAKE A NODE OUT OF SERVICE**: a node absent from the registry
+costs its entire capacity, so the agent clamps and floors its counters rather than publishing a
+record the app refuses. **`cpuLoad` is deliberately NOT clamped**, because reporting the truth
+is the agent's job and deciding what is too hot is the app's — clamping to the ceiling here
+would hide saturation.
+
+**A DEFECT IN MY OWN TEST, failing on CORRECT code**: the assertion forbidding `process.exit`
+in `record.mjs` matched that file's own header sentence *explaining* why it must not — the
+prose-anchor trap, in the very test written to guard against a trap. It now runs on
+`codeOnly()` output, with a companion assertion that the real file *does* contain the phrase in
+prose, so the strip is doing work rather than hiding a defect.
+
+**AND A DEFECT IN MY OWN MUTATION HARNESS, reported rather than counted as a result**: the
+first run of the "record.mjs imports mediasoup" mutation came back SURVIVED with **30 tests
+instead of 38** — the parity file had failed to *load*, which vitest reports on the `Test
+Files` line and not on the `Tests` line, so grepping the latter alone reads a suite that broke
+outright as a pass. That is the v2.106.6 trap (an unparseable file reports "no tests", not a
+failure). The harness now reads both lines and also fails a mutation that changes the test
+*count*; re-run, it bit.
+
+- [x] `server/voipRegistry.ts` — the pure core: record validation, freshness, usability,
+      per-core load, node selection, transport precedence, caps, and an injected-client read
+      path that fails to `[]`.
+- [x] `server/voipRegistry.test.ts` (30) — driven, not pinned, because every claim here is
+      about what a *set* of records resolves to. Includes: garbage dropped whole, `01.2.3.4`
+      and `256.1.1.1` refused, a backwards clock reading stale, three heartbeats fitting
+      inside the TTL, load beating zone once the gap is real, selection never returning a
+      stale node even when it is the least loaded, and an exhaustive enumeration of the
+      transport precedence yielding exactly the three transports.
+- [x] `voip-node/` — its own package: `agent.mjs` (workers, routers, transports, the HMAC
+      API, the heartbeat), `record.mjs` (the shared record shape, importable and side-effect
+      free), `relay-voip.service`, and a `README.md` runbook stating what is deliberately
+      absent and why.
+- [x] `server/voipNodeParity.test.ts` (8) — the two sides' actual output compared, plus the
+      packaging guards.
+- [x] **All 15 tripwires verified by MUTATION** off a confirmed-GREEN baseline, from
+      byte-exact backups, the mutator aborting unless its target occurs exactly once;
+      `package.json`, `deploy.yml` and `voipRegistry.ts` byte-identical afterwards.
+- [x] **NOT VERIFIED AGAINST A NODE, said plainly**: the agent is syntax-checked and its
+      record is proven acceptable to the app, but nothing has been deployed, no worker has
+      started under systemd, and no media has flowed. There is no mediasoup here to run it
+      against, which is exactly why the record contract is a test rather than a hope.
+- [x] No schema change, no new app dependency, no new required env var. 4608 tests.
+
+## v2.106.27 — the app was painting its own background over its own content (2026-07-30)
+
+The owner, twice: *"there's a problem with the profile section when you click at
+disappear"*, then the detail that solved it — *"when you open the profile page its shows
+all areas for 2 seconds than it disapper"*.
+
+**THE TIMING IS WHAT IDENTIFIED IT.** A page that renders FULLY and is then removed is not
+an empty state and not a missing gate. Driven in a real browser at 390px against the built
+bundle: **at 400ms the element at the page centre was a real Profile row; by ~900ms it was
+the background CANVAS** — opaque, and hiding it changed the painted pixel. The DOM was
+intact throughout (90+ buttons, all the text). Nothing threw: the error boundary is loud,
+a full-screen "An unexpected error occurred." with a stack trace, so a throw would not
+have been described as things disappearing. **The content was still there, painted
+underneath.**
+
+**TWO PRE-EXISTING BUGS COMPOUNDED, and each is separately sufficient.**
+
+**(1) A SECOND, NESTED `ThemeProvider` — the root cause.** `main.tsx` wraps `<App />` in
+the real one (`defaultTheme="dark" switchable`); `App.tsx` then nested ANOTHER that was
+**not** `switchable`, so it ignored localStorage and its `theme` was permanently `"dark"`.
+Everything below it — including `AppShell` — read that one, so
+`liveBackground = theme === "dark"` was **TRUE for a LIGHT-theme user**: the near-black
+live canvas mounted and the shell was given `bg-transparent`. **And both providers ran the
+effect that toggles `.dark` on `<html>`**, with React flushing child effects before parent
+ones — so the inner added the class and the outer removed it. **CSS said LIGHT while JS
+said DARK.** Measured: `html="relay-v2 relay-app-lock"` with no `.dark`, a canvas mounted,
+and the shell computing to `rgba(0,0,0,0)`. This is precisely the divergence v2.106.0's own
+comment warned about — *"two theme reads is how you get an opaque shell over a running
+canvas"* — except the two reads **agreed with each other** and were both wrong, because the
+context they read was not the user's. A single-derivation rule cannot save you from a
+provider that lies.
+
+**(2) THE CANVAS PAINTS ABOVE UNPOSITIONED CONTENT.** It is `position: fixed; z-index: 0`,
+and per CSS painting order a POSITIONED element with `z-index: 0` paints in the
+positioned-descendants step — **after** in-flow, non-positioned content. So any page whose
+content sits inside no positioned ancestor is painted UNDER it. Measured per tab:
+**Profile, Messages and Contacts were covered**; **Dialer survived only because its keypad
+happens to live inside `relative` wrappers**. Three of the five tabs were broken by
+accident and two worked by accident — which is why it looked like a Profile bug.
+
+**AND THAT IS ALMOST CERTAINLY THE REAL CAUSE OF "THE CONTACT IS NOT SHOWING" TOO**, which
+is worth saying plainly rather than leaving v2.106.25 looking like the whole answer:
+Contacts was one of the three covered tabs. The missing error state that release added is a
+genuine and separate defect — a failed read still must not read as an empty address book —
+but it was not what the owner was looking at.
+
+**THE FIXES ARE ONE ROOT-CAUSE REMOVAL AND ONE CLASS FIX.** The redundant provider is
+deleted, so `useTheme()` returns the user's actual choice everywhere and the `.dark` class
+has exactly one writer. And the shell's content wrapper plus the desktop sidebar are lifted
+to `relative z-10`, **at the shell rather than per page**, so a page added later cannot
+inherit the bug — a per-page fix would have repeated the accident that made two tabs work.
+
+**RE-MEASURED AFTER THE FIX, and both halves show:** in **LIGHT** theme there is now **no
+canvas at all** (correct — the redesign's background is a dark-theme surface), and in
+**DARK** the canvas is present and visible as the intended background while **real content
+is the topmost element on all five tabs**, each inside a `div[pos=relative z=10]`.
+
+**THE RELATIONSHIP IS PINNED, NOT THE NUMBERS.** The test reads the canvas's declared
+z-index and the content's and asserts content **>** canvas — freezing either literal alone
+would let a change to the other side silently reopen it.
+
+- [x] `App.tsx`'s nested `ThemeProvider` removed; a sweep asserts exactly ONE mount in the
+      whole client and that it is the `switchable` one
+- [x] The scroll container and the desktop sidebar lifted above the canvas, at the shell
+- [x] `client/src/app/backgroundOverContent.test.ts` (8); **8 of 8 tripwires verified by
+      MUTATION**, one after a fix — *"the canvas is still fixed"* was satisfied by the
+      SECOND fixed layer (a vignette sits over the canvas), so making the canvas
+      `absolute` survived; now counted, and it bites
+- [x] **A DISCIPLINE NOTE ON MY OWN WORK**: my first pass ran `prettier` over `App.tsx`,
+      which reformatted 88 lines for a change needing a handful and broke an unrelated pin
+      by rewrapping a ternary. Reverted and redone by de-indenting exactly the block that
+      lost a level — the diff is now the change plus its comment
+- [x] **TWO OF MY OWN ASSERTIONS WERE WRONG ABOUT THE CODE**, each caught by failing on
+      correct source: `{children}` occurs TWICE (`AppShell` passes it to `Inner` before
+      `Inner` renders it) so an `indexOf` ordering check read the wrong one; and counting
+      `theme === "dark"` file-wide reads 3, because the sidebar's own Dark/Light toggle
+      legitimately reads it for `aria-pressed` and its label — **a mistake CLAUDE.md
+      already records being made once before in this same file**, so it is now asserted as
+      one DERIVATION rather than one mention
+- [x] **ONE PRE-EXISTING PIN REWRITTEN TO THE PROPERTY**: `appShellNav.test.ts` froze the
+      scroll container's exact class string, so a `relative z-10` prefix broke it while
+      saying nothing about what it guards (no clearance padding; a flex column so pages
+      fill it with `flex-1`) — now asserted on the class list whatever else joins it
+- [x] **NOT VERIFIED ON THE OWNER'S PHONE, said plainly**: measured headlessly at 390px in
+      both themes across all five tabs, before and after, against the real built bundle —
+      but nobody has opened Profile on their handset
+- [x] No schema change, no new dependency, no new env var. 4570 tests
+
+## v2.106.26 — two defects I shipped in v2.106.23, found by reviewing my own work (2026-07-30)
+
+An independent adversarial review of the 2g voicemail patch — the one that shipped three
+releases ago — came back **SHIP_WITH_FIXES** with two real production defects and four
+tests it disproved BY MUTATION. Recording it as its own release rather than folding it in
+quietly, because the interesting part is that both defects are classes this repo had
+already paid for and written down.
+
+**(1) THE RECORDING HALO WAS SWALLOWING TAPS ON THE ONLY TWO EXITS.** The 66px indicator's
+ping overlay had no `pointer-events-none`, and `@keyframes relayPing` scales to **2.8** —
+so a 66px box paints and **HIT-TESTS** out to ~185px, ±59px past its own edge, while
+Discard and Send sit 32px away in the same `gap-8` row. It covered the **inner ~27px of
+BOTH 54px buttons**; it is positioned while they are static, so it hit-tests ABOVE them
+whatever the DOM order; hit-testing ignores opacity; and the `cubic-bezier(0,0,.2,1)`
+easing holds the grown state for most of every 1.8s cycle. **So while a voicemail was
+recording, the two only ways out of it were half-untappable.** The geometry is arithmetic,
+not opinion, and it matches the reviewer's independent figure exactly. **THE REPO HAD PAID
+FOR THIS TWICE** — v2.105.21 (*"`pointer-events:none` so it cannot swallow a tap meant for
+hang-up"*) and v2.106.13 (*"a full-width overlay on top of it becomes a DEAD ZONE"*) — and
+the two precedent uses of this very class are 10px brand dots with no adjacent controls, so
+the precedent never needed the guard and did not carry it.
+
+**(2) THE ACCENT AS SMALL TEXT FAILED AA IN LIGHT — WORSE THAN WHAT IT REPLACED.** Three
+sites used `style={{ color: "var(--rb, #3FE0C5)" }}`: the 10.5px Send label, the "Voicemail
+sent" line and its tick. **MEASURED: 1.68:1 on the white light card** (AA needs 4.5), and
+the presence green it replaced was 4.46:1 — so the v2.106.18 vocabulary fix, correct in
+principle, made the contrast **~2.7× worse** in the theme the app defaults to. `index.css`
+says this in as many words in its own comment (*"its default teal computes to about 1.7:1
+on a light card"*), and it is the measurement that forced `--relay-green-text` to exist in
+v2.99.86. **THE FIX IS THE INDIRECTION THAT ALREADY EXISTED**: v2.106.4 repointed
+`--primary` at `--rb` inside `.dark.relay-v2` PRECISELY so accent UI follows the cycling
+hue automatically while light keeps a measured value — so `text-primary` is the cycling
+accent in dark (**11.17:1**) and a measured cyan in light (**4.84:1**). Reaching for the
+raw variable routes around that on purpose-built infrastructure. **The FILLS are untouched
+and correct** (dark glyph on the accent measures 10.1:1) — this was only ever about text,
+and `ACCENT` now says so in its own doc comment and is used for fills only.
+
+**FOUR OF MY OWN TESTS WERE DISPROVED BY MUTATION, and two of them were the load-bearing
+ones.** (a) `not.toMatch(/if \(false/)` — the sweep guarding *"a control that stops doing
+anything while its copy stays"* — **does not cover `{false && …}`, which is the ONLY way to
+gate an element inside a JSX return**, i.e. the realistic spelling of the exact defect it
+claims to defend against; wrapping the record button in it left all 28 tests green.
+(b) *"the peer lookup never blocks the card"* was satisfied while `if (!peer.data) return
+null;` blanked the WHOLE card — so a throttled or in-flight **decoration** query would cost
+the caller all three ways to reach the person, the precise property that case exists to
+protect. (c) Both motion loops asked whether *a gated copy exists somewhere*, not whether
+**every** occurrence is gated, so a second ungated animation passed; they bit only because
+there happened to be exactly one of each. (d) An assertion **depended on comment prose**
+(`toMatch(/transcript/i)` against raw source), so tidying the file's own header would turn
+it red on correct code — the prose-anchor trap inverted.
+
+**AND A TRUE SENTENCE HAD BEEN DELETED BY AN OVER-BROAD TEST OF MY OWN.**
+`not.toMatch(/\d+\s*seconds?/)` was written to forbid the board's unbuilt *"No answer
+after 30 seconds"* and forbade **every** second-duration in the file, honest ones included
+— which is what removed *"Recording stops automatically at 60 seconds."*, the only place
+the app said that hitting the cap also SENDS the take. **That matters more after the reskin,
+not less**, because the panel gained a separate Pause and a separate Discard, so Send is now
+the only remaining stop and nothing on screen said so. The sentence is back, derived from
+`VOICEMAIL_MAX_MS` rather than written as a literal, and the ban is narrowed to the
+no-answer claim it was actually for.
+
+**THE GUARDS ARE RULES, NOT LITERALS, and my first attempt at them was itself inadequate**
+— the mutation run showed I had fixed both production defects and pinned NEITHER, which is
+the worst combination. Now: every `relayPing` halo in the file must carry
+`pointer-events-none`, the raw accent variable may never appear in a `color:` position, and
+`ACCENT` must still have a real fill consumer so it cannot rot into dead code.
+
+- [x] `pointer-events-none` on the recording halo
+- [x] Three accent-text sites moved to `text-primary`; `ACCENT` documented as fills-only
+      and given its `ACCENT_DIM` sibling so the paused waveform is one colour, not two
+- [x] The stop-and-send sentence restored, derived from the constant
+- [x] Four disproved assertions strengthened; three standing guards added
+- [x] `client/src/app/voicemailFrame.test.ts` → 31; **9 of 9 tripwires verified by
+      MUTATION**, in two runs — the first found **two real gaps in my own new pins** (both
+      production fixes unguarded) and one bad needle of mine that correctly ABORTED at 0
+      occurrences; all re-run and all bite
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: the halo geometry is arithmetic against
+      the real keyframe and the contrast is computed from the real tokens, but nobody has
+      tried to tap Discard mid-recording on a phone
+- [x] No schema change, no new dependency, no new env var. 4562 tests
+
+## v2.106.25 — "not showing": six ways the app hid something and said nothing (2026-07-30)
+
+The owner, twice: *"The main page and other pages, the contact is not showing. Many
+things is not showing there."* A 90-agent design-vs-built audit over every screen came
+back with **67 adversarially-verified findings** (25 refuted), and the ones that answer
+that report are **ONE CLASS**: something the user should see, that the app decides not to
+draw, with nothing saying why.
+
+**THE CLASS IS WHY THIS WAS HARD TO REPORT.** In every one of the six, the screen looks
+FINISHED. A failed query renders as an empty address book; a narrowed list renders as an
+empty one; a failed group read renders as an admin who has lost their adminship; an
+account-only pane renders as a blank; an unreadable label renders as a chip with no word
+in it; and a nav with nothing lit renders as a nav. None of them looks like an error, so
+none of them gets reported as one — they get reported as "things is not showing".
+
+**(1) THE OWNER'S LITERAL REPORT, AND IT IS THE SHARPEST OF THE SIX.** `Contacts.tsx` had
+**no `isError` arm anywhere in the file** and no `onError` on the query — so ANY failure
+of `contacts.list` fell through to `filtered.length === 0` and rendered **"No contacts
+yet"** with an "Add a contact" button: a confident false claim about somebody's own
+directory. **AND IT PERSISTS RATHER THAN FLASHING** — once react-query's retries are
+spent `isLoading` is false and a background refetch never flips it back. Messages has
+rendered `threads.isError` with a Retry for releases and that is pinned as *"not
+blank-forever"*; this screen simply never got it. **THE ORDER IS LOAD-BEARING**: the error
+arm goes BEFORE `isLoading`, because a background retry on an errored query would
+otherwise drop the screen back to the skeleton and hide the failure again on a loop. **AND
+THE COPY NEVER SAYS THE DIRECTORY IS EMPTY**, because that wording IS the defect — the
+contacts are still there; this device could not reach them.
+
+**(2) AN EMPTY NARROWED LIST IS NOT AN EMPTY DIRECTORY.** The empty state read `search`
+and ignored `tagFilter`, so tapping a label chip that matched nothing also said "No
+contacts yet" and offered contact creation — the same defect v2.106.2 fixed in Messages,
+where an unfiltered count made the page render `No conversations match ""`. **AND IT
+FIRES ON THE FIRST TAP FOR A TYPICAL ACCOUNT**, since every contact created before
+v2.106.14 with no category matches none of the four chips. The narrowing is already
+recoverable in one tap, so what was needed was honest copy, not a new control; the
+Add-a-contact CTA is withheld while a filter is on, because the useful action there is
+clearing the filter.
+
+**(3) `/app` LIT NO TAB AT ALL — AND THAT IS THE URL ALL FIVE LANDING-PAGE CTAs POINT
+AT.** `active = location.startsWith(tab.path)` was computed **independently in the bottom
+bar and in the desktop sidebar**, and no tab's path is a prefix of `/app`, so a visitor
+arriving from the marketing page met a navigation bar with no pill, no accent label and no
+`aria-current` — in either theme, since both branches key off the same false flag. **THE
+ROUTE ALREADY KNEW**: `App.tsx` writes `tab="dialer"` for both `/app` and `/app/dialer`,
+so the prop is the truth and the path derivation is only the fallback for a caller that
+omits it (which degrades to exactly today's behaviour rather than losing the highlight).
+Deriving it ONCE also removes the second copy of the rule — which is how the two navs
+could have come to disagree.
+
+**(4) `/app/admin` HAD NO WAY BACK.** It is a drill-in pushed from Profile, and
+`isSubPage` was gated on the single prefix `/app/profile` — so no Back arrow, and no tab
+lit either, leaving an unrelated tab as the only exit. **WORST IN AN INSTALLED PWA**,
+where there is no browser back chrome at all. It is now derived as "not one of the five
+tabs", so the NEXT drill-in route gets its Back affordance without this string being
+updated; `/app/join` gains one too, which is a deliberate consequence — `goBack` falls
+through to the dialer when there is no history to pop.
+
+**(5) A FAILED GROUP READ LOOKED LIKE LOSING YOUR ADMINSHIP.** `GroupInfoSheet` read only
+`info.data` and **never** `isError`/`isPending`, and `iAmAdmin` derives from that same
+value — so a failed `conversationInfo` showed an unexplained empty Members card AND
+silently removed the add-by-number row, the "all members can add" switch and the
+invite-link section **from a real admin**, who would reasonably conclude they had been
+demoted rather than that a query failed. Nothing else on screen says a read failed:
+`main.tsx` only `console.error`s. It now says so, says **"your controls are hidden until
+this loads — nothing has changed"**, and distinguishes in-flight from failed, because an
+empty roster is a claim about a group and "loading" is not.
+
+**(6) TWO PROFILE ROWS WERE GUEST DEAD ENDS**, against this repo's own shipped rule (*"NO
+ROW IS A DEAD END"*, v2.99.89, restated in that very file). **Sign-in PIN** and
+**Devices** are drawn for everyone while their sections returned bare `null` for anyone
+with no `users` row — every guest, permanently — so tapping either landed on a pane with a
+back arrow, a title, and nothing under it. **HIDING THE ROWS WOULD SATISFY THE LETTER OF
+THE RULE AND BE WORSE**: a guest would never learn the feature exists, and the reason they
+cannot use it is the one thing they can act on. So the pane explains and offers the step,
+from **ONE** shared component — two copies of that sentence is how the two panes come to
+describe one requirement differently — with the register action INJECTED by the pane
+switch, because that sheet is the page's own state. App lock and Story privacy are
+deliberately NOT gated: the first is device-local and the second reads through
+`requireIdentity`, which a guest satisfies.
+
+**(7) A STARRED CONTACT COULD VANISH FROM THE NEW-CONVERSATION PICKER ENTIRELY.** The
+server emits `favourite` and so does the schema column; `contactSuggest.ts` read
+**`favorite`** — so `!!c.favorite` was false for every real contact and the favourite
+tiebreak was a **permanent no-op**. With `.slice(0, limit)` at 6 that is not a mis-rank,
+it is a **DROP**: a starred contact who is offline and late alphabetically was absent from
+the picker. **TYPESCRIPT COULD NOT SEE IT** — the caller passes whole contact objects, and
+excess-property checks do not apply to a variable. **AND THE TEST THAT PINNED THE ORDERING
+WAS VACUOUS**: its fixture seeded `{ favorite: true }`, the same wrong spelling, so the
+suite reported this as working. **Fixing the source turned that test RED, which is the
+proof**; it is now seeded correctly AND joined by a case that bites where the old one
+could not — a favourite that is offline and alphabetically last must survive a limit of
+ONE, so a mis-rank shows up as a disappearance rather than as a lower position.
+
+**(8) THE SELECTED FILTER CHIP'S OWN WORD WAS UNREADABLE IN LIGHT THEME.**
+`.rchip-accent` set `color: var(--rb)` for **both** themes with no light override — while
+its sibling accent recipes `.rkey` and `.rstoryring` both branch on theme, and the tab bar
+keeps a per-tab `shade` for exactly this reason. `<html>` carries `relay-v2`
+unconditionally, the app **defaults to light**, and the accent engine is dark-gated, so
+`--rb` there is the static `#35e0b4`. **MEASURED, NOT ESTIMATED: 1.55:1 → 5.44:1** against
+the chip's own tinted fill (AA needs 4.5) — so the SELECTED chip's label was the one word
+on the row you could not read while its unselected neighbours were fine. The tint and
+hairline still carry the selection, so nothing about *you are here* is lost; only the TEXT
+moves, to the AA-measured token v2.99.86 exists for. Dark is untouched by scope. **THE
+ARITHMETIC IS IN THE SUITE RATHER THAN IN A MESSAGE**, because `oklch()` cannot be read
+numerically out of a browser (Chromium hands the string back verbatim — the trap that
+produced a whole table of nonsense in v2.106.4), and **the converter is validated against
+a figure this repo measured in a real browser**: it must reproduce v2.99.86's 5.92:1
+before any other number it produces is worth believing. It does, at 5.91.
+
+**FOUR DEFECTS IN MY OWN TESTS, all caught by them failing on CORRECT code**: a bare
+`/empty/i` sweep matched the shadcn primitives, which are themselves named `Empty*`; an
+`<EmptyTitle>` match landed on the error arm's, since that arm is now the first in the
+file; a `--rb` lookup scoped to `:root` read nothing, because that block contains nested
+rules that end a naive brace slice early; and **the prose-anchor trap, twice** — a
+`\bfavorite\b` sweep matched the comment recording the misspelling, and a PRE-EXISTING
+pin in another file anchored on `filtered.length === 0`, which my own new comment quotes,
+so it read the wrong `EmptyTitle`. Both now run on comment-stripped source.
+
+**TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, both having frozen a literal this
+release legitimately moves: one froze the exact two-way `{search ? "No matches" : "No
+contacts yet"}` expression, i.e. it forbade telling a THIRD kind of empty apart — the very
+defect in (2); and one matched `<PasscodeGate>[\s\S]*<Inner>`, which broke the moment
+`Inner` took a prop, while the property is only that the canvas-owning component is nested
+inside the gate, not that it is propless.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: the contrast is computed against the real
+stylesheet's own tokens and every gate is pinned, but nobody has watched a failed contacts
+read on a phone, and the audit's remaining findings are enumerated rather than fixed.
+
+- [x] Contacts: an error arm ahead of loading, with Retry and copy that never claims the
+      directory is empty
+- [x] Contacts: the empty state distinguishes searched / labelled / genuinely empty
+- [x] `/app` lights the Calls tab; both navs read ONE derived value; drill-ins derived
+- [x] `/app/admin` gets a Back affordance
+- [x] `GroupInfoSheet` reports a failed read instead of silently stripping the roster and
+      every admin control
+- [x] Both guest panes explain themselves from one shared component
+- [x] `favourite` spelling fixed; the vacuous fixture corrected and joined by a case that
+      bites
+- [x] `.rchip-accent` gets the light-theme override every sibling recipe already had
+- [x] `client/src/app/notShowing.test.ts` (20); **all 17 tripwires verified by MUTATION**
+      off a confirmed-GREEN baseline, sources byte-identical afterwards, one re-run after
+      the mutator correctly ABORTED on a needle I had written with an HTML entity the
+      source does not use
+- [x] **STILL OPEN, enumerated rather than implied**: 59 further audited findings, of
+      which 8 are `broken` — the register sheet still requires a surname the server
+      declares optional; the admin push doctor reports a healthy PushKit token as
+      misfiled; `GroupInvite`'s avatar `onError` hides the image with no fallback beneath
+      it; the story composer has no keyboard-accessible trigger once a story exists; the
+      voicemail bar's only labelled control sends; and `listContacts` returns `[]` rather
+      than throwing on a dead DB, so a dead database is still indistinguishable from an
+      empty list even with (1) in place
+- [x] No schema change, no new dependency, no new env var. 4559 tests
+
+## v2.106.24 — presence stops blocking calls; reachability decides (2026-07-30)
+
+The owner's brief, verbatim: *"Allow the call if the callee has a live socket OR any
+registered push subscription. Fall back to messaging only when they have neither."*
+
+**THE THREE THINGS THEY ASKED ME TO CONFIRM BEFORE CHANGING ANYTHING, ANSWERED FIRST.**
+
+1. **Where the gate actually is:** in exactly TWO files, both halves of the
+   `/i/<pin>` invite-join card — `OnboardingGate.tsx` (a visitor with no identity) and
+   `Join.tsx` (somebody signed in). Nowhere else. The Dialer's own guard is a
+   *nonexistent-number* check (v2.99.17), not a presence check, and the signaling path
+   never consulted presence at all.
+2. **Whether `apns-voip` is already reachable from call initiation:** YES, and it
+   shipped in v2.105.12 — `onPageCallee` sends `kind:"incoming-call"` through
+   `sendPushToIdentity` and `relay.ts` pages the dial when `pushed > 0`. So the server
+   half of the ask already existed; what was wrong was a CLIENT gate refusing to offer
+   the call in the first place. Pinned here rather than rebuilt.
+3. **A genuinely unreachable user:** already correct — the fast honest `offline` reply
+   plus the leave-a-message card (v2.99.11). That is the one guard kept.
+
+**THE DIAGNOSIS IS A CATEGORY ERROR, NOT A BUG IN ANY ONE LINE.** `presence` is bound to
+a live socket session (`presence.socketSessionId`), so backgrounding the app, locking the
+phone or closing the tab drops it and `isOnline` goes 0 — which is the *normal* state for
+a phone. Presence answers **"is a socket open"**; a call needs to know **"can anything be
+woken"**. Those were the same boolean, so the join card refused calls to most of the user
+base most of the time.
+
+**AND IT WAS GUARDING A LIMITATION THAT NO LONGER EXISTS**, which is what makes this
+safe rather than a relaxation: the owner verified a VoIP push end to end on a physical
+device — APNs HTTP 200 (`apns-id 7BD950D7-6926-4D0F-AA94-2934786819A2`) and the handset
+rendered full-screen CallKit with the app not in the foreground. A backgrounded phone is
+exactly what that wakes.
+
+**THE SHARPEST FINDING IS THE ONE THAT WOULD HAVE BROKEN THE OWNER'S OWN VERIFIED
+DEVICE.** The obvious implementation is to reuse `hasPushSubscription` — it already asks
+"does this identity have a push row". **It would have reported the CallKit iPhone as
+UNREACHABLE**, because it filters to `('webpush','fcm','expo')` and EXCLUDES both APNs
+kinds *deliberately* (v2.105.11/12): its only consumer asks *"did they already get a
+NOTIFICATION, so is an email redundant"*, and a VoIP push carries no `aps.alert`, so it
+is not a notification. Counting APNs there would leave a recipient with **neither a push
+nor an email**. Two different questions, so two predicates — new `canRingIdentity`
+accepts every kind that can ring (`webpush`, `fcm`, `expo`, `apns`, `apns-voip`), and a
+test forbids either from being collapsed into the other in EITHER direction.
+
+**IT FAILS OPEN, and that direction is the whole point of the release**: this decides
+whether to OFFER a call, so a DB hiccup must not hide the call button — that is the bug
+being removed. `if (!db) return true` and `catch { return true }`, both mutation-verified.
+
+**THE SOCKET PATH IS UNTOUCHED AND IS STILL PREFERRED**, per the owner's constraint:
+`reachable = (pres?.isOnline ?? false) || (await canRingIdentity(id.id))`, so for
+somebody with the app open the `||` short-circuits and **no query is spent** — the
+ordering is pinned by index comparison, not by reading it.
+
+**PRESENCE TRACKING IS NOT REMOVED** (their constraint, and it is right): it still
+decides the socket-vs-push route, still drives every LED, and its v2.95 guest-privacy
+suppression is byte-identical. **REACHABILITY IS DELIBERATELY *NOT* SUPPRESSED WITH IT**,
+because the privacy rule hides whether somebody is online *right now* while reachability
+says only that a device exists — withholding it would refuse calls to exactly the
+long-inactive guests the suppression protects, i.e. re-create the bug in the name of
+privacy. Nothing new is disclosed: that endpoint already returns their name, avatar,
+badge and tier for any number.
+
+**A PARTY LINE IS ALWAYS REACHABLE**, stated as a decision: joining a line rings nobody
+— you land on the room — so deriving it from occupancy would make an EMPTY line
+uncallable, which is the opposite of what a party line is for.
+
+**BOTH CLIENT GATES FAIL OPEN ON A MISSING FIELD** (`reachable ?? true`), because a
+rolling deploy serves both bundles for ~60s and refusing on an absent field would turn
+that window into a calling outage. **THE COPY CHANGED WITH THE RULE**: "They're offline —
+can't call" became "Can't be reached", and *"once they're back online"* had to go —
+coming online is not what would fix the state that remains, since there is no device to
+come online.
+
+**NO `claimHash` OR OWNERSHIP CHECK IS WEAKENED** (their constraint): the lookup selects
+`pushSubscriptions.id` ONLY, scoped by `identityId`, and a test forbids `endpoint`,
+`p256dh`, `auth` and `claimHash` from appearing in it. No env var, key path or APNs
+config is touched.
+
+**ON THE LONGER RING TIMEOUT THEY ASKED ME TO CONSIDER — the numbers are already
+push-aware, and I am leaving them alone rather than changing them quietly.** The callee's
+60s auto-decline is armed when their ring card is **PRESENTED**, including on the
+push-delivered path where `deliverPendingRing` hands the ring over as the app opens — so
+a phone woken from a locked screen gets its full 60s from when the person *sees* the
+call, not from when the caller dialled. What the caller's 65s bounds is how long *they*
+stare at the card, which is an ordinary ring length rather than a limitation of the push
+path; raising it is a decision about the caller's patience. The **LADDER** is pinned
+instead, because the ordering is what makes all three honest: callee 60s < caller 65s <
+server `PENDING_RING_TTL_MS` 70s — the callee gives up first so the caller is *told*
+"declined" rather than timing out on nothing, and the caller resolves before the server
+forgets the pending ring. A mutation raising the backstop past the TTL bites, and so does
+one arming the callee's clock at dial time.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: no phone here, so nobody has backgrounded the
+app and watched a call arrive as CallKit. What is proven is the predicate, the wire field,
+both gates, the fail-open direction and the timeout ladder.
+
+- [x] `canRingIdentity` in `server/v2db.ts` — accepts every ringable kind, fails open,
+      reads only `id`, never consults the push switch (that is enforced once, inside
+      `sendPushToIdentity`)
+- [x] `hasPushSubscription` left byte-identical, with the difference pinned as deliberate
+- [x] `reachable` on `directory.lookup`, socket-first, `true` for a party line
+- [x] Both halves of the invite-join card gate on reachability, fail open, keep the
+      honest nothing-to-ring guard, and no longer promise "back online"
+- [x] `server/callReachability.test.ts` (28); **all 16 tripwires verified by MUTATION**
+      off a confirmed-GREEN baseline, sources byte-identical afterwards — with two
+      re-anchored after the mutator correctly ABORTED on a needle shared verbatim with
+      `hasPushSubscription`
+- [x] Three pre-existing pins rewritten to the property (they had frozen the presence
+      gate itself): two in `client/src/app/callLinkJoin.test.ts`, one in
+      `server/inviteJoinScreen.test.ts`
+- [x] A defect in my own first draft, caught by it failing on CORRECT code: the
+      honest-guard pin anchored on `blocked = `, and the identifier is `joinBlocked` —
+      capital B, so the substring never matched. Now the identifiers are NAMED per screen
+      and the assertion reads the flag's own initialiser
+- [x] No schema change, no new dependency, no new env var. 4537 tests
+
+## v2.106.23 — 2g voicemail, 5a party lines, 5c quality readout (2026-07-30)
+
+Three frames, and the first three patches in this build that **arrived with their own
+tests** — the previous five did not, and saying so is the point: the instruction was
+made explicit and it took.
+
+**2g VOICEMAIL (the board's own label; this file's table has 2f/2g swapped and the BOARD
+wins).** The card the caller sees after an unanswered dial, plus the recording state.
+
+**5a PARTY LINES** — one of the four screens that existed in the app with no frame. The
+line's own 6-digit number renders `dir="ltr"` and bidi-ISOLATED, because an RTL title
+sitting beside it would otherwise reorder the digits.
+
+**5c CALL QUALITY READOUT.** The one-line readout above the control bar now takes a tone:
+accent when the call is healthy, a warning hue when a value is bad, neutral while nothing
+has been measured — so a caller with no data yet cannot be told the call is fine. Three
+CONSTRAINTS were kept because each is measured rather than stylistic: it stays
+`position:absolute; bottom:100%` so it can never become a flex ITEM of `.controls` and
+push a chip off a 320px screen; `pointer-events:none` so it cannot swallow a tap meant for
+hang-up; and NO `backdrop-filter`, because it sits over live video. The class is one of
+THREE COMPLETE LITERAL strings, never composed — a runtime-assembled class name is
+invisible to the JIT and renders unstyled.
+
+**THE TONE IS A PURE FUNCTION IN `callStats.ts`, NOT A TERNARY IN THE RENDERER**, which is
+what makes it testable without a browser: `callQualityTone(stats)` sits beside
+`summarizeStats`, and the renderer's `tone` parameter DEFAULTS to neutral so a caller that
+forgets it degrades to "nothing claimed" rather than to "healthy".
+
+**ATTRIBUTION CHECKED BEFORE ACCUSING.** A trap sweep over all five touched files flagged
+presence-green and repainting keyframes in `relayAssets.ts` and `relayClient.ts`. Diffing
+the ADDED lines only shows every one of those is PRE-EXISTING — the only green in the new
+lines is comments explaining why the accent was used instead, and no new keyframes were
+added at all. Blaming a patch for code it did not write is its own kind of false finding.
+
+`client/src/app/voicemailFrame.test.ts` + `client/src/pages/app/partyLinesFrame.test.ts` +
+`client/src/lib/callQualityTone.test.ts` (78 tests across the three), with
+`server/partyLines.test.ts` and `client/src/lib/callStats.test.ts` extended.
+**SPOT-CHECKED BY MUTATION rather than taken on trust**, and said plainly as a spot-check
+rather than a full sweep: gutting `callQualityTone` fails 6, and removing the party-line
+number's bidi isolation fails 1. Two further mutations ABORTED on needles that legitimately
+occur many times in those files and are reported as aborts rather than as results.
+
+**NOT VERIFIED ON A DEVICE OR IN A CALL, said plainly**: nobody has left a voicemail,
+opened a party line, or watched the quality readout change colour mid-call.
+
+**1h IS NOW UNBLOCKED** — it shares `relayAssets.ts` with 5c, which has landed.
+
+No schema change, no new dependency, no new env var. 4507 tests.
+
 ## v2.106.22 — boards 2h, 2i, 4j, and one row's timestamp taking down the address book (2026-07-30)
 
 Three more frames applied serially, plus the closest thing yet to an answer on the

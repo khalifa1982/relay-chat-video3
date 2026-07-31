@@ -271,3 +271,28 @@ export function callStatsVerdict(s: CallStats): "relay" | "poor" | "ok" {
   if ((s.jitterMs ?? 0) > 50) return "poor";
   return "ok";
 }
+
+/** Which hue the in-call readout wears (board 5c). */
+export type QualityTone = "good" | "warn" | "neutral";
+
+/**
+ * Map a summary to the readout's colour state.
+ *
+ * `callStatsVerdict` is left untouched and is READ here, so the thresholds live in
+ * exactly one place — but its "ok" cannot be painted accent on its own, and that
+ * distinction is the whole reason this function exists. `summarizeStats([])` is
+ * "ok": the verdict deliberately treats unknown values as not-poor, because
+ * absence is not evidence of a bad call. Painting THAT accent would make a bright
+ * pill assert a healthy call on zero evidence — including during a ring, before
+ * any candidate pair exists.
+ *
+ * So `good` additionally requires a MEASURED media path. `path` is the one field
+ * that cannot be reported without a succeeded candidate pair, which makes it the
+ * honest test for "this is a real reading" rather than a placeholder.
+ */
+export function callQualityTone(s: CallStats): QualityTone {
+  const v = callStatsVerdict(s);
+  if (v === "relay" || v === "poor") return "warn";
+  if (s.path === "unknown") return "neutral";
+  return "good";
+}

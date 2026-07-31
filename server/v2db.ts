@@ -2360,6 +2360,64 @@ export async function pushReachable(identityId: number): Promise<boolean> {
   return hasSub && enabled;
 }
 
+/**
+ * Can this identity be RUNG by a push — i.e. does a call to them have anything to
+ * wake?
+ *
+ * THIS IS DELIBERATELY NOT `hasPushSubscription`, AND CONFUSING THE TWO WOULD BREAK
+ * THE ONE DEVICE THIS EXISTS FOR. That function filters to
+ * `('webpush','fcm','expo')` and EXCLUDES both APNs kinds on purpose (v2.105.11/12):
+ * its only consumer asks "did they already get a NOTIFICATION, so is an email
+ * redundant", and a VoIP push carries no `aps.alert`, so it is not a notification.
+ *
+ * Ringing is the opposite question, and for ringing `apns-voip` is the BEST target
+ * in the fleet — it is the only thing that renders the full-screen CallKit screen on
+ * a locked iPhone, verified in production against a real handset (APNs HTTP 200,
+ * CallKit shown while the app was not in the foreground). Reusing the message-side
+ * helper here would have reported exactly that device as unreachable and gone on
+ * refusing calls to it.
+ *
+ * So the kinds are the ones the RING path can actually deliver to:
+ *   - `apns-voip` → PushKit → CallKit full screen (best)
+ *   - `expo`      → Expo's service → mobile notification
+ *   - `apns`      → APNs alert     → standard notification
+ *   - `fcm`       → FCM v1         → Android, incl. the full-screen intent
+ *   - `webpush`   → browser        → the service worker's requireInteraction alert
+ * A legacy NULL kind reads as webpush, the same reading the sender takes.
+ *
+ * FAILS OPEN on any trouble, and that direction is the point rather than laziness:
+ * this backs a decision about whether to OFFER a call. Failing shut would hide the
+ * call button because a query hiccuped, which is the bug being removed; failing open
+ * offers the call and lets the dial itself report the truth — the same fail-open rule
+ * v2.99.17 gave the dialer's own `nonexistent` check.
+ *
+ * It deliberately does NOT consult the user's push switch. That switch (v2.99.40)
+ * silences NOTIFICATIONS; the question here is whether a device exists to ring at
+ * all, and the switch is enforced inside `sendPushToIdentity` where every transport
+ * fans out — so a caller is still told the truth about reachability while the callee's
+ * own preference still governs delivery. Deciding it twice, in two places, is how the
+ * two answers come to disagree.
+ */
+export async function canRingIdentity(identityId: number): Promise<boolean> {
+  try {
+    const db = await getDb();
+    if (!db) return true;
+    const rows = await db
+      .select({ id: pushSubscriptions.id })
+      .from(pushSubscriptions)
+      .where(
+        and(
+          eq(pushSubscriptions.identityId, identityId),
+          sql`(${pushSubscriptions.kind} IS NULL OR ${pushSubscriptions.kind} IN ('webpush','fcm','expo','apns','apns-voip'))`,
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  } catch {
+    return true;
+  }
+}
+
 /** Is push delivery enabled for the account behind this identity (v2.99.40)?
  *  NULL/true = on (the historical default: having a subscription meant push),
  *  explicit false = the user turned it off in Profile. Guests have no user row

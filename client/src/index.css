@@ -766,8 +766,26 @@ body.relay-app-lock {
 
    Scoped to `.relay-v2` so the marketing landing page and the docs are untouched. */
 .relay-v2 .rglass {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  /* THE BOARD'S SINGLE CARD RECIPE, and it used to paint NOTHING in the theme the app
+     defaults to. Two of its three declarations were dark-only values on an
+     un-dark-scoped rule:
+
+       * `background` as a SHORTHAND reset background-color to transparent, so in light
+         a card showed the page straight through it.
+       * the hairline was white at 9% — invisible on a light card, so a list of rows had
+         no boundaries at all in the theme most people see.
+
+     `Admin.tsx` had already worked this out and patched it with two inline tokens, and
+     that is exactly the shape this repo keeps paying for: a workaround at ONE of five
+     call sites, so the other four stayed broken. The values belong here.
+
+     `background-image`, NOT the `background` shorthand — the shorthand is what reset the
+     colour, and re-introducing it would undo the fix while looking identical. `--card`
+     and `--border` are theme tokens, so dark loses nothing: in `.dark.relay-v2` the
+     border resolves to `oklch(1 0 0 / 7%)`, i.e. the board's own row hairline. */
+  background-color: var(--card);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+  border: 1px solid var(--border);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 /* Sheets and dialogs sit ABOVE the glass tier: nearly opaque, because they cover
@@ -900,6 +918,38 @@ body.relay-app-lock {
   border: 1px solid rgba(var(--rb-rgb), 0.4);
   color: var(--rb);
 }
+/* LIGHT THEME NEEDS ITS OWN TEXT COLOUR, and this rule was the only accent recipe
+   missing one — `.rkey` above and `.rstoryring` below both branch on theme, and the tab
+   bar keeps a per-tab `shade` for exactly this reason.
+   `<html>` carries `relay-v2` unconditionally and the app DEFAULTS to light, while the
+   accent engine is dark-gated — so in light `--rb` is the static `#35e0b4`, which as
+   TEXT computes to about 1.4:1 on a light card. The result was that the SELECTED chip's
+   own word ("All" / "Dialed" / "Missed" / "Received") was the one label on the row you
+   could not read, while its unselected neighbours were fine.
+   The tint and the hairline still carry the selection, so nothing about "you are here"
+   is lost; only the TEXT moves, to the AA-measured token v2.99.86 exists for (5.9:1 on
+   this card). Dark is untouched — the cycling accent is legible on near-black, which is
+   what it was built for. */
+.relay-v2:not(.dark) .rchip-accent {
+  color: var(--relay-green-text);
+}
+/* AVATAR INITIALS, and this needed its OWN rule for the same reason `.rchip-accent` above
+   did — with the difference that the failure here is app-wide rather than on one screen.
+   `PeerAvatar`'s fallback was `bg-primary/15 text-primary`, i.e. accent text on its own
+   faint accent TINT, and the tint darkens the effective background enough that even the
+   theme-aware `--primary` lands under AA: MEASURED as rendered at 390px, the initials
+   computed to **3.77:1** in light theme (dark was fine at 9.29). That is every avatar
+   without a photo, on every surface — thread rows, contacts, History, the chat header, call
+   tiles — in the theme the app DEFAULTS to.
+   NO border, unlike `.rchip-accent`: an avatar is a disc, and a hairline around it reads as
+   a story ring, which already means something else here. */
+.relay-v2 .ravatar-fallback {
+  background: rgba(var(--rb-rgb), 0.15);
+  color: var(--rb);
+}
+.relay-v2:not(.dark) .ravatar-fallback {
+  color: var(--relay-green-text);
+}
 /* Primary CTA: SOLID accent with dark text. `#04211a` is the board's on-accent colour —
    a near-black green that stays legible across all twelve hues, which plain black or
    white would not (white fails on the yellow and lime entries). */
@@ -908,6 +958,46 @@ body.relay-app-lock {
   color: #04211a;
   box-shadow: 0 10px 30px rgba(var(--rb-rgb), 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.35);
 }
+/* CONTACT TAG CHIPS — board 3b's four fixed label hues, as ONE recipe per tag instead of
+   the two hand-rolled inline copies that used to carry these values (the Contacts filter
+   row and the per-row chip). A copy of a recipe is how the copy misses the fix the
+   original receives, which is exactly what happened here.
+
+   THE FIX IS THE TEXT, and it is the SAME defect v2.106.31 measured on the accent: a chip
+   paints its hue at 13% over the card and then sets the SAME pastel hue as its label, so
+   in LIGHT theme the word sits on a near-white tint of itself. Measured as rendered, over
+   the real `--card` in each theme:
+
+     tag      light TODAY   light FIXED   dark (unchanged)
+     vip      1.53:1        4.74:1        6.13:1
+     family   1.69:1        4.81:1        5.61:1
+     friend   1.67:1        4.65:1        5.64:1
+     team     1.71:1        4.66:1        5.53:1
+
+   Against AA's 4.5 for normal text, all four light values FAILED and all four dark values
+   were fine — which is why it survived: the board is a dark design and the app ships LIGHT.
+
+   THE LIGHT VALUE IS AN OVERRIDE RATHER THAN A REPLACEMENT, and that split is the whole
+   reason this needs CSS at all: the darker same-hue text measures 1.97-2.03:1 on the DARK
+   chip, i.e. worse than what it replaces. One value cannot serve both themes, and an inline
+   `style={{ color }}` cannot branch on one — so the values move out of the JSX.
+
+   The FILL and the HAIRLINE are the board's, untouched: the hue still identifies the label,
+   only the word becomes readable. Each light value is the LIGHTEST same-hue oklch lightness
+   clearing 4.6:1, so the colour moves as little as possible from what was specified. */
+.relay-v2 .rtag {
+  border: 1px solid;
+  border-radius: 9999px;
+}
+.relay-v2 .rtag-vip    { background: #e8c94a21; border-color: #e8c94a73; color: #e8c94a; }
+.relay-v2 .rtag-family { background: #f9a8d421; border-color: #f9a8d473; color: #f9a8d4; }
+.relay-v2 .rtag-friend { background: #93c5fd21; border-color: #93c5fd73; color: #93c5fd; }
+.relay-v2 .rtag-team   { background: #c4b5fd21; border-color: #c4b5fd73; color: #c4b5fd; }
+.relay-v2:not(.dark) .rtag-vip    { color: #896b00; }
+.relay-v2:not(.dark) .rtag-family { color: #9e557f; }
+.relay-v2:not(.dark) .rtag-friend { color: #4372a5; }
+.relay-v2:not(.dark) .rtag-team   { color: #7565a7; }
+
 /* The per-screen scrim between the canvas and the content, so text keeps its contrast
    over whatever the background happens to be doing underneath. */
 .relay-v2 .rscrim {

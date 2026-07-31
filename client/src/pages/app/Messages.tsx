@@ -98,7 +98,7 @@ import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useThreadMuted, isThreadMuted, setThreadMuted, onMutedChange } from "@/app/mutedThreads";
 import { useTypers, useTypingConversations } from "@/app/typingStore";
-import { bubbleStyleFor, nameColorFor } from "@/app/peerColors";
+import { bubbleStyleFor, bubbleGlyphColor, nameColorFor } from "@/app/peerColors";
 import { TypingLine } from "@/app/TypingLine";
 import { useDraft } from "@/app/draftStore";
 
@@ -590,7 +590,10 @@ export default function MessagesPage({
                       </span>
                       <span className="text-[11px] text-muted-foreground">{cat.rows.length}</span>
                       {catUnread && (
-                        <span className="size-2 rounded-full" style={{ background: "#fb923c" }} />
+                        /* The section's own unread pip, same accent as the row counts under
+                           it — two colours for one state is how a header comes to disagree
+                           with its rows. `bg-primary`, not the 2.26:1 orange literal. */
+                        <span className="size-2 rounded-full bg-primary" />
                       )}
                     </button>
                     {open &&
@@ -810,9 +813,21 @@ export default function MessagesPage({
                                     the top, so this only has to say why. `ms-auto` moves
                                     here so the timestamp still ends the line. */}
                                 {t.pinned && (
+                                  /* NOT GREEN. Green means ONLINE in this app — it is what
+                                     every presence LED is drawn with, and it is why v2.99.86
+                                     moved DND off it, v2.106.9 the speaking tile, v2.106.11
+                                     the push banner and v2.106.18 the voice waveform. A pin
+                                     is not a presence statement, so it was a further meaning
+                                     for the one colour that has to carry exactly one.
+                                     NOT the accent either, deliberately: the accent now means
+                                     UNREAD in this row (see the count and the timestamp
+                                     below), and a pinned-but-READ thread must not read as
+                                     unread. The pin's real effect is the SORT — it is already
+                                     at the top — so this only has to say why, which is a
+                                     quiet job. Measured: 6.00:1 light, 6.55:1 dark. */
                                   <Pin
                                     aria-label="Pinned"
-                                    className="ms-auto size-3.5 shrink-0 -rotate-45 text-[color:var(--relay-green-text)]"
+                                    className="ms-auto size-3.5 shrink-0 -rotate-45 text-muted-foreground"
                                   />
                                 )}
                                 {t.lastMessageAt && (
@@ -821,7 +836,21 @@ export default function MessagesPage({
                                     className={
                                       (t.pinned ? "shrink-0 pl-1.5 " : "ms-auto shrink-0 pl-1 ") +
                                       "text-[11.5px] tabular-nums [unicode-bidi:isolate] " +
-                                      (unread ? "font-semibold text-[#fb923c]" : "text-muted-foreground")
+                                      /* Board 1c: unread is the ACCENT. `text-primary`, not
+                                         the hardcoded `#fb923c` — measured 2.26:1 on the light
+                                         card against AA's 4.5, i.e. the timestamp of an UNREAD
+                                         thread was the least readable thing in the row in the
+                                         theme the app defaults to (dark was fine at 8.30, which
+                                         is why it survived: the board is a dark design and the
+                                         app ships light). `text-primary` measures 4.85:1 light
+                                         and 11.16:1 dark, and v2.106.4 repointed `--primary` at
+                                         `--rb` inside `.dark.relay-v2`, so dark keeps the
+                                         cycling accent and only light becomes readable.
+                                         AND THE ORANGE MEANT SOMETHING ELSE: the owner asked
+                                         for orange on their OWN BUBBLES in their own words
+                                         (v2.99.85), so spending it on "unread" put two meanings
+                                         on one colour. */
+                                      (unread ? "font-semibold text-primary" : "text-muted-foreground")
                                     }
                                   >
                                     {timeAgo(t.lastMessageAt)}
@@ -881,7 +910,7 @@ export default function MessagesPage({
                                 {unread && (
                                   /* Colour + weight, not a heavy pill (the reference's
                                      "2 New Chats" treatment). */
-                                  <span className="shrink-0 font-semibold text-[13px] text-[#fb923c]">
+                                  <span className="shrink-0 font-semibold text-[13px] text-primary">
                                     {t.unreadCount > 99 ? "99+" : t.unreadCount} new
                                   </span>
                                 )}
@@ -890,9 +919,13 @@ export default function MessagesPage({
                                     claim about a message that may not exist. Withheld
                                     when a real count is already shown. */}
                                 {!unread && t.manualUnread && (
+                                  /* Same accent as the count it stands in for — and the same
+                                     measurement applies even though this is a FILL rather than
+                                     text: at 2.26:1 the orange dot missed the 3:1 that
+                                     non-text UI needs on the light card too. */
                                   <span
                                     aria-label="Marked unread"
-                                    className="size-2.5 shrink-0 rounded-full bg-[#fb923c]"
+                                    className="size-2.5 shrink-0 rounded-full bg-primary"
                                   />
                                 )}
                               </div>
@@ -911,7 +944,15 @@ export default function MessagesPage({
       {/* ── conversation view ────────────────────────────────── */}
       <section
         className={
-          "flex-1 min-w-0 flex-col min-h-0 md:rounded-2xl md:border md:border-border md:bg-card " +
+          /* `bg-background` on MOBILE too, not only `md:bg-card`. Both the message list and the
+             composer are fully opaque (`--background` and `--card` carry no alpha), so any
+             region of this column showing the background CANVAS is by definition a region
+             neither of them is covering — i.e. a layout shortfall, which is what the owner
+             photographed as "a large empty region with stars" where the composer should be.
+             Painting the column's own surface does not fix a shortfall; it makes one look
+             like a gap in the app instead of like the app having stopped, which is the
+             difference between a screenshot that is diagnostic and one that is not. */
+          "flex-1 min-w-0 flex-col min-h-0 bg-background md:rounded-2xl md:border md:border-border md:bg-card " +
           (activeConvoId == null ? "hidden md:flex" : "flex")
         }
       >
@@ -1174,11 +1215,27 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
-  const sendMutation = trpc.messages.send.useMutation({
-    onSuccess: () => {
-      utils.messages.list.invalidate({ conversationId });
-      utils.messages.threads.invalidate();
-    },
+  const afterSend = () => {
+    utils.messages.list.invalidate({ conversationId });
+    utils.messages.threads.invalidate();
+  };
+  const sendMutation = trpc.messages.send.useMutation({ onSuccess: afterSend });
+  /* A SECOND HOOK FOR THE VOICE NOTE, AND THE SEPARATION IS THE POINT.
+   *
+   * Both sends used to share `sendMutation`, and the text Send button is disabled on
+   * `sendMutation.isPending`. The voice-note send is FIRE-AND-FORGET, so a voice request
+   * that never settled left `isPending` true forever — after which the accent Send button
+   * was still drawn, still looked live, and was permanently dead with nothing on screen
+   * saying why. Two independent operations must not share one in-flight flag: a stuck
+   * voice note is now a stuck voice note, not a thread you can no longer type in.
+   *
+   * It also gets a REAL onError. It had none — the upload succeeded, the send failed, and
+   * the blob was discarded with no toast and no retry, so a voice note could fail 100%
+   * silently while the user believed it had gone. `main.tsx` only console.errors. */
+  const voiceSendMutation = trpc.messages.send.useMutation({
+    onSuccess: afterSend,
+    onError: (e) =>
+      toast.error(e.message || "Voice note not sent — tap the mic and try again."),
   });
 
   /* ── self-destructing messages (v2.96) ──────────────────────────
@@ -1776,12 +1833,26 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         replyToId: reply?.id ?? null,
         meta: exp != null ? { expire: exp } : undefined,
       });
-    } catch {
+    } catch (e) {
       setText(body);
       if (reply) setReplyingToState(reply);
       if (upload) setPendingUpload(upload);
       if (exp != null) setExpire(exp);
-      toast.error("Message not sent — check your connection and tap send again.");
+      /* THE SERVER'S OWN REASON, not a guess about the network.
+       *
+       * This was a bare `catch` reporting "check your connection" for EVERY failure — and
+       * the failures that actually happen here are not connection failures. "You can't
+       * message this person." (they blocked you), "not a member of this conversation", a
+       * stale `replyToId` rehydrated from a saved draft, an attachment that is not yours,
+       * a lost identity: every one of them read as a network blip, and tapping send again
+       * never helped. Being told to retry something that can never succeed is exactly
+       * "I cannot send messages".
+       *
+       * Every other mutation in this file already surfaces `e.message`; this was the one
+       * that did not. The connection wording survives only as the fallback for an error
+       * that genuinely carries no message. */
+      const why = e instanceof Error ? e.message.trim() : "";
+      toast.error(why || "Message not sent — check your connection and tap send again.");
     }
   }
 
@@ -1867,7 +1938,24 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   function discardRecording() {
     // `cancel()` resolves `done` with null, so the upload never happens — the note is
     // gone rather than sent-and-unsent.
-    recordingRef.current?.cancel();
+    try {
+      recordingRef.current?.cancel();
+    } catch {
+      /* a wedged recorder must not stop Discard from working */
+    }
+    /* DISCARD RETURNS THE COMPOSER UNCONDITIONALLY, WITHOUT WAITING FOR THE RECORDER.
+     *
+     * `setRecording(false)` also runs in the recording promise's `.finally()`, and that is
+     * the normal path — but it can only run once the promise SETTLES, and the whole reason
+     * this was unrecoverable is that the promise could hang. While `recording` is true the
+     * composer is REPLACED by the recording bar, so a recorder that never answered took
+     * the text field and the send button with it and left its own Discard button as a
+     * no-op. `voiceNote.ts` now guarantees the promise settles; this is the belt to that
+     * braces, and it is cheap: setting the flag twice is idempotent, while relying on one
+     * mechanism is how "there is no way out of this screen" happened. */
+    recordingRef.current = null;
+    setRecording(false);
+    setRecPaused(false);
   }
 
   // Safety net: if the conversation unmounts while recording, cancel so the
@@ -1878,6 +1966,22 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       recordingRef.current = null;
     };
   }, []);
+
+  /* LEAVING A THREAD ENDS THE RECORDING, and the missing sibling of this is 300 lines
+   * above: `pendingUpload` IS reset on a conversation change, for exactly the reason that
+   * an attachment picked in one chat must not be sent to the next one. A recording had no
+   * such reset — so switching threads mid-record left the recording bar sitting over the
+   * NEW conversation with a live mic and a take belonging to the OLD one, and whichever
+   * thread was open when it stopped is where it landed.
+   *
+   * `discardRecording` already cancels the recorder, nulls the ref and clears both flags
+   * unconditionally, so this needs no new mechanism — only the call nobody made. */
+  useEffect(() => {
+    return () => {
+      discardRecording();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
 
   async function startRecording() {
     if (!recorderSupported()) {
@@ -1897,9 +2001,26 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       setRecPaused(false);
       void rec.done
         .then(async (result) => {
+          /* THE COMPOSER COMES BACK BEFORE THE UPLOAD, NOT AFTER IT — the v2.106.30
+           * lock-out, one step downstream.
+           *
+           * The recording is OVER by the time this runs: the take is in hand and the mic
+           * is released. But `recording` stayed true across the whole upload, and while it
+           * is true the composer is REPLACED by the recording bar — whose three controls
+           * are all disabled mid-upload. So a 60-second voice note on a slow uplink left
+           * the person with no text field, no send and no way out for as long as the
+           * transfer took, and if the transfer hung, indefinitely. Settling the promise
+           * was the fix for the recorder; this is the same rule applied to the step after
+           * it — the bar exists to represent a LIVE recording, so it must not outlive one.
+           *
+           * The `.finally()` below is KEPT and becomes idempotent: these are cheap flag
+           * writes, and relying on one mechanism is how the original lock-out happened. */
+          recordingRef.current = null;
+          setRecording(false);
+          setRecPaused(false);
           if (!result) return; // cancelled / empty
           // uploadBlob() re-throws on failure (it only resets `uploading` in
-          // its own finally) — catch here or `recording` sticks true forever.
+          // its own finally) — catch here or the error escapes into a void handler.
           try {
             await uploadBlob(result.blob, `voice-note.${result.ext}`, result.durationMs);
           } catch {
@@ -1927,7 +2048,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       const json = await uploadAttachment(blob, { filename, mimeType: blob.type, durationMs });
       const exp = expire;
       setExpire(null);
-      sendMutation.mutate({
+      // Its OWN mutation, so a stuck voice send cannot disable the text Send button —
+      // and it reports its own failures, which it never used to.
+      voiceSendMutation.mutate({
         conversationId,
         kind: "audio",
         body: null,
@@ -1992,7 +2115,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       {/* conversation header — ONE compact bar (the app's top bar is hidden on
           mobile while a chat is open): back, avatar + presence LED, name +
           verified badge, and a live status line (typing… > online > last seen). */}
-      <header className="flex items-center gap-2 px-2 md:px-4 py-2 border-b border-border/70 bg-card/90 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur-md md:rounded-t-2xl">
+      <header className="shrink-0 flex items-center gap-2 px-2 md:px-4 py-2 border-b border-border/70 bg-card/90 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur-md md:rounded-t-2xl">
         <button
           type="button"
           aria-label="Back"
@@ -2095,7 +2218,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             {((!isGroup && thread?.peerNumber) || (isGroup && thread?.groupNumber)) && (
               <span className="text-muted-foreground/40">·</span>
             )}
-            {typers.length > 0 ? (
+            {/* TYPING IS ANNOUNCED ONCE, and this arm is the one that goes.
+                It used to fire here AND in `TypingLine` above the composer at the same
+                time — the same fact twice on one screen — and in a GROUP it also DROPPED
+                "5 members · 3 online" the moment anybody typed, so the header lost the
+                group's size to repeat something already visible.
+                `TypingLine` is the one kept because it is strictly better: it names WHO is
+                typing and colours each person with `nameColorFor`, which an anonymous
+                "typing…" cannot, and it sits OUTSIDE the scroll container so it can never
+                push the list. Scoped to non-group here rather than removed outright, so a
+                1:1 header — which has no members line to protect — is unchanged. */}
+            {typers.length > 0 && !isGroup ? (
               <span className="text-[color:var(--relay-online)] font-medium animate-pulse">typing…</span>
             ) : isGroup ? (
               <span className="text-muted-foreground">
@@ -2151,24 +2284,31 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         )}
         {!isGroup && thread?.peerNumber && (
           <>
+            {/* BOARD 1d: VIDEO first, then CALL — and the call chip is the ACCENT while
+                video is neutral glass, because a 1:1 conversation's primary action is to
+                ring the person.
+                THAT ALSO RETIRES A REAL COLLISION: the voice chip was `#22c55e`, which is
+                the exact hex `VerifiedBadge.tsx` uses for the `registered` tier — and this
+                header renders that badge about 40px to the left of it. Two different
+                meanings on one green, side by side, in the owner's own screenshot. */}
             <AccentCircle
-              rgb="34,197,94"
-              hex="#22c55e"
-              title="Voice call"
-              size={34}
-              onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}&voice=1`)}
-            >
-              <Phone className="size-4" />
-            </AccentCircle>
-            <AccentCircle
-              rgb="56,189,248"
-              hex="#38bdf8"
+              rgb="255,255,255"
+              hex="#ffffff"
               title="Video call"
               size={34}
               onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}&video=1`)}
             >
               <Video className="size-4" />
             </AccentCircle>
+            <button
+              type="button"
+              title="Voice call"
+              aria-label="Voice call"
+              onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}&voice=1`)}
+              className="rchip-accent grid size-[34px] shrink-0 place-items-center rounded-[12px] transition active:scale-95 motion-reduce:transition-none"
+            >
+              <Phone className="size-4" />
+            </button>
           </>
         )}
         {/* CALL THIS GROUP (#113, v2.105.7) — the precondition the ask needed.
@@ -2267,13 +2407,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             height={m.attachment.height ?? null}
                             durationMs={m.attachment.durationMs ?? null}
                             mine={mine}
+                            glyph={bubbleGlyphColor({ mine: !!mine, isGroup, senderIdentityId: m.senderIdentityId })}
                             onOpen={openMedia(m)}
                           />
                         )}
                         {m.body && (
                           <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body, mentionRoster, !!mine)}</div>
                         )}
-                        <div className={"text-[10px] mt-1 " + "text-white/70"}>
+                        <div className={"font-mono text-[9px] mt-1 " + "text-white/70"}>
                           {formatTime(m.createdAt)}
                         </div>
                       </div>
@@ -2570,6 +2711,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             durationMs={
                               (att as { durationMs?: number | null }).durationMs ?? null
                             }
+                            glyph={bubbleGlyphColor({ mine: !!mine, isGroup, senderIdentityId: m.senderIdentityId })}
                             mine={mine}
                             onOpen={openMedia(m)}
                           />
@@ -2636,7 +2778,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       condition here to fall out of step with it. */}
                   <div
                     className={
-                      "flex justify-end items-center gap-1 text-[10px] leading-none mt-0.5 -mb-0.5 text-white/70"
+                      "flex justify-end items-center gap-1 font-mono text-[9px] leading-none mt-0.5 -mb-0.5 text-white/70"
                     }
                   >
                     {formatTime(m.createdAt)}
@@ -2728,8 +2870,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           cannot re-render this whole conversation (the v2.99.67 mistake). */}
       <TypingLine typers={typers} isGroup={isGroup} labelFor={senderLabel} />
 
-      {/* composer */}
-      <div className="px-3 md:px-5 py-3 border-t border-border bg-card md:rounded-b-2xl">
+      {/* composer — `shrink-0` is LOAD-BEARING even though it changes nothing today.
+          This row and the header are the two things the conversation column must never
+          give up, and both were surviving only on the flex automatic-minimum-size rule
+          (an item's min-height defaults to its content). That rule stops applying the
+          moment either element becomes a scroll container or takes a `min-h-0` — at which
+          point the list, which legitimately grows, wins and the composer is squeezed to
+          nothing. The owner's report was a missing composer; declaring the intent costs
+          two words and removes the dependency on a default. */}
+      <div className="shrink-0 px-3 md:px-5 py-3 border-t border-border bg-card md:rounded-b-2xl">
         {replyingTo && (
           <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-muted/60 border-l-2 border-[#fb923c] text-sm">
             <Reply className="size-4 shrink-0 text-[#fb923c]" />
@@ -2782,7 +2931,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 }}
                 className="shrink-0 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-xs font-medium transition hover:bg-muted/60 active:scale-95 motion-reduce:transition-none"
               >
-                <span style={{ color: "var(--rb, #3FE0C5)" }}>@</span>
+                {/* `text-primary`, not the raw accent: measured 1.59:1 on the light card
+                    against AA's 4.5, versus 4.59:1 here. v2.106.4 repointed `--primary` at
+                    `--rb` inside `.dark.relay-v2` precisely so accent UI follows the
+                    cycling hue in dark (7.12:1) while light keeps a measured value — so
+                    reaching for the variable directly routes around the infrastructure
+                    built for this. Fills are unaffected; this is only ever about text. */}
+                <span className="text-primary">@</span>
                 {mem.name}
               </button>
             ))}
@@ -2872,20 +3027,6 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           >
             <Smile className="size-5" />
           </Button>
-          {/* One "+" replaces the separate media and paperclip buttons — it opens
-              the menu above (Record video / Photo & video / Attach file). */}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={() => setAttachMenuOpen((v) => !v)}
-            aria-label={attachMenuOpen ? "Close attach menu" : "Attach media or a file"}
-            title="Attach media or a file"
-            aria-expanded={attachMenuOpen}
-            className={attachMenuOpen ? "bg-muted/60 text-primary" : ""}
-          >
-            <Plus className={"size-5 transition-transform" + (attachMenuOpen ? " rotate-45" : "")} />
-          </Button>
           {/* Self-destruct toggle (v2.96): off → view-once → 5s → 10s → 30s.
               Applies to the NEXT send (text, media, or voice note).
               QA M3: 1:1 ONLY. In a group the message is one shared row, so the
@@ -2928,6 +3069,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             onChange={handleFile}
           />
           <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
+          {/* BOARD 1d: THE ATTACH CLIP LIVES INSIDE THE FIELD, not beside it.
+              Measured at 390px the row was emoji + attach + timer + field + mic, leaving the
+              text field 190px against the board's 274 — the field is what the screen is for
+              and it was the smallest thing in the row. Moving this one control inside
+              recovers its whole 42px cell without removing anything.
+              LOGICAL properties (`pe-11`, `end-1`), not `pr-`/`right-`: this app renders
+              Arabic and the owner's own thread has an Arabic message in it, so the reserved
+              space and the button have to swap sides with the text direction. */}
+          <div className="relative min-w-0 flex-1">
           <Input
             ref={composerRef}
             value={text}
@@ -2961,8 +3111,24 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             onPaste={handlePaste}
             placeholder={uploading ? "Uploading…" : "Type a message"}
             disabled={uploading || recording}
-            className="flex-1 h-11 rounded-full px-4"
+            className="h-11 w-full rounded-full ps-4 pe-11"
           />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => setAttachMenuOpen((v) => !v)}
+              aria-label={attachMenuOpen ? "Close attach menu" : "Attach media or a file"}
+              title="Attach media or a file"
+              aria-expanded={attachMenuOpen}
+              className={
+                "absolute end-1 top-1/2 size-9 -translate-y-1/2 rounded-full " +
+                (attachMenuOpen ? "bg-muted/60 text-primary" : "")
+              }
+            >
+              <Plus className={"size-5 transition-transform" + (attachMenuOpen ? " rotate-45" : "")} />
+            </Button>
+          </div>
           {text.trim() || pendingUpload ? (
             <Button
               type="button"
@@ -2984,10 +3150,26 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               onClick={recording ? stopRecording : startRecording}
               variant={recording ? "destructive" : "default"}
               size="icon"
-              className="h-11 w-11 rounded-full border-0"
-              style={recording ? undefined : { background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", color: "#08211d" }}
+              /* Board 1d: the mic is the composer's ACCENT circle, and it swaps to Send
+                 when there is text — so the two occupy the SAME position. This was the old
+                 FIXED cyan (`#3FE0C5`/`#6EE7FF`) while Send beside it uses `.rcta`, so the
+                 hue visibly JUMPED the moment you typed a character: one control on the
+                 cycling accent, its twin on a literal the accent replaced in v2.106.7.
+                 `.rcta` carries the board's on-accent `#04211a`, which stays legible across
+                 all twelve hues where white fails on the yellow and lime entries.
+                 While RECORDING the button is `destructive`, so it must NOT also carry the
+                 accent — a red stop control tinted with the accent reads as neither. */
+              className={"h-11 w-11 rounded-full border-0" + (recording ? "" : " rcta")}
               aria-label={recording ? "Stop" : "Record"}
-              disabled={!recorderSupported()}
+              /* `|| uploading`, matching the gate the text field one row up already has.
+                 Without it, tapping the mic while a photo or file was still uploading
+                 opened the recording bar with a LIVE microphone and all three of its
+                 controls already disabled by that same `uploading` flag — a recording
+                 nobody could stop, discard or send, entered from the button that is the
+                 composer's primary while the field is empty. Stopping is still allowed
+                 once a recording is live, because `recording` is the state that owns the
+                 bar and the upload it would wait on is a different one. */
+              disabled={!recorderSupported() || (!recording && uploading)}
               title={
                 recorderSupported()
                   ? recording
@@ -3280,19 +3462,36 @@ function Receipt({ status, mine }: { status?: string | null; mine: boolean }) {
      read, grey = delivered", so READ now takes the cycling accent rather than a fixed
      blue — the state change the owner asked to see at a glance, in the app's one accent.
 
-     THE OWN BUBBLE STAYS ORANGE, deliberately, which is why the accent works here: the
-     board draws the outgoing bubble as a translucent accent tint, but the owner asked for
-     orange own-bubbles in their own words in v2.99.85 ("when he post mind bubble is
-     orange"), and an explicit request is not something a later visual spec overrides. A
-     bright accent tick on the orange fill is high contrast; an accent tick on an accent
-     bubble would not be.
+     THE OWN BUBBLE STAYS ORANGE, deliberately: the board draws the outgoing bubble as a
+     translucent accent tint, but the owner asked for orange own-bubbles in their own words
+     in v2.99.85 ("when he post mind bubble is orange"), and an explicit request is not
+     something a later visual spec overrides.
+
+     AND THAT IS EXACTLY WHY THE ACCENT IS WRONG HERE — a correction to my own claim above,
+     which said "a bright accent tick on the orange fill is high contrast". It is not.
+     MEASURED against the orange bubble's own pale gradient stop (#fb923c), which is the
+     worst case a tick can land on:
+
+       read = accent            1.34:1      <- the state that matters most
+       delivered = white 70%    1.77:1      <- MORE visible than read
+
+     So the vocabulary was not merely faint, it was INVERTED: the more important state was
+     the fainter one, which is why the ✓✓ in the owner's screenshot is hard to pick out at
+     all. Read is now solid WHITE (2.26:1) and delivered white at 55% (1.57:1), so the
+     distinction rides opacity on a surface built for white text and read is the more
+     visible of the two.
+     SAID PLAINLY: neither clears AA's 4.5, and neither can on a mid-tone fill — but a tick
+     is a small state indicator rather than body text, it sits beside a label that names the
+     state in words, and every alternative measured worse. The accent stays the app's
+     read-vs-delivered vocabulary everywhere it sits on a CARD (the thread row, Message
+     info); it is only on a saturated bubble that it cannot be seen.
 
      ONE mechanism, deliberately. The first cut set a grey CLASS and then overrode it with
-     an inline accent for the read case — and the mutation run showed the class could be
+     an inline colour for the read case — and the mutation run showed the class could be
      deleted with no visible change at all, because an inline `style` beats it. Two
      individually-removable mechanisms are dead weight that reads as load-bearing
      (v2.105.17), so the colour is decided in exactly one expression. */
-  const tickStyle = { color: read ? "var(--rb)" : "rgba(255,255,255,0.7)" };
+  const tickStyle = { color: read ? "#fff" : "rgba(255,255,255,0.55)" };
   const label = failed
     ? "Not sent"
     : read
@@ -3627,6 +3826,7 @@ function AttachmentView({
   height,
   durationMs,
   mine = false,
+  glyph,
   onOpen,
 }: {
   mimeType: string;
@@ -3643,6 +3843,10 @@ function AttachmentView({
   durationMs?: number | null;
   /** Own-bubble styling (white-on-orange) vs received (theme tokens). */
   mine?: boolean;
+  /** The bubble's own dark gradient stop, for a glyph on a white on-bubble control.
+   *  Threaded rather than derived here, because this component knows nothing about who
+   *  sent the message — and the sender is what picks the hue. */
+  glyph?: string;
   onOpen?: (m: { url: string; type: "image" | "video"; name?: string }) => void;
 }) {
   // A thumb/image that 404s/403s used to render as a broken white rectangle —
@@ -3691,10 +3895,21 @@ function AttachmentView({
     );
   }
   if (mimeType.startsWith("audio/")) {
-    return <VoiceNotePlayer url={url} mine={mine} durationMs={durationMs} />;
+    return <VoiceNotePlayer url={url} mine={mine} durationMs={durationMs} glyph={glyph} />;
   }
   return <FileCard url={url} filename={filename} mine={mine} />;
 }
+
+/**
+ * Board 1d's 18-bar waveform.
+ *
+ * A FIXED pattern rather than a decode of the audio, and that is a deliberate limit rather
+ * than a shortcut: real amplitudes need the whole file fetched and put through an
+ * AudioContext, which on the owner's own thread of six voice notes is six decodes for
+ * decoration — and the board draws a stylised wave, not an analysis. Deterministic per
+ * index, so a note looks the same every time it is opened.
+ */
+const WAVE_BARS = [38, 62, 100, 74, 46, 88, 58, 30, 70, 96, 54, 42, 80, 64, 34, 90, 50, 26] as const;
 
 function fmtClock(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
@@ -3743,11 +3958,14 @@ function VoiceNotePlayer({
   url,
   mine,
   durationMs,
+  glyph,
 }: {
   url: string;
   mine: boolean;
   /** Recorded length from the attachment row, when the sender's client stored one. */
   durationMs?: number | null;
+  /** The bubble's own dark gradient stop, for a glyph on the white play disc. */
+  glyph?: string;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -3901,28 +4119,35 @@ function VoiceNotePlayer({
         type="button"
         onClick={toggle}
         aria-label={playing ? "Pause" : "Play voice note"}
-        className={
-          "grid size-9 shrink-0 place-items-center rounded-full active:scale-95 transition-transform " +
-          (mine ? "bg-white/20 text-white" : "")
-        }
-        /* Board 2f asks for an ACCENT play button, and the same vocabulary argument
-           as the waveform above applies: this was `--relay-online`, and a play
-           control is not a presence statement. Green means ONLINE in this app and
-           that is the only thing it may mean. Literal fallbacks, never a
-           self-referencing `var(--rb, var(--rb))`, which is a cycle the browser
-           drops (v2.106.7). */
-        style={
-          mine
-            ? undefined
-            : {
-                background: "rgba(var(--rb-rgb, 63, 224, 197), 0.16)",
-                color: "var(--rb, #3FE0C5)",
-              }
-        }
+        className="grid size-9 shrink-0 place-items-center rounded-full bg-white ring-1 ring-black/10 active:scale-95 transition-transform"
+        /* A SOLID WHITE DISC WITH THE BUBBLE'S OWN DARK STOP AS THE GLYPH, and this is a
+           correction to my own v2.106.18: `.rchip-accent` is a CARD recipe, measured on
+           `--card`, and this control sits on a SATURATED BUBBLE — a surface it was never
+           measured for.
+           MEASURED across all 36 bubble surfaces the app can draw (own orange, peer blue
+           and the 16 group hues, both gradient stops of each): the accent glyph on its own
+           accent tint on the bubble is 1.16:1 at worst and FAILS AA on 30 of the 36. That
+           is the near-invisible play triangle in the owner's own screenshot.
+           The disc is white so it reads as a control on every hue by construction, and the
+           glyph takes the bubble's DARKER stop so it borrows the bubble's identity instead
+           of introducing a nineteenth colour: 4.92:1 at worst, 0 of 36 failing.
+           `ring-black/10` because the white disc alone is only 1.92:1 against the palest
+           bubble — the glyph carries the identification, the hairline carries the edge. */
+        style={{ color: glyph }}
       >
         {playing ? <Pause className="size-4" /> : <Play className="size-4 translate-x-[1px]" />}
       </button>
       <div className="min-w-0 flex-1">
+        {/* BOARD 1d: an 18-BAR WAVEFORM, not a progress slider. This is the dominant
+            element in the owner's own screenshot of the conversation and the largest
+            single visual delta on the frame.
+            The bar HEIGHTS are a fixed pattern rather than a decode of the audio: reading
+            real amplitudes needs the whole file fetched and put through an AudioContext,
+            which on a thread of six voice notes is six decodes for decoration — and the
+            board draws a stylised wave, not an analysis. The pattern is deterministic per
+            bar index so a note looks the same every time it is opened.
+            Everything the slider did is kept: the same click-to-seek element, the same
+            `role="slider"` and aria values, and the same `frac` rAF driver. */}
         <div
           role="slider"
           aria-label="Seek"
@@ -3930,13 +4155,18 @@ function VoiceNotePlayer({
           aria-valuemax={Math.round(dur) || 0}
           aria-valuenow={Math.round(cur)}
           onClick={seek}
-          className={"relative h-1.5 cursor-pointer rounded-full " + track}
+          className="flex h-[22px] cursor-pointer items-center gap-[1.8px]"
         >
-          <div className={"absolute inset-y-0 left-0 rounded-full " + fill} style={{ width: `${frac * 100}%` }} />
-          <div
-            className={"absolute top-1/2 size-3 -translate-y-1/2 rounded-full shadow " + fill}
-            style={{ left: `calc(${frac * 100}% - 6px)` }}
-          />
+          {WAVE_BARS.map((h, i) => (
+            <span
+              key={i}
+              className={
+                "min-w-0 flex-1 rounded-full transition-colors motion-reduce:transition-none " +
+                ((i + 1) / WAVE_BARS.length <= frac ? fill : track)
+              }
+              style={{ height: `${h}%` }}
+            />
+          ))}
         </div>
         <div className={"mt-1 flex items-center justify-between font-mono text-[10px] " + sub}>
           <span>{fmtClock(cur)}</span>
@@ -4246,12 +4476,26 @@ function MediaLightbox({
         )}
       </div>
       {/* The board's footer. `pointer-events-none` so it can never swallow the tap
-          that closes the viewer — the whole backdrop is the close target. */}
+          that closes the viewer — the whole backdrop is the close target.
+
+          THE WORDING IS CORRECTED, because the old one was a FALSE CLAIM ON SCREEN. RELAY
+          has no end-to-end encryption and cannot: `drizzle/schema.ts` stores `body` as
+          plain `text`, and `server/v2db.ts` runs `like(messages.body, '%…%')` — a database
+          substring match, which is only possible on plaintext the server can read. Media is
+          the same: the object is served through a cookie-gated proxy, not sealed to a key
+          only the recipient holds.
+          What IS true is what v2.99.14 built: the bytes travel over TLS and the URL is not
+          shareable — the proxy streams them itself rather than redirecting to a presigned
+          storage URL, so a media link cannot be opened outside the app. That is worth
+          saying, and it is a promise the code keeps.
+          Board 1d's "END-TO-END ENCRYPTED" centre chip is DECLINED for the same reason,
+          rather than built: a security claim the app cannot honour is worse than no claim,
+          and this one would have been printed in the middle of every conversation. */}
       <div
         className="pointer-events-none absolute inset-x-0 bottom-5 text-center font-mono text-[10px] font-semibold uppercase text-white/45"
         style={{ letterSpacing: ".22em" }}
       >
-        Media is end-to-end encrypted
+        Encrypted in transit · stays in the app
       </div>
     </div>
   );
@@ -4428,12 +4672,13 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
         onClick={() => setOpen(true)}
         aria-label="New message"
         title="New message"
-        className="grid place-items-center w-[34px] h-[34px] rounded-[10px] shrink-0 hover:brightness-110"
-        style={{
-          background: "linear-gradient(160deg,rgba(251,146,60,.3),rgba(251,146,60,.1))",
-          color: "#fb923c",
-          boxShadow: "inset 0 1px 0 rgba(255,255,255,.15)",
-        }}
+        /* BOARD 1c: the compose chip is the ACCENT chip. It was a hand-rolled orange tint
+           carrying an orange GLYPH — accent-on-its-own-tint, the v2.106.31 pattern, and it
+           measured 1.77:1 in light (the tint itself is only 1.28:1 against the card, so the
+           chip barely existed either). `.rchip-accent` is the recipe built for exactly this
+           and it is the ONLY one that carries a per-theme text colour, which an inline style
+           cannot express. */
+        className="rchip-accent grid place-items-center w-[34px] h-[34px] rounded-[10px] shrink-0 hover:brightness-110"
       >
         <MessageSquarePlus className="size-[18px]" />
       </button>
@@ -4638,12 +4883,12 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                          "selected" means everywhere else in this app now. */
                       <span
                         key={n}
-                        className="inline-flex items-center gap-1 rounded-[16px] border px-2.5 py-[5px] font-mono text-[10.5px] font-bold"
-                        style={{
-                          background: "rgba(var(--rb-rgb, 63, 224, 197), 0.14)",
-                          borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.40)",
-                          color: "var(--rb, #3FE0C5)",
-                        }}
+                        /* `.rchip-accent` rather than a hand-rolled copy of it: this
+                           carried the class's OWN values (a .14 fill and a .40 border) and
+                           differed only in missing its light-theme text colour — measured
+                           1.47:1 against AA's 4.5, versus 5.17:1 with the class. A duplicate
+                           of a recipe is how the copy misses the fix the original received. */
+                        className="rchip-accent inline-flex items-center gap-1 rounded-[16px] px-2.5 py-[5px] font-mono text-[10.5px] font-bold"
                       >
                         {n.slice(0, 3)} {n.slice(3)}
                         <button
@@ -4740,7 +4985,14 @@ function SuggestList({
                 ) : (
                   <span
                     className="grid size-8 place-items-center rounded-full text-[11px] font-bold"
-                    style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)", color: "#08211d" }}
+                    /* A FILL, which is the accent's correct use (dark glyph on accent
+                       measures 10:1) — but on the FIXED cyan the cycling accent replaced in
+                       v2.106.7, so every other accent surface breathed and this one did not.
+                       The fallback is a LITERAL, never `var(--rb, var(--rb))`: a
+                       self-referencing custom property is a cycle, which resolves to the
+                       guaranteed-invalid value and makes the browser DROP the declaration
+                       entirely — a disc with no fill at all. */
+                    style={{ background: "var(--rb, #3FE0C5)", color: "#04211a" }}
                   >
                     {(c.displayName || c.number).slice(0, 2).toUpperCase()}
                   </span>
@@ -4774,7 +5026,10 @@ function SuggestList({
                   className="grid size-5 shrink-0 place-items-center rounded-full border"
                   style={{ borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.45)" }}
                 >
-                  <Plus className="size-3" style={{ color: "var(--rb, #3FE0C5)" }} />
+                  {/* 1.59:1 on the light card as the raw accent; 4.59:1 as `text-primary`,
+                      which clears both AA text and the 3:1 non-text-contrast bar a glyph
+                      this size is judged against. */}
+                  <Plus className="size-3 text-primary" />
                 </span>
               )}
             </button>
