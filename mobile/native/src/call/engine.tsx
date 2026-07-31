@@ -7,7 +7,21 @@
  *  - voice-first + MUTUAL-CONSENT video (video-request / accept / decline;
  *    both cameras turn on together), 1:1 auto-end on remote-left
  *  - mesh (newcomer offers, candidate queue, renegotiation) via the shared
- *    @livekit/react-native-webrtc stack, LiveKit SFU when the server says so
+ *    @livekit/react-native-webrtc stack — the WebRTC BINDING, not an SFU client.
+ *
+ *  THE HOSTED SFU WAS DELETED IN v2.106.54 (account cancelled) — no Room, no
+ *  token, no watchdog; every call is the mesh. TWO PACKAGES DELIBERATELY STAY,
+ *  and they are NOT the SFU client:
+ *    - @livekit/react-native-webrtc IS the WebRTC binding (RTCPeerConnection,
+ *      MediaStream, mediaDevices, RTCView). The mesh is built on it.
+ *    - @livekit/react-native is the ANDROID INITIALISER. Its
+ *      `LiveKitReactNative.setup()` (MainApplication.kt) configures
+ *      `WebRTCModuleOptions` for the binding above: hardware acoustic echo
+ *      cancellation and noise suppression, the video encoder/decoder factories,
+ *      and `enableMediaProjectionService` — WITHOUT WHICH SCREEN SHARE SENDS
+ *      BLACK FRAMES. Removing it costs mesh call audio quality and screen share,
+ *      so it is a mesh dependency wearing a confusing name. Only its JS
+ *      `AudioSession` export was SFU-only, and those calls are gone.
  *  - native audio routing: earpiece/speaker via react-native-incall-manager,
  *    speaker DEFAULT ON on phones (v2.84 parity)
  * M3.5 adds: CALL WAITING (a second ring mid-call → decline / END current &
@@ -17,16 +31,15 @@
  * consent and never auto-end at 0 remotes), REJOIN-AFTER-RESTART (AsyncStorage
  * snapshot → register under the snapshot pin → the server's rejoin offer is
  * accepted instead of declined), and `peer-hold` (a held call shows "On hold"
- * instead of auto-ending — the web's holder tears its SFU connection down).
- * Still deferred: hold/swap/merge UI, screen share, recording, filters (M5).
+ * instead of auto-ending — a hold FREEZES media and keeps the peer connection).
+ * M5 added screen share (mesh getDisplayMedia + a replaceTrack hot-swap) and PiP.
+ * Still deferred: hold/swap/merge UI, filters.
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Vibration } from "react-native";
 import {
   MediaStream, RTCIceCandidate, RTCPeerConnection, RTCSessionDescription, mediaDevices,
 } from "@livekit/react-native-webrtc";
-import { AudioSession } from "@livekit/react-native";
-import { Room, RoomEvent, Track } from "livekit-client";
 import InCallManager from "react-native-incall-manager";
 import { RelaySignaling, type IceServer, type Msg } from "./signaling";
 import {
@@ -42,10 +55,10 @@ export type CallStatus = "calling" | "ringing" | "paging" | "connecting" | "live
 export type CallPhase = "idle" | "incoming" | "dialing" | "in-call";
 
 export interface RemoteTile {
-  key: string;            // pin (mesh) or participant identity (SFU)
+  key: string;            // the peer's 6-digit pin
   name: string;
-  /** Remote media for RTCView — mesh stream, or the SFU video track wrapped
-   *  in a MediaStream (ONE rendering path; SFU audio plays via AudioSession). */
+  /** Remote media for RTCView — the peer's mesh stream. Audio is ROUTED by
+   *  InCallManager (earpiece/speaker), never carried by this element. */
   stream: MediaStream | null;
   hasVideo: boolean;
 }
@@ -81,10 +94,10 @@ interface EngineState {
   /** Transient toast surfaced by the engine (add-person feedback, "full"…). */
   notice: string | null;
   // ── M5 ──
-  /** The server has LiveKit Egress recording configured (registered ack). */
-  recAvailable: boolean;
-  /** A recording is live in this room (any participant). */
-  recOn: boolean;
+  /* NO RECORDING FIELD. Call recording was the hosted SFU's egress service in
+     its entirety and went with the cancelled account (v2.106.53/54); the server
+     no longer sends the flag or the broadcast, so a Record control here would be
+     one that silently does nothing. */
   /** I'm sharing my screen. */
   sharingScreen: boolean;
   /** Pin of a REMOTE participant sharing their screen ("" = none). */
@@ -107,7 +120,6 @@ interface EngineApi extends EngineState {
   toggleSpeaker: () => void;
   answerVideoAsk: (yes: boolean) => void;
   toggleScreenShare: () => void;
-  toggleRecording: () => void;
 }
 
 const CallContext = createContext<EngineApi | null>(null);
@@ -132,7 +144,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     incoming: null, waiting: null, videoAsk: null, tiles: [], localStream: null,
     micOn: true, camOn: false, speakerOn: true,
     onHold: false, isGroup: false, rejoining: false, notice: null,
-    recAvailable: false, recOn: false, sharingScreen: false, peerScreenPin: "",
+    sharingScreen: false, peerScreenPin: "",
   });
   const [ready, setReady] = useState(false);
   const st = useRef(state);
@@ -145,17 +157,11 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
   const peers = useRef<Map<string, Peer>>(new Map());
   const iceServers = useRef<IceServer[]>([]);
   const localStream = useRef<MediaStream | null>(null);
-  const livekitEnabled = useRef(false);
-  const lkRoom = useRef<Room | null>(null);
-  const lkPendingToken = useRef<{ roomId: string; token: string; url: string } | null>(null);
-  const lkStreams = useRef<Map<string, MediaStream>>(new Map()); // identity → wrapped video
   const videoApproved = useRef(false);
   const callAnswered = useRef(false);
   const established = useRef(false);
   const dialTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const failT = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lkWatchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lkTries = useRef(0);
   const ringTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inCall = useRef(false);
   // ── M3.5 internals ──
@@ -179,9 +185,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
 
   /** Web parity (v2.80): teardown gates fire only when NO remote is attached —
    *  a group member's decline must never kill a conference with live peers. */
-  const aloneInCall = () =>
-    peers.current.size === 0 &&
-    (!lkRoom.current || lkRoom.current.remoteParticipants.size === 0);
+  const aloneInCall = () => peers.current.size === 0;
 
   const showNotice = (text: string) => {
     if (noticeT.current) clearTimeout(noticeT.current);
@@ -220,38 +224,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         hasVideo: vts.some(t => !t.muted && t.enabled !== false),
       });
     });
-    const room = lkRoom.current;
-    if (room) {
-      room.remoteParticipants.forEach(rp => {
-        // Prefer a SCREEN-SHARE publication when one exists — natively the
-        // share is a SEPARATE publication behind the camera one, and taking
-        // the first pub rendered the (muted) camera under a "viewing their
-        // screen" chip (review finding).
-        let track: unknown | null = null;
-        rp.videoTrackPublications.forEach(pub => {
-          const src = (pub as unknown as { source?: string }).source;
-          if (pub.track && (src === Track.Source.ScreenShare || !track)) track = pub.track;
-        });
-        let stream: MediaStream | null = null;
-        if (track) {
-          // Wrap the SFU video track in a stable MediaStream (cached per
-          // identity — RTCView keys off the stream URL).
-          const cached = lkStreams.current.get(rp.identity);
-          const mst = (track as { mediaStreamTrack: unknown }).mediaStreamTrack;
-          if (cached && (cached.getVideoTracks()[0] as unknown) === mst) {
-            stream = cached;
-          } else {
-            const ms = new MediaStream(undefined as never);
-            (ms as unknown as { addTrack: (t: unknown) => void }).addTrack(mst);
-            lkStreams.current.set(rp.identity, ms);
-            stream = ms;
-          }
-        } else {
-          lkStreams.current.delete(rp.identity);
-        }
-        tiles.push({ key: rp.identity, name: rp.name || rp.identity, stream, hasVideo: !!track });
-      });
-    }
     patch({ tiles });
   };
 
@@ -259,7 +231,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     if (established.current) return;
     established.current = true;
     clearTimer(dialTimeout);
-    clearTimer(lkWatchdog);
     clearTimer(rejoinWatchdog);
     pendingRejoin.current = null;
     patch({ status: "live", phase: "in-call", rejoining: false });
@@ -371,7 +342,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     // 1:1 auto-end (v2.81): the other party left — end rather than sit alone.
     // Groups stay open (the host may ring more people in — web parity), and a
     // HELD call must survive the holder's temporary departure (peer-hold).
-    if (inCall.current && peers.current.size === 0 && !lkRoom.current &&
+    if (inCall.current && peers.current.size === 0 &&
         !callIsGroup.current && !heldByPeer.current) {
       hangupInternal("remote-left");
     }
@@ -428,95 +399,11 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     for (const [pin] of peers.current) await meshOffer(pin).catch(() => {});
   };
 
-  // ── LiveKit SFU ──
-  const armLkWatchdog = () => {
-    clearTimer(lkWatchdog);
-    lkTries.current = 0;
-    const tick = () => {
-      lkWatchdog.current = null;
-      if (!inCall.current || !livekitEnabled.current || established.current) return;
-      const room = lkRoom.current as unknown as { state?: string } | null;
-      if (room && room.state === "connected") { lkWatchdog.current = setTimeout(tick, 4000); return; }
-      if (!callAnswered.current) {
-        // Still ringing — keep the token fresh forever; the ring timers govern.
-        void sig.current?.send({ type: "refresh-livekit" });
-        lkWatchdog.current = setTimeout(tick, 4000);
-        return;
-      }
-      lkTries.current++;
-      if (lkTries.current > 3) {
-        hangupInternal("livekit-join-timeout");
-        return;
-      }
-      void sig.current?.send({ type: "refresh-livekit" });
-      lkWatchdog.current = setTimeout(tick, 4000);
-    };
-    lkWatchdog.current = setTimeout(tick, 4500);
-  };
-
-  const joinLivekit = async (rid: string) => {
-    const tok = lkPendingToken.current;
-    if (lkRoom.current || !tok || tok.roomId !== rid) return;
-    // Consume the token — a failed connect must retry with a FRESH one
-    // (they're short-TTL), which the watchdog's refresh-livekit provides.
-    lkPendingToken.current = null;
-    const room = new Room();
-    lkRoom.current = room;
-    room.on(RoomEvent.TrackSubscribed, () => { publishTiles(); markEstablished(); });
-    room.on(RoomEvent.TrackUnsubscribed, publishTiles);
-    room.on(RoomEvent.ParticipantConnected, () => {
-      if (room.remoteParticipants.size > 1) markGroup();
-      publishTiles();
-    });
-    room.on(RoomEvent.ParticipantDisconnected, (rp?: { identity?: string }) => {
-      if (rp?.identity && st.current.peerScreenPin === rp.identity) patch({ peerScreenPin: "" });
-      publishTiles();
-      if (inCall.current && room.remoteParticipants.size === 0 && established.current &&
-          !callIsGroup.current && !heldByPeer.current) {
-        hangupInternal("remote-left");
-      }
-    });
-    room.on(RoomEvent.Disconnected, () => {
-      if (lkRoom.current !== room || !inCall.current) return;
-      if (!established.current) {
-        // Pre-establishment SFU blip: retry via a fresh token (v2.83 parity).
-        lkRoom.current = null;
-        void sig.current?.send({ type: "refresh-livekit" });
-        return;
-      }
-      hangupInternal("livekit-disconnected");
-    });
-    try {
-      await AudioSession.startAudioSession();
-      await room.connect(tok.url, tok.token);
-      await room.localParticipant.setMicrophoneEnabled(st.current.micOn);
-      if ((videoApproved.current || callIsGroup.current) && st.current.camOn) {
-        await room.localParticipant.setCameraEnabled(true);
-      }
-      publishTiles();
-    } catch {
-      if (lkRoom.current === room) lkRoom.current = null; // watchdogless M3: next token retries
-    }
-  };
-
   // ── protocol ──
   const handleMessage = useCallback((m: Msg) => {
     switch (m.type) {
       case "registered":
-        livekitEnabled.current = !!m.livekit;
         if (m.iceServers?.length) iceServers.current = m.iceServers;
-        patch({ recAvailable: !!m.recording });
-        break;
-      case "recording":
-        // Broadcast to the whole room — any participant may start/stop.
-        patch({ recOn: m.on !== false });
-        if (m.on !== false && m.by && m.by !== sig.current?.pin) {
-          showNotice("This call is being recorded.");
-        }
-        break;
-      case "recording-error":
-        patch({ recOn: false });
-        showNotice(m.message || "Couldn't start the recording.");
         break;
       case "peer-screen":
         if (!m.pin) break;
@@ -613,13 +500,13 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       case "joined": {
         roomId.current = m.roomId ?? roomId.current;
         if (m.iceServers?.length) iceServers.current = m.iceServers;
-        livekitEnabled.current = !!m.livekit;
         callAnswered.current = true;
         // Answering INTO an ongoing conference must flip the group flag before
-        // any consent choke point runs (SFU publish gate, toggleCam).
+        // any consent choke point runs (toggleCam) — a group bypasses the
+        // 1:1 mutual-consent gate.
         if ((m.members?.length ?? 0) > 1) markGroup();
         patch({ status: "connecting" });
-        if (!livekitEnabled.current) {
+        {
           // Mesh: the NEWCOMER (me) offers to every existing member (glare-free).
           for (const member of m.members ?? []) {
             createPeer(member.pin, member.name, true);
@@ -633,7 +520,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         callAnswered.current = true;
         clearTimer(dialTimeout);
         if (!established.current) patch({ status: "connecting" });
-        if (!livekitEnabled.current && m.pin) {
+        if (m.pin) {
           // Existing member: the newcomer offers — just prepare the pc.
           createPeer(m.pin, m.name || m.pin, false);
         }
@@ -642,13 +529,13 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       case "peer-left": {
         // `peer-left` is the server's authoritative "membership removed" —
         // the holder LEFT for real (server releases held rooms on full leave).
-        // Without clearing the flag a held 1:1 shows "On hold" forever, and
-        // on SFU there's no mesh peer left to trigger the auto-end.
+        // Without clearing the flag a held 1:1 shows "On hold" forever — the
+        // hold path suppresses the auto-end, so only this can release it.
         if (heldByPeer.current) {
           heldByPeer.current = false;
           patch({ onHold: false });
           if (inCall.current && !callIsGroup.current && peers.current.size === 0 &&
-              (!lkRoom.current || lkRoom.current.remoteParticipants.size === 0)) {
+              true) {
             hangupInternal("remote-left");
             break;
           }
@@ -656,12 +543,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         if (m.pin) removePeer(m.pin);
         break;
       }
-      case "livekit-token":
-        if (m.roomId && m.token) {
-          lkPendingToken.current = { roomId: m.roomId, token: m.token, url: m.url || "" };
-          if (livekitEnabled.current && roomId.current === m.roomId && !lkRoom.current) void joinLivekit(m.roomId);
-        }
-        break;
       case "signal":
         if (m.from) void onSignal(m.from, m.data);
         break;
@@ -692,10 +573,11 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         }
         break;
       case "peer-hold":
-        // The peer answered THEIR call waiting: the web holder freezes media
-        // (mesh) or tears down its SFU connection entirely — without this
-        // flag the SFU path looks like "remote left" and auto-ends US. Park
-        // instead and wait for on:false / their return. 1:1 ONLY: in a group
+        // The peer answered THEIR call waiting: the web holder FREEZES media
+        // and keeps the peer connection, so their tile goes quiet rather than
+        // leaving — without this flag a silent peer reads as "remote left"
+        // and auto-ends US. Park instead and wait for on:false / their
+        // return. 1:1 ONLY: in a group
         // one member's hold must not banner the whole (still live) call —
         // per-tile hold badges belong to the hold/swap milestone.
         if (!inCall.current || callIsGroup.current) break;
@@ -749,12 +631,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
   const cleanupMedia = () => {
     peers.current.forEach(p => { try { p.pc.close(); } catch { /* */ } });
     peers.current.clear();
-    const room = lkRoom.current;
-    lkRoom.current = null;
-    lkPendingToken.current = null;
-    lkStreams.current.clear();
-    if (room) { void room.disconnect().catch(() => {}); }
-    void AudioSession.stopAudioSession();
     const ls = localStream.current;
     localStream.current = null;
     if (ls) ls.getTracks().forEach(t => { try { t.stop(); } catch { /* */ } });
@@ -767,7 +643,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     nativeStopCallService(); // M4: release the ongoing-call keep-alive
     clearTimer(dialTimeout);
     clearTimer(failT);
-    clearTimer(lkWatchdog);
     clearTimer(waitingTimeout);
     clearTimer(rejoinWatchdog);
     // Promote-on-death (v2.78.1): a dying call must NOT swallow a live second
@@ -796,7 +671,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       ...s, phase: "idle", status: "calling", peerName: "", peerPin: "",
       incoming: null, waiting: null, videoAsk: null, tiles: [], localStream: null,
       camOn: false, micOn: true, onHold: false, isGroup: false, rejoining: false,
-      recOn: false, sharingScreen: false, peerScreenPin: "",
+      sharingScreen: false, peerScreenPin: "",
     }));
     if (promoted) {
       patch({ incoming: { ...promoted }, phase: "incoming" });
@@ -835,7 +710,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     clearTimer(waitingTimeout);
     clearTimer(dialTimeout);
     clearTimer(failT);
-    clearTimer(lkWatchdog);
     // A boot-armed rejoin must not race the answer: its 10s watchdog would
     // tear down the freshly accepted call (review finding).
     clearTimer(rejoinWatchdog);
@@ -860,11 +734,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       // Partial teardown — everything but the mic, InCallManager, and FGS.
       peers.current.forEach(p => { try { p.pc.close(); } catch { /* */ } });
       peers.current.clear();
-      const room = lkRoom.current;
-      lkRoom.current = null;
-      lkPendingToken.current = null;
-      lkStreams.current.clear();
-      if (room) void room.disconnect().catch(() => {});
       established.current = false;
       callAnswered.current = true;
       videoApproved.current = false; // voice answer — mid-call consent can upgrade
@@ -881,19 +750,17 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       patch({
         phase: "in-call", status: "connecting", peerName: w.fromName, peerPin: w.from,
         isVideoCall: w.video, camOn: false, tiles: [], videoAsk: null,
-        onHold: false, isGroup: false, recOn: false, sharingScreen: false, peerScreenPin: "",
+        onHold: false, isGroup: false, sharingScreen: false, peerScreenPin: "",
       });
       void sig.current?.send({ type: "accept", roomId: w.roomId });
-      armLkWatchdog();
       // Voice answer to a video dial: tell them cameras stay off (v2.81).
       if (w.video) void sig.current?.send({ type: "video-decline" });
     })();
   };
 
   /** Positive rejoin (M3.5): the server offered our room back after a restart
-   *  registered under the snapshot pin. Mesh: WE are the newcomer — offer to
-   *  every member (glare-free). SFU: the token was pushed right behind the
-   *  offer; the bounded watchdog drives the join. */
+   *  registered under the snapshot pin. WE are the newcomer, so we offer to
+   *  every member (glare-free) — the same rule a fresh join follows. */
   const resumeRejoin = async (m: Msg) => {
     const snap = pendingRejoin.current;
     if (!snap) return;
@@ -901,7 +768,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     clearTimer(rejoinWatchdog);
     roomId.current = m.roomId ?? snap.roomId;
     if (m.iceServers?.length) iceServers.current = m.iceServers;
-    livekitEnabled.current = !!m.livekit;
     callAnswered.current = true;
     if ((m.members?.length ?? 0) > 1 || snap.isGroup) markGroup();
     try {
@@ -923,7 +789,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     }
     localStream.current?.getAudioTracks().forEach(t => { t.enabled = snap.micOn; });
     patch({ micOn: snap.micOn, speakerOn: snap.speakerOn });
-    if (!livekitEnabled.current) {
+    {
       for (const mem of m.members ?? []) createPeer(mem.pin, mem.name || mem.pin, true);
       void (async () => { for (const mem of m.members ?? []) await meshOffer(mem.pin).catch(() => {}); })();
       // Rejoin rosters are NOT ghost-filtered server-side — if nobody connects
@@ -933,24 +799,19 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         rejoinWatchdog.current = null;
         if (inCall.current && !established.current) hangupInternal("rejoin-failed");
       }, 15_000);
-    } else {
-      armLkWatchdog(); // callAnswered=true ⇒ bounded retries, honest teardown
     }
     void clearRejoinSnapshot(); // consumed — establishment re-writes it
   };
 
-  /** M5 screen share. SFU: the LiveKit SDK owns capture+publication. Mesh:
-   *  getDisplayMedia (MediaProjection consent behind it) hot-swaps into the
-   *  pre-allocated video m-line — replaceTrack, no renegotiation. Both paths
-   *  announce via `{type:"screen"}` so every client spotlights the sharer. */
+  /** M5 screen share, mesh-only since v2.106.54: getDisplayMedia (MediaProjection
+   *  consent behind it) hot-swaps into the pre-allocated video m-line —
+   *  replaceTrack, no renegotiation — and announces via `{type:"screen"}` so
+   *  every client spotlights the sharer. */
   const stopScreenShareInternal = async (announce: boolean) => {
     const dying = screenStream.current;
     screenStream.current = null;
     patch({ sharingScreen: false });
-    const room = lkRoom.current;
-    if (room) {
-      try { await room.localParticipant.setScreenShareEnabled(false); } catch { /* */ }
-    } else if (dying) {
+    if (dying) {
       // Restore the camera into the slot (or empty it if the cam is off).
       const camTrack = st.current.camOn ? (localStream.current?.getVideoTracks()[0] ?? null) : null;
       peers.current.forEach(p => {
@@ -973,12 +834,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     screenBusy.current = true;
     void (async () => {
       try {
-        const room = lkRoom.current;
-        if (room) {
-          // SDK path: raises the MediaProjection consent itself.
-          await room.localParticipant.setScreenShareEnabled(true);
-          patch({ sharingScreen: true });
-        } else {
+        {
           const md = mediaDevices as unknown as { getDisplayMedia?: (c: object) => Promise<MediaStream> };
           if (!md.getDisplayMedia) { showNotice("Screen sharing isn't available on this device."); return; }
           const disp = await md.getDisplayMedia({ video: true });
@@ -1026,9 +882,7 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       // a duplicate m-line (web guards every enable path the same way).
       // stop-share restores the camera per camOn, so state-only is enough.
       if (st.current.sharingScreen) return;
-      const room = lkRoom.current;
-      if (room) await room.localParticipant.setCameraEnabled(true);
-      else {
+      {
         // Mesh: fill the PRE-ALLOCATED video m-line with replaceTrack — no
         // renegotiation, no RN↔RN offer glare. Renegotiate only for peers
         // without a reserved slot (legacy path).
@@ -1170,7 +1024,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       void (async () => {
         try { await ensureMedia(false); } catch { hangupInternal("no-media"); return; }
         void sig.current?.send({ type: "invite", to: number, video });
-        armLkWatchdog(); // SFU deployments: keep the join token fresh while ringing
         clearTimer(dialTimeout);
         dialTimeout.current = setTimeout(() => {
           if (inCall.current && !callAnswered.current) failDial("No answer — they'll see your missed call.");
@@ -1203,7 +1056,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
         // History's direction inference depends on).
         pendingGroupInvites.current = uniq.slice(1);
         void sig.current?.send({ type: "invite", to: uniq[0], video });
-        armLkWatchdog();
         clearTimer(dialTimeout);
         dialTimeout.current = setTimeout(() => {
           if (inCall.current && !callAnswered.current) failDial("No answer — they'll see your missed call.");
@@ -1214,12 +1066,14 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       if (!inCall.current) return;
       const n = number.replace(/\D/g, "");
       if (!/^\d{6}$/.test(n) || n === sig.current?.pin) { showNotice("Enter a valid 6-digit number."); return; }
-      if (peers.current.has(n) || lkRoom.current?.remoteParticipants.has(n)) {
+      if (peers.current.has(n)) {
         showNotice("They're already in this call.");
         return;
       }
-      const cap = livekitEnabled.current ? 10 : 6;
-      const count = 1 + peers.current.size + (lkRoom.current?.remoteParticipants.size ?? 0);
+      /* SIX, matching the web's exported ROOM_MAX. A measurement rather than a
+         preference: on the mesh each phone runs N-1 encoders and N-1 decoders. */
+      const cap = 6;
+      const count = 1 + peers.current.size;
       if (count >= cap) { showNotice(`Call is full (${cap} people max).`); return; }
       // 6s guard: an offline/nonexistent target answers with error{offline},
       // which must read as a toast — never a call teardown (v2.50 web fix).
@@ -1259,7 +1113,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
           return;
         }
         void sig.current?.send({ type: "accept", roomId: r.roomId });
-        armLkWatchdog(); // callee-side backstop: media must come up or the call ends honestly
         if (r.video) void sig.current?.send({ type: answerVideo ? "video-accept" : "video-decline" });
       })();
     },
@@ -1270,14 +1123,12 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
     toggleMic: () => {
       const next = !st.current.micOn;
       localStream.current?.getAudioTracks().forEach(t => { t.enabled = next; });
-      void lkRoom.current?.localParticipant.setMicrophoneEnabled(next);
       patch({ micOn: next });
       if (established.current) setTimeout(writeSnap, 150); // snapshot follows state
     },
     toggleCam: () => {
       if (st.current.camOn) {
         localStream.current?.getVideoTracks().forEach(t => { t.enabled = false; });
-        void lkRoom.current?.localParticipant.setCameraEnabled(false);
         patch({ camOn: false });
         if (established.current) setTimeout(writeSnap, 150);
         return;
@@ -1308,12 +1159,6 @@ export function CallProvider({ me, children }: { me: Whoami; children: React.Rea
       if (yes) { videoApproved.current = true; void enableCamera(); }
     },
     toggleScreenShare: toggleScreenShareInternal,
-    toggleRecording: () => {
-      if (!inCall.current || !st.current.recAvailable) return;
-      // Optimistic-off only for stop; start waits for the server broadcast
-      // (it may bounce with recording-error when Egress isn't reachable).
-      void sig.current?.send({ type: st.current.recOn ? "stop-recording" : "start-recording" });
-    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [state, ready]);
 

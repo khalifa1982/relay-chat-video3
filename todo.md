@@ -11278,6 +11278,69 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.55 — the last SFU branch, in the store app (2026-07-31)
+
+Owner, quoting my own paragraph about not having done it back at me, prefixed with "Fix t":
+`mobile/native` still carried the retired SFU. Two corrections I owe are recorded here rather
+than glossed, because one of my stated reasons for not doing it was simply wrong.
+
+- [x] **CORRECTION 1: A ROOT TEST DOES COVER `mobile/native`.** I told the owner it was "a
+      separate package no test or typecheck here covers". `client/src/lib/nativeRewrite.test.ts`
+      has covered it for releases — it reads those files off disk and asserts against them, which
+      is why five of its assertions had to move in this commit. Saying a directory is unguarded
+      when it is guarded is how a change lands there unnoticed.
+- [x] **CORRECTION 2: `@livekit/react-native` HAD TO STAY, AND MY FIRST DRAFT DELETED IT.**
+      Its name says SFU and it is not one: `LiveKitReactNative.setup()` (called from
+      `MainApplication.kt`) configures `WebRTCModuleOptions` — the options of
+      `@livekit/react-native-webrtc`, i.e. the binding **the MESH is built on**. It sets hardware
+      acoustic echo cancellation and noise suppression, the video encoder/decoder factories, and
+      `enableMediaProjectionService`, **without which screen share sends BLACK FRAMES**. Removing
+      it would have cost every mesh call its hardware audio processing, broken screen share, and
+      failed the Kotlin compile on an unresolved import. So "remove completely" cannot be
+      literally satisfied in that directory: only `livekit-client`, the actual SFU client, goes.
+      Both survivors now carry that reason in the engine header AND in the test, because a future
+      reader deleting them by name is the obvious next mistake.
+- [x] **WHAT WENT**: `AudioSession`, the room/token/watchdog refs, `armLkWatchdog` + `joinLivekit`,
+      the `livekit-token` case, five watchdog call sites, three `if (!livekitEnabled.current)`
+      gates, both screen-share SFU branches, the camera-enable branch, the mic/cam publication
+      toggles, and the two wire fields — 174 deletions across four files. `aloneInCall` collapses
+      to `peers.current.size === 0`, and the cap becomes a plain `6` matching the web's exported
+      `ROOM_MAX`, with the reason in place: a MEASUREMENT, since on the mesh each phone runs N−1
+      encoders and N−1 decoders.
+- [x] **RECORDING WENT TOO, AND THAT IS THE SAME DELETION RATHER THAN SCOPE CREEP.** It was the
+      hosted SFU's egress service in its entirety — `server/recording.ts` said so in its own
+      header — so v2.106.53 deleted the server half. What was left on native was a Record chip
+      driven by `m.recording` on the registered ack, a field the server no longer sends: the chip
+      could never appear, its taps would reach a server with no handler, and any future truthy
+      `recording` field would surface a control that silently does nothing — the class this repo
+      keeps removing. Gone from the engine, the API surface, the wire type and the overlay
+      (● REC badge included).
+- [x] **FIVE STALE COMMENTS CORRECTED, and they were load-bearing prose rather than decoration**:
+      each explained a live rule by REFERENCE to the SFU ("on SFU there's no mesh peer left to
+      trigger the auto-end"), so left alone they would have justified real code with a transport
+      that no longer exists. The `peer-hold` one now states the actual mechanism — a hold FREEZES
+      media and keeps the peer connection, so a silent peer must not read as "remote left".
+- [x] **VERIFIED BY DIFFERENTIAL TYPECHECK, said plainly because it is weaker than a build**:
+      `mobile/native` has no `node_modules` here, so `tsc` cannot resolve its imports. What is
+      proven is that the error SET is unchanged — the same 4 pre-existing errors, same messages,
+      before and after — so this introduced none and fixed none. A dangling empty `else` from one
+      gate conversion was caught exactly this way (TS1128, which also masked the other three).
+      **Nobody has built the APK.**
+- [x] **9 of 9 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+      backups, the mutator aborting unless its target occurs exactly once, all four sources
+      byte-identical afterwards — including the SFU capture call reinstated, the `Track.Source`
+      namespace reinstated, `livekit-client` re-added, the Android initialiser removed,
+      `setup(this)` removed, the recording verbs reinstated and the ● REC chip reinstated.
+- [x] **ONE SURVIVED AND IT WAS A REAL GAP IN MY OWN TEST**, the pin-the-name-not-the-use class:
+      `toContain("getDisplayMedia")` survived deleting the awaited CALL, because the identifier
+      also occurs in the local type declaration and in the `!md.getDisplayMedia` support guard —
+      so it pinned that the engine MENTIONS capture while share had become a no-op, and with the
+      SFU branch gone that is the only capture path there is. Now pinned on the call.
+- [x] **TWO MUTATION NEEDLES OF MINE WERE WRONG AND ABORTED AT 0 OCCURRENCES** rather than
+      recording a false survivor (a guessed function name, and a dependency version I had not
+      read), and both bit once corrected.
+- [x] No schema change, one dependency removed, no new env var. 4918 tests.
+
 ## v2.106.54 — adding a media node becomes an infrastructure step (2026-07-31)
 
 Owner doc: when nodes are added later, the app must use them with **no code change and no

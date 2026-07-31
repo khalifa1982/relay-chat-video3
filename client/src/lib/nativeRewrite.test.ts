@@ -253,14 +253,38 @@ describe("native rewrite — M3.5 call waiting / groups / rejoin / voice notes",
   });
 });
 
-describe("native rewrite — M5 screen share / PiP / recording (Android)", () => {
-  it("engine speaks the production screen + recording vocabulary", () => {
+describe("native rewrite — M5 screen share / PiP (Android)", () => {
+  it("engine speaks the production screen vocabulary, and offers no recording", () => {
     const e = read("mobile/native/src/call/engine.tsx");
-    for (const t of ['"start-recording"', '"stop-recording"', 'case "recording"', 'case "peer-screen"'])
-      expect(e).toContain(t);
+    const pkg2 = JSON.parse(read("mobile/native/package.json"));
+    expect(e).toContain('case "peer-screen"');
     expect(e).toMatch(/type: "screen", action: "on"/); // server broadcasts peer-screen
-    expect(e).toContain("setScreenShareEnabled"); // SFU path
-    expect(e).toContain("getDisplayMedia");       // mesh path (replaceTrack hot-swap)
+    /* RECORDING IS GONE, AND THIS ASSERTION USED TO REQUIRE IT (v2.106.54).
+       It was the hosted SFU's egress service in its entirety — `server/recording.ts`
+       said so in its own header — so it died with the cancelled account: the server
+       sends no `recording` flag on the registered ack and has no case for either verb.
+       Leaving the control here would have been a Record chip driven by a flag nothing
+       sets, whose taps reach a server that ignores them — a control that silently does
+       nothing, which is the class this repo keeps removing. Asserted on the OVERLAY too,
+       because the engine going quiet while the chip stayed is the half-shipped shape. */
+    const ov = read("mobile/native/src/screens/CallOverlay.tsx");
+    for (const gone of ['"start-recording"', '"stop-recording"', 'case "recording"',
+                        "recAvailable", "recOn", "toggleRecording"]) {
+      expect(e, `engine still names ${gone}`).not.toContain(gone);
+      expect(ov, `overlay still names ${gone}`).not.toContain(gone);
+    }
+    expect(ov).not.toContain("REC");
+    /* THE SFU BRANCH IS GONE (v2.106.54): the hosted SFU account was cancelled, so
+       `setScreenShareEnabled` — its SDK's capture call — must not come back. Screen
+       share is the MESH path only now: getDisplayMedia + a replaceTrack hot-swap
+       into the pre-allocated video m-line. */
+    expect(e).not.toContain("setScreenShareEnabled");
+    /* THE CALL, not the name. A `toContain("getDisplayMedia")` here SURVIVED a mutation
+       that deleted the awaited call, because the identifier also occurs in the local
+       type declaration and in the `!md.getDisplayMedia` support guard — so it pinned
+       that the engine MENTIONS capture while share had become a no-op. With the SFU
+       branch gone this is the only capture path there is. */
+    expect(e).toMatch(/await md\.getDisplayMedia\(/);
     // Android 14: mediaProjection FGS type only AFTER the capture grant.
     expect(e).toMatch(/screenShare: true/);
     expect(read("mobile/native/android/app/src/main/java/com/relaynative/CallService.java"))
@@ -268,15 +292,35 @@ describe("native rewrite — M5 screen share / PiP / recording (Android)", () =>
     // Review findings: the lib's projection FGS is OFF until setup() runs
     // (share silently sends black without it), and startForeground with a
     // type missing from the manifest declaration throws.
+    /* THIS STAYS, AND IT IS A MESH DEPENDENCY WEARING A CONFUSING NAME.
+       `LiveKitReactNative.setup()` configures `WebRTCModuleOptions` — the options of
+       @livekit/react-native-webrtc, i.e. the binding the MESH is built on: hardware
+       acoustic echo cancellation and noise suppression, the video encoder/decoder
+       factories, and `enableMediaProjectionService`, without which screen share sends
+       BLACK FRAMES. Deleting it alongside the SFU client (v2.106.54's first draft did)
+       would cost every mesh call its hardware audio processing and break screen share,
+       while also failing the Kotlin compile on the unresolved import. */
     expect(read("mobile/native/android/app/src/main/java/com/relaynative/MainApplication.kt"))
       .toContain("LiveKitReactNative.setup(this)");
+    // …so the package that provides it must remain a dependency, while the SFU
+    // CLIENT must not.
+    expect(pkg2.dependencies["@livekit/react-native"], "the Android initialiser").toBeTruthy();
+    expect(pkg2.dependencies["@livekit/react-native-webrtc"], "the WebRTC binding").toBeTruthy();
+    expect(pkg2.dependencies["livekit-client"], "the SFU client is deleted").toBeUndefined();
     expect(read("mobile/native/android/app/src/main/AndroidManifest.xml"))
       .toContain("microphone|mediaPlayback|mediaProjection");
     // Mid-share parity: camera enable is state-only, joiners get the SCREEN.
     const eng = read("mobile/native/src/call/engine.tsx");
     expect(eng).toMatch(/if \(st\.current\.sharingScreen\) return;/);
+    /* THIS is the mid-share join rule, and after v2.106.54 it is the ONLY one: a
+       fresh mesh peer is handed the screen track rather than the parked camera.
+       `Track.Source.ScreenShare` was the SFU half of the same rule (its viewers
+       picked the share publication out of a participant's tracks) and it came from
+       the deleted `livekit-client` — so its NAMESPACE must be gone too, or the
+       import is back. */
     expect(eng).toMatch(/screenVt \?\? ls\.getVideoTracks\(\)\[0\]/);
-    expect(eng).toContain("Track.Source.ScreenShare"); // SFU viewers pick the share pub
+    expect(eng).not.toContain("Track.Source");
+    expect(eng).not.toMatch(/\bfrom "livekit-client"/);
   });
 
   it("PiP: in-call home press shrinks to Picture-in-Picture, gated by the engine", () => {
