@@ -12,6 +12,7 @@
  * real node from this sandbox.
  */
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
 import {
   chooseCallTransport,
   decodeNode,
@@ -40,7 +41,7 @@ const NOW = 1_785_000_000_000;
 /** The two real nodes, as the brief measured them. */
 const A = (over: Partial<VoipNode> = {}): VoipNode => ({
   instanceId: "i-062022390e558ce74",
-  publicIp: "13.201.44.153",
+  publicIp: "192.0.2.10",
   privateIp: "10.0.1.192",
   az: "ap-south-1a",
   cores: 2,
@@ -52,7 +53,7 @@ const A = (over: Partial<VoipNode> = {}): VoipNode => ({
 });
 const B = (over: Partial<VoipNode> = {}): VoipNode => ({
   instanceId: "i-0dce71f5056f73ce6",
-  publicIp: "13.203.219.67",
+  publicIp: "198.51.100.20",
   privateIp: "10.0.2.246",
   az: "ap-south-1b",
   cores: 2,
@@ -83,7 +84,29 @@ describe("a node record is validated because it decides where media goes", () =>
       expect(decodeNode(encodeNode(A({ publicIp: ip as string }))), ip).toBeNull();
       expect(decodeNode(encodeNode(A({ privateIp: ip as string }))), ip).toBeNull();
     }
-    expect(isIpv4("13.201.44.153")).toBe(true);
+    expect(isIpv4("192.0.2.10")).toBe(true);
+  });
+
+  it("no fixture in this suite carries a REAL media-node address", () => {
+    /* v2.106.52. These fixtures used to hold the nodes' actual public IPs, and the
+       2026-07-31 move to Elastic IPs then required editing five test files — a test
+       edit forced by an infrastructure change, which means the tests knew something
+       about production they have no business knowing. Two costs, one guard:
+
+         1. It is churn with no value. The addresses are arbitrary here; every
+            assertion is about SHAPE (isIpv4) or about what a record resolves to.
+         2. This repository is PUBLIC, so a routable production address in a fixture
+            is a detail about the owner's infrastructure published for no reason.
+
+       RFC 5737 reserves 192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24 for exactly
+       this: addresses that are valid IPv4, obviously synthetic, and never routable.
+       Using them makes the fixtures immune to any future re-addressing.
+
+       Scoped to the Mumbai /8s the nodes actually live in, so this cannot fail on an
+       unrelated dotted number (a version, a port range, a timestamp). */
+    const src = fs.readFileSync(__filename, "utf8");
+    const suspicious = src.match(/\b13\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g) || [];
+    expect(suspicious, `use an RFC 5737 range instead: ${suspicious.join(", ")}`).toEqual([]);
     expect(isIpv4("0.0.0.0")).toBe(true);
   });
 

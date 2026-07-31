@@ -11328,7 +11328,36 @@ per number, so without it a dial from a non-primary device is unreachable by its
 tier in `voipRegistry.ts`. Deleting it changes no behaviour while `enabled` is false, so it is a
 separate commit rather than a 250-line refactor of the call path on the day it was repaired.
 
-No schema change, no new dependency, no new env var. 4926 tests.
+**ALSO: the media nodes got stable Elastic IPs, and the swap proved the design.**
+
+The owner's EIP quota landed; both mediasoup nodes moved off auto-assigned addresses:
+
+| node | instance | private (signaling) | public (media) | allocation |
+|---|---|---|---|---|
+| relay-voip-a | `i-062022390e558ce74` | 10.0.1.192 | 13.207.213.126 | `eipalloc-0f635fd71c037d3a2` |
+| relay-voip-b | `i-0dce71f5056f73ce6` | 10.0.2.246 | 13.203.36.154 | `eipalloc-0359c2389f4a474f8` |
+
+**The association itself was the test.** On both instances IMDS reported the new address and
+mediasoup announced it with no config change (`IP_CHANGE_PROOF_PASSED`) — v2.106.46's IMDSv2
+re-read and v2.106.35's exit-on-address-change demonstrated in production rather than argued.
+`announcedAddress` is immutable per transport (v2.106.34), so a node that could not notice
+would announce an address that no longer reaches it while its heartbeat looked perfect.
+
+**Stable does not make hardcoding acceptable**, and nothing in the repo hardcodes them: the
+registry is what makes node 3+ plug-and-play, and an EIP can still be re-associated.
+
+**The fix for the stale literals is neither the old nor the new address.** Nine fixtures across
+four test files held the nodes' REAL public IPs, so an infrastructure change forced a test edit
+— a test knowing something about production it has no business knowing, and in a PUBLIC repo a
+routable production address published for no reason. They now use RFC 5737 documentation ranges
+(192.0.2.0/24, 198.51.100.0/24): valid IPv4, obviously synthetic, never routable. A standing
+guard fails if a `13.x.x.x` literal reappears in that suite, scoped to the Mumbai /8 so it
+cannot fire on an unrelated dotted number; verified to bite, source byte-identical afterwards.
+
+**Said plainly: this fixes nothing about audio.** It closes a different class — media candidates
+going stale after a node restart.
+
+No schema change, no new dependency, no new env var. 4927 tests.
 
 ## v2.106.51 — mesh remote audio was never played out on a call with no video (2026-07-31)
 

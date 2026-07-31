@@ -37,7 +37,7 @@ import {
 const NOW = 1_785_000_000_000;
 const REAL = {
   instanceId: "i-062022390e558ce74",
-  publicIp: "13.201.44.153",
+  publicIp: "192.0.2.10",
   privateIp: "10.0.1.192",
   az: "ap-south-1a",
   cores: 2,
@@ -71,7 +71,7 @@ describe("the record the agent publishes is one the app accepts", () => {
       {
         ...REAL,
         instanceId: "i-0dce71f5056f73ce6",
-        publicIp: "13.203.219.67",
+        publicIp: "198.51.100.20",
         privateIp: "10.0.2.246",
         az: "ap-south-1b",
       },

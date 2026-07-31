@@ -22,15 +22,36 @@ costs a deploy:
 
 ## The two nodes (Mumbai, one per AZ)
 
-| zone | instance | private | public |
-|---|---|---|---|
-| ap-south-1a | `i-062022390e558ce74` | 10.0.1.192 | 13.201.44.153 |
-| ap-south-1b | `i-0dce71f5056f73ce6` | 10.0.2.246 | 13.203.219.67 |
+| zone | instance | private (signaling) | public (media) | EIP allocation |
+|---|---|---|---|---|
+| ap-south-1a | `i-062022390e558ce74` | 10.0.1.192 | 13.207.213.126 | `eipalloc-0f635fd71c037d3a2` |
+| ap-south-1b | `i-0dce71f5056f73ce6` | 10.0.2.246 | 13.203.36.154 | `eipalloc-0359c2389f4a474f8` |
 
-**Those public IPs are auto-assigned, not Elastic.** They change if an instance is stopped
-and started. Nothing in this repo may hardcode them: the agent reads its own address from
-IMDSv2 at boot (and re-reads it every 60s), publishes it to the registry, and the app reads
-the registry. The table above is for humans checking a node by hand.
+**Those public IPs are now ELASTIC and stable** (2026-07-31; the quota increase landed, both
+allocations tagged `DoNotDelete=true`). They previously auto-assigned and changed on
+stop/start.
+
+**Stable does not make hardcoding acceptable, and nothing in this repo hardcodes them.** The
+agent reads its own address from IMDSv2 at boot, re-reads it on a timer, publishes it to the
+registry, and the app reads the registry. Three reasons that stays true now the addresses are
+pinned:
+
+1. The registry is what makes node 3+ plug-and-play — it launches with its own EIP and simply
+   registers. A config list would need editing and deploying for every new node.
+2. An EIP can still be re-associated, and `announcedAddress` is immutable per transport
+   (v2.106.34), which is why an address change makes the agent deregister and exit for systemd
+   to restart it (v2.106.35) rather than announce an address that no longer reaches it.
+3. **The swap itself proved the path.** Associating the EIPs was used as the live test: on both
+   nodes IMDS reported the new address and mediasoup announced it with no config change
+   (`IP_CHANGE_PROOF_PASSED`, both instances). That is the scenario the self-discovery design
+   exists for, demonstrated in production rather than argued.
+
+The table is for humans checking a node by hand. **Signaling stays on the PRIVATE addresses
+(TCP 4443); the public ones are for media announcement only** — do not cross the two.
+
+Test fixtures deliberately use RFC 5737 documentation ranges (192.0.2.0/24, 198.51.100.0/24)
+rather than these addresses, so an infrastructure change can never require a test edit — and
+so no routable production address sits in a public repository.
 
 An Elastic IP per node is still worth having — it makes the address survive a stop/start and
 lets a DNS name point at it — and is blocked on an EIP quota increase (request

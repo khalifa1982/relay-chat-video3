@@ -43,7 +43,7 @@ const NOW = 1_785_000_000_000;
 
 const NODE: VoipNode = {
   instanceId: "i-062022390e558ce74",
-  publicIp: "13.201.44.153",
+  publicIp: "192.0.2.10",
   privateIp: "10.0.1.192",
   az: "ap-south-1a",
   cores: 2,
