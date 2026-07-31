@@ -232,20 +232,53 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
   // shell with it. 100svh remains the CSS fallback until the first
   // measurement lands. An explicit px height also makes the whole flex
   // chain below unambiguously definite for Safari's layout engine.
+  //
+  // …AND THE ON-SCREEN KEYBOARD IS PART OF "THE VIEWPORT RIGHT NOW", which is what this
+  // used to get wrong. It listened to `visualViewport`'s resize and then wrote
+  // `window.innerHeight` — and on iOS the keyboard changes `visualViewport.height` and
+  // leaves `innerHeight` ALONE. So the handler fired and wrote an UNCHANGED value: a
+  // subscription that reads as handled while handling nothing.
+  //
+  // MEASURED, before the fix, at 390x844 with the visual viewport shrunk to 400: the
+  // shell stayed 844px tall and the message input's bottom edge stayed at 785 — 385px
+  // BELOW the keyboard. Tap the composer on a phone and the field you just tapped, and
+  // the Send button beside it, are underneath the keyboard. That is the owner's
+  // "I cannot send messages", and it is invisible on a desktop browser.
+  //
+  // It is worse here than in most apps for a reason THIS app chose: v2.76 locks document
+  // scrolling (`html/body.relay-app-lock`) to stop iOS shoving the whole app past its own
+  // end. That was right, and it also removed the browser's own scroll-the-focused-input
+  // -into-view rescue — so nothing was left to compensate. The lock stays; the missing
+  // half is a keyboard-aware height.
   useEffect(() => {
     const root = document.documentElement;
     const set = () => {
-      try { root.style.setProperty("--relay-vh", window.innerHeight + "px"); } catch { /* */ }
+      try {
+        const vv = window.visualViewport;
+        // The VISIBLE height, not the layout height. Trusted only when the page is not
+        // pinch-ZOOMED: `visualViewport.height` also shrinks under a zoom, and sizing the
+        // shell to a zoomed viewport would shrink the app because somebody magnified it.
+        const visible = vv && vv.scale <= 1.01 ? vv.height : Number.POSITIVE_INFINITY;
+        // The smaller of the two, floored so a transient 0 (or an absurd reading mid
+        // rotation) can never collapse the shell to nothing — failing toward "too tall"
+        // is recoverable by scrolling; failing toward "no height" is a blank app.
+        const h = Math.max(320, Math.round(Math.min(window.innerHeight, visible)));
+        root.style.setProperty("--relay-vh", h + "px");
+      } catch { /* */ }
     };
     set();
     window.addEventListener("resize", set);
     window.addEventListener("orientationchange", set);
     const vv = window.visualViewport;
     vv?.addEventListener("resize", set);
+    // iOS moves the visual viewport as well as resizing it; a scroll without a resize
+    // still changes what is on screen.
+    vv?.addEventListener("scroll", set);
     return () => {
       window.removeEventListener("resize", set);
       window.removeEventListener("orientationchange", set);
       vv?.removeEventListener("resize", set);
+      vv?.removeEventListener("scroll", set);
       root.style.removeProperty("--relay-vh");
     };
   }, []);
@@ -733,7 +766,12 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
           reach it). h-svh caps main at the viewport so every inner list scrolls
           within it and the composer stays pinned. Mobile keeps the measured
           --relay-vh height (flex-none) as before. */}
-      <main className="flex-1 max-md:flex-none flex flex-col min-w-0 min-h-svh md:h-svh md:overflow-hidden max-md:h-[var(--relay-vh,100svh)]">
+      {/* `max-md:min-h-0` IS LOAD-BEARING, and without it the keyboard fix above is a
+          NO-OP: `min-h-svh` applies at every width, and `min-height` WINS over `height`,
+          so shrinking `--relay-vh` to the keyboard-visible height would be overridden
+          back to ~100svh and the composer would stay underneath the keyboard. Measured
+          both ways. The desktop rule (`md:h-svh`) is untouched. */}
+      <main className="flex-1 max-md:flex-none flex flex-col min-w-0 min-h-svh max-md:min-h-0 md:h-svh md:overflow-hidden max-md:h-[var(--relay-vh,100svh)]">
         {/* mobile header */}
         <header
           className={

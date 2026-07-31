@@ -42,7 +42,6 @@
  * never be able to name a room or a producer it should not reach, and the app is where the
  * signed room capability already lives (`server/roomCapability.ts`).
  */
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { cpus, loadavg } from "node:os";
 import * as mediasoup from "mediasoup";
@@ -54,6 +53,9 @@ import {
   NODE_TTL_MS,
   nodeKey,
 } from "./record.mjs";
+// The signature rule lives in its own importable module so the APP's signer can be tested
+// against this exact verifier — see sign.mjs for why that split is load-bearing.
+import { SIG_HEADER, verifySignature } from "./sign.mjs";
 
 const API_PORT = Number(process.env.VOIP_API_PORT || 4443);
 const RTC_MIN_PORT = Number(process.env.RTC_MIN_PORT || 40000);
@@ -273,22 +275,6 @@ async function createWebRtcTransport(room) {
  * `timingSafeEqual` THROWS on a length mismatch, which would turn a malformed signature
  * into a 500 instead of a 401.
  */
-function verifySignature(rawBody, header) {
-  if (!SECRET) return false;
-  if (typeof header !== "string") return false;
-  const dot = header.indexOf(".");
-  if (dot <= 0) return false;
-  const ts = Number(header.slice(0, dot));
-  const sig = header.slice(dot + 1);
-  if (!Number.isFinite(ts)) return false;
-  if (Math.abs(Date.now() - ts) > 5 * 60_000) return false;
-  const want = createHmac("sha256", SECRET).update(`${ts}.${rawBody}`).digest("hex");
-  const a = Buffer.from(sig, "utf8");
-  const b = Buffer.from(want, "utf8");
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
-
 /** @type {Record<string, (body: any) => Promise<any>>} */
 const HANDLERS = {
   /** Health + capabilities. The app polls nothing here; the registry is the read path. */
@@ -428,7 +414,12 @@ function startApi() {
         res.writeHead(code, { "content-type": "application/json" });
         res.end(JSON.stringify(obj));
       };
-      if (!verifySignature(raw, req.headers["x-relay-voip-sig"])) return reply(401, { error: "unauthorized" });
+      // Verified against the RAW bytes, never against a re-serialization of the parsed
+      // JSON — re-serializing can reorder keys, and then a perfectly good request fails.
+      // Also verified BEFORE the JSON parse, so an unauthenticated caller cannot even
+      // reach the parser.
+      if (!verifySignature(SECRET, raw, req.headers[SIG_HEADER], Date.now()))
+        return reply(401, { error: "unauthorized" });
       let body;
       try {
         body = JSON.parse(raw || "{}");

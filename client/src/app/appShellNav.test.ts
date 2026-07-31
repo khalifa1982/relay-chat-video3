@@ -62,8 +62,18 @@ describe("AppShell — docked in-flow bottom nav (no gap above, nothing hidden u
     expect(SHELL).toMatch(/max-md:flex-none/);
   });
 
-  it("the shell keeps --relay-vh = window.innerHeight fresh (resize / rotation / visualViewport)", () => {
-    expect(SHELL).toMatch(/setProperty\("--relay-vh", window\.innerHeight \+ "px"\)/);
+  it("the shell keeps --relay-vh fresh (resize / rotation / visualViewport)", () => {
+    /* REWRITTEN in v2.106.29, and it had FROZEN THE DEFECT: the assertion was the exact
+       expression `setProperty("--relay-vh", window.innerHeight + "px")`, which is precisely
+       what was wrong — on iOS the on-screen keyboard changes `visualViewport.height` and
+       leaves `innerHeight` alone, so the visualViewport listener fired and wrote an
+       UNCHANGED value. Measured: the composer stayed 385px under the keyboard, which is the
+       owner's "I cannot send messages".
+       The PROPERTY is that the var is written from a MEASUREMENT rather than a CSS unit and
+       is kept fresh on every event that changes what is on screen; which measurement it is
+       belongs to `keyboardViewport.test.ts`, which pins the keyboard rule specifically. */
+    expect(SHELL).toMatch(/setProperty\("--relay-vh"/);
+    expect(SHELL).toMatch(/window\.innerHeight/);
     expect(SHELL).toMatch(/addEventListener\("orientationchange", set\)/);
     expect(SHELL).toMatch(/visualViewport/);
   });

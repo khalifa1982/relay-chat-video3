@@ -11278,6 +11278,84 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.29 — "I cannot send messages": the keyboard was covering the composer (2026-07-31)
+
+The owner: *"I went inside the message screens and I cannot send messages; they do not
+match the new design."*
+
+**SENDING ITSELF IS FINE, AND ESTABLISHING THAT FIRST IS WHAT MADE THE REAL CAUSE
+FINDABLE.** The built bundle was driven at 390px with a stubbed tRPC layer and one real
+thread: the composer is present, hit-testable (`elementFromPoint` returns the input
+itself), typing updates the value, the send button appears and is reachable,
+`messages.send` fires with the correct payload, three bubbles render, no horizontal
+overflow, no page errors. A fix aimed at the send path would have been aimed at nothing.
+
+**THE CAUSE IS PHONE-ONLY, WHICH IS WHY NO DESKTOP MEASUREMENT COULD SEE IT.** `AppShell`
+sizes the mobile shell from a measured `--relay-vh` rather than a CSS viewport unit
+(v2.78, because `dvh` reported the toolbar-collapsed height on a real iPhone). It **did**
+subscribe to `visualViewport`'s resize — and then wrote **`window.innerHeight`**, which on
+iOS does not change when the keyboard opens. So the handler fired and wrote an unchanged
+value: a subscription that reads as handled while handling nothing.
+
+**MEASURED, with the visual viewport shrunk to 400 to simulate the keyboard:**
+
+|  | `--relay-vh` | `<main>` | input bottom |
+|---|---|---|---|
+| keyboard closed | 844px | 844 | 785 |
+| keyboard open, BEFORE | 844px (unchanged) | 844 | **785 — 385px under the keyboard** |
+| keyboard open, AFTER | 400px | 400 | **341 — 59px of clearance** |
+
+`handlerChangedAnything: false` before, `true` after. You tap the composer and the field
+you just tapped, and Send beside it, are underneath the keyboard.
+
+**IT IS WORSE IN THIS APP THAN IN MOST FOR A REASON THIS APP CHOSE ON PURPOSE**: v2.76
+locks document scrolling (`html/body.relay-app-lock`) to stop iOS shoving the whole app
+past its own end. That was right, and it also removed the browser's own
+scroll-the-focused-input-into-view rescue, so nothing was left to compensate. The lock
+stays; the missing half was a keyboard-aware height.
+
+**`max-md:min-h-0` IS LOAD-BEARING AND WITHOUT IT THE FIX IS A NO-OP.** `min-h-svh`
+carries no breakpoint prefix so it applies on a phone too, and **`min-height` wins over
+`height`** — shrinking the var would have been overridden straight back to ~100svh.
+Measured both ways. That is the second time in three releases a fix would have silently
+done nothing without a second change beside it.
+
+**THE ZOOM GUARD IS NOT DEFENSIVENESS**: `visualViewport.height` also shrinks under a
+pinch-zoom, so trusting it unconditionally would shrink the app because somebody magnified
+it — the visible height is used only while `scale <= 1.01`. **THE FLOOR PICKS A FAILURE
+DIRECTION**: failing toward "too tall" is recoverable by scrolling, failing toward "no
+height" is a blank app, so it is floored at 320. A visual-viewport **scroll** is now
+listened for as well as a resize, because iOS moves the visual viewport as well as
+resizing it and a move with no resize still changes what is on screen.
+
+**A PRE-EXISTING PIN HAD FROZEN THE DEFECT ITSELF** — the sharpest version of this
+recurring problem. `appShellNav.test.ts` asserted the exact expression
+`setProperty("--relay-vh", window.innerHeight + "px")`: it forbade the fix while asserting
+the bug. It is now the property, with the keyboard rule pinned in its own file.
+
+**A DEFECT IN MY OWN HARNESS, reported rather than counted as a finding**: the first probe
+run rendered the thread row as "Unknown" and could not open a conversation — which looks
+exactly like a production bug and is not one. The DB layer's `ThreadSummary` uses `other*`
+while the wire projection renames them `peer*`, and my stub used the DB names.
+
+- [x] `client/src/app/AppShell.tsx` — the visible-viewport height, the zoom guard, the
+      floor, the scroll listener, and `max-md:min-h-0`.
+- [x] `client/src/app/keyboardViewport.test.ts` (8); **all 4 tripwires mutation-verified**
+      off a confirmed-GREEN baseline, including the original bug reinstated verbatim.
+- [x] **NOT VERIFIED ON A DEVICE, said plainly**: the keyboard is simulated by overriding
+      `visualViewport.height` in a real browser, which is the mechanism, but nobody has
+      typed into the composer on the owner's iPhone.
+- [x] **ALSO**: `server/mediasoupSignaling.ts` — the app→node client (HMAC-signed POST to
+      the node's PRIVATE address, bounded timeout, every failure a closed-set reason and
+      never a throw, since the caller is the call path). The signer is IMPORTED from the
+      node's own module rather than reimplemented, so there is one implementation and
+      parity is structural; a TypeScript copy was rejected as the v2.99.71 shape.
+      `server/mediasoupSignaling.test.ts` (20) drives the real signer against the agent's
+      real verifier over a real HTTP server. **Four defects in my own test, one cause:**
+      the round-trip cases signed with a hardcoded date five days from the real clock,
+      which the replay window correctly refused — the window rejecting my own test.
+- [x] No schema change, no new app dependency, no new required env var. 4636 tests.
+
 ## v2.106.28 — mediasoup becomes the primary media transport: the registry and the node agent (2026-07-30)
 
 The owner, having stood up two mediasoup nodes in Mumbai: *"do it asap .. inplace of
