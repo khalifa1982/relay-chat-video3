@@ -9,27 +9,30 @@ importers:
   .:
     dependencies:
       ioredis:
-        specifier: ^5.4.1
-        version: 5.11.1
+        specifier: 5.4.1
+        version: 5.4.1
       mediasoup:
-        specifier: ^3.19.3
-        version: 3.23.2
+        specifier: 3.19.3
+        version: 3.19.3
 
 packages:
 
-  '@ioredis/commands@1.10.0':
-    resolution: {integrity: sha512-UmeW7z4LfctwoQ5wkhVzgq8tXkreED2xZGpX+Bg+zA+WJFZCT6c062AfCK/Dfk81xZnnwdhJCUMkitihRaoC2Q==}
+  '@ioredis/commands@1.11.0':
+    resolution: {integrity: sha512-tuMmOu6dtyGFv/fzCjtapCJj/zgoHaFsqs3wKsroJSRXtlLmyL/t+B7uaQiavGk1F3WWFQcUqZwk92bpp9jKcA==}
 
   '@isaacs/fs-minipass@4.0.1':
     resolution: {integrity: sha512-wgm9Ehl2jpeqP3zw/7mo3kRHFp5MEDhqAdwy1fTGkHAwnkGOVsgpvQhL8B5n1qlb01jV3n/bI0ZfZp5lWA1k4w==}
     engines: {node: '>=18.0.0'}
 
+  '@types/ini@4.1.1':
+    resolution: {integrity: sha512-MIyNUZipBTbyUNnhvuXJTY7B6qNI78meck9Jbv3wk0OgNwRyOOVEKDutAkOs1snB/tx0FafyR6/SN4Ps0hZPeg==}
+
   chownr@3.0.0:
     resolution: {integrity: sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g==}
     engines: {node: '>=18'}
 
-  cluster-key-slot@1.1.1:
-    resolution: {integrity: sha512-rwHwUfXL40Chm1r08yrhU3qpUvdVlgkKNeyeGPOxnW8/SyVDvgRaed/Uz54AqWNaTCAThlj6QAs3TZcKI0xDEw==}
+  cluster-key-slot@1.1.2:
+    resolution: {integrity: sha512-RMr0FhtfXemyinomL4hrWcYJxmX6deFdCxpJzhDttxgO1+bcCnkk+9drydLVDmAMG7NE6aN/fl4F7ucU/90gAA==}
     engines: {node: '>=0.10.0'}
 
   data-uri-to-buffer@4.0.1:
@@ -64,13 +67,23 @@ packages:
     resolution: {integrity: sha512-rPd5gpyWuIfEbBiHC/f9I4wdeCpAhg0aWdYgjMRdVTqhJT22C6VrWTi4hpAAgJad1Vv8BJDEvrzAQTW7CxzmJw==}
     engines: {node: '>=22'}
 
-  ioredis@5.11.1:
-    resolution: {integrity: sha512-ehuGcf94bQXhfagULNXrJdfnWO38v070jxSx/qE87Kjzmu2fU7ro5EFAb+OPituLqgfyuQaym5DlrNydW2sJ9A==}
+  ini@5.0.0:
+    resolution: {integrity: sha512-+N0ngpO3e7cRUWOJAS7qw0IZIVc6XPrW4MlFBdD066F2L4k1L6ker3hLqSq7iXxU5tgS4WGkIUElWn5vogAEnw==}
+    engines: {node: ^18.17.0 || >=20.5.0}
+
+  ioredis@5.4.1:
+    resolution: {integrity: sha512-2YZsvl7jopIa1gaePkeMtd9rAcSjOOjPtpcLlOeusyO+XH2SK5ZcT+UCrElPP+WVIInh2TzeI4XW9ENaSLVVHA==}
     engines: {node: '>=12.22.0'}
 
-  mediasoup@3.23.2:
-    resolution: {integrity: sha512-0y8ylIA8MOlXDJNK+1PBxrnAD+/H8sxqdJ0WExHb60dlHDJNd1N1b3YGEflho3xAFpdpJAYgXgv/b1DaCdy4Vw==}
-    engines: {node: '>=22'}
+  lodash.defaults@4.2.0:
+    resolution: {integrity: sha512-qjxPLHd3r5DnsdGacqOMU6pb/avJzdh9tFX2ymgoZE27BmjXrNy/y4LoaiTeAb+O3gL8AfpJGtqfX/ae2leYYQ==}
+
+  lodash.isarguments@3.1.0:
+    resolution: {integrity: sha512-chi4NHZlZqZD18a0imDHnZPrDeBbTtVN7GXMwuGdRH9qotxAjYs3aVLKc7zNOG9eddR5Ksd8rvFEBc9SsggPpg==}
+
+  mediasoup@3.19.3:
+    resolution: {integrity: sha512-1BH68i/q/hVAuSQHFCMq6TJDwca74KMtxE7k79BGD+wrnkvi3PTpaNaVjJ/JLjpCZnBZ3WrtI3Js0nw7NHSAXw==}
+    engines: {node: '>=20'}
 
   minipass@7.1.3:
     resolution: {integrity: sha512-tEBHqDnIoM/1rXME1zgka9g6Q2lcoCkxHLuc7ODJ5BxbP5d4c2Z5cGgtXAku59200Cx7diuHTOYfSBD8n6mm8A==}
@@ -103,9 +116,9 @@ packages:
   standard-as-callback@2.1.0:
     resolution: {integrity: sha512-qoRRSyROncaz1z0mvYqIE4lCd9p2R90i6GxW3uZv5ucSu8tU7B5HXUP1gG8pVZsYNVaXjk8ClXHPttLyxAL48A==}
 
-  supports-color@11.0.0:
-    resolution: {integrity: sha512-/zyImLdxhdygBIaVX0xTlQhKaCDLCrm665aqHk8xqK/Pa6k61fL6gwQGQq1k31yNyz6x55PppQgF2DMyPQa5xw==}
-    engines: {node: '>=22'}
+  supports-color@10.2.2:
+    resolution: {integrity: sha512-SS+jx45GF1QjgEXQx4NJZV9ImqmO2NPz5FNsIHrsDjh2YsHnawpan7SNQ1o8NuhrbHZy9AZhIoCUiCeaW/C80g==}
+    engines: {node: '>=18'}
 
   tar@7.5.22:
     resolution: {integrity: sha512-MFO/QzvtAOmJbkhOaCTvbGcFN9L9b+JunIsDwaKljSOdcLMea3NJ1k9Usz/rjdfSXTq4dfzfeS7W4p4YOAAHeA==}
@@ -121,23 +134,25 @@ packages:
 
 snapshots:
 
-  '@ioredis/commands@1.10.0': {}
+  '@ioredis/commands@1.11.0': {}
 
   '@isaacs/fs-minipass@4.0.1':
     dependencies:
       minipass: 7.1.3
 
+  '@types/ini@4.1.1': {}
+
   chownr@3.0.0: {}
 
-  cluster-key-slot@1.1.1: {}
+  cluster-key-slot@1.1.2: {}
 
   data-uri-to-buffer@4.0.1: {}
 
-  debug@4.4.3(supports-color@11.0.0):
+  debug@4.4.3(supports-color@10.2.2):
     dependencies:
       ms: 2.1.3
     optionalDependencies:
-      supports-color: 11.0.0
+      supports-color: 10.2.2
 
   denque@2.1.0: {}
 
@@ -152,31 +167,41 @@ snapshots:
     dependencies:
       fetch-blob: 3.2.0
 
-  h264-profile-level-id@2.3.3(supports-color@11.0.0):
+  h264-profile-level-id@2.3.3(supports-color@10.2.2):
     dependencies:
-      debug: 4.4.3(supports-color@11.0.0)
+      debug: 4.4.3(supports-color@10.2.2)
     transitivePeerDependencies:
       - supports-color
 
-  ioredis@5.11.1:
+  ini@5.0.0: {}
+
+  ioredis@5.4.1:
     dependencies:
-      '@ioredis/commands': 1.10.0
-      cluster-key-slot: 1.1.1
-      debug: 4.4.3(supports-color@11.0.0)
+      '@ioredis/commands': 1.11.0
+      cluster-key-slot: 1.1.2
+      debug: 4.4.3(supports-color@10.2.2)
       denque: 2.1.0
+      lodash.defaults: 4.2.0
+      lodash.isarguments: 3.1.0
       redis-errors: 1.2.0
       redis-parser: 3.0.0
       standard-as-callback: 2.1.0
     transitivePeerDependencies:
       - supports-color
 
-  mediasoup@3.23.2:
+  lodash.defaults@4.2.0: {}
+
+  lodash.isarguments@3.1.0: {}
+
+  mediasoup@3.19.3:
     dependencies:
-      debug: 4.4.3(supports-color@11.0.0)
+      '@types/ini': 4.1.1
+      debug: 4.4.3(supports-color@10.2.2)
       flatbuffers: 25.9.23
-      h264-profile-level-id: 2.3.3(supports-color@11.0.0)
+      h264-profile-level-id: 2.3.3(supports-color@10.2.2)
+      ini: 5.0.0
       node-fetch: 3.3.2
-      supports-color: 11.0.0
+      supports-color: 10.2.2
       tar: 7.5.22
 
   minipass@7.1.3: {}
@@ -203,7 +228,7 @@ snapshots:
 
   standard-as-callback@2.1.0: {}
 
-  supports-color@11.0.0: {}
+  supports-color@10.2.2: {}
 
   tar@7.5.22:
     dependencies:

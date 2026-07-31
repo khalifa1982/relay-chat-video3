@@ -159,3 +159,42 @@ describe("the agent's packaging keeps mediasoup out of the app", () => {
     expect(agent).toMatch(/from "\.\/record\.mjs"/);
   });
 });
+
+describe("the media node's dependencies are pinned to what the nodes actually run", () => {
+  const PKG = JSON.parse(readFileSync("voip-node/package.json", "utf8")) as {
+    dependencies: Record<string, string>;
+  };
+  const LOCK = readFileSync("voip-node/pnpm-lock.yaml", "utf8");
+
+  it("every dependency is an EXACT version, never a range", () => {
+    /* A caret here was already lying. The two live nodes were installed at mediasoup 3.19.3 and
+       a fresh install against `^3.19.3` resolves to 3.23.2 — four minor versions apart, with a
+       C++ worker compiled per install, so nothing would surface the difference until a call
+       behaved differently on ONE box. mediasoup's own API moved inside that range
+       (`listenIps`/`announcedIp` became @deprecated), which is exactly the drift a range hides. */
+    for (const [name, range] of Object.entries(PKG.dependencies)) {
+      expect(range, `${name} must be pinned exactly, got ${range}`).toMatch(/^\d+\.\d+\.\d+$/);
+    }
+  });
+
+  it("the LOCKFILE agrees with the pins — or a rebuild fails on --frozen-lockfile", () => {
+    /* THIS CAUGHT A REAL MISTAKE OF MINE. I generated the lockfile before pinning the versions,
+       so it locked 3.23.2 while package.json said 3.19.3 — a disagreement that makes
+       `pnpm install --frozen-lockfile` refuse outright, i.e. a media node that cannot be rebuilt.
+       Both halves have to be asserted, because either alone looks fine. */
+    for (const [name, version] of Object.entries(PKG.dependencies)) {
+      expect(LOCK, `${name}@${version} is not in the lockfile`).toContain(`${name}@${version}:`);
+    }
+  });
+
+  it("the lockfile does not ALSO carry a different version of a pinned dependency", () => {
+    // A stale entry left behind by an earlier resolution is how the two come to disagree again.
+    for (const name of Object.keys(PKG.dependencies)) {
+      const found = [...LOCK.matchAll(new RegExp(`^  ${name}@(\\d+\\.\\d+\\.\\d+):`, "gm"))].map(
+        (m) => m[1],
+      );
+      expect(new Set(found).size, `${name} appears at ${found.join(", ")}`).toBe(1);
+      expect(found[0]).toBe(PKG.dependencies[name]);
+    }
+  });
+});
