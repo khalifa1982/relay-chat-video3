@@ -11278,6 +11278,58 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.52 — LiveKit retired; the ring drops to 257ms (2026-07-31)
+
+Owner cancelled the LiveKit subscription and APIs: *"remove it completely, and I need the ring in one
+second, not three seconds"*.
+
+**A CORRECTION TO MYSELF FIRST, because it changed the diagnosis.** I had reported the mesh connecting
+in "3.4s", taken from `msFromAnswerToEstablished` in my own rig. That field is MISLABELLED — it is
+`estAt - T0` where `T0` is the PROCESS START (drive.mjs:105), so it included server boot, two browser
+launches, guest minting and registration. The real timeline was always: dial -> ringing **255ms**,
+answer -> connected **356ms**. The app was never slow. Every second of waiting was LiveKit.
+
+**THE FIX.** `livekitConfig()` now returns `{enabled:false, url:""}` unconditionally and reads no
+`LIVEKIT_*` variable. That boolean is stamped on every signaling frame as `livekit` and the client's
+entire SFU branch hangs off it, so false routes every call onto the mesh immediately.
+
+**Ignoring the env is load-bearing, not tidiness.** The alternative — asking an operator to unset three
+vars on two boxes — leaves a stale `LIVEKIT_URL` able to reinstate the ~20s wait (4.5s + 3x4s of
+watchdog before the v2.106.48 fallback could start rebuilding on the mesh). Not readable from the
+environment means not reachable by accident.
+
+**MEASURED with the vars deliberately left SET and pointing at a dead port** — the exact 20s condition:
+
+| | |
+|---|---|
+| dial -> ringing | **257 ms** |
+| answer -> connected | **340 ms** |
+| dial -> connected | **603 ms** |
+| peer connections | **1** (was 21) |
+| inbound audio energy | **2.052 / 2.216** both ways |
+
+**TWO REAL LOSSES, stated rather than discovered.** Call RECORDING is LiveKit Egress
+(`server/recording.ts` needs `LIVEKIT_*` on top of `RECORDING_S3_*`), so it died with the cancelled
+subscription, not with this commit. And the group cap goes **10 -> 6**, because the mesh runs N-1
+encoders on every phone. Both follow from the cancellation.
+
+**EIGHT TESTS BROKE AND ALL EIGHT WERE ASSERTING THE RETIRED BEHAVIOUR.** `relay.test.ts` required
+`enabled === true` with all three vars set — it would have forbidden the retirement — and now asserts
+the opposite plus that the body contains no `process.env.LIVEKIT`, with its own `beforeEach` setting
+all three vars so that a fully-populated environment yielding false IS the assertion. Five behavioural
+token-DELIVERY tests are deleted: there is no token to deliver.
+
+**The three survivors are the ones that still matter.** `claimPrimaryForCall` promotes the DIALLING
+device to primary, and that is a MESH concern — `signal` routes via `reg.clients.get(to)`, one socket
+per number, so without it a dial from a non-primary device is unreachable by its peer's offers.
+
+**NOT DONE.** The LiveKit code is still present and now permanently unreachable: 155 lines in
+`relayClient.ts`, 81 in `relay.ts`, `server/recording.ts`, the `livekit-client` dependency, the LiveKit
+tier in `voipRegistry.ts`. Deleting it changes no behaviour while `enabled` is false, so it is a
+separate commit rather than a 250-line refactor of the call path on the day it was repaired.
+
+No schema change, no new dependency, no new env var. 4926 tests.
+
 ## v2.106.51 — mesh remote audio was never played out on a call with no video (2026-07-31)
 
 **THE FOURTH INDEPENDENT WAY A CALL COULD CARRY NOTHING**, found by measurement an hour after

@@ -1344,11 +1344,30 @@ describe("relay — LiveKit SFU token minting", () => {
     }
   });
 
-  it("livekitConfig().enabled is true only when all three vars are set", () => {
-    expect(livekitConfig().enabled).toBe(true);
-    expect(livekitConfig().url).toBe("wss://example.livekit.cloud");
-    delete process.env.LIVEKIT_API_SECRET;
+  it("LIVEKIT IS RETIRED — disabled unconditionally, and the env is not consulted", () => {
+    // v2.106.52. The owner cancelled the LiveKit subscription and asked for it
+    // removed. This assertion USED to require `enabled === true` when all three
+    // vars were set — i.e. it would now forbid the retirement.
+    //
+    // Ignoring the env is the point, not an implementation detail: `enabled` is
+    // what every signaling frame stamps as `livekit`, and the client's entire SFU
+    // branch hangs off it. A stale LIVEKIT_URL left behind in /home/relay/.env
+    // would otherwise reinstate the ~20s connect wait (4.5s + 3x4s of watchdog
+    // before the mesh fallback could start), which is the exact failure being
+    // removed. So it must not be reachable by leaving a variable set.
+    //
+    // Note this test's own beforeEach SETS all three vars — so the env being
+    // fully populated while `enabled` is false is precisely what is asserted.
+    expect(process.env.LIVEKIT_URL).toBeTruthy();
+    expect(process.env.LIVEKIT_API_KEY).toBeTruthy();
+    expect(process.env.LIVEKIT_API_SECRET).toBeTruthy();
     expect(livekitConfig().enabled).toBe(false);
+    expect(livekitConfig().url).toBe("");
+    // …and the function body reads no LIVEKIT_ env var at all.
+    const src = fs.readFileSync(path.resolve(__dirname, "relay.ts"), "utf8");
+    const at = src.indexOf("export function livekitConfig()");
+    const body = src.slice(at, src.indexOf("\n}", at));
+    expect(body).not.toMatch(/process\.env\.LIVEKIT/);
   });
 
   it("mints a scoped, short-lived join token (identity=pin, room, publish+subscribe, 60s, no admin)", async () => {

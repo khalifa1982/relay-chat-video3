@@ -955,10 +955,27 @@ export function iceServers(userId: string, ttlSecOverride?: number): IceServer[]
  * Secrets without a restart (same pattern as iceServers()).
  * ────────────────────────────────────────────────────────────────────────── */
 export function livekitConfig(): { enabled: boolean; url: string } {
-  const url = process.env.LIVEKIT_URL || "";
-  const key = process.env.LIVEKIT_API_KEY || "";
-  const secret = process.env.LIVEKIT_API_SECRET || "";
-  return { enabled: !!(url && key && secret), url };
+  // ── LIVEKIT IS RETIRED (v2.106.52). ───────────────────────────────────────
+  // The owner cancelled the LiveKit subscription and asked for it removed, so
+  // this returns DISABLED unconditionally and does not read the env at all.
+  //
+  // WHY THIS IS THE LOAD-BEARING LINE RATHER THAN A CLEANUP. `enabled` is what
+  // every `registered`/`room`/`joined`/`peer-joined` frame stamps as `livekit`,
+  // and the client's whole SFU branch hangs off that one boolean. Returning
+  // false here therefore routes EVERY call onto the mesh immediately — which is
+  // the speed fix, measured: the mesh rings in ~255ms and connects ~350ms after
+  // the answer, where an unreachable SFU cost 4.5s + 3x4s of watchdog before
+  // v2.106.48's fallback could even start rebuilding on the mesh.
+  //
+  // It deliberately IGNORES the env instead of trusting the operator to unset
+  // three variables on two boxes: a stale LIVEKIT_URL left in /home/relay/.env
+  // would otherwise bring the ~20s wait straight back, and that is exactly the
+  // failure the owner has been living with. Not readable from the environment
+  // means not reachable by accident.
+  //
+  // The remaining LiveKit code is dead as a consequence and comes out next; it
+  // cannot run while this is false, so removing it changes no behaviour.
+  return { enabled: false, url: "" };
 }
 
 /**
