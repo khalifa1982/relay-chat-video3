@@ -1,10 +1,11 @@
 /**
  * RELAY mediasoup MEDIA-NODE AGENT.
  *
- * Runs ON a media node (not on the app fleet). One mediasoup worker per core, one router
- * per room, `WebRtcTransport`s announcing this node's own public IP. Publishes itself to
- * the Redis registry the app reads, and exposes a VPC-internal HTTP API the app's
- * signaling layer drives.
+ * Runs ON a media node (not on the app fleet). One mediasoup worker per core, ONE
+ * `WebRtcServer` bound to each worker, one router per room, and every transport in a room
+ * created on that room's server — so all of a core's transports share a single UDP + TCP port
+ * pair instead of taking a port each out of the worker's range. Publishes itself to the Redis
+ * registry the app reads, and exposes a VPC-internal HTTP API the app's signaling layer drives.
  *
  * Start:  node agent.mjs        (systemd unit: relay-voip.service)
  * Env:    REDIS_URL          required — the same relay-redis the app uses
@@ -107,7 +108,16 @@ const MAX_INCOMING_BITRATE = 1_500_000;
 const INITIAL_OUTGOING_BITRATE = 1_000_000;
 
 // ── state ────────────────────────────────────────────────────────────────────────
-/** @type {import("mediasoup").types.Worker[]} */
+/**
+ * One entry per CPU core: the worker AND the `WebRtcServer` bound to it.
+ *
+ * THE PAIR IS RECORDED BECAUSE IT CANNOT BE DERIVED. `createWebRtcServer` is on `Worker`, not
+ * `Router`, and `Router` exposes no `worker` getter — verified against mediasoup's own
+ * declarations rather than the docs — so nothing can walk from a room's router back to the
+ * server its transports must be created on.
+ *
+ * @type {{worker: import("mediasoup").types.Worker, webRtcServer: import("mediasoup").types.WebRtcServer, port: number}[]}
+ */
 const workers = [];
 let nextWorker = 0;
 /** roomId → { router, transports:Map, producers:Map, consumers:Map, audioObserver } */
@@ -115,6 +125,26 @@ const rooms = new Map();
 let self = { instanceId: "unknown", publicIp: "", privateIp: "", az: "" };
 /** @type {import("ioredis").Redis | null} */
 let redis = null;
+
+/**
+ * Drop this node's registry record, so a PLANNED stop does not make the app wait out the TTL
+ * before it stops sending rooms here.
+ *
+ * ONE implementation, because there are now two callers — a signal-driven shutdown and the
+ * address-change exit — and two copies of "how does a node leave the registry" is how one of
+ * them comes to leave a record behind. A crash needs no equivalent: the TTL is the backstop,
+ * which is why this may fail silently.
+ */
+async function deregister() {
+  try {
+    if (redis) {
+      await redis.del(nodeKey(self.instanceId));
+      await redis.srem(NODE_INDEX_KEY, self.instanceId);
+    }
+  } catch {
+    /* ignore — the TTL is the backstop */
+  }
+}
 
 // ── IMDSv2 ───────────────────────────────────────────────────────────────────────
 /**
@@ -169,9 +199,14 @@ async function readSelf() {
 // ── workers ──────────────────────────────────────────────────────────────────────
 async function startWorkers() {
   const n = Math.max(1, cpus().length);
+  /* THE FIRST `n` PORTS ARE RESERVED FOR THE WebRtcServers, and each worker's own range starts
+     ABOVE them — so a worker can never allocate a port a server is already bound to. Collision
+     avoided by construction rather than by hoping the ranges do not overlap. */
+  const serverPortBase = RTC_MIN_PORT;
+  const workerMinPort = RTC_MIN_PORT + n;
   for (let i = 0; i < n; i++) {
     const w = await mediasoup.createWorker({
-      rtcMinPort: RTC_MIN_PORT,
+      rtcMinPort: workerMinPort,
       rtcMaxPort: RTC_MAX_PORT,
       logLevel: "warn",
       logTags: ["info", "ice", "dtls", "rtp", "rtcp", "bwe"],
@@ -186,12 +221,38 @@ async function startWorkers() {
       console.error(`[voip] worker ${w.pid} died — exiting so systemd restarts us`);
       process.exit(1);
     });
-    workers.push(w);
+    /* ONE WebRtcServer PER WORKER, and every transport on that worker shares its single
+       UDP + TCP port pair instead of taking a port each out of the worker's range. That is the
+       reason to prefer it over per-transport `listenInfos`: one socket pair per core rather than
+       one per participant.
+       TWO ENTRIES, NOT ONE. `listenInfos` is a LIST, and supplying only the UDP entry ships a
+       node that silently has no TCP candidate at all — which is invisible until somebody on a
+       UDP-blocking network cannot connect and everything else looks healthy.
+       `announcedAddress`, not the deprecated `announcedIp`: LISTEN on the private address, ANNOUNCE
+       the public one. That is the whole trick of an SFU behind NAT — the socket binds inside the
+       VPC while the candidate a browser receives is the address routable to it. */
+    const port = serverPortBase + i;
+    const webRtcServer = await w.createWebRtcServer({
+      listenInfos: [
+        { protocol: "udp", ip: self.privateIp, announcedAddress: self.publicIp, port },
+        { protocol: "tcp", ip: self.privateIp, announcedAddress: self.publicIp, port },
+      ],
+    });
+    workers.push({ worker: w, webRtcServer, port });
   }
-  console.log(`[voip] ${workers.length} worker(s) on ports ${RTC_MIN_PORT}-${RTC_MAX_PORT}`);
+  console.log(
+    `[voip] ${workers.length} worker(s); WebRtcServers on ${serverPortBase}-${serverPortBase + n - 1}, ` +
+      `worker range ${workerMinPort}-${RTC_MAX_PORT}, announcing ${self.publicIp}`,
+  );
 }
 
-/** Round-robin, so rooms spread across cores rather than piling on worker 0. */
+/**
+ * Round-robin, so rooms spread across cores rather than piling on worker 0.
+ *
+ * Returns the PAIR, because a room needs both halves and cannot recover one from the other:
+ * transports are created on the `WebRtcServer` while `canConsume` and `rtpCapabilities` come
+ * from the router, and `Router` has no `worker` getter to walk back through.
+ */
 function pickWorker() {
   const w = workers[nextWorker % workers.length];
   nextWorker++;
@@ -201,7 +262,8 @@ function pickWorker() {
 async function getOrCreateRoom(roomId) {
   const existing = rooms.get(roomId);
   if (existing) return existing;
-  const router = await pickWorker().createRouter({ mediaCodecs: MEDIA_CODECS });
+  const slot = pickWorker();
+  const router = await slot.worker.createRouter({ mediaCodecs: MEDIA_CODECS });
   /* Dominant-speaker detection, so the app can forward only the loudest few. Forwarding
      every audio stream in a large room is the thing that makes a 10-way call cost ten
      times a 1:1 for no perceptual gain. */
@@ -212,6 +274,11 @@ async function getOrCreateRoom(roomId) {
   });
   const room = {
     router,
+    /* The server every transport in THIS room is created on. Recorded per room rather than
+       looked up per transport, so a room can never end up with transports split across two
+       servers — which would put one participant's media on a different port pair from the
+       rest and is invisible until exactly one person cannot connect. */
+    webRtcServer: slot.webRtcServer,
     audioObserver,
     transports: new Map(),
     producers: new Map(),
@@ -245,11 +312,16 @@ function closeRoom(roomId) {
 
 async function createWebRtcTransport(room) {
   const transport = await room.router.createWebRtcTransport({
-    // LISTEN on the private IP, ANNOUNCE the public one. This is the whole trick of an SFU
-    // behind NAT: the socket binds inside the VPC while the candidate a browser receives is
-    // the address that is actually routable to it.
-    listenIps: [{ ip: self.privateIp, announcedIp: self.publicIp }],
+    /* THE SERVER, NOT `listenIps` — and they are MUTUALLY EXCLUSIVE rather than merely
+       redundant: the option type is `Either<Either<listenInfos, listenIps>, webRtcServer>`, so
+       passing both is a type error and passing the deprecated one gets a port per transport
+       instead of one shared pair per core. The listen/announce addresses were decided once when
+       this server was created; a transport cannot restate or override them. */
+    webRtcServer: room.webRtcServer,
     enableUdp: true,
+    /* EXPLICIT, and it is the candidate that carries a UDP-blocked network. The WebRtcServer
+       has a TCP listener precisely so this can be true; leaving it to a default is how a node
+       ends up UDP-only with nothing saying so. */
     enableTcp: true,
     preferUdp: true,
     initialAvailableOutgoingBitrate: INITIAL_OUTGOING_BITRATE,
@@ -511,8 +583,32 @@ async function main() {
     try {
       const now = await readSelf();
       if (now.publicIp !== self.publicIp) {
-        console.warn(`[voip] public IP changed ${self.publicIp} -> ${now.publicIp}`);
+        /* THE CONVERSION TO `WebRtcServer` CHANGED WHAT THIS CASE MEANS, and simply updating
+           `self` would now be silently wrong.
+           `announcedAddress` is decided when the SERVER is created and is immutable, so a
+           process that keeps running after its address changes announces the OLD one for the
+           rest of its life — not for one interval. Updating `self` would fix the heartbeat and
+           fix nothing about the media, which is the worst combination: the registry would report
+           a healthy node at the new address while every transport it minted pointed at an
+           address that no longer reaches it.
+           So exit, and let systemd restart — the same reasoning and the same machinery as a
+           worker death directly above. Every room here is already broken by the address change,
+           the deregister below stops the app sending more, the registry TTL expires this node,
+           its rooms are reassigned to the surviving one, and clients take the already-shipped
+           rejoin path. Rebuilding the servers in place was the alternative and it is strictly
+           more code for the same outcome, because the rooms bound to the old servers have to be
+           torn down either way. */
+        console.warn(
+          `[voip] public IP changed ${self.publicIp} -> ${now.publicIp} — exiting so the ` +
+            `WebRtcServers are recreated announcing the new address`,
+        );
         self = now;
+        try {
+          await deregister();
+        } catch {
+          /* the TTL is the backstop */
+        }
+        process.exit(0);
       }
     } catch {
       /* keep the last known good */
@@ -521,20 +617,13 @@ async function main() {
 
   const shutdown = async () => {
     console.log("[voip] shutting down");
-    // Deregister so a PLANNED stop does not make the app wait out the TTL before it stops
-    // sending rooms here. A crash needs no equivalent: the TTL is the backstop.
-    try {
-      if (redis) {
-        await redis.del(nodeKey(self.instanceId));
-        await redis.srem(NODE_INDEX_KEY, self.instanceId);
-      }
-    } catch {
-      /* ignore */
-    }
+    await deregister();
     for (const id of [...rooms.keys()]) closeRoom(id);
-    for (const w of workers) {
+    for (const slot of workers) {
       try {
-        w.close();
+        /* `.worker`, because `workers` holds the {worker, webRtcServer} PAIR. Closing the worker
+           closes the server bound to it, so there is nothing separate to close. */
+        slot.worker.close();
       } catch {
         /* ignore */
       }

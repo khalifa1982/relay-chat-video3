@@ -11278,6 +11278,70 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.35 — one WebRtcServer per core, and the types forced a decision (2026-07-31)
+
+The media node moves off the deprecated per-transport listen. Every transport in a room is created
+on that room's `WebRtcServer`, so all of a core's transports share **one UDP + TCP port pair**
+instead of taking a port each out of the worker's range.
+
+- **The pair is recorded per room because it cannot be derived.** `createWebRtcServer` is on
+  `Worker`, not `Router`, and `Router` has no `worker` getter. Recording it per *room* rather than
+  per transport also makes it impossible for one room's transports to split across two servers —
+  which would put one participant's media on a different port pair from everybody else's and is
+  invisible until exactly one person cannot connect.
+- **Two `listenInfos` entries**, and this is the one most worth pinning: it is a *list*, so
+  supplying only the UDP entry ships a node with **no TCP candidate at all** — and the people that
+  fails are exactly those on a UDP-blocking network for whom every other candidate is also
+  unusable, while every reading on the box looks healthy.
+- `announcedAddress`, not the deprecated `announcedIp`. Server ports come from the bottom of the
+  range with each worker's own range starting above them, so a worker can never allocate a port a
+  server already holds — collision avoided by construction.
+
+### The decision the types forced
+
+`announcedAddress` is decided when the **server** is created and is immutable. So converting
+naively would have made the auto-assigned-IP story **worse** than what it replaced: today's
+per-transport listen reads the live value at call time, so a re-read fixes new rooms within one
+interval, whereas a boot-created server announces the old address for the rest of the process's
+life.
+
+Updating the cached address alone would then be the worst combination — the heartbeat reporting a
+healthy node at the new address while every transport it minted points at one that no longer
+reaches it — **and nothing could detect it, because this agent is the only source of that value**:
+`assignmentStillValid` would compare two copies of the same stale number, they agree, nothing looks
+wrong.
+
+So an address change now **deregisters and exits** for systemd to restart. Same reasoning and same
+machinery as the worker-death handler above it: every room here is already broken by the change,
+the deregister stops the app sending more, the TTL expires the node, its rooms are reassigned, and
+clients take the already-shipped rejoin path. Rebuilding the servers in place is strictly more code
+for the same outcome, because the rooms bound to the old servers have to be torn down either way.
+
+### A real bug my own conversion introduced, caught by its own test
+
+`workers` became a list of `{worker, webRtcServer, port}` and the shutdown loop still read
+`w.close()` — `undefined` on a pair — so a **planned** stop would have thrown on its way out,
+taking the clean deregister with it and making every restart wait out the full TTL.
+
+The address-change path also needed a second caller for the deregister, which had only ever existed
+inline inside the shutdown. Extracted: two copies of "how does a node leave the registry" is how one
+of them comes to leave a record behind.
+
+### Verification
+
+`server/voipWebRtcServer.test.ts` (13), pinned on **source** and honest about it — importing
+`agent.mjs` starts mediasoup workers, binds a port and connects to Redis. Function bodies are
+located by brace matching rather than a fixed character slice (the v2.99.78 fragility, hit six
+times), and comments are stripped because the file explains in prose exactly what it must not do.
+
+**11 of 11 tripwires verified by mutation** off a confirmed-green baseline — including the shutdown
+bug reinstated verbatim, the TCP listenInfo deleted, the listen and announce addresses swapped, and
+the exit removed. `agent.mjs` byte-identical afterwards.
+
+**Not verified against a node, said plainly:** no mediasoup worker has been started here, no
+transport created, no candidate gathered. The security group is deliberately left wider than it now
+needs to be, and why is recorded rather than left as an oversight. 4738 tests.
+
 ## v2.106.34 — four mediasoup API facts, read off the declarations (2026-07-31)
 
 Three planning decisions rested on documentation. The packages are one `pnpm add` away, so these

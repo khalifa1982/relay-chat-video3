@@ -92,6 +92,8 @@ its worker compiled, so an update is the two `.mjs` files plus a restart.
 ```bash
 # 1. copy agent.mjs + record.mjs + package.json into /opt/relay-voip
 #    (from the repo, or via SSM send-command — NOT from the app release tar)
+#    INCLUDING pnpm-lock.yaml, and install with --frozen-lockfile: the versions are pinned
+#    exactly and a plain install on a box without the lockfile silently resolves newer ones
 
 # 2. first time only: the env file with the secrets
 sudo install -d -m 0750 -o root -g relay /etc/relay-voip
@@ -131,6 +133,19 @@ so the second case cannot happen silently, but check `journalctl` first.
 
 The registry is the app's only read path; there is no health endpoint to poll. A node that
 stops heartbeating disappears from selection within `NODE_TTL_MS` (15s) on its own.
+
+## Ports: one pair per core, taken from the bottom of the range
+
+Each worker gets ONE `WebRtcServer` bound to `RTC_MIN_PORT + i`, listening on both UDP and TCP,
+and every transport in every room on that worker shares it. On a 2-core box that is **40000 and
+40001**, and the workers' own range starts at `RTC_MIN_PORT + n` so a worker can never allocate a
+port a server already holds — collision avoided by construction rather than by hoping the ranges
+do not overlap.
+
+The security group is unchanged (UDP + TCP 40000–49999) and is now wider than it needs to be.
+Narrowing it to the two server ports is possible and **not** done here, because the worker range
+is still what a future non-WebRTC transport (plain RTP, a recorder) would draw from, and a rule
+that has to be widened again under time pressure is worse than one that is generous now.
 
 ## Four API facts, read off mediasoup's own declarations rather than the docs
 
