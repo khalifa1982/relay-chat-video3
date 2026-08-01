@@ -387,7 +387,11 @@ describe("v2.104.0 — the UI offers only what the server would allow", () => {
 
   it("the appoint control is admin-only and never offered against the creator", () => {
     expect(SHEET).toMatch(/\{iAmAdmin && !m\.isCreator && \(/);
-    expect(SHEET).toMatch(/m\.isAdmin \? "Remove admin" : "Make admin"/);
+    /* The TERNARY is the property — one control whose label states which way it goes —
+       and both halves must reach the screen. Repointed for #156: the labels are keys now,
+       so the shape is pinned on the condition and the words on `copyOnScreen`. */
+    expect(SHEET).toMatch(/m\.isAdmin \? t\("groups\.removeAdmin"\) : t\("groups\.makeAdmin"\)/);
+    for (const w of ["Remove admin", "Make admin"]) expect(copyOnScreen(SHEET, w), w).toBe(true);
   });
 
   it("a group with no admin SAYS so instead of offering a control that fails", () => {
@@ -395,7 +399,7 @@ describe("v2.104.0 — the UI offers only what the server would allow", () => {
     // no way to appoint one. Nothing about it regresses; the feature does not reach it,
     // and the sheet says that in words.
     expect(SHEET).toMatch(/hasAdmin/);
-    expect(SHEET).toMatch(/created before admins existed/);
+    expect(copyOnScreen(SHEET, "created before admins existed")).toBe(true);
   });
 
   it("the role write is not optimistic, and refreshes only the read that shows it", () => {

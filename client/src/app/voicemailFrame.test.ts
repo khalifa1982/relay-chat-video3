@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { codeOnly } from "../../../server/testing/codeOnly";
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
 import { VOICEMAIL_MAX_MS, CAP_LABEL, fmtClock, reasonLine } from "./VoicemailPrompt";
 
 /* ============================================================================
@@ -131,9 +132,19 @@ describe("the readout is DERIVED from the cap, never a literal", () => {
     /* AND THE HONEST ONE IS REQUIRED TO BE PRESENT AND DERIVED. Send is now the only
        control that stops the recorder (Pause and Discard are separate), so the copy
        saying so is load-bearing, and it must come from the constant — a literal
-       could promise a ceiling `VOICEMAIL_MAX_MS` does not enforce. */
-    expect(VM).toMatch(/Sending stops the recording/);
-    expect(VM).toMatch(/\{Math\.round\(VOICEMAIL_MAX_MS \/ 1000\)\} seconds/);
+       could promise a ceiling `VOICEMAIL_MAX_MS` does not enforce.
+
+       REPOINTED FOR LOCALISATION (#…, the Arabic sweep) AND NOT WEAKENED. Both halves
+       froze a spelling this screen legitimately moved: the sentence now lives in
+       `dict/voicemail.ts` and the figure is interpolated into it, so `{Math.round(…)}
+       seconds` no longer appears as a run of source text. What each stood for is
+       unchanged — the sentence must still REACH the screen (`copyOnScreen` is satisfied
+       by the literal OR by a key whose English half is that sentence, which is strictly
+       stronger, because reaching the dictionary also proves an Arabic half exists), and
+       the figure must still be DERIVED from the constant at BOTH sites that state it.
+       Counting them is what stops one quietly reverting to a literal. */
+    expect(copyOnScreen(VM, "Sending stops the recording"), whyCopyMissing(VM, "Sending stops the recording")).toBe(true);
+    expect([...VM.matchAll(/Math\.round\(VOICEMAIL_MAX_MS \/ 1000\)/g)]).toHaveLength(2);
     expect(VM).not.toMatch(/\b60\s*seconds\b/);
     // Nor the board's other unbuilt claims: no greeting feature exists, nothing
     // is end-to-end encrypted here, and this card cannot decline a live call.
@@ -430,7 +441,9 @@ describe("shipped behaviour survives the reskin", () => {
        defect this test claims to defend against. */
     expect(CARD).not.toMatch(/\{\s*false\s*&&/);
     expect(CARD).not.toMatch(/\{\s*(?:0|null|undefined)\s*&&/);
-    expect(CARD).toMatch(/Leave a voice message/);
+    /* REPOINTED FOR LOCALISATION, same property: the invitation to record must still be
+       on the card. Satisfied by the literal or by the key carrying those exact words. */
+    expect(copyOnScreen(CARD, "Leave a voice message"), whyCopyMissing(CARD, "Leave a voice message")).toBe(true);
     expect(CARD).not.toMatch(/if \(false/);
   });
 

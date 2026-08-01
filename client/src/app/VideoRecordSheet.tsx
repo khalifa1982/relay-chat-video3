@@ -6,6 +6,7 @@ import {
   videoRecorderSupported,
   type VideoRecording,
 } from "@/lib/videoNote";
+import { useLocale, type TKey } from "./i18n";
 
 /**
  * In-app video recorder (v2.96.2) — RELAY's own camera sheet.
@@ -42,6 +43,27 @@ import {
  * moved DND off it, v2.106.9 the speaking tile, v2.106.11 the push banner and
  * v2.106.18 the voice waveform. The "Use video" button used to be painted with
  * it; it is the cycling accent now, like every other primary CTA in the app.
+ *
+ * ── LANGUAGE AND DIRECTION ──────────────────────────────────────────────────
+ * Copy lives in `dict/videorec.ts`; that module's header records the four
+ * vocabulary distinctions this screen must not lose in translation. Three
+ * direction decisions are made HERE rather than there, because they are about
+ * geometry rather than words:
+ *
+ *   THE REC CHIP'S TIMER IS AN LTR ISLAND. `0:07 / 1:00` is two numeric runs with
+ *   a separator between them, and in an RTL paragraph the bidi algorithm resolves
+ *   that separator to the paragraph direction — so the two times swap and the chip
+ *   claims the cap has elapsed. It is therefore isolated as one island, which also
+ *   means the elapsed/total pair cannot be a single dictionary string: isolating
+ *   each number SEPARATELY would leave them ordered by the RTL run between them and
+ *   change nothing.
+ *
+ *   THE PROGRESS HAIRLINE FILLS FROM THE READING START. `transform` is physical, so
+ *   `origin-left` would fill a right-to-left screen backwards. This mirrors what
+ *   `VoicemailPrompt` already does for the same hairline on the sibling recorder.
+ *
+ *   THE SELFIE MIRROR STAYS PHYSICAL. `scaleX(-1)` on the front-camera preview is a
+ *   fact about a camera, not about reading order, and must not follow `dir`.
  */
 const REC_RED = "#fb5560";
 
@@ -61,6 +83,7 @@ export function VideoRecordSheet({
    *  only to a caller that has one to offer. */
   onPickLibrary?: () => void;
 }) {
+  const { t, rtl } = useLocale();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recRef = useRef<VideoRecording | null>(null);
@@ -71,7 +94,10 @@ export function VideoRecordSheet({
   const [elapsedMs, setElapsedMs] = useState(0);
   const [result, setResult] = useState<{ blob: Blob; mimeType: string; ext: string; durationMs: number } | null>(null);
   const [reviewUrl, setReviewUrl] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  /* The KEY, not the sentence. A translated string frozen in state is stale the moment
+     the language changes, and storing one would also drag `t` into an effect closure
+     whose dependency list does not (and should not) include it. */
+  const [errKey, setErrKey] = useState<TKey | null>(null);
   // Probed ONCE: isTypeSupported is cheap but this renders 5x/sec while recording.
   const [canRecord] = useState(() => videoRecorderSupported());
 
@@ -84,7 +110,7 @@ export function VideoRecordSheet({
   useEffect(() => {
     if (phase === "review") return;
     let dead = false;
-    setErr(null);
+    setErrKey(null);
     releaseStream();
     openVideoCapture(facing)
       .then((s) => {
@@ -99,11 +125,7 @@ export function VideoRecordSheet({
         }
       })
       .catch(() => {
-        if (!dead) {
-          setErr(
-            "Camera unavailable. If you're on a video call, turn the call's camera off first, then try again."
-          );
-        }
+        if (!dead) setErrKey("videorec.cameraUnavailable");
       });
     return () => {
       dead = true;
@@ -128,9 +150,13 @@ export function VideoRecordSheet({
   // Running timer while recording.
   useEffect(() => {
     if (phase !== "rec") return;
-    const t0 = Date.now();
-    const t = setInterval(() => setElapsedMs(Date.now() - t0), 200);
-    return () => clearInterval(t);
+    const startedAt = Date.now();
+    /* `tick`, not `t`: `t` is the translator now, and a local of that name inside an
+       effect shadows it. Nothing in this effect calls it today, so this is a latent
+       trap rather than a live bug — but the repo's precedent (v2.106.85) is to REMOVE
+       a shadow rather than alias around it, and it costs one word. */
+    const tick = setInterval(() => setElapsedMs(Date.now() - startedAt), 200);
+    return () => clearInterval(tick);
   }, [phase]);
 
   function startTake() {
@@ -166,7 +192,7 @@ export function VideoRecordSheet({
         setPhase("review");
       });
     } catch {
-      setErr("Recording isn't supported by this browser.");
+      setErrKey("videorec.unsupported");
     }
   }
 
@@ -190,7 +216,8 @@ export function VideoRecordSheet({
   // Board 4j's progress hairline. Driven by TRANSFORM rather than `width`: a
   // width write repaints, and this updates five times a second (v2.99.84).
   const progress = maxMs > 0 ? Math.min(1, elapsedMs / maxMs) : 0;
-  const notice = err ?? (canRecord ? null : "Recording isn't supported by this browser.");
+  const noticeKey: TKey | null = errKey ?? (canRecord ? null : "videorec.unsupported");
+  const notice = noticeKey ? t(noticeKey) : null;
   // A shutter that can only refuse is absent, not disabled.
   const shutterLive = !notice;
 
@@ -204,7 +231,7 @@ export function VideoRecordSheet({
       className="dark relay-v2 fixed inset-0 z-[130] flex flex-col bg-black"
       role="dialog"
       aria-modal="true"
-      aria-label="Record a video"
+      aria-label={t("videorec.title")}
     >
       {/* top bar — board 4j: close · REC chip · flip, padding 10px 16px */}
       <div
@@ -214,7 +241,7 @@ export function VideoRecordSheet({
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close recorder"
+          aria-label={t("videorec.close")}
           className="grid size-11 shrink-0 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
         >
           {/* the frame's 19px stroke-2 cross */}
@@ -233,7 +260,18 @@ export function VideoRecordSheet({
               style={{ background: REC_RED }}
             />
             <span className="whitespace-nowrap font-mono text-[11px] font-semibold" style={{ color: "#ffd6db" }}>
-              REC {clock(elapsedMs)} / {clock(maxMs)}
+              {t("videorec.rec")}
+            </span>
+            {/* ONE island for the whole `0:07 / 1:00` run — see the header. Isolating
+                the two clocks separately would leave them ordered by the RTL run
+                between them, i.e. still swapped, so this span deliberately holds
+                both times and their separator. */}
+            <span
+              dir="ltr"
+              className="whitespace-nowrap font-mono text-[11px] font-semibold [unicode-bidi:isolate]"
+              style={{ color: "#ffd6db" }}
+            >
+              {clock(elapsedMs)} / {clock(maxMs)}
             </span>
           </span>
         )}
@@ -242,7 +280,7 @@ export function VideoRecordSheet({
             type="button"
             onClick={() => setFacing((f) => (f === "user" ? "environment" : "user"))}
             disabled={phase === "rec"}
-            aria-label="Flip camera"
+            aria-label={t("videorec.flip")}
             className="grid size-11 shrink-0 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20 disabled:opacity-40"
           >
             {/* the frame draws a generic rotate arrow here; SwitchCamera is the
@@ -261,8 +299,16 @@ export function VideoRecordSheet({
           className="mx-4 mt-1.5 h-[3px] overflow-hidden rounded-[2px] bg-white/12"
           role="presentation"
         >
+          {/* `transform` is PHYSICAL, so the fill has to be anchored to the reading
+              start by hand — `origin-left` grows a right-to-left screen backwards.
+              Two complete literals rather than a composed class, so the JIT sees
+              both. Mirrors `VoicemailPrompt`'s identical hairline. */}
           <span
-            className="block h-full origin-left rounded-[2px]"
+            className={
+              rtl
+                ? "block h-full origin-right rounded-[2px]"
+                : "block h-full origin-left rounded-[2px]"
+            }
             style={{ background: REC_RED, transform: `scaleX(${progress})` }}
           />
         </div>
@@ -293,8 +339,22 @@ export function VideoRecordSheet({
             words, which is what a screen reader and a glance-away user get. Kept
             deliberately though the frame omits it, in the board's mono voice. */}
         {phase === "rec" && capLeft <= 10_000 && (
-          <div className="absolute bottom-3 left-0 right-0 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-white/60">
-            Auto-stops in {Math.ceil(capLeft / 1000)}s
+          /* `inset-x-0` rather than the `left-0 right-0` pair it replaces: identical
+             geometry, and it says out loud that this is a full-width centred line
+             rather than something anchored to a physical edge.
+
+             THE TRACKING IS DROPPED IN ARABIC, and that is a script fact rather than
+             taste: Arabic is cursive, and letter-spacing pulls the joins apart. The
+             board's 0.18em is a mono-uppercase treatment for Latin, and `uppercase`
+             is already a no-op here for the same reason. */
+          <div
+            className={
+              rtl
+                ? "absolute inset-x-0 bottom-3 text-center font-mono text-[10px] text-white/60"
+                : "absolute inset-x-0 bottom-3 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-white/60"
+            }
+          >
+            {t("videorec.autoStops", { seconds: Math.ceil(capLeft / 1000) })}
           </div>
         )}
       </div>
@@ -315,7 +375,7 @@ export function VideoRecordSheet({
             className="inline-flex min-h-11 items-center gap-2 rounded-[18px] px-4 text-[11px] font-semibold text-white transition-transform active:scale-95"
             style={{ background: "rgba(0, 0, 0, 0.4)", border: "1px solid rgba(255, 255, 255, 0.3)" }}
           >
-            <RotateCcw className="size-4" /> Retake
+            <RotateCcw className="size-4" /> {t("videorec.retake")}
           </button>
           <button
             type="button"
@@ -326,7 +386,7 @@ export function VideoRecordSheet({
                accent surface — and what keeps the presence green out of it. */
             className="rcta inline-flex min-h-11 items-center gap-2 rounded-[18px] px-5 text-[11px] font-bold transition-transform active:scale-95"
           >
-            <Check className="size-4" /> Use video
+            <Check className="size-4" /> {t("videorec.useVideo")}
           </button>
         </div>
       ) : (
@@ -344,7 +404,7 @@ export function VideoRecordSheet({
               <button
                 type="button"
                 onClick={onPickLibrary}
-                aria-label="Choose a video from your library"
+                aria-label={t("videorec.library")}
                 className="grid size-11 place-items-center rounded-[14px] transition-transform active:scale-95"
                 style={{
                   background: "linear-gradient(135deg, hsl(30 40% 30%), hsl(200 40% 25%))",
@@ -360,7 +420,7 @@ export function VideoRecordSheet({
             <button
               type="button"
               onClick={phase === "rec" ? () => recRef.current?.stop() : startTake}
-              aria-label={phase === "rec" ? "Stop recording" : "Start recording"}
+              aria-label={phase === "rec" ? t("videorec.stop") : t("videorec.start")}
               className="relative size-[78px] shrink-0 transition-transform active:scale-95"
             >
               <span className="absolute inset-0 rounded-full" style={{ border: "3.5px solid #fff" }} />
@@ -384,7 +444,7 @@ export function VideoRecordSheet({
               <button
                 type="button"
                 onClick={stopAndSend}
-                aria-label="Stop and send"
+                aria-label={t("videorec.stopAndSend")}
                 className="rcta grid size-[52px] place-items-center rounded-full transition-transform active:scale-95"
               >
                 <Send className="size-[19px]" strokeWidth={2} />

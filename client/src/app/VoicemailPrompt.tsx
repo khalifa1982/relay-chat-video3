@@ -5,6 +5,7 @@ import { trpc } from "@/lib/trpc";
 import { RoleBadge } from "./VerifiedBadge";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
+import { translate, useLocale, useT, type TKey } from "./i18n";
 
 /* ============================================================================
    BOARD 2g — VOICEMAIL (with 5h's "VOICEMAIL — RECORDING (MAX 60S)" panel)
@@ -49,7 +50,7 @@ import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/l
    FOUR MORE BOARD/5h STRINGS DECLINED, each because it states something this app
    does not do:
      - "No answer after 30 seconds" — the no-answer backstop is 65_000ms
-       (`relayClient.ts`). `reasonLine` below already answers correctly for all
+       (`relayClient.ts`). `reasonKey` below already answers correctly for all
        three real reasons and is pinned by `v29911OfflineCall.test.ts`.
      - "it's delivered encrypted, like everything else" — message bodies and
        attachments have no end-to-end encryption here (the storage proxy READS
@@ -112,15 +113,49 @@ export function fmtClock(totalSec: number): string {
  *  cannot disagree. A literal here would go stale the moment the cap moves. */
 export const CAP_LABEL = fmtClock(VOICEMAIL_MAX_MS / 1000);
 
+/**
+ * Which of the three honest reasons this dial ended on.
+ *
+ * A KEY RATHER THAN A SENTENCE, because this is a module-level pure function and a
+ * module-level function cannot call a hook — the render site translates it. Returning
+ * finished English here is exactly the shape that leaves a screen reporting itself as
+ * translated while one line on it stays English (v2.106.91's finding, and the `ago()`
+ * helper on the alert surfaces).
+ *
+ * THE THREE ARE DISTINCT ON PURPOSE and the distinction is the whole point of the
+ * function: declined, offline and unanswered are three different facts about one call,
+ * and this card is the one surface that knows which. Collapsing any two — in either
+ * language — would make it guess.
+ */
+export function reasonKey(reason: string): TKey {
+  if (reason === "peer-rejected") return "voicemail.reasonDeclined";
+  if (reason === "server-error:offline") return "voicemail.reasonOffline";
+  return "voicemail.reasonNoAnswer";
+}
+
+/**
+ * The ENGLISH reading of `reasonKey`, DERIVED from it rather than a second mapping.
+ *
+ * Kept because it is the seam the tests were written against, and it is a better one
+ * now than before: it proves the whole chain — reason → key → a dictionary entry whose
+ * English half is that sentence — where it used to prove only its own `if` ladder.
+ * Deriving rather than restating is what stops the two ever disagreeing about what
+ * "offline" says, which is the class of drift this repo has paid for repeatedly.
+ */
 export function reasonLine(reason: string): string {
-  if (reason === "peer-rejected") return "They declined your call.";
-  if (reason === "server-error:offline") return "They're offline right now.";
-  return "They didn't answer.";
+  return translate("en", reasonKey(reason));
 }
 
 function initialsOf(label: string): string {
   const parts = label.trim().split(/\s+/).slice(0, 2);
   return parts.map((p) => p[0]?.toUpperCase() ?? "").join("") || "?";
+}
+
+/** The reason a send failed, as text to interpolate into a translated sentence.
+ *  DELIBERATELY NOT TRANSLATED: this is the server's or the browser's own message, and
+ *  inventing an Arabic rendering of it would be inventing the cause. */
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**
@@ -169,10 +204,15 @@ function CalleeAvatar({
       )}
       {/* The "this call didn't connect" marker, kept from the header tile this
           avatar replaces — destructive, because a missed call is the fact the
-          card exists to report. */}
+          card exists to report.
+
+          `-end-`, not `-right-`: the marker rides the disc's TRAILING corner, so it
+          belongs on the other side in Arabic. That is the same logical spelling the
+          thread rows' and GroupInfoSheet's own avatar badges already use, so the app
+          cannot end up with one badge flipping and another not. */}
       <span
         aria-hidden
-        className="absolute -bottom-0.5 -right-0.5 grid size-6 place-items-center rounded-full border-2 border-card bg-destructive text-destructive-foreground"
+        className="absolute -bottom-0.5 -end-0.5 grid size-6 place-items-center rounded-full border-2 border-card bg-destructive text-destructive-foreground"
       >
         <PhoneMissed className="size-3" />
       </span>
@@ -216,6 +256,7 @@ function RecordPanel({
   onDiscard: () => void;
   onSend: () => void;
 }) {
+  const { t, rtl } = useLocale();
   const BARS = 24;
   const barsRef = useRef<Array<HTMLSpanElement | null>>([]);
   const clockRef = useRef<HTMLSpanElement | null>(null);
@@ -265,7 +306,7 @@ function RecordPanel({
           the same voice the History day headers and the Contacts A–Z letters
           already use. */}
       <div className="text-center font-mono text-[10px] font-semibold uppercase tracking-[0.26em] text-muted-foreground">
-        Voicemail — recording (max {Math.round(VOICEMAIL_MAX_MS / 1000)}s)
+        {t("voicemail.recordingLabel", { seconds: Math.round(VOICEMAIL_MAX_MS / 1000) })}
       </div>
 
       <div className="flex items-center gap-2.5 rounded-2xl border border-destructive/35 bg-destructive/10 px-3 py-2.5">
@@ -280,7 +321,16 @@ function RecordPanel({
             (paused ? "bg-muted-foreground" : "bg-destructive motion-safe:animate-pulse")
           }
         />
-        <span className="shrink-0 font-mono text-xs font-semibold tabular-nums">
+        {/* `dir="ltr"` + isolation, because this is `elapsed / total` — two clock
+            values either side of a slash, i.e. exactly the shape the bidi algorithm
+            reorders. Digits are weak and `/` is neutral, so in an RTL paragraph
+            "0:23 / 1:00" resolves the other way round and the readout claims the take
+            is already over its cap. The app's other mono numerics carry the same pair
+            (the thread stamps, the PIN tags). */}
+        <span
+          dir="ltr"
+          className="shrink-0 font-mono text-xs font-semibold tabular-nums [unicode-bidi:isolate]"
+        >
           <span ref={clockRef}>0:00</span> / {CAP_LABEL}
         </span>
         {/* The wave. aria-hidden because a screen reader gains nothing from 24
@@ -311,11 +361,15 @@ function RecordPanel({
             rather than assuming, because an engine without MediaRecorder.pause
             leaves the recorder running — which is why `voiceNote.ts` exposes
             `state()` at all. */}
+        {/* The BRANCH IS OUTSIDE `t()`, here and everywhere else on this card. A
+            `t(paused ? "a" : "b")` type-checks and renders correctly, and is invisible
+            to `copyOnScreen` — so a pin on owner-signed-off wording could no longer be
+            written for it at all, which is a guard silently lost rather than a bug. */}
         <button
           type="button"
           onClick={onTogglePause}
-          aria-label={paused ? "Resume recording" : "Pause recording"}
-          title={paused ? "Resume" : "Pause"}
+          aria-label={paused ? t("voicemail.resumeRecording") : t("voicemail.pauseRecording")}
+          title={paused ? t("voicemail.resume") : t("voicemail.pause")}
           className="grid size-[26px] shrink-0 place-items-center rounded-full bg-foreground/10 text-foreground transition active:scale-95"
         >
           {paused ? <Mic className="size-3" /> : <Pause className="size-3" />}
@@ -323,11 +377,21 @@ function RecordPanel({
       </div>
 
       {/* Elapsed-vs-cap rail (board 5h). Compositor-only: the fill is a scaleX
-          transform off a left origin, never an animated width. */}
+          transform off the LEADING edge, never an animated width.
+
+          THE ORIGIN IS THE ONE THING HERE THAT CANNOT BE SWEPT TO A LOGICAL UTILITY:
+          `transform-origin` takes physical keywords only — there is no `origin-start`
+          in CSS, let alone in Tailwind — so a rail that fills left-to-right in Arabic
+          would grow from the END of the line while the waveform beside it (an ordinary
+          flex row, which `dir` flips for free) grows from the start. Two static class
+          names picked by a ternary, never a composed one: a class assembled at render
+          time is invisible to the JIT and comes out unstyled. */}
       <span aria-hidden className="block h-[3px] w-full overflow-hidden rounded-full bg-foreground/15">
         <span
           ref={fillRef}
-          className="block h-full w-full origin-left bg-destructive"
+          className={
+            "block h-full w-full bg-destructive " + (rtl ? "origin-right" : "origin-left")
+          }
           style={{ transform: "scaleX(0)" }}
         />
       </span>
@@ -337,14 +401,14 @@ function RecordPanel({
         <button
           type="button"
           onClick={onDiscard}
-          aria-label="Discard this recording"
-          title="Discard this recording"
+          aria-label={t("voicemail.discardRecording")}
+          title={t("voicemail.discardRecording")}
           className="flex flex-col items-center gap-1.5 transition active:scale-95"
         >
           <span className="grid size-[54px] place-items-center rounded-full border border-border bg-foreground/[0.07] text-foreground">
             <X className="size-5" />
           </span>
-          <span className="text-[10.5px] text-muted-foreground">Discard</span>
+          <span className="text-[10.5px] text-muted-foreground">{t("voicemail.discard")}</span>
         </button>
 
         {/* The centre of board 2g is a red pinging MICROPHONE — an indicator,
@@ -376,21 +440,21 @@ function RecordPanel({
             </span>
           </span>
           <span className="text-[10.5px] font-semibold text-destructive">
-            {paused ? "Paused" : "Recording"}
+            {paused ? t("voicemail.paused") : t("voicemail.recording")}
           </span>
         </div>
 
         <button
           type="button"
           onClick={onSend}
-          aria-label="Send voicemail"
-          title="Send this voice message"
+          aria-label={t("voicemail.sendVoicemail")}
+          title={t("voicemail.sendThisVoiceMessage")}
           className="flex flex-col items-center gap-1.5 transition active:scale-95"
         >
           <span className="rcta grid size-[54px] place-items-center rounded-full">
             <Send className="size-5" />
           </span>
-          <span className="text-[10.5px] font-semibold text-primary">Send</span>
+          <span className="text-[10.5px] font-semibold text-primary">{t("voicemail.send")}</span>
         </button>
       </div>
 
@@ -403,8 +467,7 @@ function RecordPanel({
           screen says so. Derived from the constant, never written as a literal, so
           the copy cannot promise a ceiling the recorder does not enforce. */}
       <p className="text-center text-[11px] text-muted-foreground">
-        Sending stops the recording. It stops and sends on its own at{" "}
-        {Math.round(VOICEMAIL_MAX_MS / 1000)} seconds.
+        {t("voicemail.autoStop", { seconds: Math.round(VOICEMAIL_MAX_MS / 1000) })}
       </p>
     </div>
   );
@@ -419,6 +482,7 @@ function RecordPanel({
  * they're back online" alert (the v2.88 call-back watch).
  */
 export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClose: () => void }) {
+  const t = useT();
   const openThread = trpc.messages.openThread.useMutation();
   const sendMessage = trpc.messages.send.useMutation();
   const watchOnline = trpc.directory.watchOnline.useMutation();
@@ -471,7 +535,7 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
 
   async function beginRecording() {
     if (!recorderSupported()) {
-      toast.error("Voice recording isn't supported by this browser — send them a message instead.");
+      toast.error(t("voicemail.notSupported"));
       return;
     }
     try {
@@ -504,20 +568,20 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
             meta: { voicemail: true },
           });
           setRecState("sent");
-          toast.success(`Voicemail sent to ${who}.`);
+          toast.success(t("voicemail.sentTo", { who }));
           window.setTimeout(onClose, 1400);
         } catch (err) {
           setRecState("idle");
-          toast.error(
-            "Couldn't send the voicemail: " + (err instanceof Error ? err.message : String(err))
-          );
+          /* The underlying reason is INTERPOLATED INTO the sentence rather than
+             concatenated onto it: Arabic does not put the cause where English does, and
+             a sentence chopped at the English seam can only be re-assembled into
+             nonsense. `err.message` is the server's or the browser's own text and stays
+             untranslated — it is not ours to reword. */
+          toast.error(t("voicemail.sendFailed", { error: errText(err) }));
         }
       });
     } catch (err) {
-      toast.error(
-        "Mic access is required to leave a voicemail: " +
-          (err instanceof Error ? err.message : String(err))
-      );
+      toast.error(t("voicemail.micRequired", { error: errText(err) }));
     }
   }
 
@@ -549,11 +613,11 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
       const thread = await openThread.mutateAsync({ number: info.pin });
       await sendMessage.mutateAsync({ conversationId: thread.conversationId, kind: "text", body });
       setTextState("sent");
-      toast.success(`Message sent to ${who}.`);
+      toast.success(t("voicemail.messageSentTo", { who }));
       window.setTimeout(onClose, 1200);
     } catch (err) {
       setTextState("idle");
-      toast.error("Couldn't send the message: " + (err instanceof Error ? err.message : String(err)));
+      toast.error(t("voicemail.messageFailed", { error: errText(err) }));
     }
   }
 
@@ -561,9 +625,11 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
     try {
       await watchOnline.mutateAsync({ number: info.pin });
       setWatched(true);
-      toast.success(`You'll be alerted when ${who} is back online.`);
+      toast.success(t("voicemail.watchSet", { who }));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't set the alert.");
+      // The server's own refusal wins when there is one — it says which rule was hit.
+      // Only the fallback, which is ours, is translated.
+      toast.error(err instanceof Error ? err.message : t("voicemail.watchFailed"));
     }
   }
 
@@ -571,14 +637,14 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
     <div
       className="relay-v2 fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
       role="alertdialog"
-      aria-label={`Call to ${who} didn't connect`}
+      aria-label={t("voicemail.didntConnect", { who })}
     >
       <div className="rsheet w-[min(94vw,400px)] rounded-3xl border border-border bg-card p-5 shadow-2xl">
         <div className="flex justify-end">
           <button
             type="button"
             onClick={onClose}
-            aria-label="Dismiss"
+            aria-label={t("voicemail.dismiss")}
             className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
           >
             <X className="size-4" />
@@ -586,15 +652,22 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
         </div>
 
         {/* Board 2g's hierarchy: avatar · title · explainer, centred. The
-            explainer stays `reasonLine`, because this app knows which of three
-            things happened and already says so honestly. */}
+            explainer stays `reasonKey`, because this app knows which of three
+            things happened and already says so honestly — in either language,
+            since the key is what the render site translates. */}
         <div className="mb-4 flex flex-col items-center px-2 text-center">
           <CalleeAvatar label={who} avatarUrl={peer.data?.avatarUrl ?? null} />
           <div className="mt-3 flex items-center justify-center gap-1.5">
-            <span className="text-[17px] font-bold leading-tight">{who}</span>
+            {/* `dir="auto"`, not `dir="ltr"`: `who` is a display NAME (which may itself
+                be Arabic) OR, when the lookup has not resolved, the callee's 6-digit
+                RELAY number. Forcing LTR would lay an Arabic name out backwards;
+                `auto` resolves per value and a pure-digit string still renders LTR. */}
+            <span dir="auto" className="text-[17px] font-bold leading-tight">
+              {who}
+            </span>
             <RoleBadge role={peer.data?.role ?? null} size={14} />
           </div>
-          <div className="mt-1 text-xs text-muted-foreground">{reasonLine(info.reason)}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{t(reasonKey(info.reason))}</div>
         </div>
 
         {recState === "recording" ? (
@@ -606,7 +679,9 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
             onSend={stopRecording}
           />
         ) : recState === "sending" ? (
-          <div className="py-3 text-center text-sm text-muted-foreground">Sending voicemail…</div>
+          <div className="py-3 text-center text-sm text-muted-foreground">
+            {t("voicemail.sendingVoicemail")}
+          </div>
         ) : recState === "sent" ? (
           /* The ACCENT, not `--relay-online`: green means ONLINE and nothing else in
              this app, and a "sent" tick is not a presence statement (v2.106.18).
@@ -621,19 +696,21 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
              lands at 1.68:1; `text-primary` is 4.84:1 in light and IS the cycling
              accent in dark, where it measures 11.17:1. One token, both themes. */
           <div className="flex items-center justify-center gap-2 py-3 text-sm text-primary">
-            <Check className="size-4" /> Voicemail sent
+            <Check className="size-4" /> {t("voicemail.voicemailSent")}
           </div>
         ) : (
           <div className="space-y-2">
             {/* Send a written message (v2.99.11) — a quick text into the DM. */}
-            <div className="flex items-center gap-2 rounded-2xl border border-border bg-muted/20 p-1.5 pl-3">
+            {/* `ps-3`, not `pl-3`: the extra padding belongs on the side the text
+                STARTS from, which is the right-hand side in Arabic. */}
+            <div className="flex items-center gap-2 rounded-2xl border border-border bg-muted/20 p-1.5 ps-3">
               <input
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") sendText(); }}
                 disabled={textState !== "idle"}
-                placeholder={`Message ${who}…`}
-                aria-label={`Message ${who}`}
+                placeholder={t("voicemail.messagePlaceholder", { who })}
+                aria-label={t("voicemail.messageLabel", { who })}
                 maxLength={2000}
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
@@ -641,7 +718,7 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
                 type="button"
                 onClick={sendText}
                 disabled={!text.trim() || textState !== "idle"}
-                aria-label="Send message"
+                aria-label={t("voicemail.sendMessage")}
                 className="rcta grid size-9 shrink-0 place-items-center rounded-xl transition-transform active:scale-95 disabled:opacity-40"
               >
                 {textState === "sent" ? <Check className="size-4" /> : <Send className="size-4" />}
@@ -652,7 +729,7 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
               onClick={beginRecording}
               className="rcta flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 font-semibold transition-transform active:scale-[0.98]"
             >
-              <Mic className="size-4" /> Leave a voice message
+              <Mic className="size-4" /> {t("voicemail.leaveVoiceMessage")}
             </button>
             <button
               type="button"
@@ -662,17 +739,19 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
             >
               {watched ? (
                 <>
-                  <Check className="size-4 text-primary" /> You'll be alerted when they're online
+                  <Check className="size-4 text-primary" /> {t("voicemail.willAlert")}
                 </>
               ) : (
                 <>
-                  <Bell className="size-4" /> Tell me when they're back online
+                  <Bell className="size-4" /> {t("voicemail.tellMeOnline")}
                 </>
               )}
             </button>
+            {/* ONE STRING WITH `{who}` INSIDE IT, never a sentence split around the
+                interpolation: Arabic puts the name in a different place, so a sentence
+                chopped at the English seam can only be re-assembled into nonsense. */}
             <p className="pt-1 text-center text-xs text-muted-foreground">
-              The voice message lands in your chat with {who} — they'll get a
-              "Voicemail" alert.
+              {t("voicemail.landsInChat", { who })}
             </p>
           </div>
         )}

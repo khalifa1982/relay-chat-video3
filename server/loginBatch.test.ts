@@ -303,12 +303,29 @@ describe("#120 — guest entry", () => {
     expect(copyOnScreen(guest, "I am a guest — reserve my number")).toBe(true);
   });
 
-  it("the reserved number is revealed matrix-style", () => {
-    // This half already worked (v2.94.6) — pinned so the copy above cannot come to
-    // promise a reveal that no longer happens.
-    const fn = LOGIN.slice(LOGIN.indexOf("async function submitGuest"), LOGIN.indexOf("async function submitEmail"));
-    expect(fn).toMatch(/if \(num\) setReveal\(\{ name, number: num \}\)/);
-    expect(LOGIN).toMatch(/<MatrixReveal/);
+  it("the reserved number is still revealed — one screen up, for members too", () => {
+    /* REWRITTEN (#162). This froze `MatrixReveal` IN THIS COMPONENT, i.e. it pinned the
+       guest-only arrangement: the reveal fired for somebody who typed a name and for
+       nobody who signed in with their email. The owner's newer handoff covers *"either
+       guest or member"*, so the reveal moved up to `OnboardingGate`, which arms it on the
+       signed-out → signed-in transition — one funnel every entry surface shares.
+
+       The PROPERTY this pin stood for is unchanged and still asserted: the copy above
+       promises a reserved number, so a reveal must actually happen. It is just no longer
+       this component's job, and pinning it here would forbid covering members. */
+    const fn = LOGIN.slice(
+      LOGIN.indexOf("async function submitGuest"),
+      LOGIN.indexOf("async function submitEmail"),
+    );
+    expect(fn.length).toBeGreaterThan(80);
+    expect(fn, "the guest submit no longer needs the number for a local reveal").not.toMatch(
+      /setReveal\(/,
+    );
+    expect(LOGIN, "and plays no reveal of its own, or a guest would see two").not.toMatch(
+      /<(?:MatrixReveal|PinReveal)\b/,
+    );
+    const GATE = read("client/src/app/OnboardingGate.tsx");
+    expect(GATE).toMatch(/<PinReveal pin=\{me\.number\}/);
   });
 });
 

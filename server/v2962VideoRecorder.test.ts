@@ -18,6 +18,8 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen, keysForEnglish } from "./testing/copyOnScreen";
 
 const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
 
@@ -61,12 +63,43 @@ describe("VideoRecordSheet (v2.96.2)", () => {
     expect(SHEET).toMatch(/facing === "user" \? \{ transform: "scaleX\(-1\)" \}/);
   });
   it("review offers Retake and Use, and revokes the object URL", () => {
-    expect(SHEET).toMatch(/Retake/);
-    expect(SHEET).toMatch(/Use video/);
+    /* REPOINTED (localisation sweep) — and these two were ALREADY VACUOUS before the
+       sweep, which is the more useful half of the finding. `toMatch(/Retake/)` and
+       `toMatch(/Use video/)` ran against the RAW file, and this sheet's own header
+       comment transcribes board 4j: *"after stop Retake pill … and a SOLID-accent
+       'Use video' pill"*. Both pins were therefore passing on PROSE — the buttons
+       could have rendered nothing at all and they would have stayed green. That is
+       the trap `codeOnly` exists for, hit for the twentieth time in this repo.
+
+       So: comment-stripped source, and asked as the property these always stood for
+       — this review screen still offers these two actions — via `copyOnScreen`,
+       which is satisfied by the literal OR by a key whose English half is that word.
+       Strictly stronger than what it replaces, because reaching the dictionary also
+       proves an Arabic half exists (`Entry` requires both). */
+    const code = codeOnly(SHEET);
+    expect(code, "the strip left nothing to assert against").toContain("phase === \"review\"");
+    expect(copyOnScreen(code, "Retake"), "the review screen no longer offers Retake").toBe(true);
+    expect(copyOnScreen(code, "Use video"), "the review screen no longer offers Use video").toBe(
+      true
+    );
     expect(SHEET).toMatch(/URL\.revokeObjectURL\(reviewUrl\)/);
   });
   it("explains the mid-video-call camera conflict honestly", () => {
-    expect(SHEET).toMatch(/turn the call's camera off first/);
+    /* REPOINTED (localisation sweep). This notice is held in state as a KEY rather
+       than as a sentence — so that a language change while the sheet is open does not
+       leave a stale string on screen — which means it reaches the screen through
+       `setErrKey("…")` and NOT through a `t("…")` call. `copyOnScreen` looks for the
+       translator call specifically (deliberately: a bare mention would match an import
+       or a comment), so it cannot see this one. The property is identical and is
+       asserted directly: the sentence exists in the dictionary, and this sheet
+       references the key that carries it. */
+    const line = "turn the call's camera off first";
+    const keys = keysForEnglish(line);
+    expect(keys, `"${line}" is not in the dictionary at all — the copy is gone`).not.toEqual([]);
+    expect(
+      keys.some((k) => codeOnly(SHEET).includes(`"${k}"`)),
+      `the dictionary carries "${line}" (${keys.join("/")}) but the sheet does not reach it`
+    ).toBe(true);
   });
 });
 
