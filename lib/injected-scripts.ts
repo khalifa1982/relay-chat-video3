@@ -644,7 +644,10 @@ export const RELAY_NATIVE_BRIDGE_JS = `(() => {
     window.__relayNativeBridge = true;
 
     // Shim: window.RelayNative.postMessage(jsonString)
-    // Routes to the native WKScriptMessageHandler on iOS
+    // On Android: the native @JavascriptInterface "RelayNative" is already bound
+    //   by RelayWebViewSetup — window.RelayNative.postMessage() calls native directly.
+    // On iOS: routes to WKScriptMessageHandler.
+    // Fallback: posts via ReactNativeWebView for RN-side handling.
     if (!window.RelayNative) {
       window.RelayNative = {
         postMessage: function(msg) {
@@ -663,6 +666,10 @@ export const RELAY_NATIVE_BRIDGE_JS = `(() => {
           }
         }
       };
+    } else {
+      // Android: RelayNative is already bound natively via @JavascriptInterface.
+      // Ensure it has the postMessage method (it does from native addJavascriptInterface).
+      // Nothing to shim — the native interface handles webCallEnded + setAudioRoute directly.
     }
   } catch (e) {}
 })();

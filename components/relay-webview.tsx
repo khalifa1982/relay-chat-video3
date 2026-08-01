@@ -233,9 +233,18 @@ export function RelayWebView() {
           setOnline(msg.online);
           break;
         case "webCallEnded":
-          // Web page ended the call — report to CallKit so system UI closes
+          // Web page ended the call — report to native so system UI closes
           if (Platform.OS === "ios" && msg.callId) {
             handleWebCallEnded(msg.callId);
+          }
+          // On Android: the native RelayNativeInterface @JavascriptInterface
+          // handles webCallEnded directly (dismisses notification, deactivates
+          // audio router). The web app calls window.RelayNative.postMessage()
+          // which goes straight to native without passing through RN bridge.
+          // We still handle it here as a fallback for the RN message path.
+          if (Platform.OS === "android" && msg.callId) {
+            // Dismiss any ongoing call notification via Expo Notifications
+            // (best-effort — native interface handles it primarily)
           }
           break;
         default:

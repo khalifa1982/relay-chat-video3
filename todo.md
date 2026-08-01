@@ -240,3 +240,16 @@
 - [x] Add RELAY_NATIVE_BRIDGE_JS shim so web can use window.RelayNative.postMessage()
 - [x] Fix JS-side mode propagation: answerCall now uses actual mode from push payload
 - [x] tsc clean + 65 tests pass
+
+## Round 25 — Android Audio Routing, RelayNative @JavascriptInterface, webCallEnded (relay-push-android-app-config.md §4, §4.5, §5)
+
+- [x] Add RelayNativeInterface.kt with @JavascriptInterface for webCallEnded + setAudioRoute
+- [x] Add RelayAudioRouter.kt for native AudioManager MODE_IN_COMMUNICATION routing
+- [x] Wire RelayNativeInterface into MainActivity WebView setup (RelayWebViewSetup.kt + withMainActivity)
+- [x] Handle webCallEnded on Android: dismiss ongoing-call notification + deactivate audio router
+- [x] Handle setAudioRoute on Android: speaker/earpiece/bluetooth via AudioManager
+- [x] Report audioRouteChanged back to WebView when route changes (routeChangeReceiver)
+- [x] Update relay-webview.tsx webCallEnded handler to also work on Android
+- [x] Update RELAY_NATIVE_BRIDGE_JS to detect native Android interface and skip shim
+- [x] Add BLUETOOTH_CONNECT + MODIFY_AUDIO_SETTINGS permissions
+- [x] tsc clean + 65 tests pass

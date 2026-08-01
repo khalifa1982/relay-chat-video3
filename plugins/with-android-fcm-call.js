@@ -14,13 +14,19 @@
  *  2. IncomingCallActivity.kt — Full-screen activity shown on lock screen with
  *     Answer/Decline buttons, ringtone loop, and auto-dismiss after 60s
  *  3. CallActionReceiver.kt — BroadcastReceiver for notification action buttons
- *  4. Manifest entries for the service, activity, and receiver
- *  5. Required permissions (VIBRATE, WAKE_LOCK, FOREGROUND_SERVICE_PHONE_CALL)
- *  6. Copies ringtone.wav to android res/raw for notification channel sound
+ *  4. RelayNativeInterface.kt — @JavascriptInterface bound as "RelayNative" on
+ *     the WebView for web→native messaging (webCallEnded, setAudioRoute)
+ *  5. RelayAudioRouter.kt — AudioManager-based audio routing in MODE_IN_COMMUNICATION
+ *  6. Manifest entries for the service, activity, and receiver
+ *  7. Required permissions (VIBRATE, WAKE_LOCK, FOREGROUND_SERVICE_PHONE_CALL,
+ *     BLUETOOTH_CONNECT)
+ *  8. Copies ringtone.wav to android res/raw for notification channel sound
+ *  9. Patches MainActivity.kt to attach RelayNativeInterface to the WebView
  */
 const {
   withAndroidManifest,
   withDangerousMod,
+  withMainActivity,
 } = require("@expo/config-plugins");
 const fs = require("fs");
 const path = require("path");
@@ -50,8 +56,9 @@ class RelayCallFcmService : FirebaseMessagingService() {
     companion object {
         const val CHANNEL_ID = "incoming_calls"
         const val NOTIFICATION_ID = 7788
-        const val ACTION_ANSWER = "${PACKAGE}.ACTION_ANSWER"
-        const val ACTION_DECLINE = "${PACKAGE}.ACTION_DECLINE"
+        const val ONGOING_CALL_NOTIFICATION_ID = 7789
+        const val ACTION_ANSWER = "\${PACKAGE}.ACTION_ANSWER"
+        const val ACTION_DECLINE = "\${PACKAGE}.ACTION_DECLINE"
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_ROOM_ID = "roomId"
         const val EXTRA_MODE = "mode"
@@ -132,12 +139,12 @@ class RelayCallFcmService : FirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val ringtoneUri = Uri.parse("android.resource://\${packageName}/raw/ringtone")
+        val ringtoneUri = Uri.parse("android.resource://\\\${packageName}/raw/ringtone")
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentTitle("Incoming RELAY Call")
-            .setContentText("\${callerName} is calling\u2026")
+            .setContentText("\\\${callerName} is calling\\u2026")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)
@@ -165,7 +172,7 @@ class RelayCallFcmService : FirebaseMessagingService() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ringtoneUri = Uri.parse("android.resource://\${packageName}/raw/ringtone")
+            val ringtoneUri = Uri.parse("android.resource://\\\${packageName}/raw/ringtone")
             val audioAttr = AudioAttributes.Builder()
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
@@ -340,7 +347,7 @@ class IncomingCallActivity : AppCompatActivity() {
 
     private fun startRinging() {
         try {
-            val ringtoneUri = Uri.parse("android.resource://\${packageName}/raw/ringtone")
+            val ringtoneUri = Uri.parse("android.resource://\\\${packageName}/raw/ringtone")
             mediaPlayer = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
@@ -402,7 +409,7 @@ class IncomingCallActivity : AppCompatActivity() {
         dismissNotification()
 
         // Launch MainActivity with deep link URL so Expo Linking can read it
-        val uri = Uri.parse("manusrelaymobile://call?nativeCall=\${callId}&mode=\${mode}&action=answer")
+        val uri = Uri.parse("manusrelaymobile://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=answer")
         val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
             setPackage(packageName)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -416,7 +423,7 @@ class IncomingCallActivity : AppCompatActivity() {
         dismissNotification()
 
         // Launch MainActivity with deep link URL for decline
-        val uri = Uri.parse("manusrelaymobile://call?nativeCall=\${callId}&mode=\${mode}&action=decline")
+        val uri = Uri.parse("manusrelaymobile://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=decline")
         val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
             setPackage(packageName)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -460,7 +467,7 @@ class CallActionReceiver : BroadcastReceiver() {
         when (intent.action) {
             RelayCallFcmService.ACTION_ANSWER -> {
                 // Launch via deep link so Expo Linking can read the call params
-                val uri = android.net.Uri.parse("manusrelaymobile://call?nativeCall=\${callId}&mode=\${mode}&action=answer")
+                val uri = android.net.Uri.parse("manusrelaymobile://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=answer")
                 val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
                     setPackage(context.packageName)
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -469,7 +476,7 @@ class CallActionReceiver : BroadcastReceiver() {
             }
             RelayCallFcmService.ACTION_DECLINE -> {
                 // Launch via deep link for decline
-                val uri = android.net.Uri.parse("manusrelaymobile://call?nativeCall=\${callId}&mode=\${mode}&action=decline")
+                val uri = android.net.Uri.parse("manusrelaymobile://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=decline")
                 val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
                     setPackage(context.packageName)
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -477,6 +484,324 @@ class CallActionReceiver : BroadcastReceiver() {
                 context.startActivity(launchIntent)
             }
         }
+    }
+}
+`;
+
+// ─── NEW: RelayAudioRouter.kt — Native AudioManager routing ────────────────
+
+const RELAY_AUDIO_ROUTER = `package ${PACKAGE}
+
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.webkit.WebView
+
+/**
+ * Manages audio routing for in-call WebView sessions.
+ * Uses AudioManager in MODE_IN_COMMUNICATION for proper call audio.
+ */
+class RelayAudioRouter(private val context: Context) {
+
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val handler = Handler(Looper.getMainLooper())
+    private var webView: WebView? = null
+    private var currentRoute: String = "speaker"
+    private var isActive = false
+
+    // Receiver for audio route changes (headset plug/unplug, BT connect/disconnect)
+    private val routeChangeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            if (!isActive) return
+            handler.postDelayed({
+                val newRoute = detectCurrentRoute()
+                if (newRoute != currentRoute) {
+                    currentRoute = newRoute
+                    notifyWebView(newRoute)
+                }
+            }, 300) // Small delay to let the system settle
+        }
+    }
+
+    fun setWebView(wv: WebView?) {
+        this.webView = wv
+    }
+
+    fun activate() {
+        if (isActive) return
+        isActive = true
+        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+
+        // Register for route change events
+        val filter = IntentFilter().apply {
+            addAction(AudioManager.ACTION_HEADSET_PLUG)
+            addAction(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
+            addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(routeChangeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(routeChangeReceiver, filter)
+        }
+    }
+
+    fun deactivate() {
+        if (!isActive) return
+        isActive = false
+        audioManager.mode = AudioManager.MODE_NORMAL
+        audioManager.isSpeakerphoneOn = false
+        if (audioManager.isBluetoothScoOn) {
+            audioManager.isBluetoothScoOn = false
+            audioManager.stopBluetoothSco()
+        }
+        try { context.unregisterReceiver(routeChangeReceiver) } catch (_: Exception) {}
+    }
+
+    /**
+     * Set the audio route. Called from RelayNativeInterface when web sends setAudioRoute.
+     */
+    fun setRoute(route: String) {
+        if (!isActive) {
+            activate()
+        }
+        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+
+        when (route) {
+            "speaker" -> {
+                if (audioManager.isBluetoothScoOn) {
+                    audioManager.isBluetoothScoOn = false
+                    audioManager.stopBluetoothSco()
+                }
+                audioManager.isSpeakerphoneOn = true
+            }
+            "earpiece" -> {
+                if (audioManager.isBluetoothScoOn) {
+                    audioManager.isBluetoothScoOn = false
+                    audioManager.stopBluetoothSco()
+                }
+                audioManager.isSpeakerphoneOn = false
+            }
+            "bluetooth" -> {
+                audioManager.isSpeakerphoneOn = false
+                audioManager.startBluetoothSco()
+                audioManager.isBluetoothScoOn = true
+            }
+        }
+        currentRoute = route
+        // Report back to web
+        notifyWebView(route)
+    }
+
+    /**
+     * Detect the current active audio route.
+     */
+    private fun detectCurrentRoute(): String {
+        if (audioManager.isBluetoothScoOn) return "bluetooth"
+        if (audioManager.isSpeakerphoneOn) return "speaker"
+
+        // Check if wired headset is connected
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            for (device in devices) {
+                if (device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                    device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                    device.type == AudioDeviceInfo.TYPE_USB_HEADSET) {
+                    return "headphones"
+                }
+                if (device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                    device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
+                    return "bluetooth"
+                }
+            }
+        }
+        return "earpiece"
+    }
+
+    /**
+     * Inject audioRouteChanged event into the WebView.
+     */
+    private fun notifyWebView(route: String) {
+        val js = """
+            (function() {
+                try {
+                    window.dispatchEvent(new CustomEvent('relay:native', {
+                        detail: { type: 'audioRouteChanged', route: '$route' }
+                    }));
+                } catch(e) {}
+            })();
+        """.trimIndent()
+        handler.post {
+            webView?.evaluateJavascript(js, null)
+        }
+    }
+
+    companion object {
+        private const val TAG = "RelayAudioRouter"
+    }
+}
+`;
+
+// ─── NEW: RelayNativeInterface.kt — @JavascriptInterface for web→native ────
+
+const RELAY_NATIVE_INTERFACE = `package ${PACKAGE}
+
+import android.app.NotificationManager
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import org.json.JSONObject
+
+/**
+ * Native JavaScript interface bound as "RelayNative" on the WebView.
+ * The web app at your-chat.io calls:
+ *   window.RelayNative.postMessage(JSON.stringify({type:'webCallEnded', callId:'...'}))
+ *   window.RelayNative.postMessage(JSON.stringify({type:'setAudioRoute', route:'speaker'}))
+ *
+ * This runs on the WebView's JS thread — use Handler to post to main thread.
+ */
+class RelayNativeInterface(
+    private val context: Context,
+    private val audioRouter: RelayAudioRouter
+) {
+    private val handler = Handler(Looper.getMainLooper())
+    private var webView: WebView? = null
+
+    fun setWebView(wv: WebView?) {
+        this.webView = wv
+        audioRouter.setWebView(wv)
+    }
+
+    @JavascriptInterface
+    fun postMessage(jsonString: String) {
+        try {
+            val json = JSONObject(jsonString)
+            val type = json.optString("type", "")
+            when (type) {
+                "webCallEnded" -> handleWebCallEnded(json)
+                "setAudioRoute" -> handleSetAudioRoute(json)
+                else -> Log.d(TAG, "Unknown message type: \$type")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing message: \$jsonString", e)
+        }
+    }
+
+    private fun handleWebCallEnded(json: JSONObject) {
+        val callId = json.optString("callId", "")
+        Log.d(TAG, "webCallEnded: callId=\$callId")
+
+        handler.post {
+            // Dismiss any ongoing call notification
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(RelayCallFcmService.NOTIFICATION_ID)
+            nm.cancel(RelayCallFcmService.ONGOING_CALL_NOTIFICATION_ID)
+
+            // Deactivate audio routing
+            audioRouter.deactivate()
+        }
+    }
+
+    private fun handleSetAudioRoute(json: JSONObject) {
+        val route = json.optString("route", "speaker")
+        Log.d(TAG, "setAudioRoute: route=\$route")
+
+        handler.post {
+            audioRouter.setRoute(route)
+        }
+    }
+
+    companion object {
+        private const val TAG = "RelayNativeInterface"
+
+        /**
+         * Singleton instance so we can attach it from MainActivity and reference
+         * it from the FCM service if needed.
+         */
+        @Volatile
+        var instance: RelayNativeInterface? = null
+    }
+}
+`;
+
+// ─── NEW: RelayWebViewSetup.kt — Helper to attach interface to WebView ─────
+
+const RELAY_WEBVIEW_SETUP = `package ${PACKAGE}
+
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.WebView
+
+/**
+ * Finds the react-native-webview WebView in the view hierarchy and attaches
+ * the RelayNative @JavascriptInterface to it.
+ *
+ * Called from MainActivity.onResume() with a short delay to ensure the RN
+ * view tree is mounted.
+ */
+object RelayWebViewSetup {
+    private const val TAG = "RelayWebViewSetup"
+    private var attached = false
+
+    @SuppressLint("SetJavaScriptEnabled")
+    fun attachToWebView(activity: Activity) {
+        if (attached) return
+        val handler = Handler(Looper.getMainLooper())
+
+        // Poll for WebView with increasing delays (RN mounts async)
+        fun tryAttach(attempt: Int) {
+            val webView = findWebView(activity.window.decorView)
+            if (webView != null) {
+                val audioRouter = RelayAudioRouter(activity)
+                val nativeInterface = RelayNativeInterface(activity, audioRouter)
+                nativeInterface.setWebView(webView)
+                RelayNativeInterface.instance = nativeInterface
+
+                webView.addJavascriptInterface(nativeInterface, "RelayNative")
+                attached = true
+                Log.d(TAG, "RelayNative interface attached to WebView")
+            } else if (attempt < 10) {
+                // Retry after delay (100ms, 200ms, 400ms, ...)
+                handler.postDelayed({ tryAttach(attempt + 1) }, (100L * (attempt + 1)))
+            } else {
+                Log.w(TAG, "Could not find WebView after 10 attempts")
+            }
+        }
+
+        handler.postDelayed({ tryAttach(0) }, 500)
+    }
+
+    fun detach() {
+        attached = false
+        RelayNativeInterface.instance?.setWebView(null)
+        RelayNativeInterface.instance = null
+    }
+
+    private fun findWebView(view: View): WebView? {
+        if (view is WebView) return view
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val found = findWebView(view.getChildAt(i))
+                if (found != null) return found
+            }
+        }
+        return null
     }
 }
 `;
@@ -550,6 +875,8 @@ function withAndroidFcmCall(config) {
     addPermission(manifest, "android.permission.FOREGROUND_SERVICE_PHONE_CALL");
     addPermission(manifest, "android.permission.USE_FULL_SCREEN_INTENT");
     addPermission(manifest, "android.permission.RECEIVE_BOOT_COMPLETED");
+    addPermission(manifest, "android.permission.BLUETOOTH_CONNECT");
+    addPermission(manifest, "android.permission.MODIFY_AUDIO_SETTINGS");
 
     return cfg;
   });
@@ -607,6 +934,18 @@ function withAndroidFcmCall(config) {
         path.join(packageDir, "CallActionReceiver.kt"),
         CALL_ACTION_RECEIVER
       );
+      fs.writeFileSync(
+        path.join(packageDir, "RelayAudioRouter.kt"),
+        RELAY_AUDIO_ROUTER
+      );
+      fs.writeFileSync(
+        path.join(packageDir, "RelayNativeInterface.kt"),
+        RELAY_NATIVE_INTERFACE
+      );
+      fs.writeFileSync(
+        path.join(packageDir, "RelayWebViewSetup.kt"),
+        RELAY_WEBVIEW_SETUP
+      );
 
       // Copy ringtone to res/raw
       const resRawDir = path.join(androidDir, "app", "src", "main", "res", "raw");
@@ -620,6 +959,32 @@ function withAndroidFcmCall(config) {
       return cfg;
     },
   ]);
+
+  // Step 4: Patch MainActivity to call RelayWebViewSetup.attachToWebView on resume
+  config = withMainActivity(config, (cfg) => {
+    let content = cfg.modResults.contents;
+
+    // Add import if not present
+    if (!content.includes("RelayWebViewSetup")) {
+      // Add import after the last import statement
+      content = content.replace(
+        /(import [^\n]+\n)(?!import)/,
+        `$1import ${PACKAGE}.RelayWebViewSetup\n`
+      );
+
+      // Add onResume override to call attachToWebView
+      // Find the class body opening
+      if (!content.includes("onResume")) {
+        content = content.replace(
+          /class MainActivity[^{]*\{/,
+          `$&\n    override fun onResume() {\n        super.onResume()\n        RelayWebViewSetup.attachToWebView(this)\n    }\n`
+        );
+      }
+    }
+
+    cfg.modResults.contents = content;
+    return cfg;
+  });
 
   return config;
 }
