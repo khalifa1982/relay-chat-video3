@@ -723,3 +723,68 @@ describe("voip-deploy reads the whole output, not a truncated prefix", () => {
     expect(step).toMatch(/echo "\$OUT" \| grep -q "VOIP_EXIT=0"/);
   });
 });
+
+describe("the reuse gate proves EVERY dependency, not just the expensive one", () => {
+  /* THE DEFECT THIS PINS COST TWO OF EIGHT NODES ON THE FIRST REAL APPLY (2026-08-01).
+     The gate keyed the whole skip decision on the mediasoup WORKER BINARY, and read "a
+     usable worker is present" as "dependencies are satisfied". They are different claims:
+     the agent also imports `ioredis`, and infra's pre-provisioned
+     /opt/relay-voip/node_modules is NOT uniform — six nodes had it, two did not. Those two
+     skipped the install, started, and died at import with ERR_MODULE_NOT_FOUND, crash-looping
+     on Restart=always. This is v2.106.47 one dependency along: there a DIRECTORY test passed
+     over a blocked build; here a BINARY test passed over a missing sibling package. */
+
+  it("resolves every name in the manifest the way Node will, from the agent's own directory", () => {
+    const sh = REMOTE;
+    expect(sh).toMatch(/DEP_NAMES=.*Object\.keys\(p\.dependencies/);
+    // createRequire(...).resolve walks node_modules upward exactly as the ESM loader does
+    // for a bare specifier — and does NOT execute the package, which importing it would.
+    expect(sh).toMatch(/createRequire\('\$AGENT_DIR\/index\.js'\)\.resolve\('\$dep'\)/);
+    expect(sh).toMatch(/for dep in \$DEP_NAMES/);
+  });
+
+  it("an unresolvable dependency FORCES the install", () => {
+    const sh = REMOTE;
+    // The flag must be a conjunct of the gate, not merely computed and discarded.
+    expect(sh).toMatch(
+      /if \[ -z "\$WORKER_BIN" \][\s\S]{0,160}\[ "\$DEPS_RESOLVE" != "1" \][\s\S]{0,160}then/
+    );
+  });
+
+  it("fails TOWARD installing — an unreadable manifest forces it too", () => {
+    // The opposite default is what produced a crash-looping node reported as deployed.
+    const sh = REMOTE;
+    expect(sh).toMatch(/\[ -n "\$DEP_NAMES" \] \|\|[\s\S]{0,120}DEPS_RESOLVE=0/);
+  });
+
+  it("the check runs BEFORE the gate, or the flag it sets is never read", () => {
+    const sh = REMOTE;
+    const setAt = sh.indexOf("DEPS_RESOLVE=1");
+    const gateAt = sh.indexOf('[ "$DEPS_RESOLVE" != "1" ]');
+    expect(setAt).toBeGreaterThan(-1);
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(setAt).toBeLessThan(gateAt);
+  });
+});
+
+describe("the install picks a runner explicitly and refuses loudly with none", () => {
+  /* Every node in the fleet reports `pnpm: MISSING`, so the fallback is the ONLY path on
+     the nodes that actually need an install — it is not hypothetical. */
+
+  it("tries pnpm, then corepack, and REFUSES rather than half-installing", () => {
+    const sh = REMOTE;
+    expect(sh).toMatch(/if command -v pnpm[\s\S]{0,120}elif command -v corepack[\s\S]{0,80}fi/);
+    expect(sh).toMatch(/\[ -n "\$PNPM" \] \|\| fail "REFUSED: neither pnpm nor corepack/);
+  });
+
+  it("the agent manifest pins packageManager, or corepack refuses to guess a version", () => {
+    // Without it corepack errors mid-deploy asking which version to use — on exactly the
+    // nodes that need the install, which is the worst possible place to discover it.
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(ROOT, "voip-node", "package.json"), "utf8")
+    );
+    expect(pkg.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+/);
+    // And the dependency set is exactly what the resolution check will walk.
+    expect(Object.keys(pkg.dependencies).sort()).toEqual(["ioredis", "mediasoup"]);
+  });
+});

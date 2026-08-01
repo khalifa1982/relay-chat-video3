@@ -2,6 +2,8 @@
   "name": "relay-voip-node",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "pnpm@10.4.1",
+  "comment_packageManager": "Pinned so COREPACK can resolve pnpm without being told a version. Every media node reports `pnpm: MISSING`, so the deploy\u0027s install path runs through corepack — and corepack refuses to guess: without this field it errors mid-deploy asking which version to use. The version matches the root manifest\u0027s pin (the hash is omitted because corepack accepts a bare version and the root\u0027s integrity hash is for a different lockfile).",
   "type": "module",
   "description": "RELAY mediasoup media-node agent. Runs ON a media node, NOT on the app fleet. Deliberately a separate package: the app is bundled with esbuild --packages=external and each app instance runs `pnpm install --frozen-lockfile` on every deploy, so a root mediasoup dependency would make every app box compile a C++ worker it never runs.",
   "engines": {

@@ -221,15 +221,57 @@ if [ -z "$WORKER_BIN" ]; then
   done
 fi
 
-if [ -z "$WORKER_BIN" ] || [ ! -x "$WORKER_BIN" ] || { [ "$HAD_MANIFEST" = "1" ] && [ "$DEPS_BEFORE" != "$DEPS_AFTER" ]; }; then
-  echo "dependencies changed, or no usable worker binary — installing with the lockfile"
+# EVERY DEPENDENCY MUST RESOLVE, NOT JUST THE EXPENSIVE ONE (2026-08-01).
+#
+# This is the v2.106.47 defect one dependency along, and it cost two of eight nodes on the
+# first real apply. The gate above proves the mediasoup WORKER BINARY is usable — and then
+# the whole gate was keyed on that alone, so it read "a usable worker is present" as
+# "dependencies are satisfied". They are not the same claim: the agent imports `ioredis`
+# too, and infra's pre-provisioned /opt/relay-voip/node_modules is NOT uniform across the
+# fleet — six nodes had ioredis, two did not. Those two skipped the install, started, and
+# died at `import` with ERR_MODULE_NOT_FOUND, crash-looping on Restart=always.
+#
+# Proving the cheap dependency is present costs nothing; assuming it is costs a node. So
+# resolve EVERY name in the manifest the way Node will, from the agent's own directory.
+# `createRequire(...).resolve()` walks node_modules upward exactly as the ESM loader does
+# for a bare specifier, and it does NOT execute the package — importing mediasoup here to
+# test it would be a side effect in the middle of a deploy.
+#
+# It FAILS TOWARD INSTALLING: any name that does not resolve — for whatever reason,
+# including a resolver edge case of our own — forces the install, which is recoverable.
+# The opposite default is what produced a crash-looping node reported as deployed.
+DEPS_RESOLVE=1
+DEP_NAMES=$(node -e "const p=require('$AGENT_DIR/package.json');process.stdout.write(Object.keys(p.dependencies||{}).join(' '))" 2>/dev/null || echo "")
+for dep in $DEP_NAMES; do
+  node -e "require('module').createRequire('$AGENT_DIR/index.js').resolve('$dep')" >/dev/null 2>&1 || {
+    echo "dependency does NOT resolve from the agent: $dep — the install is required"
+    DEPS_RESOLVE=0
+  }
+done
+[ -n "$DEP_NAMES" ] || { echo "could not read the manifest's dependencies — forcing the install"; DEPS_RESOLVE=0; }
+
+if [ -z "$WORKER_BIN" ] || [ ! -x "$WORKER_BIN" ] || [ "$DEPS_RESOLVE" != "1" ] || { [ "$HAD_MANIFEST" = "1" ] && [ "$DEPS_BEFORE" != "$DEPS_AFTER" ]; }; then
+  echo "dependencies changed or unresolvable, or no usable worker binary — installing with the lockfile"
   # --frozen-lockfile is load-bearing rather than tidy: the versions are pinned EXACTLY
   # because the worker is host-specific (a prebuilt binary validated against this host when
   # one matches, a source build otherwise), so a plain install on a box without the lockfile
   # resolves newer ones and the difference is invisible until a call behaves differently on
   # ONE node.
-  PNPM=pnpm
-  command -v pnpm >/dev/null 2>&1 || PNPM="corepack pnpm"
+  # PICK A RUNNER AND SAY SO. Every node in the fleet reports `pnpm: MISSING`, so the
+  # fallback is not hypothetical — it is the ONLY path on the nodes that actually need an
+  # install. corepack ships with Node 20 and resolves the version from the manifest's
+  # `packageManager` field, which voip-node/package.json now pins for exactly this reason:
+  # without it corepack asks which version to use and the install dies mid-deploy.
+  #
+  # Refusing LOUDLY when neither exists is the point. A half-run install leaves a node with
+  # a partial node_modules, and the previous shape would have reported that through a
+  # generic "install failed" without saying the tool was simply absent.
+  PNPM=""
+  if command -v pnpm >/dev/null 2>&1; then PNPM="pnpm"
+  elif command -v corepack >/dev/null 2>&1; then PNPM="corepack pnpm"
+  fi
+  [ -n "$PNPM" ] || fail "REFUSED: neither pnpm nor corepack is on this node, so the dependencies cannot be installed — service NOT restarted" 97
+  echo "installer: $PNPM"
   ( cd "$AGENT_DIR" && sudo -u "$SVC_USER" env HOME="$AGENT_DIR" $PNPM install --frozen-lockfile ) \
     || fail "REFUSED: dependency install failed — service NOT restarted" 98
   echo "install: ok"

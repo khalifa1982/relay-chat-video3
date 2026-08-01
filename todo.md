@@ -18248,6 +18248,66 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.75 — the reuse gate proved the expensive dependency and not the cheap one (2026-08-01)
+
+The first real apply ran on all eight media nodes. **Six came up; two did not**, and the
+two that failed did so for a defect in my own v2.106.72 gate.
+
+**SIX NODES ARE LIVE**, three per AZ, each reporting two mediasoup workers, WebRtcServers
+on 40000-40001 and the HMAC-gated internal API on :4443 —
+`i-0b6c043f4e9dc3c90` (3.6.85.52), `i-07224dbec1d23c36f` (15.252.23.92),
+`i-06ef2da49a8490df1` (3.111.211.28) in ap-south-1a; `i-0b4c7f23a086134eb`
+(13.207.218.57), `i-0ae0d7bf628202994` (13.233.62.62), `i-09574fccbff912150`
+(13.206.168.251) in ap-south-1b.
+
+**TWO FAILED** — `i-0dce71f5056f73ce6` and `i-062022390e558ce74` — both with
+`ERR_MODULE_NOT_FOUND: Cannot find package 'ioredis'`, crash-looping on `Restart=always`.
+
+**THE CAUSE IS MINE AND IT IS v2.106.47 ONE DEPENDENCY ALONG.** The install-skip gate was
+keyed on the mediasoup WORKER BINARY, and read "a usable worker is present" as
+"dependencies are satisfied". Those are different claims: the agent imports **two**
+packages, and infra's pre-provisioned `/opt/relay-voip/node_modules` is **not uniform
+across the fleet** — six nodes carried `ioredis`, two did not. Those two skipped the
+install on a gate that only ever asked about mediasoup, started, and died at `import`.
+v2.106.47 fixed a DIRECTORY test that passed over a blocked build by checking the binary;
+this fixes a BINARY test that passed over a missing sibling package. Proving the cheap
+dependency costs nothing; assuming it costs a node.
+
+**THE FIX RESOLVES EVERY NAME IN THE MANIFEST** the way Node will — `createRequire` from
+the agent's own directory, which walks `node_modules` upward exactly as the ESM loader
+does for a bare specifier and does NOT execute the package (importing mediasoup to test it
+would be a side effect in the middle of a deploy). It **fails toward installing**: any
+name that does not resolve, for any reason including a resolver edge case of our own,
+forces the install — the opposite default is what produced a crash-looping node reported
+as deployed.
+
+**A SECOND PROBLEM THE RUN EXPOSED**: every node prints `pnpm: MISSING`, so the corepack
+fallback is not hypothetical — it is the ONLY path on the nodes that actually need an
+install. corepack refuses to guess a version, so `voip-node/package.json` now pins
+`packageManager` (matching the root's 10.4.1); without it the install would have died
+mid-deploy asking which pnpm to use, on exactly the two nodes that need it. The runner is
+chosen explicitly and REFUSES loudly (`VOIP_EXIT=97`) when neither exists, rather than
+half-installing.
+
+**WHAT WORKED, AND IT IS THE REASON THIS IS RECOVERABLE**: the script verified the unit was
+actually active after restarting it, saw it was not, printed the journal with the exact
+error, reported `VOIP_EXIT=100` and failed the run. No node was left claiming success while
+broken — the v2.106.47 property holding under a real failure. And a crash-looping agent
+never registers in Redis, so the app cannot select it: the pool sees six healthy nodes and
+nothing degraded.
+
+**5 of 5 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, both sources byte-identical afterwards — including the resolve flag dropped from
+the gate, the resolution loop emptied (the worker-only gate returns), an unreadable
+manifest no longer forcing the install, the installer refusal removed, and the
+`packageManager` pin removed.
+
+**A DEFECT IN MY OWN TESTS, caught by all six failing at once**: I wrote them against
+helpers that do not exist in that file (`remote()`, `codeOnly()`, a bare `readFileSync`)
+rather than its actual `REMOTE`/`fs`/`path`/`ROOT`. Corrected against the real file.
+
+No schema change, no new dependency, no new env var. 5217 tests.
+
 ## v2.106.74 — the ring push had two lifetimes, one per transport (2026-08-01)
 
 Owner, re-uploading `relaypushbackendconfig.md`: *"ok do what the best"*.
