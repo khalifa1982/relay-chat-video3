@@ -723,13 +723,18 @@ export default function HistoryPage() {
       {/* Search across the log by name / number / PIN. */}
       {items.length > 0 && (
         <div className="mb-2.5 relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+          {/* `start-3` is LOGICAL so the glyph moves to the field's leading edge in
+              Arabic, and the field's `ps-9` moves with it — the padding exists to
+              reserve room for THIS icon, so the two have to flip together or the
+              glyph lands on top of the text. `top-1/2 -translate-y-1/2` is VERTICAL
+              centring and is direction-independent, so it stays exactly as it is. */}
+          <Search className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
           <input
             value={historySearch}
             onChange={(e) => setHistorySearch(e.target.value)}
             placeholder={t("history.search")}
             aria-label={t("history.searchLabel")}
-            className="h-9 w-full rounded-lg border border-border/60 bg-muted/40 pl-9 pr-3 text-sm outline-none focus:border-primary/50"
+            className="h-9 w-full rounded-lg border border-border/60 bg-muted/40 ps-9 pe-3 text-sm outline-none focus:border-primary/50"
           />
         </div>
       )}
@@ -920,7 +925,7 @@ export default function HistoryPage() {
                       type="button"
                       onClick={() => toggleGroup(g.key)}
                       aria-expanded={isOpen}
-                      className="w-full flex items-center gap-2 border-b-2 border-border px-4 py-3 text-left transition-colors hover:bg-muted/30"
+                      className="w-full flex items-center gap-2 border-b-2 border-border px-4 py-3 text-start transition-colors hover:bg-muted/30"
                     >
                       {isOpen ? (
                         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={2.4} />
@@ -1010,7 +1015,7 @@ export default function HistoryPage() {
                       {/* Board 1b: "day headers (mono, .26em)" — the wide mono tracking
                           is what makes a day read as a divider rather than as a row. */}
                       <span
-                        className="flex-1 text-left font-mono text-[10px] font-bold uppercase"
+                        className="flex-1 text-start font-mono text-[10px] font-bold uppercase"
                         style={{ letterSpacing: ".26em" }}
                       >
                         {sec.label}
@@ -1166,18 +1171,31 @@ function PresenceLed({ p }: { p: PresenceSnapshot | undefined }) {
               ? t("history.presence.away")
               : t("history.presence.offline")
       }
-      className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-background"
+      // `-end-0.5` so the LED sits on the disc's TRAILING corner in both
+      // directions — the same logical edge GroupInfoSheet and GroupCallScreen use
+      // for the identical affordance. It must flip together with DirectionBadge's
+      // `-start-1` below: the two share one avatar and are on OPPOSITE corners on
+      // purpose, so mirroring one alone would stack them in Arabic. `-bottom-0.5`
+      // is vertical and direction-independent.
+      className="absolute -end-0.5 -bottom-0.5 size-3 rounded-full border-2 border-background"
       style={{ background: dot.color, boxShadow: dot.glow || undefined }}
     />
   );
 }
 
-/** The small corner disc that overlaps an avatar's lower-left, showing call
- *  direction: an up-right arrow (out) or down-left arrow (in/missed), tinted
- *  with the row's tone. */
+/** The small corner disc that overlaps an avatar's LEADING lower corner, showing
+ *  call direction: an up-right arrow (out) or down-left arrow (in/missed), tinted
+ *  with the row's tone.
+ *
+ *  `-start-1` is logical, and it is paired with PresenceLed's `-end-0.5`: both
+ *  badges hang off the SAME avatar on opposite corners so they never overlap, so
+ *  they have to mirror together — flipping one alone would stack them in Arabic.
+ *  The ARROW GLYPHS themselves are deliberately NOT mirrored: they encode
+ *  incoming-vs-outgoing rather than reading order, and `TONE`/`DirectionBadge`
+ *  pair them with a colour that means the same thing in both directions. */
 function DirectionBadge({ direction, toneName }: { direction: "in" | "out"; toneName: string }) {
   return (
-    <span className="absolute -bottom-1 -left-1 grid size-[18px] place-items-center rounded-full bg-background">
+    <span className="absolute -bottom-1 -start-1 grid size-[18px] place-items-center rounded-full bg-background">
       {direction === "out" ? (
         <ArrowUpRight className={"size-3 " + toneName} strokeWidth={3} />
       ) : (
@@ -1279,7 +1297,7 @@ function ConferenceItem({
             <button
               type="button"
               onClick={() => openPeerProfile(peer.number)}
-              className="flex max-w-full items-baseline text-left text-[15px] font-bold text-foreground outline-none focus-visible:underline"
+              className="flex max-w-full items-baseline text-start text-[15px] font-bold text-foreground outline-none focus-visible:underline"
               aria-label={`View ${peer.name}'s profile`}
             >
               <span className="truncate" dir="auto">{title}</span>
@@ -1299,7 +1317,7 @@ function ConferenceItem({
             {isGroup ? (
               <>
                 <span className="font-semibold text-foreground">
-                  <Users className="mr-0.5 inline size-3 align-[-1px]" />
+                  <Users className="me-0.5 inline size-3 align-[-1px]" />
                   Group · {conf.partyCount}
                 </span>
                 {" · "}
@@ -1316,7 +1334,10 @@ function ConferenceItem({
             {formatFullWhen(conf.startedAt)}
           </div>
         </div>
-        <div className="ml-auto flex items-center gap-1.5">
+        {/* `ms-auto` pins the action cluster to the row's TRAILING edge in both
+            directions — physical `ml-auto` would have shoved it to the middle-left
+            of an Arabic row, away from the thumb. */}
+        <div className="ms-auto flex items-center gap-1.5">
           {/* Not saved yet → one-tap add-to-contacts (v2.96, 1:1 only). */}
           {!isGroup && !saved && onAddContact && peer?.number ? (
             <RoundAction
@@ -1369,9 +1390,13 @@ function ConferenceItem({
           Owner: *"you don't need to put myself because it's showing my name ...
           they will see all others except themselves."* On a 1:1 row the roster was
           pure repetition of the name and number already on the line above, so it
-          is gone entirely there. */}
+          is gone entirely there.
+
+          `ps-12` indents the roster past the avatar disc above it, so it has to follow
+          the avatar to the trailing side in Arabic rather than staying left and hanging
+          under nothing. */}
       {isGroup && others.length > 0 ? (
-        <ul className="mt-2 flex flex-wrap gap-1.5 pl-12">
+        <ul className="mt-2 flex flex-wrap gap-1.5 ps-12">
           {others.map((p) => (
             <li
               key={p.number || p.name}
@@ -1459,7 +1484,7 @@ function SoloItem({
             type="button"
             onClick={() => peerNum && openPeerProfile(peerNum)}
             className={
-              "flex max-w-full items-baseline text-left text-[15px] font-bold outline-none focus-visible:underline " +
+              "flex max-w-full items-baseline text-start text-[15px] font-bold outline-none focus-visible:underline " +
               (missedIn ? tone.name : "text-foreground")
             }
             aria-label={`View ${peerName}'s profile`}
@@ -1484,7 +1509,10 @@ function SoloItem({
             {formatFullWhen(call.startedAt)}
           </div>
         </div>
-        <div className="ml-auto flex items-center gap-1.5">
+        {/* `ms-auto` pins the action cluster to the row's TRAILING edge in both
+            directions — physical `ml-auto` would have shoved it to the middle-left
+            of an Arabic row, away from the thumb. */}
+        <div className="ms-auto flex items-center gap-1.5">
           {/* Not saved yet → one-tap add-to-contacts (v2.96). */}
           {!saved && onAddContact && peerNum ? (
             <RoundAction

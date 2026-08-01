@@ -114,7 +114,10 @@ describe("client surfaces", () => {
     expect(GROUP_SCREEN).toMatch(/trpc\.partyLines\.list\.useQuery/);
     expect(GROUP_SCREEN).toMatch(/trpc\.partyLines\.remove\.useMutation/);
     expect(GROUP_SCREEN).toMatch(/\/i\/\$\{l\.number\}/);
-    expect(GROUP_SCREEN).toMatch(/on the line/);
+    expect(
+      copyOnScreen(GROUP_SCREEN, "on the line"),
+      "the group-call screen no longer says 'on the line'",
+    ).toBe(true);
   });
   it("relayClient: rejected/busy while alone never tear down a PARKED room (group call / pl- line)", () => {
     // v2.89.0 review fix D3 (client half): a lone line occupant whose add-

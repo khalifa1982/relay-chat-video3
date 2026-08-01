@@ -24,8 +24,7 @@ import path from "node:path";
 // #115 — the story vocabulary now lives in one shared place, so assert it there.
 import { STORY_KIND_LABEL } from "@shared/statusReply";
 import { previewOfStoryReply } from "@/app/messagePreview";
-import { copyOnScreen } from "../../../server/testing/copyOnScreen";
-import { copyOnScreen } from "../../../server/testing/copyOnScreen";
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "../../..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -92,9 +91,16 @@ describe("the ephemeral post is called a STORY", () => {
   });
 
   it("the ring, the pip and the viewer all say story", () => {
-    expect(OVERLAYS).toMatch(/"New story — tap to view"/);
-    expect(OVERLAYS).toMatch(/"View story"/);
-    expect(OVERLAYS).toMatch(/View \$\{label\}'s story/);
+    /* Through `copyOnScreen`, so the pin survives the sentence moving into `dict/peer.ts`
+       — and is STRICTLY STRONGER for it, because reaching the dictionary also proves an
+       Arabic half exists. Freezing the literal would have forbidden the translation while
+       saying nothing about the word this test is actually for. */
+    for (const s of ["New story — tap to view", "View story"]) {
+      expect(copyOnScreen(OVERLAYS, s), whyCopyMissing(OVERLAYS, s)).toBe(true);
+    }
+    /* The peer's OWN name is interpolated here, so the sentence cannot be matched whole —
+       what matters is that the surrounding words say story. */
+    expect(copyOnScreen(OVERLAYS, "'s story"), whyCopyMissing(OVERLAYS, "'s story")).toBe(true);
     expect(TOPBAR).toMatch(/title="You have an active story"/);
     expect(SHELL).toMatch(/title="New stories"/);
   });

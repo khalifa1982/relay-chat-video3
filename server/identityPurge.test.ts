@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "./testing/codeOnly";
-import { copyOnScreen, keysForEnglish } from "./testing/copyOnScreen";
+import { copyOnScreen, keysForEnglish, whyCopyMissing } from "./testing/copyOnScreen";
 import {
   GUEST_PURGE_BATCH,
   GUEST_PURGE_DAYS,
@@ -780,12 +780,26 @@ describe("the guest countdown on somebody else's profile", () => {
 
   it("says the clock resets, because a bare countdown implies one nobody can stop", () => {
     // True: touchGuestExpiry pushes guestExpiresAt forward on every visit.
-    expect(OVERLAYS).toMatch(/Opening RELAY resets the countdown/);
+    expect(
+      copyOnScreen(OVERLAYS, "Opening RELAY resets the countdown"),
+      whyCopyMissing(OVERLAYS, "Opening RELAY resets the countdown"),
+    ).toBe(true);
     expect(V2DB).toMatch(/export async function touchGuestExpiry/);
   });
 
   it("reads today as 'today', not as '0 days'", () => {
-    expect(OVERLAYS).toMatch(/Guest number expires today/);
-    expect(OVERLAYS).toMatch(/day\$\{daysLeft === 1 \? "" : "s"\}/);
+    /* NOT `copyOnScreen` here, and the reason is a real limit worth naming: that helper
+       resolves LITERAL `t("key")` call sites, and this one is `t(guestExpiryKey(days))`
+       — a key CHOSEN AT RUNTIME, which no static reader can follow. So the property is
+       pinned where it actually lives: the zero band selects the today key, and that key
+       carries the sentence in both languages. */
+    expect(keysForEnglish("Guest number expires today")).toContain("peer.guestExpiresToday");
+    expect(OVERLAYS).toMatch(/if \(daysLeft <= 0\) return "peer\.guestExpiresToday";/);
+    /* AND THE PLURAL IS SELECTED, NOT CONCATENATED. English needs one/other and Arabic
+       needs zero/one/two/few/many, so `day${n === 1 ? "" : "s"}` cannot be translated at
+       all — it is a sentence assembled from a fragment. `guestExpiryKey` picks a WHOLE
+       key per band instead, which is why today reads as "today" in both languages. */
+    expect(OVERLAYS).toMatch(/function guestExpiryKey\(/);
+    expect(OVERLAYS).not.toMatch(/day\$\{[^}]*\?\s*""\s*:\s*"s"\}/);
   });
 });

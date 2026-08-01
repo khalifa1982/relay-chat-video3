@@ -105,7 +105,12 @@ describe("v2.99.37 — every element the owner listed is present", () => {
     // `ms-auto` moves to whichever of the two comes first — otherwise both would claim
     // it and the timestamp would stop ending the line. The PROPERTY is that the line's
     // last element is pushed right and stays tabular, either way.
-    expect(ROW).toMatch(/t\.pinned \? "shrink-0 pl-1\.5 " : "ms-auto shrink-0 pl-1 "/);
+    /* LOGICAL, not physical (#156's RTL pass): this padding sits at the START of the
+       timestamp, and in Arabic the start edge is the RIGHT one — `pl-` would put it on
+       the wrong side of the number. `ms-auto` was already logical, so this makes the two
+       agree rather than introducing the idea. */
+    expect(ROW).toMatch(/t\.pinned \? "shrink-0 ps-1\.5 " : "ms-auto shrink-0 ps-1 "/);
+    expect(ROW).not.toMatch(/\bpl-1(\.5)?\b/);
     expect(ROW).toMatch(/text-\[11\.5px\] tabular-nums/);
     /* RE-ANCHORED (v2.106.42): this required the `<Pin` to be the very next thing after
        `{t.pinned && (`, so a COMMENT between them broke it — while saying nothing about the
