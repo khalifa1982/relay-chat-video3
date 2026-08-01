@@ -471,8 +471,23 @@ export default function MessagesPage({
     {
       key: "pin",
       label: t.pinned ? "Unpin" : "Pin",
+      /* v2.106.66 — SKY, NOT `#22c55e`. That hex is `VerifiedBadge`'s `registered` tier
+         VERBATIM, and these rows render that badge (line ~883) — so swiping a row put a
+         green Pin chip beside a green tier seal, two meanings on one hue a few pixels
+         apart. v2.106.40 retired exactly this pairing in the 1:1 header and the tray was
+         never swept; this is the same collision one screen along.
+
+         SAID PLAINLY, THE BOARD DOES NOT DECIDE THIS: 1c draws the row at rest, so it
+         shows no open tray and specifies no Pin colour. The change is the collision, not
+         a match — claiming otherwise would be inventing a spec.
+
+         Sky is what is left once this SCREEN's vocabulary is subtracted: green is the
+         registered tier and presence, the accent is UNREAD in that same row (v2.106.42,
+         which is also why the pinned MARKER is muted rather than accent), grey is already
+         both neutral actions in this tray, amber is Mute, red is Delete, and violet means
+         a group in a list that contains groups. */
       icon: t.pinned ? <PinOff className="size-5" /> : <Pin className="size-5" />,
-      color: "#22c55e",
+      color: "#0ea5e9",
       onSelect: () => threadState.mutate({ conversationId: t.conversationId, pinned: !t.pinned }),
     },
   ];
@@ -546,6 +561,17 @@ export default function MessagesPage({
             <NewMessageDialog defaultMode={only === "groups" ? "group" : "dm"} />
           </div>
         </header>
+        {/* v2.106.66 — THE STORIES STRIP IS CHROME, NOT THE FIRST ROW OF THE LIST.
+            Board 1c's own order is header → strip → search → threads, and its caption reads
+            "Stories strip · threads · swipe actions"; the app had it BELOW the search and
+            INSIDE the scroller, so it scrolled away with the threads and sat under a field
+            it is not part of. Read off the board's markup rather than a description of it.
+
+            Out of the scroller matters more than the order does: a story is a 24h thing and
+            the ring is the only signal it exists, so scrolling two threads down used to hide
+            every one of them. Above the search because the search narrows THREADS — putting
+            a stories row under it implies it filters those too. */}
+        <StatusStrip />
         {scopedThreads.length > 0 && (
           <div className="px-3 py-2 border-b border-border/60">
             <div className="relative">
@@ -561,8 +587,6 @@ export default function MessagesPage({
           </div>
         )}
         <div className="flex-1 overflow-y-auto">
-          {/* Rich user status (story-style) — rings for me + contacts, above the threads. */}
-          <StatusStrip />
           {/* v2.106.64 — GROUP CALLS live in the group section, per the owner: *"in the
               group section, add group calls … so in the group section you will have a
               group call and group message"*. A party line is the durable thing a group

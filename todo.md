@@ -11278,6 +11278,50 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.67 — the stories strip stops scrolling away, and the Pin chip stops wearing the badge's green (2026-08-01)
+
+Two findings from the design audit, each **checked against the board's own markup before
+acting** rather than taken from the audit's description of it.
+
+- [x] **THE STRIP WAS BELOW THE SEARCH AND INSIDE THE SCROLLER.** Board 1c's element order
+      is header → strip → search → threads, and its own caption reads *"Stories strip ·
+      threads · swipe actions"*. The app had it as the first row of the scrolling list.
+- [x] **OUT OF THE SCROLLER MATTERS MORE THAN THE ORDER DOES**: a story lives 24 hours and
+      the ring is the only signal one exists, so scrolling two threads down hid every one
+      of them. Above the search because the search narrows THREADS — a stories row beneath
+      it implies it filters those too.
+- [x] **MEASURED AGAINST THE REAL BUNDLE, 4/4** (`scratchpad/strip-verify.mjs`): strip
+      136–223, search field at 244, thread scroller starts at 289 and does not contain the
+      strip. Source order is not layout order, which is the whole reason this is measured.
+- [x] **A HARNESS BUG OF MY OWN, reported rather than counted**: my first locator took the
+      FIRST scrolling div on the page — the shell's own — and reported the strip "inside a
+      scroller" when the question is whether it scrolls WITH THE THREADS. It now finds the
+      scroller by walking up from a thread row, which is the same class of mistake as the
+      `querySelector("aside")` one two releases ago.
+
+- [x] **THE PIN CHIP WORE `#22c55e`, WHICH IS `VerifiedBadge`'s `registered` HEX VERBATIM**
+      — and these rows render that badge, so swiping put a green Pin chip beside a green
+      tier seal a few pixels apart. v2.106.40 retired exactly this pairing in the 1:1
+      header (*"Two different meanings on one green, side by side, in the owner's own
+      screenshot"*) and the swipe tray was never swept. Same collision, one screen along.
+- [x] **SAID PLAINLY, THE BOARD DOES NOT DECIDE THE REPLACEMENT**: 1c draws the row at
+      rest, so it shows no open tray and specifies no Pin colour. The audit's claim that
+      the board uses the accent there is unsupported and was not acted on — the change is
+      the collision, not a match, because inventing a spec would be worse than the bug.
+- [x] Sky is what remains once this SCREEN's vocabulary is subtracted: green is the
+      registered tier and presence, the accent means UNREAD in that same row (v2.106.42,
+      which is also why the pinned MARKER is muted rather than accent), grey is already
+      both neutral actions in this tray, amber is Mute, red is Delete, and violet means a
+      group in a list that contains groups.
+- [x] **PINNED AS THE COLLISION RATHER THAN THE LITERAL**: no swipe chip in EITHER tray may
+      use the badge's hex, and the rule asserts the badge really does own it and really
+      does render on these rows — without that pair it would be a claim about a collision
+      that might not exist.
+- [x] **5 of 5 tripwires verified by MUTATION** off a confirmed-GREEN baseline from
+      byte-exact backups; sources byte-identical afterwards.
+- [x] `pnpm verify` green: 285 files, 5104 tests. No schema change, no new dependency, no
+      new env var.
+
 ## v2.106.66 — a group can be born with its photo, and the green guard was self-allowing (2026-08-01)
 
 Owner, verbatim: *"there is a problem with the avatar of the group when you created you select

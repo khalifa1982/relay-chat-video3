@@ -170,3 +170,60 @@ describe("a new group message rises to the top — already true, pinned", () => 
     expect(MESSAGES).not.toMatch(/scopedThreads[\s\S]{0,200}\.sort\(/);
   });
 });
+
+describe("v2.106.66 — the strip is chrome, and the tray does not reuse the badge's green", () => {
+  it("the stories strip sits ABOVE the search and OUTSIDE the scroller", () => {
+    /* Board 1c's own order is header → strip → search → threads, and its caption reads
+       "Stories strip · threads · swipe actions" — read off the board's markup rather than
+       a description of it. The app had the strip BELOW the search and INSIDE the scroller,
+       so it scrolled away with the threads.
+
+       Out of the scroller matters more than the order: a story lives 24h and the ring is
+       the only signal it exists, so scrolling two threads down hid every one of them. */
+    const strip = MESSAGES.indexOf("<StatusStrip />");
+    const search = MESSAGES.indexOf('aria-label="Search conversations"');
+    const scroller = MESSAGES.indexOf('<div className="flex-1 overflow-y-auto">');
+    expect(strip, "the strip is gone").toBeGreaterThan(-1);
+    expect(search, "the search is gone").toBeGreaterThan(-1);
+    expect(scroller, "the thread scroller is gone").toBeGreaterThan(-1);
+    expect(strip, "the strip must precede the search").toBeLessThan(search);
+    expect(strip, "…and must not be inside the scroller").toBeLessThan(scroller);
+    // Exactly one mount: a second would put two strips on one screen.
+    expect((MESSAGES.match(/<StatusStrip \/>/g) || []).length).toBe(1);
+  });
+
+  it("the Pin chip does not wear the registered tier's own hex", () => {
+    /* `#22c55e` is `VerifiedBadge`'s `registered` colour VERBATIM, and these rows render
+       that badge — so swiping put a green Pin chip beside a green tier seal. v2.106.40
+       retired exactly this pairing in the 1:1 header; the tray was never swept.
+
+       PINNED AS THE COLLISION, NOT AS A LITERAL: the board draws 1c at rest and specifies
+       no Pin colour, so freezing whichever hue replaced it would be inventing a spec. What
+       must hold is that the tray never reuses a hue this screen has already spent. */
+    const left = MESSAGES.slice(
+      MESSAGES.indexOf("const swipeLeftActions"),
+      MESSAGES.indexOf("const swipeRightActions"),
+    );
+    expect(left.length).toBeGreaterThan(200);
+    expect(left, "the Pin action is gone").toMatch(/key: "pin"/);
+    // The row really does render the badge that owns the hex — without this the rule
+    // above is a claim about a collision that may not exist.
+    expect(MESSAGES).toMatch(/<RoleBadge role=\{tier\}/);
+    expect(read("client/src/app/VerifiedBadge.tsx")).toMatch(
+      /registered: \{ color: "#22c55e"/,
+    );
+    // …so no swipe chip may use it.
+    const right = MESSAGES.slice(
+      MESSAGES.indexOf("const swipeRightActions"),
+      MESSAGES.indexOf("useEffect(() => {", MESSAGES.indexOf("const swipeRightActions")),
+    );
+    for (const [name, tray] of [["left", left], ["right", right]] as const) {
+      const colours = Array.from(tray.matchAll(/color: "(#[0-9a-f]{6})"/gi)).map((m) => m[1]);
+      expect(colours.length, `${name} tray has no colours`).toBeGreaterThan(0);
+      expect(colours, `${name} tray reuses the registered badge's hex`).not.toContain("#22c55e");
+    }
+    // And the accent is likewise not it: the accent means UNREAD in this same row
+    // (v2.106.42), which is why the pinned MARKER is muted rather than accent.
+    expect(left).not.toMatch(/color: "var\(--rb\)"/);
+  });
+});
