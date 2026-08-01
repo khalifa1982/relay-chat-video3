@@ -375,9 +375,16 @@ describe("the ⋮ menu and the info panel", () => {
   });
 
   it("the forward picker never offers the thread you are already in", () => {
-    expect(MSG).toMatch(/\(threadsQuery\.data \?\? \[\]\)\.filter\(\(t\) => t\.conversationId !== conversationId\)/);
+    /* 2026-08-01 REWRITTEN TO THE PROPERTY. This froze the one-line
+       `(threadsQuery.data ?? []).filter(...)` and the exact empty-state SENTENCE, so it
+       broke the moment the picker gained a search box while saying nothing about the
+       rule it stands for: the thread you are already in is never offered. */
+    expect(MSG).toMatch(/t\.conversationId !== conversationId/);
     expect(MSG).toMatch(/\{forwardTargets\.map\(\(t\) => \(/);
+    /* And the empty state must tell the two cases apart — "no other conversations yet"
+       is a false claim about somebody's own inbox while a search is narrowing it. */
     expect(MSG).toMatch(/No other conversations yet\./);
+    expect(MSG).toMatch(/forwardSearch\.trim\(\)\s*\?/);
   });
 
   it("Info lists sent, delivered and read — the three the owner named", () => {

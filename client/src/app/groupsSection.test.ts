@@ -79,7 +79,13 @@ describe("the two tabs partition the threads — no thread in both, none in neit
     expect(groupsArm).toMatch(/t\.kind === "group" && !t\.archived/);
     expect(groupsArm).not.toMatch(/key: "notes"/);
     // `only` is an explicit dep: the section LIST depends on it now, not just the rows.
-    expect(cats).toMatch(/\[scopedThreads, me, threadSearch, only\]/);
+    /* 2026-08-01: was the exact dep list, so it broke when the memo legitimately gained
+       a fifth dep. The property is that the memo is derived from the SCOPED list and
+       re-runs when the search changes (QA H3) — the deps it must contain, not the ones
+       it must not. */
+    expect(cats).toMatch(/\}, \[[^\]]*scopedThreads[^\]]*\]\)/);
+    expect(cats).toMatch(/\}, \[[^\]]*threadSearch[^\]]*\]\)/);
+    expect(cats).toMatch(/\}, \[[^\]]*\bonly\b[^\]]*\]\)/);
   });
 });
 

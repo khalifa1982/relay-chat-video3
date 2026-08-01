@@ -340,9 +340,15 @@ describe("what the group's own identity looks like on screen", () => {
   });
 
   it("a group is findable by its OWN id, not just its title", () => {
-    expect(MESSAGES).toMatch(
-      /matchQuery\(threadSearch, \[t\.peerDisplayName, t\.peerNumber, t\.title, t\.groupNumber\]\)/,
-    );
+    /* 2026-08-01 REWRITTEN TO THE PROPERTY. It froze the exact ONE-LINE argument list,
+       so it broke when a fifth field (the name YOU saved the peer under) joined it —
+       while saying nothing about the rule: a group is findable by its own 6-digit id. */
+    const at = MESSAGES.indexOf("matchQuery(threadSearch, [");
+    expect(at, "the thread search is gone").toBeGreaterThan(-1);
+    const args = MESSAGES.slice(at, MESSAGES.indexOf("])", at));
+    expect(args.length).toBeGreaterThan(30);
+    expect(args).toContain("t.groupNumber");
+    expect(args).toContain("t.title");
   });
 
   it("the row shows the group's id in the same place a person's sits", () => {

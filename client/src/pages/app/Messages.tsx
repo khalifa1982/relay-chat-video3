@@ -113,6 +113,34 @@ function initialsFrom(name: string): string {
   return parts.map((p) => p[0]?.toUpperCase() ?? "").join("").slice(0, 2) || "??";
 }
 
+/**
+ * THE NAME YOU SAVED, not only the name they chose (2026-08-01).
+ *
+ * `peerDisplayName` on a thread is the LIVE identity name — whatever that person
+ * calls themselves. It is never what YOU saved them as, so a thread with somebody
+ * stored in your contacts as "Dad" was unreachable by typing "Dad": the one word
+ * most likely to be typed matched nothing, against the owner's ask that search work
+ * "by name … anywhere and the entire system".
+ *
+ * ONE HOOK, because the thread list and the Forward picker both need it and two
+ * copies is how the two come to disagree about what a conversation is called.
+ *
+ * COSTS NO REQUEST. `RelayEngine` already runs `contacts.list` app-wide (it feeds the
+ * blocked-pin set), and this is the same procedure with the same input — so
+ * react-query serves it from the shared cache key rather than fetching again.
+ */
+function useSavedNames(): Map<string, string> {
+  const saved = trpc.contacts.list.useQuery(undefined, { staleTime: 30_000 });
+  return useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of saved.data ?? []) {
+      const n = (c.displayName ?? "").trim();
+      if (c.number && n) m.set(c.number, n);
+    }
+    return m;
+  }, [saved.data]);
+}
+
 function timeAgo(iso: string | Date): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;
   const diff = (Date.now() - d.getTime()) / 1000;
@@ -333,6 +361,7 @@ export default function MessagesPage({
   // Thread-list search (v2.95): filter conversations by peer name/number. Pure
   // client filter over the already-loaded list — instant, no new request.
   const [threadSearch, setThreadSearch] = useState("");
+  const savedNameByNumber = useSavedNames();
   // The GROUPS tab is this same page narrowed to group threads. The narrowing is a memo
   // of its OWN, ahead of the categories, for two reasons. (1) Narrowing by picking
   // categories below would leak archived DIRECT threads into a tab that says Groups,
@@ -364,7 +393,17 @@ export default function MessagesPage({
       ? scoped.filter((t) =>
           // v2.102.0: a group is findable by its OWN 6-digit id too, not only its
           // title — which is the point of giving it one.
-          matchQuery(threadSearch, [t.peerDisplayName, t.peerNumber, t.title, t.groupNumber]),
+          matchQuery(threadSearch, [
+            t.peerDisplayName,
+            t.peerNumber,
+            t.title,
+            t.groupNumber,
+            // 2026-08-01: the name YOU saved them under. An extra FIELD rather than a
+            // replacement, because both are legitimate readings of the same
+            // keystrokes — somebody may search for the name on screen or the name in
+            // their own address book.
+            t.peerNumber ? savedNameByNumber.get(t.peerNumber) : undefined,
+          ]),
         )
       : scoped;
     const meId = me?.id;
@@ -432,7 +471,11 @@ export default function MessagesPage({
     // `only` is an explicit dep even though `scopedThreads` already moves with it: the
     // section LIST is now derived from it too, and depending on that coupling is how a
     // memo comes to serve a stale section set (the v2.99.22 H3 shape).
-  }, [scopedThreads, me, threadSearch, only]);
+    // `savedNameByNumber` is a dep for the same reason `threadSearch` is (QA H3): the
+    // memo filters by it, and react-query's structural sharing keeps `scopedThreads`
+    // referentially stable, so without it a contact renamed while the list is open
+    // would go on matching only their old name.
+  }, [scopedThreads, me, threadSearch, only, savedNameByNumber]);
 
   /**
    * The swipe actions (v2.103.0). Every one is a TOGGLE reading the row's own state, so
@@ -1725,10 +1768,33 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const [forwardBusy, setForwardBusy] = useState(false);
   // Every conversation EXCEPT this one — forwarding a message back into the thread
   // it is already in is never what anybody means, and offering it invites the tap.
-  const forwardTargets = useMemo(
-    () => (threadsQuery.data ?? []).filter((t) => t.conversationId !== conversationId),
-    [threadsQuery.data, conversationId]
-  );
+  /**
+   * THE FORWARD PICKER HAD NO SEARCH AT ALL (2026-08-01).
+   *
+   * It listed every other conversation in a 64px-tall scroller — past a handful of
+   * threads that is a list you scroll rather than a picker you use, and the owner's
+   * ask is that every box searches by name OR pin. Same shared `matchQuery` and the
+   * same fields as the thread list, saved name included, so a forward and a search
+   * can never disagree about what a conversation is called.
+   */
+  const savedNameByNumber = useSavedNames();
+  const [forwardSearch, setForwardSearch] = useState("");
+  const forwardTargets = useMemo(() => {
+    const others = (threadsQuery.data ?? []).filter(
+      (t) => t.conversationId !== conversationId
+    );
+    const q = forwardSearch.trim();
+    if (!q) return others;
+    return others.filter((t) =>
+      matchQuery(q, [
+        t.peerDisplayName,
+        t.peerNumber,
+        t.title,
+        t.groupNumber,
+        t.peerNumber ? savedNameByNumber.get(t.peerNumber) : undefined,
+      ])
+    );
+  }, [threadsQuery.data, conversationId, forwardSearch, savedNameByNumber]);
 
   /**
    * Forward one message into another conversation.
@@ -3624,7 +3690,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       </AlertDialog>
 
       {/* ── Forward to another conversation (v2.99.74) ── */}
-      <AlertDialog open={forwarding !== null} onOpenChange={(open) => !open && setForwarding(null)}>
+      <AlertDialog
+        open={forwarding !== null}
+        onOpenChange={(open) => {
+          if (open) return;
+          setForwarding(null);
+          // Or the NEXT forward opens filtered by a query nobody typed for it.
+          setForwardSearch("");
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Forward to…</AlertDialogTitle>
@@ -3635,7 +3709,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {forwarding && (forwarding.meta as { expire?: unknown } | null)?.expire == null && (
-            <div className="max-h-64 space-y-1 overflow-y-auto">
+            <>
+              <Input
+                value={forwardSearch}
+                onChange={(e) => setForwardSearch(e.target.value)}
+                placeholder="Search by name or number"
+                aria-label="Search conversations to forward to"
+                className="mb-2"
+              />
+              <div className="max-h-64 space-y-1 overflow-y-auto">
               {forwardTargets.map((t) => (
                 <button
                   key={t.conversationId}
@@ -3650,11 +3732,18 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 </button>
               ))}
               {forwardTargets.length === 0 && (
+                /* The two emptinesses are DIFFERENT and must not share a sentence:
+                   "no other conversations yet" becomes a false claim about somebody's
+                   own inbox the moment a search is narrowing it — the v2.106.25
+                   defect, which is what an empty state that ignores its filter is. */
                 <p className="px-1 py-2 text-sm text-muted-foreground">
-                  No other conversations yet.
+                  {forwardSearch.trim()
+                    ? `No conversations match \u201C${forwardSearch.trim()}\u201D.`
+                    : "No other conversations yet."}
                 </p>
               )}
-            </div>
+              </div>
+            </>
           )}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>

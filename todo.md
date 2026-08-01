@@ -18248,6 +18248,94 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.70 — search by name **or** number, in every box (2026-08-01)
+
+The owner, twice: *"any type of box you can search either by name … or by pin number …
+anywhere and the entire system by these two methods"*. v2.99.96 built the shared rule and
+put it on Contacts, History and the group-call picker. An audit of the rest of the app
+found **three genuine gaps and one non-gap**, and reporting the non-gap as a gap would
+have wasted the owner's time as much as missing a real one.
+
+**1. THE MESSAGES THREAD SEARCH NEVER SAW THE NAME YOU SAVED.** It matched
+`t.peerDisplayName` — the LIVE identity name, whatever that person calls themselves — so
+somebody stored in your own contacts as "Dad" could not be found by typing "Dad". The
+single most likely word a person types matched nothing. Fixed by adding the saved name as
+an **extra FIELD rather than a replacement**, because both are legitimate readings of the
+same keystrokes: replacing the live one would make a person unfindable by the name they
+chose for themselves.
+
+**2. THE ADMIN PANEL COULD NOT FIND `777-777`.** `adminFindIdentities` tested
+`/^\d{6}$/` against the **RAW** query, so the grouping this app itself RENDERS — and
+therefore the exact form an admin reads off the screen and types back — fell through to a
+`LIKE` over email and display name, which cannot match a number either. Refusing the
+app's own format back is the app arguing with itself.
+
+**3. THE FORWARD PICKER HAD NO SEARCH BOX AT ALL** — a scrolling list of every
+conversation you have.
+
+**4. NOT A GAP, and recorded in the test file so it is not "fixed" later.** The
+new-message and group-member pickers use `suggestContacts`, whose NAME matching is
+word-start only rather than infix. That is a **decision**: v2.99.93 records that a one- or
+two-letter infix matches most of a contact list and is indistinguishable from no filter,
+and v2.99.96 then kept infix in `matchQuery` *because* adopting the suggestion rule there
+would REGRESS the main lists. The two differ on purpose — and they already AGREE on the
+number half, which is what the owner asked about, because both import the same primitives.
+
+**THE NUMBER RULE MOVED TO `shared/searchNumber.ts`, and the reason is the class this
+repo keeps paying for.** The obvious fix for (2) was a second `/^\d{6}$/`-shaped check on
+the server. A second copy of one rule is exactly what bit at v2.99.71 (`turn-check.mjs`
+vs `iceServers()`, which would have reported two live relays permanently DOWN) and
+v2.105.11 (the client token classifier vs the server's, which deregistered devices). Here
+a divergence would mean the admin panel and every other search box disagreeing about
+whether `777 777` is a number — invisible until somebody cannot find a user they can see
+on screen. `client/src/app/searchMatch.ts` now RE-EXPORTS `digitsOf`/`isNumberQuery`, so
+every existing import is unchanged and there is exactly ONE definition; the test asserts
+`suggestIsNumberQuery === isNumberQuery`, i.e. the pickers reach the same function object
+rather than a lookalike.
+
+**`pinFromQuery` REQUIRES EXACTLY SIX DIGITS, deliberately.** A prefix search is a
+different operation — the suggestion pickers do that on purpose — and an admin looking
+somebody up by number means THAT number, not the first person whose number starts with it.
+
+**`useSavedNames` IS ONE HOOK WITH TWO CONSUMERS**, because two copies of the map is how
+the thread list and the Forward picker come to disagree about what a conversation is
+called. It **costs no request**: `RelayEngine` already runs `contacts.list` app-wide, so
+this resolves to the same react-query cache key.
+
+**THE FORWARD PICKER'S EMPTY STATE TELLS THE TWO CASES APART.** "No other conversations
+yet" is a false claim about somebody's own inbox the moment a filter is what emptied it —
+the v2.106.25 defect. An EMPTY search returns the whole list rather than nothing (failing
+the other way makes the picker useless until you type), and the query is cleared when the
+dialog closes, or the next forward opens filtered by something nobody typed for it.
+
+`client/src/app/searchEverywhere.test.ts` (14), the number rule driven BEHAVIOURALLY
+because whether `777-777` finds 777777 is exactly what a source assertion cannot answer.
+**12 of 12 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once and treating a changed
+test TOTAL as a failure, all five sources byte-identical afterwards — including the raw
+six-digit test reinstated verbatim, the saved name dropped from the thread search, the
+memo's dep removed, the search box deleted, an empty search returning nothing, the clear
+removed, the empty state made single-case, and a LOOKALIKE number rule given to the
+suggestion pickers.
+
+**FIVE OF MY OWN NEEDLES WERE WRONG ABOUT THE SOURCE and the harness ABORTED on each
+rather than recording a false survivor** — which is what that check is for; re-anchored
+against the real text, all five bit.
+
+**FOUR PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, and each had frozen a literal this
+release legitimately moves: `groupIdentity.test.ts` froze the exact one-line
+`matchQuery(threadSearch, [t.peerDisplayName, t.peerNumber, t.title, t.groupNumber])`, so
+it broke the moment a fifth field joined while saying nothing about the rule it stands for
+(a group is findable by its own 6-digit id); `searchEnhancements.test.ts` bounded that
+same call at a fixed `{0,120}` characters, which one added field plus its reason
+overflowed — now bounded by the call's own closing bracket so it cannot go stale again;
+`groupsSection.test.ts` froze the exact dep LIST, so a legitimate fifth dep broke it (now
+the deps it must CONTAIN); and `deliveryReceipts.test.ts` froze the picker's one-line
+filter and its exact empty-state sentence, i.e. it forbade the search box — now the
+property plus a new assertion that the empty state is two-case.
+
+No schema change, no new dependency, no new env var. 5178 tests.
+
 ## v2.106.69 — the push backend, configured to the credentials that were already staged (2026-08-01)
 
 Owner: *"Did you activate the new nod structure? [uploaded `relaypushbackendconfig.md`] Configure it."*

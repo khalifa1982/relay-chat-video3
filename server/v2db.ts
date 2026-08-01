@@ -66,6 +66,7 @@ import { hashRecoveryKey, newRecoveryKey } from "./guestRecovery";
 // #115 — ONE parser for the story-reply marker, shared with the client's bubble chip so
 // a thread row and the conversation it opens cannot disagree about the same message.
 import { isStatusReply } from "@shared/statusReply";
+import { pinFromQuery } from "../shared/searchNumber";
 import {
   normalizeProfileStatus,
   normalizeStatusNote,
@@ -646,8 +647,15 @@ export async function adminFindIdentities(
     // typed by the operator would otherwise widen their own search silently rather
     // than matching the literal character they typed.
     const esc = q.replace(/[%_\\]/g, (c) => `\\${c}`);
-    const rows = /^\d{6}$/.test(q)
-      ? await base.where(eq(identities.number, q)).limit(cap)
+    /* THE NUMBER BRANCH USED TO TEST THE RAW QUERY (`/^\d{6}$/.test(q)`), so
+       `777-777` — the grouping this app itself RENDERS, and therefore the form an
+       admin reads off the screen and types back — matched nothing and fell through
+       to a LIKE over email and display name, which cannot match a number either.
+       Refusing the app's own format back is rude; `pinFromQuery` is the SAME rule
+       every other search box in the app uses, imported rather than restated. */
+    const pin = pinFromQuery(q);
+    const rows = pin
+      ? await base.where(eq(identities.number, pin)).limit(cap)
       : q.length > 0
         ? await base
             .where(or(like(users.email, `%${esc}%`), like(identities.displayName, `%${esc}%`)))
