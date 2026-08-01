@@ -33,6 +33,20 @@ export interface RelayBackgroundHandle {
   setBusiness: (v: boolean) => void;
   setAccent: (v: string) => void;
   setIntensity: (v: number) => void;
+  /**
+   * HYPERSPACE JUMP (#162). Owner, on moving between the sign-in screen and the PIN
+   * reveal: *"as your background it comes super speedy like flying in space faster"*, and
+   * again on leaving the PIN page — *"it will move again rapidly to the next page"*.
+   *
+   * Runs for `ms` and decays; the stars stretch into streaks along their own travel
+   * direction and the parallax multiplies. It is a ONE-SHOT on the existing rAF rather
+   * than a second loop or a CSS layer, because this canvas is already the most expensive
+   * thing on the screen and a parallel animation over it is the v2.99.84 cost class.
+   *
+   * Calling it again mid-warp RESTARTS it rather than stacking — two overlapping warps
+   * would multiply the streak length without bound and read as a rendering fault.
+   */
+  warp: (ms?: number) => void;
   destroy: () => void;
 }
 
@@ -219,7 +233,13 @@ export function initRelayBackground(
     // an unset `--rb` drops every accent declaration in the app — so the one browser
     // that cannot draw the background would also be the one with invisible chips.
     publishAccentVars(hexToRgb(opts.accent ?? RELAY_ACCENT));
-    return { setBusiness: () => {}, setAccent: () => {}, setIntensity: () => {}, destroy: () => {} };
+    /* `warp` is inert here for the same reason the rest is: there is no canvas to draw a
+       streak on. It must still EXIST — a caller that awaits a jump before navigating
+       would otherwise throw on exactly the browser this branch is for. */
+    return {
+      setBusiness: () => {}, setAccent: () => {}, setIntensity: () => {},
+      warp: () => {}, destroy: () => {},
+    };
   }
 
   const low = opts.lowPower ?? isLowPowerDevice();
@@ -237,6 +257,10 @@ export function initRelayBackground(
   let colTgt = hex2(RELAY_PALETTE[0]);
   let cur = [...colTgt];
   let colT = 0;
+  /* Warp state (#162). Two numbers rather than a start-time plus a duration, so the decay
+     is a pure function of `t` and a restart is a plain reassignment — nothing to cancel. */
+  let warpUntil = 0;
+  let warpSpan = 1;
 
   const stars = [...Array(130)].map(() => ({
     x: R(), y: R(), r: R() * 1.2 + 0.3, p: R() * 6.28, s: 0.4 + R() * 1.2, d: 0.3 + R() * 0.7,
@@ -328,11 +352,35 @@ export function initRelayBackground(
     ctx!.stroke();
 
     // ---- stars -------------------------------------------------------------
+    /* WARP (#162): `k` runs 1 → 0 across the jump. Stars stretch into streaks pointing
+       back at the screen centre — the direction a viewer would be travelling — and
+       brighten, so the whole field reads as acceleration rather than as a blur filter.
+       At k === 0 every expression below collapses to the original round-dot draw, which
+       is what makes the ordinary path byte-identical to before this feature existed. */
+    const k = warpUntil > t ? Math.min(1, (warpUntil - t) / Math.max(1, warpSpan)) : 0;
+    const ease = k * k; // fast decay: the streaks should shorten sharply, not linger
     for (const s of stars) {
       const a = TONE.starAlpha[0] + TONE.starAlpha[1] * (0.5 + 0.5 * Math.sin(t * 0.001 * s.s + s.p));
-      ctx!.fillStyle = `rgba(${TONE.ink[0]},${TONE.ink[1]},${TONE.ink[2]},${a})`;
+      ctx!.fillStyle = `rgba(${TONE.ink[0]},${TONE.ink[1]},${TONE.ink[2]},${Math.min(1, a * (1 + ease * 5))})`;
+      const sx0 = s.x * w - px * 22 * s.d;
       const yy = (((s.y * h - py * 22 * s.d - sy * 0.12 * s.d) % h) + h) % h;
-      ctx!.beginPath(); ctx!.arc(s.x * w - px * 22 * s.d, yy, s.r, 0, 6.28); ctx!.fill();
+      if (ease > 0.001) {
+        // Streak away from centre, length scaled by the star's own parallax depth so the
+        // near field flies past faster than the far — which is what sells the depth.
+        const dx = sx0 - w / 2;
+        const dy = yy - h / 2;
+        const len = Math.hypot(dx, dy) || 1;
+        const reach = ease * (60 + 220 * s.d);
+        ctx!.lineWidth = s.r * 2;
+        ctx!.lineCap = "round";
+        ctx!.strokeStyle = ctx!.fillStyle;
+        ctx!.beginPath();
+        ctx!.moveTo(sx0, yy);
+        ctx!.lineTo(sx0 + (dx / len) * reach, yy + (dy / len) * reach);
+        ctx!.stroke();
+      } else {
+        ctx!.beginPath(); ctx!.arc(sx0, yy, s.r, 0, 6.28); ctx!.fill();
+      }
     }
 
     // The spec: under reduced motion keep the glows, grid and stars — and stop.
@@ -478,6 +526,14 @@ export function initRelayBackground(
     setBusiness: (v: boolean) => { business = v; },
     setAccent: (v: string) => { accent = v; },
     setIntensity: (v: number) => { intensity = v; },
+    warp(ms = 900) {
+      /* REDUCED MOTION GETS NO WARP AT ALL. The whole effect IS motion, so honouring the
+         request means skipping it — not shortening it. The page still changes; it simply
+         does not fly. `calm` is the same flag the paint loop already reads. */
+      if (calm) return;
+      warpSpan = Math.max(1, ms);
+      warpUntil = performance.now() + warpSpan; // restart, never stack
+    },
     destroy() {
       cancelAnimationFrame(raf);
       removeEventListener("mousemove", onMove);
