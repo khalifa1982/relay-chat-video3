@@ -176,7 +176,7 @@ export const RELAY_MARKUP = `
     <div class="controls">
       <div class="addpad" id="addpad">
         <div class="addpad-head"><span>Add person</span><button id="addClose" type="button" aria-label="Cancel" title="Cancel">&#10005;</button></div>
-        <input id="addInput" maxlength="16" inputmode="numeric" placeholder="000000">
+        <input id="addInput" maxlength="7" inputmode="numeric" placeholder="000000">
         <div class="addpad-keys" id="addKeys"></div>
         <button id="addGo">Add to call</button>
         <div class="addpad-hint">Invites automatically once you enter all 6 digits</div>

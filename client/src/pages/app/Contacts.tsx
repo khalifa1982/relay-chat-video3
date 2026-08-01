@@ -57,6 +57,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { PIN_INPUT_MAXLENGTH, capPinInput, pinDigits } from "@/app/pinInput";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
@@ -1122,10 +1123,15 @@ function AddContactDialog({
               <Input
                 value={number}
                 onChange={(e) =>
-                  setNumber(e.target.value.replace(/\D/g, "").slice(0, 6))
+                  // v2.106.65 — `replace(/\D/g, "")` FOLDED letters away, so `7a7b7c7d7e7f`
+                  // became `777777`: a typo turning into a saved contact for somebody
+                  // else's number. `capPinInput` drops them as typed instead, so the field
+                  // always shows exactly what will be saved.
+                  setNumber(capPinInput(e.target.value))
                 }
                 disabled={!!editing.id}
                 placeholder="e.g. 482015"
+                maxLength={PIN_INPUT_MAXLENGTH}
                 inputMode="numeric"
                 autoFocus={!editing.id}
                 className="font-mono text-lg tracking-[0.35em] pl-10"

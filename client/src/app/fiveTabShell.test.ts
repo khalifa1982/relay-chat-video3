@@ -398,7 +398,14 @@ describe("in-page navigation returns to the tab it came from", () => {
     // the bottom bar's active tab changes under a tap that only meant "open this
     // conversation". Seven call sites across three components.
     expect(MESSAGES_CODE).not.toMatch(/setLocation\((`|")\/app\/messages/);
-    expect((MESSAGES_CODE.match(/setLocation\(`\$\{basePath\}\?c=/g) ?? []).length).toBe(4);
+    /* v2.106.65 — 4 became 3. Creating a GROUP is the one navigation that must NOT keep
+       the current tab: the sheet's Direct/Group toggle is reachable from Messages, so a
+       `basePath` there landed the user on `/app/messages?c=<groupId>` — a group
+       conversation on a tab whose list, since v2.106.64, cannot contain it. The
+       destination genuinely is a groups-tab object, so that ONE site names the tab and the
+       rule is asserted as "every OTHER conversation navigation keeps its tab". */
+    expect((MESSAGES_CODE.match(/setLocation\(`\$\{basePath\}\?c=/g) ?? []).length).toBe(3);
+    expect((MESSAGES_CODE.match(/setLocation\(`\/app\/groups\?c=/g) ?? []).length).toBe(1);
     expect((MESSAGES_CODE.match(/setLocation\(basePath\)/g) ?? []).length).toBe(3);
   });
 

@@ -104,16 +104,21 @@ describe("the composer cannot be replaced by a bar with no way out", () => {
     expect(fin).toMatch(/setRecPaused\(false\)/);
   });
 
-  it("the mic reads `uploading`, exactly as the text field beside it already did", () => {
-    /* Without it, the button that is the composer's PRIMARY while the field is empty
-       opened a live microphone into a bar whose three controls were already disabled by
-       that same flag — a recording nobody could stop, discard or send. */
-    const m = MSG.match(/disabled=\{!recorderSupported\(\)[^}]*\}/);
-    expect(m, "the mic's disabled expression must exist").toBeTruthy();
-    expect((m as RegExpMatchArray)[0]).toMatch(/uploading/);
-    // …but STOPPING a live recording stays allowed: `recording` owns the bar, and the
-    // upload it would wait on is a different one.
-    expect((m as RegExpMatchArray)[0]).toMatch(/!recording/);
+  it("whatever STARTS a recording reads `uploading`, as the text field beside it does", () => {
+    /* Without it, a tap opened a live microphone into a bar whose three controls were
+       already disabled by that same flag — a recording nobody could stop, discard or send.
+       v2.106.64 moved the entry point from the mic BUTTON into the + menu (the owner's
+       ask), and the old pin also required `!recording` — a clause that only made sense
+       while one button did both jobs. Pinned on the property: every control that calls
+       `startRecording` is gated on `uploading`. */
+    const starters = MSG.match(/<button[\s\S]{0,600}?startRecording\(\)[\s\S]{0,600}?<\/button>/g) ?? [];
+    expect(starters.length, "something must start a recording").toBeGreaterThan(0);
+    for (const b of starters) {
+      expect(b, "a recording starter must be gated on `uploading`").toMatch(
+        /disabled=\{[^}]*uploading[^}]*\}/,
+      );
+      expect(b, "…and on recorder support").toMatch(/!recorderSupported\(\)/);
+    }
   });
 
   it("leaving the thread ends the recording", () => {

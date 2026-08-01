@@ -11278,6 +11278,114 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.65 — the composer's Send is permanent, and my own six-digit sweep was largely vacuous (2026-08-01)
+
+Owner, two composer items: *"on the attachment inside the chat on the plus button add the
+voice note beside of the other features set as video photos"* and *"in place of the voice
+icon in the bar put send button as icon … and inside the plus it will have everything that
+you already added, including the voice note."*
+
+**THE COMPOSER.** Send now renders unconditionally and is DISABLED when there is nothing to
+send; the mic is gone from that slot and voice-note recording lives in the `+` menu beside
+Record video, Photo & video and Attach file. What the old swap cost is worth naming: the
+composer's primary control CHANGED MEANING on the first keystroke, so the button you were
+aiming at became a different action under your thumb — and that is the reason recording had
+to be reachable from a position that is really Send's. The disabled state is not a trap: it
+enables the instant there is anything to send, so it is Send greyed out rather than a
+control that always refuses. The voice-note menu item carries the SAME guards the mic had,
+and `uploading` is not decoration — it is what stops a tap opening the recording bar with a
+live microphone while all three of its controls are already disabled by that same flag
+(v2.99.72). The mic's `recording ? stopRecording` arm was already DEAD CODE: while
+recording, the whole row is replaced by `RecordingBar`, so that branch could never render.
+
+**AND THEN THE PART THAT MATTERS MORE — MY OWN v2.106.63 SWEEP WAS LARGELY VACUOUS.** It
+claimed to make "no PIN box accepts a seventh digit" true anywhere in the system. Measured,
+it did not:
+
+  • **Contacts, GroupCallScreen and Dialer yielded ZERO elements** — three of the six files
+    it names, two of which its own comment explicitly claimed to cover — because it searched
+    for `<input` (lower case) and those files use shadcn's `<Input>`, capital I.
+  • **In Profile the "elements" ran to 46,118 and 46,803 characters** — most of the file. A
+    `capPinInput(` anywhere in 46KB satisfied the is-it-capped check, so a genuinely
+    uncapped box in that file would have passed.
+  • **The vacuity guard passed for the wrong reason**, which is the class it was written to
+    prevent: it required `total >= 6` and got 8, of which four were those slabs.
+  • **The predicate missed a real box even where the parser found one**: GroupCallScreen
+    says "(6 digits)", which neither `6-digit` nor `six digits` matched.
+
+**SO THREE MORE PIN BOXES WERE STILL UNCAPPED, AND ONE OF THEM IS THE OWNER'S COMPLAINT
+VERBATIM.** The in-call **add-person** field carried `maxlength="16"` — the one box in the
+app whose browser cap genuinely exceeded six digits. It is raw DOM inside a template
+literal, so no JSX sweep can ever reach it; it is pinned by name now. Contacts'
+add-by-number and the group-call picker had no `maxLength` at all.
+
+**AND ALL THREE FOLDED A NON-DIGIT AWAY** with `replace(/\D/g, "")` — the exact hazard
+`pinInput.ts`'s own header forbids. In the in-call field that is more than cosmetic,
+because the sixth digit AUTO-INVITES: `7a7b7c7d7e7f` silently became `777777` and rang a
+stranger into a live call off a typo.
+
+**A CLAIM OF MY OWN, CORRECTED RATHER THAN SHIPPED.** A first draft of the
+`programmaticGroupDial` comment said `capPinInput` fixes that. It does not — it also yields
+`777777`, keeping the digits and dropping the letters. What makes it safe at a TYPING site
+is that the field is rewritten as you type, so you always see what will be sent. There is
+no field at a programmatic boundary, so the honest rule there is different and is what
+shipped: accept a target that is ALREADY a number (grouping allowed, since the app renders
+`777-777`) and DROP anything else, rather than repairing it into somebody's real number.
+
+**THE SWEEP IS REBUILT AROUND THE PROPERTY.** It scans FORWARD from each `<input>`/`<Input>`
+and stops at the `/>` that closes THAT tag, tracking `{}` depth so a JSX expression cannot
+end it early; it refuses an implausibly long span; and the vacuity guard now requires every
+listed file to yield at least one element AND at least one recognised PIN box, which is
+what a bare count could never say. `Dialer.tsx` is dropped from the list with the reason:
+it has no numeric text input at all — it is a keypad, capped structurally because there is
+nothing to paste into — so listing it made the entry inert while reading as coverage. Being
+"capped" now requires BOTH `capPinInput` and the browser cap; `.slice(0, 6)` is no longer
+an accepted spelling, because it bounds the LENGTH and says nothing about the fold, and
+every site that used it also folded.
+
+**ALSO — A GAP THE MAPPING RUN FOUND IN v2.106.64, WHICH I HAD JUST SHIPPED.** The
+new-message sheet's Direct/Group toggle is reachable from the Messages tab, so creating a
+group there navigated to `${basePath}?c=<id>` — i.e. `/app/messages?c=<groupId>`, a group
+conversation on a tab whose list can no longer contain it. Close it and you find nothing.
+That one navigation now names the Groups tab; `useTabBasePath`'s rule (opening a
+conversation must not move you between tabs) is untouched everywhere else, and the pin
+asserts the exception explicitly rather than being loosened.
+
+**12 of 14 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, all six sources byte-identical afterwards — including the parser narrowed back to
+lower-case, the predicate re-narrowed, each of the three boxes reverted to the fold,
+Contacts' cap removed, the in-call markup back to 16, the programmatic dial repairing
+again, voice note removed from the menu, its `uploading` guard dropped, Send made
+conditional again, and the new group routed back to Messages.
+
+**FIVE SURVIVED THE FIRST RUN. THREE WERE REAL GAPS IN MY OWN TESTS and are fixed**: nothing
+asserted that Send is permanent (so the mic/Send swap could return with every assertion
+green — the owner's actual ask, unpinned); nothing drove the programmatic dial's refusal
+(behaviour changed with no test); and the accepted-shape rule was asserted only through
+today's source, where every site already satisfies both halves, so relaxing it to an OR
+changed nothing observable.
+
+**THE OTHER TWO ARE REPORTED AS NON-DEFECTS rather than counted or papered over.** Widening
+`MAX_ELEMENT`, and weakening the vacuity guard, each survive ALONE because the parser is
+correct — the forward scan terminates at the element's own tag, so the bound never binds.
+They are guards against a parser regression, and mutation 1 proves they work: narrowing the
+parser fails exactly those two assertions. One self-reference was still worth removing —
+the size check compared against `MAX_ELEMENT` itself, so widening the constant moved both
+sides together; it is a literal now.
+
+**FIVE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, four of them frozen on the mic's slot:
+two in `accentAsText.test.ts` (one froze the mic's `recording ? "" : " rcta"` expression,
+the other its destructive variant — the half about COLOUR is kept and asserted where the
+destructive control now lives), one in `cannotSendOrSee.test.ts` (it required the guard on
+the mic BUTTON and a `!recording` clause that only made sense while one button did both
+jobs — now every control that calls `startRecording` must be gated), and TWO in
+`ownerUiBatch2.test.ts` that shared a stale END anchor: the mic's own `aria-label`. With it
+deleted `indexOf` returned -1 and `slice(start, -1)` ran to the END OF THE FILE, reporting
+3 `<Plus>` where the property is 1 — a FALSE finding on correct source, and the
+negative-index trap recorded at v2.99.78 and v2.106.56. Both now take one helper that
+THROWS on a missing anchor, so a slice can never silently become the whole file again. No
+schema change, no new dependency, no new env var. 5101 tests.
+
 ## v2.106.64 — Messages and Groups now partition the list, and Groups holds the calls (2026-08-01)
 
 Owner, three items from one message:

@@ -19,6 +19,7 @@ import { buildAudioOutputList } from "./audioOutputs";
 import { detectDeviceType } from "./deviceType";
 import { probeBrowserMedia, buildCapabilityReport } from "@shared/mediaCapabilities";
 import { readSnapshot, writeSnapshot, clearSnapshot, type RejoinSnapshot } from "./rejoinSnapshot";
+import { capPinInput, pinDigits } from "@/app/pinInput";
 import { isDndOn } from "@/app/dnd";
 import { notify } from "@/app/notifications";
 import { RINGTONE_NOTES, RINGTONE_LOOP_MS, RINGTONE_PEAK_GAIN, RINGTONE_WAVE } from "@shared/ringtone";
@@ -2607,7 +2608,25 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const deduped = Array.from(
       new Set(
         targets
-          .map(t => String(t).replace(/\D/g, "").slice(0, 6))
+          /* v2.106.65 — grouping is stripped, a non-digit is NOT folded away. The old
+             `replace(/\D/g, "").slice(0, 6)` made `7a7b7c7d7e7f` into `777777`, which the
+             `/^\d{6}$/` filter below then happily accepted — so a malformed target became
+             a real stranger's number and got rung, rather than being dropped. Accepting
+             the grouping the app itself renders (`777-777`) is deliberate and is what
+             `capPinInput` does at every typing site. */
+          /* v2.106.65 — REFUSE a malformed target rather than repair it.
+             `replace(/\D/g, "")` made `7a7b7c7d7e7f` into `777777`, which the `/^\d{6}$/`
+             filter below then happily accepted, so a malformed target silently became a
+             real stranger's number and got rung.
+             NOTE, because a first draft of this comment said the opposite: `capPinInput`
+             would NOT have helped — it also yields `777777`, keeping the digits and
+             dropping the letters. What makes it safe at a TYPING site is that the field is
+             rewritten as you type, so you always see what will be sent. There is no field
+             here, so that protection does not exist, and the only honest rule is to accept
+             a target that is ALREADY a number (grouping allowed, since the app renders
+             `777-777`) and drop anything else. */
+          .filter(t => /^[\d\s.-]+$/.test(String(t).trim()))
+          .map(t => pinDigits(String(t)))
           .filter(t => /^\d{6}$/.test(t) && t !== me.pin)
       )
     );
@@ -6254,7 +6273,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function addInputValue(): string {
     const inp = $("addInput") as HTMLInputElement | null;
-    return (inp?.value || "").replace(/\D/g, "").slice(0, 6);
+    return pinDigits(inp?.value ?? "");
   }
   function setAddInput(v: string) {
     const inp = $("addInput") as HTMLInputElement | null; if (inp) inp.value = v;
@@ -6270,9 +6289,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     setAddInput(addInputValue().slice(0, -1));
   }
   // Sanitize typed input (desktop) to digits + auto-invite when complete.
+  //
+  // v2.106.65 — this used `replace(/\D/g, "")`, which FOLDS a letter away rather than
+  // dropping it, and this is the one field in the app where that is more than cosmetic:
+  // the sixth digit AUTO-INVITES, so `7a7b7c7d7e7f` silently became `777777` and rang a
+  // stranger into a live call off a typo. `capPinInput` drops as typed, so the field
+  // always shows exactly what will be dialled. The markup's `maxlength` came down from 16
+  // to seven in the same change, so the browser's own cap agrees with ours instead of
+  // letting ten more characters in before our handler trims them.
   function onAddInputType() {
+    const inp = $("addInput") as HTMLInputElement | null;
+    if (inp) inp.value = capPinInput(inp.value);
     const v = addInputValue();
-    setAddInput(v);
     if (v.length === 6) void addToCall();
   }
   let addInviting = false; // re-entry guard (auto-fire + Enter + button can overlap)

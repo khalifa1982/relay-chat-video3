@@ -3217,6 +3217,29 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             >
               <Paperclip className="size-4 shrink-0" /> <span className="truncate">Attach file</span>
             </button>
+            {/* v2.106.64 — VOICE NOTE lives here now, beside the other things you can
+                attach, per the owner: *"on the attachment inside the chat on the plus
+                button add the voice note beside of the other features set as video
+                photos"*. It carries the SAME guards the mic button had, and they are not
+                decoration: `uploading` is what stops a tap opening the recording bar with
+                a LIVE microphone while all three of its controls are already disabled by
+                that same flag — a recording nobody could stop, discard or send
+                (v2.99.72). An unsupported recorder disables the row and SAYS why rather
+                than hiding it, so the absence is explained instead of looking like a
+                missing feature. */}
+            <button
+              type="button"
+              onClick={() => { setAttachMenuOpen(false); startRecording(); }}
+              disabled={!recorderSupported() || uploading}
+              title={
+                recorderSupported()
+                  ? "Record a voice note"
+                  : "Voice notes need a newer browser — use Attach file for an audio file instead"
+              }
+              className="flex items-center justify-center gap-2 rounded-xl bg-muted/60 px-3 py-3 text-sm font-semibold text-foreground active:scale-95 transition-transform disabled:opacity-50"
+            >
+              <Mic className="size-4 shrink-0" /> <span className="truncate">Voice note</span>
+            </button>
           </div>
         )}
         {expire !== null && (
@@ -3362,58 +3385,40 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               <Plus className={"size-5 transition-transform" + (attachMenuOpen ? " rotate-45" : "")} />
             </Button>
           </div>
-          {text.trim() || pendingUpload ? (
-            <Button
-              type="button"
-              onClick={send}
-              disabled={sendMutation.isPending || uploading}
-              size="icon"
-              /* Board 1d: the composer's primary is the ACCENT circle. The orange stays
-                 where the owner asked for it in v2.99.85 — on their own message BUBBLES —
-                 which is a different thing from the send button. `.rcta` carries the
-                 board's on-accent `#04211a`, so no hardcoded white. */
-              className="rcta h-11 w-11 rounded-full border-0"
-              aria-label="Send"
-            >
-              <Send className="size-4" />
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              onClick={recording ? stopRecording : startRecording}
-              variant={recording ? "destructive" : "default"}
-              size="icon"
-              /* Board 1d: the mic is the composer's ACCENT circle, and it swaps to Send
-                 when there is text — so the two occupy the SAME position. This was the old
-                 FIXED cyan (`#3FE0C5`/`#6EE7FF`) while Send beside it uses `.rcta`, so the
-                 hue visibly JUMPED the moment you typed a character: one control on the
-                 cycling accent, its twin on a literal the accent replaced in v2.106.7.
-                 `.rcta` carries the board's on-accent `#04211a`, which stays legible across
-                 all twelve hues where white fails on the yellow and lime entries.
-                 While RECORDING the button is `destructive`, so it must NOT also carry the
-                 accent — a red stop control tinted with the accent reads as neither. */
-              className={"h-11 w-11 rounded-full border-0" + (recording ? "" : " rcta")}
-              aria-label={recording ? "Stop" : "Record"}
-              /* `|| uploading`, matching the gate the text field one row up already has.
-                 Without it, tapping the mic while a photo or file was still uploading
-                 opened the recording bar with a LIVE microphone and all three of its
-                 controls already disabled by that same `uploading` flag — a recording
-                 nobody could stop, discard or send, entered from the button that is the
-                 composer's primary while the field is empty. Stopping is still allowed
-                 once a recording is live, because `recording` is the state that owns the
-                 bar and the upload it would wait on is a different one. */
-              disabled={!recorderSupported() || (!recording && uploading)}
-              title={
-                recorderSupported()
-                  ? recording
-                    ? "Stop recording"
-                    : "Record a voice note"
-                  : "Voice notes need a newer browser \u2014 use the paperclip to attach an audio file instead"
-              }
-            >
-              <Mic className="size-5" />
-            </Button>
-          )}
+          {/* v2.106.64 — SEND IS PERMANENT, and the mic is gone from this position.
+              Owner: *"in place of the voice icon in the bar put send button as icon … and
+              inside the plus it will have everything that you already added, including the
+              voice note."*
+
+              What the swap cost: the composer's primary control CHANGED MEANING on the
+              first keystroke, so the button you were aiming at became a different action
+              under your thumb — and it was the reason recording had to be reachable from
+              a position that is really Send's. Now the position means one thing.
+
+              The disabled state is honest rather than a trap: it enables the instant there
+              is anything to send, so it is never a control that always refuses (the
+              v2.103.3 rule) — it is Send, greyed because there is nothing to send yet.
+
+              The RECORDING branch that used to live here was already unreachable: while
+              `recording` the whole row is replaced by `RecordingBar` (v2.99.72), so its
+              `recording ? stopRecording` arm could never render. Removing it removes dead
+              code rather than a capability. */}
+          <Button
+            type="button"
+            onClick={send}
+            disabled={(!text.trim() && !pendingUpload) || sendMutation.isPending || uploading}
+            size="icon"
+            /* Board 1d: the composer's primary is the ACCENT circle. The orange stays
+               where the owner asked for it in v2.99.85 — on their own message BUBBLES —
+               which is a different thing from the send button. `.rcta` carries the board's
+               on-accent `#04211a`, which stays legible across all twelve palette hues
+               where white fails on the yellow and lime entries. */
+            className="rcta h-11 w-11 rounded-full border-0 disabled:opacity-50"
+            aria-label="Send"
+            title="Send"
+          >
+            <Send className="size-4" />
+          </Button>
         </div>
         )}
       </div>
@@ -4881,7 +4886,16 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
     onSuccess: (res) => {
       utils.messages.threads.invalidate();
       resetAll();
-      setLocation(`${basePath}?c=${res.conversationId}`);
+      /* v2.106.64 — a NEW GROUP always lands on the Groups tab, never on `basePath`.
+         `useTabBasePath` exists so opening a conversation does not change the active tab
+         under a tap that only meant "open this" — and that rule still holds for every
+         other navigation here. This is the one case it must NOT: the sheet's Direct/Group
+         toggle is reachable from the Messages tab, so creating a group there used to land
+         on `/app/messages?c=<groupId>` — a group conversation on a tab whose list, since
+         this release, cannot contain it. The user would close it and find nothing, with
+         the group only reachable by switching tabs. The destination genuinely IS a
+         groups-tab object, so the tab moves with it. */
+      setLocation(`/app/groups?c=${res.conversationId}`);
     },
   });
   /** Add by the typed number, or by a number a suggestion supplied. */

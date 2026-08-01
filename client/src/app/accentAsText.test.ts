@@ -161,15 +161,26 @@ describe("the accent is never the raw variable in a text position", () => {
 describe("the two halves of the rule are applied to the right surfaces", () => {
   const MSG = codeOnly(read("client/src/pages/app/Messages.tsx"));
 
-  it("the composer's mic wears the accent CTA, so it matches the Send it swaps with", () => {
-    /* They occupy the same position and swap on the first keystroke, so they must be the
-       same material. Measured: 10.08:1 light, 9.85:1 dark. */
-    expect(MSG).toMatch(/className=\{"h-11 w-11 rounded-full border-0" \+ \(recording \? "" : " rcta"\)\}/);
+  it("the composer's primary control wears the accent CTA", () => {
+    /* v2.106.64 — this used to pin the MIC's `recording ? "" : " rcta"` expression,
+       because the mic and Send swapped in one position. The owner asked for that swap to
+       go ("in place of the voice icon in the bar put send button as icon"), so the pin was
+       freezing the arrangement rather than the rule.
+
+       The rule is that the composer's primary is the accent CTA — measured 10.08:1 light,
+       9.85:1 dark — and it is now Send, permanently. */
+    expect(MSG).toMatch(/className="rcta h-11 w-11 rounded-full border-0 disabled:opacity-50"/);
+    expect(MSG).toMatch(/aria-label="Send"/);
   });
 
-  it("…but NOT while recording, when it is the destructive stop", () => {
-    // A red stop control tinted with the accent reads as neither.
-    expect(MSG).toMatch(/variant=\{recording \? "destructive" : "default"\}/);
+  it("a DESTRUCTIVE control never also carries the accent", () => {
+    /* The other half of the old pair, kept because it is the part that was about colour
+       rather than about layout: a red stop tinted with the accent reads as neither. The
+       destructive control now lives in `RecordingBar` (the composer row is replaced while
+       recording), so the rule is asserted where it applies — nothing in this file may put
+       `rcta` on a destructive variant. */
+    expect(MSG).not.toMatch(/variant="destructive"[^>]*rcta/);
+    expect(MSG).not.toMatch(/rcta[^>]*variant="destructive"/);
   });
 
   it("an accent-TINTED chip uses `.rchip-accent`, which alone clears AA on a tint", () => {

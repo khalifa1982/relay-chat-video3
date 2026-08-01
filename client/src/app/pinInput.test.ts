@@ -90,6 +90,28 @@ describe("capPinInput — the cap", () => {
   });
 });
 
+describe("the composer's Send is permanent (v2.106.65)", () => {
+  /* Owner: *"in place of the voice icon in the bar put send button as icon"*. Nothing
+     pinned it, so a mutation restoring the mic/Send SWAP survived — the composer would
+     have gone back to a primary control that changes meaning on the first keystroke. */
+  const MSG = codeOnly(read("client/src/pages/app/Messages.tsx"));
+
+  it("Send renders unconditionally and is DISABLED when there is nothing to send", () => {
+    expect(MSG).toMatch(
+      /disabled=\{\(!text\.trim\(\) && !pendingUpload\) \|\| sendMutation\.isPending \|\| uploading\}/,
+    );
+    // …never gated on having something to send, which is what made the mic occupy the slot.
+    expect(MSG).not.toMatch(/\{text\.trim\(\) \|\| pendingUpload \? \(/);
+  });
+
+  it("the mic no longer occupies the composer's primary slot", () => {
+    // It lives in the + menu now. The `Mic` import stays used — RecordingBar's resume
+    // button renders it — so its mere presence proves nothing; the SWAP is what must go.
+    expect(MSG).not.toMatch(/aria-label=\{recording \? "Stop" : "Record"\}/);
+    expect(MSG).toMatch(/startRecording\(\); \}\}[\s\S]{0,400}Voice note/);
+  });
+});
+
 describe("every 6-digit PIN input in the app is capped", () => {
   /* THE SWEEP, which is the point rather than the four fixes. The owner asked for this
      "anywhere in the system", and four hand-edits is how the fifth input forgets — so this
@@ -107,27 +129,89 @@ describe("every 6-digit PIN input in the app is capped", () => {
     "client/src/pages/app/Admin.tsx",
     "client/src/pages/app/Contacts.tsx",
     "client/src/pages/app/GroupCallScreen.tsx",
-    "client/src/pages/app/Dialer.tsx",
+    // Dialer.tsx is deliberately ABSENT (v2.106.65): it has no numeric text input at all —
+    // it is a keypad, and a keypad is capped structurally because there is no field to
+    // paste into. Listing it made the entry inert while reading as coverage.
   ];
 
-  /** The window around one `<input …>`, found by walking back to its own opening tag. */
+  /**
+   * ONE ELEMENT, bounded by its own tag.
+   *
+   * v2.106.65 — THE FIRST VERSION OF THIS SWEEP WAS LARGELY VACUOUS, and the measured
+   * numbers are the finding. It searched back for `<input` (lower case) from an
+   * `inputMode="numeric"` hit and sliced forward to the next `/>`, which failed two ways:
+   *
+   *   • Contacts, GroupCallScreen and Dialer yielded ZERO elements — three of the six
+   *     files it names, and two of them the comment explicitly claimed to cover — because
+   *     they use shadcn's `<Input>` component, capital I.
+   *   • In Profile the slices ran to 46,118 and 46,803 characters: most of the file, not
+   *     an element. A `capPinInput(` ANYWHERE in 46KB satisfied the is-it-capped check, so
+   *     a genuinely uncapped box in that file would have passed.
+   *
+   * It now scans FORWARD from each opening tag and stops at the `/>` that closes THAT tag,
+   * tracking `{}` depth so a JSX expression containing `/>` cannot end it early, and it
+   * refuses an implausibly long span rather than silently searching a whole file.
+   */
+  const MAX_ELEMENT = 3000;
+
   function inputsIn(src: string): string[] {
     const out: string[] = [];
-    let i = src.indexOf('inputMode="numeric"');
-    while (i > -1) {
-      const open = src.lastIndexOf("<input", i);
-      const close = src.indexOf("/>", i);
-      if (open > -1 && close > -1) out.push(src.slice(open, close + 2));
-      i = src.indexOf('inputMode="numeric"', i + 1);
+    const open = /<(?:input|Input)\b/g;
+    let m: RegExpExecArray | null;
+    while ((m = open.exec(src))) {
+      let depth = 0;
+      let end = -1;
+      for (let i = m.index; i < Math.min(src.length, m.index + MAX_ELEMENT); i++) {
+        const ch = src[i];
+        if (ch === "{") depth++;
+        else if (ch === "}") depth--;
+        else if (depth === 0 && ch === "/" && src[i + 1] === ">") {
+          end = i + 2;
+          break;
+        } else if (depth === 0 && ch === ">" && src[i - 1] !== "=") {
+          end = i + 1; // a plain-HTML `<input …>` that does not self-close
+          break;
+        }
+      }
+      if (end > -1) out.push(src.slice(m.index, end));
     }
     return out;
   }
 
-  const SIX_DIGIT = /777777|6-digit|six digits|e\.g\. \d{6}|\{r\.number\}/i;
+  /* Widened v2.106.65: GroupCallScreen says "(6 digits)" — a bare numeral the old
+     alternatives (`6-digit` hyphenated, `six digits` spelled out) could not match, so the
+     one PIN box in that file was skipped even once the parser started finding it. */
+  const SIX_DIGIT =
+    /777777|6[- ]digit|six digits|\(6 digits\)|e\.g\. \d{6}|\{r\.number\}|RELAY number/i;
 
-  it("finds the inputs at all — a vacuous sweep passes for the wrong reason", () => {
-    const total = FILES.reduce((n, f) => n + inputsIn(read(f)).length, 0);
-    expect(total).toBeGreaterThanOrEqual(6);
+  it("the sweep really parses ELEMENTS, in every file it names", () => {
+    /* The old guard was `total >= 6` and passed on 8 — of which four were 46KB slabs and
+       three whole files contributed nothing at all. A bare count cannot tell those apart,
+       so this asserts the two properties that make the sweep mean anything: every listed
+       file yields at least one element, and no "element" is implausibly large. */
+    for (const f of FILES) {
+      const els = inputsIn(read(f));
+      expect(els.length, `${f} yielded no <input> — is the sweep still looking at it?`)
+        .toBeGreaterThan(0);
+      for (const el of els) {
+        /* A LITERAL bound, deliberately not `MAX_ELEMENT`. Comparing the parser's own
+           limit against itself is self-referential: widening the constant moved both
+           sides together and the assertion survived a mutation that let a slice be the
+           whole file. A real `<input>` is a few hundred characters. */
+        expect(el.length, `${f}: a ${el.length}-char slice is not one element`)
+          .toBeLessThan(2000);
+      }
+    }
+  });
+
+  it("…and it finds a PIN box in every file that has one", () => {
+    // The parser can be right while the PREDICATE misses: GroupCallScreen says
+    // "(6 digits)", which neither `6-digit` nor `six digits` matched, so its one PIN box
+    // was skipped even after the parser started finding the element.
+    for (const f of FILES) {
+      const six = inputsIn(read(f)).filter((el) => SIX_DIGIT.test(el) && !/maxLength=\{4\}/.test(el));
+      expect(six.length, `${f}: no input recognised as a 6-digit PIN box`).toBeGreaterThan(0);
+    }
   });
 
   it("no PIN box accepts a seventh digit", () => {
@@ -138,10 +222,12 @@ describe("every 6-digit PIN input in the app is capped", () => {
         // field with its own maxLength={4}, and folding it in here would be a false finding.
         if (!SIX_DIGIT.test(el)) continue;
         if (/maxLength=\{4\}/.test(el)) continue;
+        /* v2.106.65 — `.slice(0, 6)` is no longer an accepted spelling. It bounds the
+           LENGTH and says nothing about the fold: every site that used it also used
+           `replace(/\D/g, "")`, which reads `7a7b7c7d7e7f` as `777777`. One module now,
+           so the rule cannot be satisfied by a shape that carries the hazard. */
         const capped =
-          /capPinInput\(/.test(el) ||
-          /\.slice\(0,\s*6\)/.test(el) ||
-          /maxLength=\{PIN_INPUT_MAXLENGTH\}/.test(el);
+          /capPinInput\(/.test(el) && /maxLength=\{PIN_INPUT_MAXLENGTH\}/.test(el);
         if (!capped) offenders.push(`${f} :: ${el.slice(0, 120).replace(/\s+/g, " ")}`);
       }
     }
@@ -207,6 +293,82 @@ describe("every 6-digit PIN input in the app is capped", () => {
     expect(profile).toMatch(/\/\^\\d\{6\}\$\/\.test\(wantedDigits\)/);
     const admin = codeOnly(read("client/src/pages/app/Admin.tsx"));
     expect(admin).toMatch(/pinDigits\(confirmNum\) !== r\.number/);
+  });
+
+  it("NO PIN path folds a non-digit away — swept, not enumerated", () => {
+    /* v2.106.65 — the old version named THREE files, so the three sites it did not name
+       kept `replace(/\D/g, "")`: Contacts' add-by-number, the group-call picker, and the
+       in-call add-person field — where the sixth digit AUTO-INVITES, so a folded typo rang
+       a stranger into a live call. Swept across every file that handles a RELAY number,
+       which is what makes "anywhere in the system" true for the next one. */
+    const FOLDING = [...FILES, "client/src/lib/relayClient.ts"];
+    const offenders: string[] = [];
+    for (const f of FOLDING) {
+      const src = codeOnly(read(f));
+      /* Scoped to a SIX-digit fold, which is what says "this is a RELAY number".
+         `replace(/\D/g, "").slice(0, 4)` is the 4-digit app passcode and the group-lock
+         code — different fields with their own rules, and flagging them would be a false
+         finding of the kind that gets a guard switched off. */
+      for (const m of src.match(/replace\(\/\\D\/g[^\n]*/g) ?? []) {
+        if (/slice\(0,\s*6\)/.test(m)) offenders.push(`${f} :: ${m.trim().slice(0, 90)}`);
+      }
+      if (/replace\(\/\[\\s\\-\.\]\/g/.test(src)) offenders.push(`${f} (separator strip)`);
+    }
+    expect(offenders, "use pinDigits / capPinInput from client/src/app/pinInput.ts").toEqual([]);
+  });
+
+  it("a programmatic dial REFUSES a malformed target rather than repairing it", () => {
+    /* `programmaticGroupDial` takes a caller-supplied list, so there is no field being
+       rewritten as you type and therefore none of the protection a typing site has. The
+       old `replace(/\D/g, "").slice(0, 6)` turned `7a7b7c7d7e7f` into `777777`, which the
+       `/^\d{6}$/` filter below it then accepted — a malformed target silently becoming a
+       real stranger's number and getting rung.
+
+       The RULE is driven here rather than pinned, because "does junk reach the dial" is
+       exactly what reading the source cannot answer. This re-declares the filter chain,
+       which is honest only while the source pin below holds. */
+    const me = "999999";
+    const clean = (targets: string[]) =>
+      Array.from(
+        new Set(
+          targets
+            .filter((t) => /^[\d\s.-]+$/.test(String(t).trim()))
+            .map((t) => pinDigits(String(t)))
+            .filter((t) => /^\d{6}$/.test(t) && t !== me),
+        ),
+      );
+    expect(clean(["7a7b7c7d7e7f"]), "a folded typo must not become a number").toEqual([]);
+    expect(clean(["<script>804119</script>"])).toEqual([]);
+    expect(clean(["804119"])).toEqual(["804119"]);
+    expect(clean(["804-119"]), "the app's own grouping still works").toEqual(["804119"]);
+    expect(clean([" 804119 "])).toEqual(["804119"]);
+    expect(clean([me]), "never yourself").toEqual([]);
+    expect(clean(["80411"]), "short is refused").toEqual([]);
+
+    // …and the source really is that chain, so the re-declaration above is not a fiction.
+    const src = codeOnly(read("client/src/lib/relayClient.ts"));
+    expect(src).toMatch(/\.filter\(t => \/\^\[\\d\\s\.-\]\+\$\/\.test\(String\(t\)\.trim\(\)\)\)/);
+    expect(src).not.toMatch(/replace\(\/\\D\/g, ""\)\.slice\(0, 6\)/);
+  });
+
+  it("the in-call add-person field is capped in the markup too", () => {
+    // It is raw DOM in a template literal, so no JSX sweep can reach it — and it was the
+    // ONE box whose browser cap genuinely exceeded six digits, at `maxlength="16"`.
+    const assets = read("client/src/lib/relayAssets.ts");
+    expect(assets).toMatch(/<input id="addInput" maxlength="7"/);
+    expect(assets).not.toMatch(/id="addInput"[^>]*maxlength="(?!7")/);
+  });
+
+  it("being 'capped' requires BOTH the module and the browser cap, never either alone", () => {
+    /* Asserted on this test file's OWN source, because on today's code every site already
+       satisfies both — so relaxing the rule to an OR changes nothing observable and the
+       mutation survived. It is about the site somebody adds NEXT: `.slice(0, 6)` bounds
+       the LENGTH and says nothing about the fold, and every site that used it also folded. */
+    const self = read("client/src/app/pinInput.test.ts");
+    expect(self).toMatch(
+      /const capped =\s*\n?\s*\/capPinInput\\\(\/\.test\(el\) && \/maxLength=/,
+    );
+    expect(self).not.toMatch(/const capped =[\s\S]{0,160}\|\|/);
   });
 
   it("the duplicated separator strip is gone from the submit gates", () => {
