@@ -1862,6 +1862,7 @@ export const v2MessagesRouter = router({
            story's own text excerpt and a one-line row has no room for it. */
         lastMessageStatusReply: b.lastMessageStatusReply,
         lastMessageMine: b.lastMessageMine,
+        lastMessageStatus: b.lastMessageStatus,
         unreadCount: b.unreadCount,
       };
     });

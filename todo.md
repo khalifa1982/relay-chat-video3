@@ -11317,10 +11317,54 @@ acting** rather than taken from the audit's description of it.
       use the badge's hex, and the rule asserts the badge really does own it and really
       does render on these rows — without that pair it would be a claim about a collision
       that might not exist.
-- [x] **5 of 5 tripwires verified by MUTATION** off a confirmed-GREEN baseline from
+### The row's unread count and its read receipt, both read off 1c's markup
+
+- [x] **THE UNREAD COUNT IS THE BOARD'S PILL.** 1c's row spells it
+      `min-width:17px;height:17px;border-radius:10px;background:var(--rb);color:#04211a;
+      font-size:10px;font-weight:700;padding:0 5px`; the app rendered "3 new" as a text
+      run. **THE COMMENT THAT CHOSE THAT WAS REASONING ABOUT A DIFFERENT ELEMENT** — it
+      read *"colour + weight, not a heavy pill (the reference's '2 New Chats'
+      treatment)"*, and "2 New Chats" is a SECTION heading elsewhere on the board, not
+      this badge. Same class as v2.106.62, where a value was described from a screenshot
+      rather than read from the markup.
+- [x] It is also NARROWER, which is the part that bites: line 2 is `flex-wrap`, so
+      "99+ new" (~55px, `shrink-0`) beside a 6-digit PIN could push itself onto a third
+      line on a narrow phone. A 17px puck cannot.
+- [x] `text-primary-foreground`, never the literal — v2.106.4 repointed that token at the
+      board's `#04211a` inside `.dark.relay-v2` for exactly this pairing, so light keeps
+      its own measured value instead of near-black on a pale accent.
+- [x] **THE ROW HAD NO READ RECEIPT.** Board 1c puts a ✓/✓✓ before the preview whenever
+      the newest message is mine; the conversation showed one and its own row did not, so
+      *"did that send?"* needed opening the thread to answer.
+- [x] **MINE-ONLY, ENFORCED SERVER-SIDE**: `lastMessageStatus` is null unless `mine`,
+      because a receipt is a statement about MY message and rendering one for a peer's
+      inverts what ✓✓ means. Deciding it in the component would leave the field on the
+      wire for the next reader to get wrong.
+- [x] **IT COSTS NO EXTRA QUERY**, on the reasoning #115 recorded and then had to correct:
+      the groupwise-max aggregate selects two integer columns and is a separate query,
+      untouched; this row comes from a bare `.select()` over a few dozen PRIMARY KEYS, so
+      `status` arrives beside the `meta` and `senderIdentityId` the adjacent lines read.
+- [x] **`failed` RENDERS NO TICK AT ALL** — a failed send has reached nobody, and the
+      single ✓ would say it had. Read is the accent, delivered and sent are muted, so ✓✓
+      is not one state twice (the v2.99.74 defect, where `delivered` existed in the schema
+      and nothing wrote it).
+- [x] **THE ACCENT IS SAFE HERE despite meaning UNREAD in the same row**, and structurally
+      rather than by luck: unread counts messages that are NOT mine, so a thread whose
+      newest message is mine has nothing to count. The one co-occurrence is a hand-marked
+      unread, where the pill is a deliberate act and a read tick still says something else.
+- [x] **THREE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, two of which froze the "not a
+      pill" decision the board contradicts (one by the count's exact class string, one by
+      the literal `{n} new`), and one of which banned EVERY fixed height in the row when
+      the defect was a hard-coded 16px on a text LINE — a fixed-size CENTRED puck cannot
+      clip, so the rule now allows one and still catches a line-height regression.
+- [x] **TWO OF MY OWN ASSERTIONS WERE WRONG ABOUT THE CODE**, each caught by failing on
+      correct source: a fixed 1600-character slice ran past the builder into code that
+      legitimately awaits (the fixed-slice fragility, again — now bounded by the entry's
+      own end), and a 120-character window was too short to reach the tick's className.
+- [x] **14 of 14 tripwires verified by MUTATION** off a confirmed-GREEN baseline from
       byte-exact backups; sources byte-identical afterwards.
-- [x] `pnpm verify` green: 285 files, 5104 tests. No schema change, no new dependency, no
-      new env var.
+- [x] `pnpm verify` green: 285 files, 5108 tests. One additive nullable wire field, no
+      schema change, no new dependency, no new env var.
 
 ## v2.106.66 — a group can be born with its photo, and the green guard was self-allowing (2026-08-01)
 

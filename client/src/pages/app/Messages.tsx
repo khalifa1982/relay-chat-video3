@@ -989,18 +989,87 @@ export default function MessagesPage({
                                     </span>
                                   </span>
                                 ) : (
-                                  <span
-                                    dir="auto"
-                                    className={"min-w-0 flex-1 truncate " + (unread ? "text-foreground/90" : "")}
-                                  >
-                                    {preview}
-                                  </span>
+                                  <>
+                                    {/* v2.106.67 — board 1c puts a ✓/✓✓ BEFORE the preview
+                                        whenever the newest message is mine, and this row had
+                                        none: the conversation showed a receipt and its own
+                                        row did not, so "did that send?" needed opening the
+                                        thread to answer.
+
+                                        MINE ONLY, enforced server-side (`lastMessageStatus`
+                                        is null unless `mine`), because a receipt is a
+                                        statement about MY message — rendering one for a
+                                        peer's inverts what ✓✓ means.
+
+                                        THE ACCENT IS SAFE HERE despite meaning UNREAD in this
+                                        same row, and the reason is structural rather than
+                                        lucky: unread counts messages that are NOT mine, so a
+                                        thread whose newest message is mine has nothing to
+                                        count. The one way they co-occur is a hand-marked
+                                        unread (v2.103.0), where the pill is a deliberate act
+                                        and a read tick beside it still says something
+                                        different and true.
+
+                                        `failed` renders NOTHING rather than a tick: a failed
+                                        send has not been delivered to anybody, and the single
+                                        ✓ would say it had. */}
+                                    {t.lastMessageStatus === "read" ? (
+                                      <CheckCheck
+                                        aria-label="Read"
+                                        className="size-3.5 shrink-0 text-primary"
+                                        strokeWidth={2.6}
+                                      />
+                                    ) : t.lastMessageStatus === "delivered" ? (
+                                      <CheckCheck
+                                        aria-label="Delivered"
+                                        className="size-3.5 shrink-0 text-muted-foreground"
+                                        strokeWidth={2.6}
+                                      />
+                                    ) : t.lastMessageStatus === "sent" ? (
+                                      <Check
+                                        aria-label="Sent"
+                                        className="size-3.5 shrink-0 text-muted-foreground"
+                                        strokeWidth={2.6}
+                                      />
+                                    ) : null}
+                                    <span
+                                      dir="auto"
+                                      className={"min-w-0 flex-1 truncate " + (unread ? "text-foreground/90" : "")}
+                                    >
+                                      {preview}
+                                    </span>
+                                  </>
                                 )}
                                 {unread && (
-                                  /* Colour + weight, not a heavy pill (the reference's
-                                     "2 New Chats" treatment). */
-                                  <span className="shrink-0 font-semibold text-[13px] text-primary">
-                                    {t.unreadCount > 99 ? "99+" : t.unreadCount} new
+                                  /* v2.106.67 — THE BOARD'S PILL, read off 1c's own row markup:
+                                     `min-width:17px;height:17px;border-radius:10px;
+                                      background:var(--rb);color:#04211a;font-size:10px;
+                                      font-weight:700;padding:0 5px`.
+
+                                     THE COMMENT THIS REPLACES WAS REASONING ABOUT A DIFFERENT
+                                     ELEMENT: it read "colour + weight, not a heavy pill (the
+                                     reference's '2 New Chats' treatment)" — but "2 New Chats" is
+                                     a SECTION heading elsewhere on the board, and 1c's ROW badge
+                                     is exactly the pill it declined to build. Same class as
+                                     v2.106.62, where a value was described from a screenshot
+                                     rather than read from the markup.
+
+                                     IT IS ALSO NARROWER, WHICH IS THE PART THAT BITES: this row
+                                     is `flex-wrap`, so "99+ new" (~55px, shrink-0) beside a
+                                     6-digit PIN could push itself onto a third line on a narrow
+                                     phone. A 17px puck cannot.
+
+                                     `text-primary-foreground`, never the literal — v2.106.4
+                                     repointed that token at the board's `#04211a` inside
+                                     `.dark.relay-v2` for precisely this pairing, so light keeps
+                                     its own measured value instead of near-black on a pale
+                                     accent. `aria-label` because the pill drops the word
+                                     "new", which a screen reader still needs. */
+                                  <span
+                                    aria-label={`${t.unreadCount} unread`}
+                                    className="grid h-[17px] min-w-[17px] shrink-0 place-items-center rounded-[10px] bg-primary px-[5px] text-[10px] font-bold tabular-nums text-primary-foreground"
+                                  >
+                                    {t.unreadCount > 99 ? "99+" : t.unreadCount}
                                   </span>
                                 )}
                                 {/* Hand-marked unread (v2.103.0): a DOT, not a count —

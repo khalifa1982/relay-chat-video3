@@ -227,3 +227,66 @@ describe("v2.106.66 — the strip is chrome, and the tray does not reuse the bad
     expect(left).not.toMatch(/color: "var\(--rb\)"/);
   });
 });
+
+describe("v2.106.67 — the row carries a read receipt, and the count is the board's pill", () => {
+  const DB = read("server/v2db.ts");
+  const ROUTERS = read("server/v2routers.ts");
+
+  it("the receipt is MINE-ONLY, and that is enforced server-side", () => {
+    /* A ✓✓ is a statement about MY message. Rendering one for a peer's inverts what it
+       means, and deciding that in the component would leave the field on the wire for any
+       other reader to get wrong — so the projection nulls it unless `mine`. */
+    expect(DB).toMatch(
+      /lastMessageStatus: latest\?\.mine === true \? \(latest\?\.status \?\? null\) : null,/,
+    );
+    expect(ROUTERS).toMatch(/lastMessageStatus: b\.lastMessageStatus,/);
+    // Threaded explicitly, like every other field in that projection — a new column must
+    // not reach the browser without a decision.
+    expect(ROUTERS).not.toMatch(/\.\.\.b,/);
+  });
+
+  it("it costs no extra query — the row it reads is already loaded", () => {
+    /* #115's deferral note claimed adding a field here "touches the groupwise-max query
+       every client polls" and was wrong; the correction is recorded in v2db. The aggregate
+       selects two integer columns and is a separate query; this row comes from a bare
+       `.select()` over a few dozen primary keys, so `status` arrives with the `meta` and
+       `senderIdentityId` the adjacent lines already read. */
+    /* BOUNDED BY THE ENTRY'S OWN END, not a character count — a fixed 1600 ran past the
+       builder into code that legitimately awaits, and the "no extra query" assertion
+       failed on correct source. The fixed-slice fragility, again. */
+    const bStart = DB.indexOf("latestMessageByConvo: new Map(");
+    expect(bStart).toBeGreaterThan(-1);
+    const builder = DB.slice(bStart, DB.indexOf("\n    ),", bStart));
+    expect(builder.length, "the builder slice collapsed").toBeGreaterThan(400);
+    expect(builder).toMatch(/status: m\.status \?\? null,/);
+    expect(builder).toMatch(/mine: m\.senderIdentityId === identityId,/);
+    // No second query was introduced for it.
+    expect(builder).not.toMatch(/await /);
+  });
+
+  it("every status renders a distinct thing, and `failed` renders none", () => {
+    /* A failed send has reached nobody, so a single ✓ would say it had — the one status
+       that must produce no tick at all. */
+    const at = MESSAGES.indexOf('t.lastMessageStatus === "read"');
+    expect(at, "the receipt is gone").toBeGreaterThan(-1);
+    const block = MESSAGES.slice(at, at + 1200);
+    expect(block).toMatch(/CheckCheck[\s\S]{0,240}text-primary/); // read
+    expect(block).toMatch(/t\.lastMessageStatus === "delivered"/);
+    expect(block).toMatch(/t\.lastMessageStatus === "sent"/);
+    expect(block, "failed must not render a tick").not.toMatch(/"failed"/);
+    // It ends in an explicit null rather than falling through to a default tick.
+    expect(block).toMatch(/\) : null\}/);
+  });
+
+  it("read and delivered are told apart, so ✓✓ is not one state twice", () => {
+    // v2.99.74's whole point: `delivered` existed in the schema and nothing wrote it, so
+    // sent and delivered rendered identically. Two ✓✓ that look the same is that again.
+    const at = MESSAGES.indexOf('t.lastMessageStatus === "read"');
+    const block = MESSAGES.slice(at, at + 1200);
+    const readArm = block.slice(0, block.indexOf('"delivered"'));
+    const delArm = block.slice(block.indexOf('"delivered"'), block.indexOf('"sent"'));
+    expect(readArm).toMatch(/text-primary/);
+    expect(delArm).toMatch(/text-muted-foreground/);
+    expect(delArm, "delivered must not wear the read colour").not.toMatch(/text-primary(?!-)/);
+  });
+});

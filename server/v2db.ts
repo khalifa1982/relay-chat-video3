@@ -4413,6 +4413,18 @@ export interface ThreadSummary {
    * answerable, and correct because a story reply is always a DM to the story's author.
    */
   lastMessageMine: boolean;
+  /**
+   * v2.106.67 — board 1c draws a ✓✓ before the preview whenever the thread's newest
+   * message is MINE. `null` for everything else, so a row can never claim a receipt for
+   * somebody else's message.
+   *
+   * FREE, on the same reasoning #115 recorded and then had to correct: the groupwise-max
+   * aggregate (`MAX(id) GROUP BY conversationId`) selects two integer columns and is a
+   * separate query, untouched. The row this reads comes from a bare `.select()` over at
+   * most a few dozen PRIMARY KEYS, so `status` is already loaded beside the `meta` and
+   * `senderIdentityId` the lines above it read.
+   */
+  lastMessageStatus: string | null;
 }
 
 /**
@@ -4465,6 +4477,8 @@ export function composeThreadSummaries(input: {
       /** #115 — derived by the caller from the `meta` it already holds. */
       statusReply?: boolean;
       mine?: boolean;
+      /** v2.106.67 — the row's own `status` column, for board 1c's ✓✓ on the preview line. */
+      status?: string | null;
     } | null
   >;
 }): ThreadSummary[] {
@@ -4510,6 +4524,9 @@ export function composeThreadSummaries(input: {
       // with no preview can never claim to be a story reply.
       lastMessageStatusReply: latest?.statusReply === true,
       lastMessageMine: latest?.mine === true,
+      // NULL unless the newest message is MINE — a receipt is a statement about my own
+      // message, and rendering one for a peer's would invert what ✓✓ means.
+      lastMessageStatus: latest?.mine === true ? (latest?.status ?? null) : null,
       // Null by default and set only in the group branch, so a DM can never carry a
       // group's id by accident.
       groupNumber: null as string | null,
@@ -4800,6 +4817,7 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
                  `m.meta` is already loaded — the line directly above reads it. */
               statusReply: isStatusReply(m.meta),
               mine: m.senderIdentityId === identityId,
+              status: m.status ?? null,
             }
           : null,
       ])
