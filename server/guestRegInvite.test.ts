@@ -33,6 +33,7 @@ import fs from "fs";
 import path from "path";
 import { activeRegInvite, REG_INVITE_TTL_MS } from "./v2db";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen } from "./testing/copyOnScreen";
 
 const read = (p: string) => fs.readFileSync(path.join(process.cwd(), p), "utf8");
 
@@ -390,7 +391,7 @@ describe("the suggestion is prefilled, never auto-sent", () => {
 
 describe("both surfaces tell the truth about how far the button reaches", () => {
   it("the admin panel says it creates no account and sends nothing", () => {
-    expect(ADMIN_UI).toMatch(/doesn't create\s*\n?\s*an account or send anything/);
+    expect(copyOnScreen(ADMIN_UI, "this doesn't create an account or send anything")).toBe(true);
   });
 
   it("the guest's card says the address is theirs to change", () => {

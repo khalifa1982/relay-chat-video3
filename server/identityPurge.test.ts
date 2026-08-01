@@ -22,6 +22,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen, keysForEnglish } from "./testing/copyOnScreen";
 import {
   GUEST_PURGE_BATCH,
   GUEST_PURGE_DAYS,
@@ -712,18 +713,23 @@ describe("the admin delete", () => {
     expect(ADMIN_PAGE, "the confirmation still DECIDES, never a constant").not.toMatch(
       /disabled=\{(?:false|!true)\b/,
     );
-    expect(ADMIN_PAGE).toMatch(/Delete permanently/);
+    expect(copyOnScreen(ADMIN_PAGE, "Delete permanently")).toBe(true);
   });
 
   it("the panel says what survives, so 'everything' is not a promise it cannot keep", () => {
-    expect(ADMIN_PAGE).toMatch(/Group chats survive for their other members/);
-    expect(ADMIN_PAGE).toMatch(/retired for good/);
-    expect(ADMIN_PAGE).toMatch(/stay in storage and stay locked shut/);
+    expect(copyOnScreen(ADMIN_PAGE, "Group chats survive for their other members")).toBe(true);
+    /* "retired for good" is rendered through `tn`, because the 6-digit number inside it
+       must be a bidi-ISOLATED node. `copyOnScreen`'s TCALL knows `t(`/`tr(` and NOT
+       `tn(`, so this asks the same question the long way round. */
+    const retired = keysForEnglish("retired for good");
+    expect(retired.length, "the sentence is gone from the dictionary too").toBeGreaterThan(0);
+    expect(retired.some((k) => ADMIN_PAGE.includes(`tn("${k}"`))).toBe(true);
+    expect(copyOnScreen(ADMIN_PAGE, "stay in storage and stay locked shut")).toBe(true);
     // The avatar line is the honest one: a profile photo has always been readable by
     // any signed-in RELAY user, and the purge neither widens that nor erases it,
     // because this codebase has no storage-delete path.
-    expect(ADMIN_PAGE).toMatch(/no more readable than before, but not erased/);
-    expect(ADMIN_PAGE).toMatch(/A block anyone placed on them stays in place/);
+    expect(copyOnScreen(ADMIN_PAGE, "no more readable than before, but not erased")).toBe(true);
+    expect(copyOnScreen(ADMIN_PAGE, "A block anyone placed on them stays in place")).toBe(true);
   });
 
   it("the admin panel's tRPC surface grew by exactly this one procedure", () => {

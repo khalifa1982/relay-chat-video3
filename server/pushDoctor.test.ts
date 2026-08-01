@@ -23,6 +23,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { classifyNativeToken } from "./expoPush";
+import { copyOnScreen, keysForEnglish } from "./testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -162,16 +163,22 @@ describe("the report names each link separately", () => {
     expect(ADMIN_UI).toMatch(/d\.transports\.apnsVoipExpiresAt \?/);
     // Warn AHEAD of the lapse, not after it.
     expect(ADMIN_UI).toMatch(/days > 30/);
-    expect(ADMIN_UI).toMatch(/EXPIRED/);
+    expect(copyOnScreen(ADMIN_UI, "The VoIP certificate EXPIRED")).toBe(true);
   });
 
   it("the 'not configured' hint names BOTH credential shapes", () => {
     // Naming only the .p8 sent an operator holding a certificate looking for a
     // file they do not have — which is exactly what happened here.
-    const ui = ADMIN_UI.slice(ADMIN_UI.indexOf("APNs VoIP) is NOT configured"));
-    expect(ui).toMatch(/APNS_P8_KEY/);
-    expect(ui).toMatch(/APNS_VOIP_CERT_PEM/);
-    expect(ui).toMatch(/APNS_VOIP_KEY_PEM/);
+    /* RE-ANCHORED. The hint moved into the dictionary, so slicing the component for its
+       English left `indexOf` at -1 and `slice(-1)` silently read the file's LAST
+       CHARACTER — the negative-index trap, in the pin written to catch a real gap.
+       Asked as the property instead: ONE hint names all three credential parts, and
+       that hint reaches the screen. */
+    const namesAll = keysForEnglish("APNS_P8_KEY")
+      .filter((k) => keysForEnglish("APNS_VOIP_CERT_PEM").includes(k))
+      .filter((k) => keysForEnglish("APNS_VOIP_KEY_PEM").includes(k));
+    expect(namesAll.length, "no single hint names both credential shapes").toBeGreaterThan(0);
+    expect(namesAll.some((k) => ADMIN_UI.includes(`t("${k}"`))).toBe(true);
   });
 
   it("the claimed send list matches what the code ACTUALLY sends", () => {
@@ -232,7 +239,7 @@ describe("the test send is the REAL sender", () => {
 
   it("returns the delivered count, so zero is distinguishable from a failure", () => {
     expect(body).toMatch(/return \{ delivered \}/);
-    expect(ADMIN_UI).toMatch(/Nothing was reachable/);
+    expect(copyOnScreen(ADMIN_UI, "Nothing was reachable")).toBe(true);
   });
 });
 
