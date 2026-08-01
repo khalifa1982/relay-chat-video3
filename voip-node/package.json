@@ -8,8 +8,9 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "node agent.mjs"
+    "start": "node index.js"
   },
+  "comment_entrypoint": "`index.js`, not `agent.mjs`, and the name is a CONTRACT rather than a preference: infra provisions each media node with relay-voip-agent.service already enabled and held dormant by `ConditionPathExists=/opt/relay-voip/agent/index.js`. A different filename does not fail loudly — the condition simply never becomes true and the unit sits inactive forever, which reads exactly like a node nobody started. `\"type\": \"module\"` is what makes a .js file ESM here, so the extension change is cosmetic to Node.",
   "pnpm": {
     "onlyBuiltDependencies": [
       "mediasoup"

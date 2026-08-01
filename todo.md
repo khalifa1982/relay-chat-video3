@@ -18248,6 +18248,101 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.72 — the deploy would have selected ZERO of the eight nodes, and started nothing on them anyway (2026-08-01)
+
+Owner, uploading `scale-voip-nodes.sh` and `claudecodenodeintegration.md`: *"Have you done this"*.
+
+**THE ANSWER TO THE QUESTION IS NO, AND THE ANSWER IS NOT THE INTERESTING PART.** The
+integration doc is not built — the client transport does not exist (`mediasoup` is in no root
+manifest and `grep -rn "from ['\"]mediasoup" client/src/` returns nothing), and `relay.ts:2108`
+says in its own words *"IT CANNOT FIRE TODAY"*. `scale-voip-nodes.sh` is infra's by its own
+header (*"executed by infra, NOT Claude Code"*) and has already done its job. What checking the
+repo against the doc turned up is worse than "not started": **the deploy path we shipped would
+have matched none of the eight nodes, and if it had, every service would have stayed dormant.**
+
+**SIX CONTRACT MISMATCHES, EACH OF WHICH FAILS SILENTLY.** The fleet is now eight nodes
+(`relay-voip-a`, `-b`, `-3` … `-8`, four per AZ), provisioned by infra with
+`relay-voip-agent.service` ALREADY ENABLED and held dormant by
+`ConditionPathExists=/opt/relay-voip/agent/index.js`. That makes four values a contract with
+machines that already exist, and the repo had all four wrong:
+
+1. **THE TAG FILTER MATCHED NOTHING.** `aws-ops.yml` filtered `Values=relay-voip` — an EXACT
+   match — against a fleet whose every member is `relay-voip-<something>`. The action would
+   have printed *"no running instance tagged Name=relay-voip"* over eight healthy boxes and
+   read exactly like an untagged fleet. Now `Values=relay-voip,relay-voip-*`; the safety
+   property is untouched, because `relay-voip-*` cannot match `relay-app`, and the bare name
+   stays listed so a node tagged the old way is not orphaned.
+2. **THE ENTRYPOINT.** We installed `/opt/relay-voip/agent.mjs`; the condition watches
+   `/opt/relay-voip/agent/index.js`. **This is the one that fails most quietly** — systemd
+   reports an unmet condition as a clean "condition failed", so an enabled unit sits inactive
+   forever, indistinguishable from one nobody started. `voip-node/agent.mjs` is now
+   `voip-node/index.js` (`"type": "module"` already made a `.js` file ESM, so the rename is
+   cosmetic to Node) and the deploy extracts into `agent/` rather than one level up.
+3. **THE UNIT NAME.** We installed `relay-voip.service` beside the enabled
+   `relay-voip-agent.service` — two units, and the wrong one running is two agents contending
+   for one media port range. The script now RESOLVES which name a node carries and writes
+   there, preferring the provisioned one.
+4. **THE ENV PATH.** We read `/etc/relay-voip/env`; the nodes carry `/etc/relay-voip/agent.env`.
+   The deploy would have reported MISSING and declined to start — the failure being *correct*
+   is what makes it insidious, because the log looks like an operator step was skipped.
+5. **THE USER.** `User=relay` and `chown -R relay:relay` against a node whose service user is
+   `relayvoip`. The user is resolved now (`relayvoip` preferred, `relay` accepted) and a node
+   with neither REFUSES rather than chowning to nothing.
+6. **`VOIP_NODE_SECRET` IS ABSENT FROM THE PROVISIONED `agent.env`, AND THE AGENT THROWS
+   WITHOUT IT.** `main()` opens `if (!SECRET) throw` — correctly, since an unsigned internal API
+   is reachable by anything with VPC access to 4443 — so all eight nodes would have crash-looped
+   every 2s with the real reason buried in journald under a green deploy. The script now checks
+   for the KEY NAME (`grep -q`, so no matched line is ever echoed; **a name is not a value**) and
+   turns that loop into one legible line naming the file and the `openssl rand -hex 32` to put
+   in it.
+
+**THE PRE-BUILT WORKER IS REUSED, VERSION-CHECKED.** Infra compiled mediasoup 3.19.3 at
+`/opt/relay-voip/node_modules`, and Node finds it by walking up from
+`/opt/relay-voip/agent/index.js` unaided — so the deploy searches both roots and skips the
+install when a usable worker is already there, which is what keeps ~2 minutes per node × 8 from
+running past the SSM window. **It is reused ONLY at the version we pin**: the pins are exact
+precisely because the worker is a host-specific binary, so adopting a mismatched one would
+surface as a single node behaving differently in a call with nothing anywhere saying why. A
+mismatch falls through to a real install.
+
+**TWO NAMING DISAGREEMENTS THAT ARE HARMLESS BY COINCIDENCE, recorded rather than left to be
+discovered**: the provisioned env spells the signaling port `SIGNAL_PORT` where the agent reads
+`VOIP_API_PORT`, and sets `MEDIASOUP_WORKERS=2` where the agent derives it from `os.cpus()`.
+Both land on the same value on a c6i.large, so nothing breaks — they agree by luck rather than
+by contract, which is worth not relying on.
+
+**THE ORDERING GUARANTEES THAT ALREADY EXISTED ARE UNTOUCHED**: dry run by default, payload
+checksummed before the extract, `node --check` on every module before any restart, the worker
+binary verified on the reuse path as well as after an install, the verdict read from the
+printed `VOIP_EXIT=` marker on EVERY invocation rather than the SSM status, one node at a time
+with `--max-errors 0`, and the env file never written by the script.
+
+**18 of 18 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once and treating a changed test
+TOTAL as a failure; all five sources byte-identical afterwards. No survivors and no aborts —
+including the exact tag filter reinstated, the entrypoint pointed back at `agent.mjs`, the unit
+installed under a hardcoded name, the secret gate dropped, the version mismatch adopted, and
+the agent's own `throw` softened to a warning.
+
+**TWO OF MY OWN ASSERTIONS WERE WRONG ABOUT THE CODE, each caught by failing on CORRECT
+source.** One forbade `VOIP_NODE_SECRET=` followed by anything but a placeholder — and the
+script's own grep pattern `'^[[:space:]]*VOIP_NODE_SECRET=..*'` is exactly that shape, so the
+clever regex flagged the check it was written to permit; it now ENUMERATES the occurrences and
+requires each to be one of the two legitimate ones. **The other is THE PROSE TRAP FOR THE
+EIGHTEENTH TIME**: widening the "no `-d` test on the package directory" sweep made it match the
+script's own comment QUOTING `[ ! -d node_modules/mediasoup ]` to explain why it is gone. It
+runs on comment-stripped source now, with a companion assertion proving the prose really does
+still carry the string so the strip cannot hide a defect.
+
+**SAID PLAINLY: NOTHING HAS BEEN DEPLOYED.** There are no AWS credentials and no route to the
+fleet from here, so no node has been written to and no agent started. What is now true is that
+`voip-deploy` can SELECT the eight nodes and would land files where the enabled unit is
+actually watching — which is the doc's own step 1, and the thing that was impossible an hour
+ago. Steps 2 onward stay flag-guarded with mesh as the default, per the doc's *"Calls currently
+run on the P2P mesh and are working well — protect that."*
+
+No schema change, no new dependency, no new env var. 5195 tests.
+
 ## v2.106.71 — the staged APNs config is reachable, and a 400 no longer deregisters (2026-08-01)
 
 The owner re-uploaded `relaypushbackendconfig.md` and asked *"Have you done this?"*.

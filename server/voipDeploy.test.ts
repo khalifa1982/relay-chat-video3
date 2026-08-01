@@ -45,6 +45,24 @@ describe("voip-deploy can only ever touch a media node", () => {
     );
   });
 
+  it("the tag filter is a GLOB, or it selects none of the fleet", () => {
+    /* v2.106.72, and this one had gone from "works" to "matches nothing" without a line of
+       code changing. The nodes are named relay-voip-a, relay-voip-b, relay-voip-3 …
+       relay-voip-8; an EXACT `Values=relay-voip` filter — which is what this was — matches
+       NONE of them, so the action reported "no running instance tagged Name=relay-voip" over
+       eight healthy boxes and read exactly like an untagged fleet.
+
+       The safety property is untouched: `relay-voip-*` cannot match `relay-app`. Both
+       spellings are listed because EC2 treats `Values=a,b` as an OR and a node tagged with the
+       bare name must not become unreachable. */
+    const step = voipStep();
+    const line = step.split("\n").find((l) => l.includes("Name=tag:Name,Values=relay-voip"));
+    expect(line, "the tag filter must exist").toBeTruthy();
+    expect(line!, "the glob is what reaches relay-voip-a … relay-voip-8").toContain("relay-voip-*");
+    expect(line!, "and the bare name must still work").toMatch(/Values=relay-voip[,"]/);
+    expect(line!, "an app box can never match either spelling").not.toContain("relay-app");
+  });
+
   it("is the recorded exemption from the tag-guard sweep, not the one that was missed", () => {
     /* v2.106.33's sweep requires every TAG-TARGETED `ssm send-command` to carry
        MEDIA_NODE_GUARD. This action resolves instance ids first and sends to `--instance-ids`,
@@ -83,35 +101,64 @@ describe("voip-deploy can only ever touch a media node", () => {
     const deploy = fs.readFileSync(path.join(ROOT, ".github", "workflows", "deploy.yml"), "utf8");
     expect(deploy, "the app really does live in /home/relay").toMatch(/\/home\/relay/);
     // …and the media agent lives somewhere else entirely.
-    expect(fs.readFileSync(path.join(ROOT, "voip-node", "relay-voip.service"), "utf8")).toMatch(
+    expect(fs.readFileSync(path.join(ROOT, "voip-node", "relay-voip-agent.service"), "utf8")).toMatch(
       /WorkingDirectory=\/opt\/relay-voip/,
     );
   });
 });
 
 describe("voip-deploy never writes a secret", () => {
-  it("does not create or write /etc/relay-voip/env", () => {
+  it("does not create or write the env file", () => {
     // VOIP_NODE_SECRET and REDIS_URL are real secrets, and a workflow_dispatch input is
     // visible in run metadata — so they can only be placed by a human. The script REPORTS the
     // file's presence and declines to start without it; it must never write it.
+    //
+    // REWRITTEN v2.106.72 to cover BOTH spellings. The provisioned nodes carry
+    // `/etc/relay-voip/agent.env`; the older path is `/etc/relay-voip/env`. A sweep naming
+    // only one of them would let a write to the other through.
     for (const src of [voipStep(), REMOTE]) {
-      expect(src).not.toMatch(/tee \/etc\/relay-voip\/env/);
-      expect(src).not.toMatch(/> \/etc\/relay-voip\/env/);
-      expect(src).not.toMatch(/VOIP_NODE_SECRET=/);
+      for (const f of ["/etc/relay-voip/env", "/etc/relay-voip/agent.env"]) {
+        expect(src).not.toContain(`tee ${f}`);
+        expect(src).not.toContain(`> ${f}`);
+      }
+      /* The KEY NAME is allowed to appear — the script greps for it, and the message tells an
+         operator which line to add. A VALUE is not. Enumerated rather than pattern-matched,
+         because my first attempt at a clever regex was WRONG ABOUT THE CODE: it forbade
+         `VOIP_NODE_SECRET=` followed by anything but a placeholder, and the grep pattern
+         `'^[[:space:]]*VOIP_NODE_SECRET=..*'` is itself exactly that shape. Every occurrence
+         must be one of the two legitimate ones. */
+      for (const occ of src.match(/VOIP_NODE_SECRET=\S*/g) ?? []) {
+        const legit =
+          occ === "VOIP_NODE_SECRET=..*'" || // the grep pattern (a shape, not a value)
+          occ.startsWith("VOIP_NODE_SECRET=<"); // the "add this line" placeholder
+        expect(legit, `unexpected VOIP_NODE_SECRET occurrence: ${occ}`).toBe(true);
+      }
       expect(src).not.toMatch(/REDIS_URL=redis/);
     }
     // It does read whether the file EXISTS, which is the honest half.
-    expect(REMOTE).toMatch(/if \[ -f \/etc\/relay-voip\/env \]/);
+    expect(REMOTE).toMatch(/for f in \/etc\/relay-voip\/agent\.env \/etc\/relay-voip\/env; do/);
   });
 
-  it("prints no value from the env file — only that it is there", () => {
-    const at = REMOTE.indexOf("/etc/relay-voip/env: present");
+  it("prints no value from the env file — only that it is there, and that it names the secret", () => {
+    const at = REMOTE.indexOf('echo "$ENV_FILE: present');
     expect(at).toBeGreaterThan(0);
     const line = REMOTE.slice(at, REMOTE.indexOf("\n", at));
     // A line count is not a value. `cat`/`grep -o`/`head` of that file would be.
     expect(line).toMatch(/grep -c \./);
-    expect(line).not.toMatch(/cat \/etc\/relay-voip\/env/);
-    expect(REMOTE).not.toMatch(/cat \/etc\/relay-voip\/env/);
+    expect(line).toMatch(/values NOT read/);
+    for (const f of ["/etc/relay-voip/env", "/etc/relay-voip/agent.env", "$ENV_FILE"]) {
+      expect(REMOTE).not.toContain(`cat ${f}`);
+    }
+    /* THE SECRET IS CHECKED BY KEY NAME, WHICH IS NOT A DISCLOSURE — and it is the difference
+       between one legible line and a 2s restart loop. `main()` throws outright without
+       VOIP_NODE_SECRET ("the internal API is signed"), and infra's provisioning writes an
+       agent.env that does NOT contain it, so every node would crash-loop with the real reason
+       buried in journald. `grep -q '^VOIP_NODE_SECRET=..*'` reveals nothing: a name is not a
+       value, and `-q` prints nothing at all. */
+    expect(REMOTE).toMatch(/grep -q '\^\[\[:space:\]\]\*VOIP_NODE_SECRET=\.\.\*' "\$ENV_FILE"/);
+    expect(REMOTE, "and it must be -q, so no matched line is ever echoed").not.toMatch(
+      /grep [^|\n]*VOIP_NODE_SECRET[^|\n]*\|/,
+    );
   });
 
   it("no secret is accepted as a workflow input either", () => {
@@ -160,7 +207,7 @@ describe("voip-deploy cannot report success over a broken node", () => {
     const restart = REMOTE.indexOf("systemctl restart");
     expect(check).toBeGreaterThan(0);
     expect(restart).toBeGreaterThan(check);
-    expect(REMOTE).toMatch(/for f in agent\.mjs record\.mjs sign\.mjs; do/);
+    expect(REMOTE).toMatch(/for f in index\.js record\.mjs sign\.mjs; do/);
     expect(REMOTE).toMatch(/does not parse — NOT restarting/);
   });
 
@@ -168,8 +215,8 @@ describe("voip-deploy cannot report success over a broken node", () => {
     // A deploy that installs and leaves the unit dead is worse than none.
     const at = REMOTE.indexOf("systemctl restart");
     const after = REMOTE.slice(at);
-    expect(after).toMatch(/systemctl is-active --quiet relay-voip/);
-    expect(after).toMatch(/journalctl -u relay-voip/);
+    expect(after).toMatch(/systemctl is-active --quiet "\$SVC"/);
+    expect(after).toMatch(/journalctl -u "\$SVC"/);
     expect(after).toMatch(/fail "STARTED BUT NOT RUNNING[^"]*" 100/);
   });
 
@@ -233,7 +280,14 @@ describe("the payload is built correctly", () => {
     // i.e. it froze the defect, and would have forbidden the fix. The property is only that
     // the install runs when the manifest moved OR the built artifact is absent; which artifact
     // counts is pinned by the worker-binary describe below.
-    expect(REMOTE).toMatch(/if \[ "\$DEPS_BEFORE" != "\$DEPS_AFTER" \] \|\| \[ ! -x "\$WORKER_BIN" \]/);
+    //
+    // Widened again v2.106.72: the artifact may now be RESOLVED from either root, so "absent"
+    // is `-z` (nothing resolved) as well as `! -x` (resolved but not runnable). Enumerated as
+    // a set rather than one literal so the order of the conjuncts is free.
+    const gateLine = REMOTE.split("\n").find((l) => l.includes('if [ "$DEPS_BEFORE" != "$DEPS_AFTER" ]'));
+    expect(gateLine, "the install gate must exist").toBeTruthy();
+    expect(gateLine!).toContain('[ -z "$WORKER_BIN" ]');
+    expect(gateLine!).toContain('[ ! -x "$WORKER_BIN" ]');
     // The fingerprint must be taken BEFORE the extract, or it always compares equal.
     expect(REMOTE.indexOf("DEPS_BEFORE=")).toBeLessThan(REMOTE.indexOf("tar -xzf"));
     // And the pins really are exact in the manifest this ships.
@@ -246,8 +300,20 @@ describe("the payload is built correctly", () => {
   it("the payload really contains every file the script requires", () => {
     // Driven rather than asserted: the script refuses on a missing module, so a file it names
     // that voip-node/ does not carry would be a deploy that always refuses.
-    for (const f of ["agent.mjs", "record.mjs", "sign.mjs", "package.json", "pnpm-lock.yaml", "relay-voip.service"]) {
+    for (const f of [
+      "index.js",
+      "record.mjs",
+      "sign.mjs",
+      "package.json",
+      "pnpm-lock.yaml",
+      "relay-voip-agent.service",
+    ]) {
       expect(fs.existsSync(path.join(ROOT, "voip-node", f)), f).toBe(true);
+    }
+    // And the old names are GONE rather than lingering beside the new ones — two entrypoints
+    // in the payload is how a node ends up running the one nobody edited.
+    for (const stale of ["agent.mjs", "relay-voip.service"]) {
+      expect(fs.existsSync(path.join(ROOT, "voip-node", stale)), stale).toBe(false);
     }
   });
 });
@@ -326,12 +392,49 @@ describe("the mediasoup worker binary is what gets verified", () => {
   });
 
   it("the install gate keys on the BINARY, never on the package directory", () => {
-    expect(REMOTE).toMatch(/WORKER_BIN="\$\{MEDIASOUP_WORKER_BIN:-[^"]*mediasoup-worker\}"/);
+    expect(REMOTE).toMatch(/MEDIASOUP_WORKER_BIN:-/);
+    expect(REMOTE).toMatch(/mediasoup-worker/);
     expect(REMOTE).toMatch(/\[ ! -x "\$WORKER_BIN" \]/);
-    // The directory test is exactly the defect: an unbuilt install satisfies it.
-    expect(REMOTE, "a -d test on the package dir cannot see a blocked build").not.toMatch(
-      /! -d \/opt\/relay-voip\/node_modules\/mediasoup\b/,
+    /* The directory test is exactly the defect: an unbuilt install satisfies it.
+       ON COMMENT-STRIPPED SOURCE, and that is the 18th time this trap has fired here — the
+       script's own comment QUOTES `[ ! -d node_modules/mediasoup ]` to explain why it is gone,
+       so a sweep for the pattern matches the prose that documents its removal and fails on
+       correct source. The companion assertion below proves the strip is doing real work rather
+       than hiding a defect. */
+    const code = REMOTE.split("\n")
+      .filter((l) => !l.trimStart().startsWith("#"))
+      .join("\n");
+    expect(code, "a -d test on the package dir cannot see a blocked build").not.toMatch(
+      /! -d [^\n]*node_modules\/mediasoup\b/,
     );
+    expect(REMOTE, "…and the prose really does still carry it, so the strip is load-bearing").toMatch(
+      /! -d node_modules\/mediasoup/,
+    );
+  });
+
+  it("the PRE-BUILT worker is reused, but only at the version we pin", () => {
+    /* v2.106.72. Infra provisions each node with mediasoup already compiled at
+       /opt/relay-voip/node_modules — and Node finds it unaided by walking up from
+       /opt/relay-voip/agent/index.js. Reusing it turns a ~2-minute-per-node compile (×8, well
+       past the SSM window) into nothing.
+
+       The VERSION CHECK is what makes reuse safe rather than convenient: the pins are exact
+       precisely because the worker is a host-specific binary, so a silent version difference
+       surfaces as one node behaving differently in a call with nothing anywhere saying why. A
+       mismatch must fall through to a real install, never be adopted. */
+    expect(REMOTE, "both roots are searched, ours first").toMatch(
+      /for root in "\$AGENT_DIR" \/opt\/relay-voip; do/,
+    );
+    expect(REMOTE, "the wanted version comes from the manifest we ship").toMatch(
+      /WANT_VER=.*dependencies\.mediasoup/,
+    );
+    const at = REMOTE.indexOf('for root in "$AGENT_DIR"');
+    const loop = REMOTE.slice(at, REMOTE.indexOf("\nfi", at));
+    expect(loop, "a version mismatch must be skipped, not adopted").toMatch(
+      /\[ "\$HAVE_VER" != "\$WANT_VER" \][\s\S]{0,200}?continue/,
+    );
+    // …and it must still be executable to count, whatever the version says.
+    expect(loop).toMatch(/\[ -x "\$CAND" \] \|\| continue/);
   });
 
   it("the binary is verified on the SKIP path too, and after any install", () => {
@@ -363,5 +466,129 @@ describe("the mediasoup worker binary is what gets verified", () => {
        builds from source otherwise. Either way it belongs to the box, so shipping one built on
        a GitHub runner is how a node ends up with a binary that does not match its libc. */
     expect(voipStep()).toMatch(/tar -czf [^\n]*--exclude=node_modules/);
+  });
+});
+
+/**
+ * v2.106.72 — THE FOUR VALUES THE NODES ALREADY DECIDED.
+ *
+ * Infra's scale-out script provisions each media node with `relay-voip-agent.service` ALREADY
+ * INSTALLED AND ENABLED, held dormant by `ConditionPathExists=/opt/relay-voip/agent/index.js`.
+ * That makes four values a contract with a machine that exists, not a naming preference:
+ *
+ *     unit      relay-voip-agent.service
+ *     entry     /opt/relay-voip/agent/index.js
+ *     env       /etc/relay-voip/agent.env
+ *     user      relayvoip
+ *
+ * EVERY ONE OF THEM FAILS SILENTLY WHEN WRONG, which is why they are pinned rather than left
+ * to review. A mismatched entrypoint leaves the condition unsatisfied; systemd reports a clean
+ * "condition failed" and the unit sits inactive — indistinguishable from a node nobody has
+ * started. The repo shipped all four wrong (`agent.mjs`, `relay-voip.service`,
+ * `/etc/relay-voip/env`, user `relay`), so a deploy would have landed files onto eight nodes
+ * and started nothing, with a green run.
+ */
+describe("the agent's install contract matches the provisioned nodes", () => {
+  const UNIT_PATH = path.join(ROOT, "voip-node", "relay-voip-agent.service");
+  const UNIT = fs.readFileSync(UNIT_PATH, "utf8");
+  const ENTRY = "/opt/relay-voip/agent/index.js";
+
+  it("the unit runs the entrypoint the provisioned condition names", () => {
+    // The three have to agree with each other or the unit is dormant forever.
+    expect(UNIT).toMatch(new RegExp(`ConditionPathExists=${ENTRY}$`, "m"));
+    expect(UNIT).toMatch(new RegExp(`ExecStart=/usr/bin/node ${ENTRY}$`, "m"));
+    expect(UNIT).toMatch(/WorkingDirectory=\/opt\/relay-voip\/agent$/m);
+  });
+
+  it("the entrypoint the unit names is the file this repo actually ships", () => {
+    /* DRIVEN, not asserted: the whole failure mode is a unit pointing at a filename nothing
+       produces. `--strip-components=1` puts voip-node/<f> at $AGENT_DIR/<f>, so the basename
+       of the ExecStart path must be a real file in voip-node/. */
+    const m = UNIT.match(/^ExecStart=\S+ (\S+)$/m);
+    expect(m, "ExecStart must name a file").toBeTruthy();
+    const basename = path.basename(m![1]);
+    expect(basename).toBe("index.js");
+    expect(
+      fs.existsSync(path.join(ROOT, "voip-node", basename)),
+      `voip-node/${basename} must exist, or the unit's condition is never satisfied`,
+    ).toBe(true);
+    // …and `"type": "module"` is what makes a .js file ESM here, so the agent still parses.
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "voip-node", "package.json"), "utf8"));
+    expect(pkg.type, "a .js entrypoint needs type:module or `import` is a syntax error").toBe(
+      "module",
+    );
+    expect(pkg.scripts?.start, "npm start must run the same file the unit does").toContain(
+      basename,
+    );
+  });
+
+  it("the unit runs as the user the nodes were provisioned with", () => {
+    expect(UNIT).toMatch(/^User=relayvoip$/m);
+    expect(UNIT).toMatch(/^Group=relayvoip$/m);
+  });
+
+  it("the unit reads the env file the nodes were provisioned with", () => {
+    expect(UNIT).toMatch(/^EnvironmentFile=\/etc\/relay-voip\/agent\.env$/m);
+  });
+
+  it("the deploy installs under the unit name the node already has enabled", () => {
+    /* Installing a SECOND unit beside the enabled one is how two agents end up fighting over
+       the same media ports, so the script resolves which name this node carries and writes
+       there — preferring the provisioned name, falling back to the legacy one. */
+    expect(REMOTE).toMatch(/^SVC=relay-voip-agent$/m);
+    expect(REMOTE).toMatch(/systemctl cat relay-voip-agent/);
+    expect(REMOTE).toMatch(/install -m 0644 "\$AGENT_DIR\/relay-voip-agent\.service" "\/etc\/systemd\/system\/\$SVC\.service"/);
+    expect(REMOTE, "never a hardcoded unit name at the write").not.toMatch(
+      /\/etc\/systemd\/system\/relay-voip(-agent)?\.service"?\s*$/m,
+    );
+  });
+
+  it("the deploy writes the agent into the directory the condition watches", () => {
+    expect(REMOTE).toMatch(/^AGENT_DIR=\/opt\/relay-voip\/agent$/m);
+    expect(REMOTE).toMatch(/^ENTRY="\$AGENT_DIR\/index\.js"$/m);
+    // The extract must land THERE, not one level up where the old layout put it.
+    expect(REMOTE).toMatch(/tar -xzf \/tmp\/voip-node\.tgz -C "\$AGENT_DIR" --strip-components=1/);
+  });
+
+  it("the legacy spellings are still accepted, so an older node is not stranded", () => {
+    /* This script cannot see which vintage a node is, and refusing the old names would strand
+       a box over a naming difference. Accepting them is free; guessing is not. */
+    expect(REMOTE, "the legacy unit").toMatch(/systemctl cat relay-voip\b/);
+    expect(REMOTE, "the legacy env path").toContain("/etc/relay-voip/env");
+    expect(REMOTE, "the legacy user").toMatch(/for u in relayvoip relay; do/);
+  });
+
+  it("a missing service user REFUSES rather than chowning to a user that is not there", () => {
+    const at = REMOTE.indexOf('[ -n "$SVC_USER" ]');
+    expect(at).toBeGreaterThan(0);
+    expect(REMOTE.slice(at, at + 200)).toMatch(/fail "REFUSED[^"]*relayvoip[^"]*" 92/);
+    // …and the chown uses the RESOLVED user, never a literal.
+    expect(REMOTE).toMatch(/chown -R "\$SVC_USER:\$SVC_USER" "\$AGENT_DIR"/);
+    expect(REMOTE, "a hardcoded chown would fail on the provisioned nodes").not.toMatch(
+      /chown -R relay:relay/,
+    );
+  });
+
+  it("a node with no VOIP_NODE_SECRET is told, not left crash-looping", () => {
+    /* The agent's main() throws without it, and infra's provisioned agent.env does not carry
+       it — so without this the eight nodes would restart every 2s with the reason in journald
+       and a green deploy above it. The gate must PRECEDE the restart. */
+    const gate = REMOTE.indexOf('if [ "$HAVE_ENV" != "1" ] || [ "$HAVE_SECRET" != "1" ]');
+    const restart = REMOTE.indexOf("systemctl restart");
+    expect(gate, "the combined env+secret gate must exist").toBeGreaterThan(0);
+    expect(restart).toBeGreaterThan(gate);
+    const msg = REMOTE.slice(gate, restart);
+    expect(msg).toMatch(/FILES INSTALLED, SERVICE NOT STARTED/);
+    expect(msg, "it must name the missing thing, not just fail").toMatch(/VOIP_NODE_SECRET/);
+    expect(msg, "and say where to put it").toContain("/etc/relay-voip/agent.env");
+  });
+
+  it("the agent really does refuse without that secret — so the gate is not theatre", () => {
+    // DRIVEN off the agent's own source: if this ever became optional the gate above would be
+    // a pointless obstacle, and if the message named a variable the agent does not read it
+    // would send an operator to the wrong line.
+    const agent = fs.readFileSync(path.join(ROOT, "voip-node", "index.js"), "utf8");
+    expect(agent).toMatch(/const SECRET = process\.env\.VOIP_NODE_SECRET/);
+    expect(agent).toMatch(/if \(!SECRET\) throw new Error\(/);
   });
 });

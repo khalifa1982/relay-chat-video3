@@ -7,7 +7,7 @@
  * None of those is answerable from reading the source, so this file spins up a REAL HTTP
  * server running the agent's own `verifySignature` and points the real `callNode` at it.
  *
- * The one thing it deliberately does NOT do is import `agent.mjs`: that would start
+ * The one thing it deliberately does NOT do is import the agent (`voip-node/index.js`): that would start
  * mediasoup workers and listen on a port. The signature rule lives in `sign.mjs` precisely
  * so it can be exercised without any of that.
  */
@@ -325,7 +325,7 @@ describe("the wire details that must not drift", () => {
   });
 
   it("the app and the agent agree on the port and the header", () => {
-    const agent = readFileSync("voip-node/agent.mjs", "utf8");
+    const agent = readFileSync("voip-node/index.js", "utf8");
     expect(agent).toMatch(new RegExp(`VOIP_API_PORT \\|\\| ${VOIP_API_PORT}`));
     // The header name is shared through `sign.mjs` rather than spelled twice, and the
     // agent must read it from there rather than re-typing the literal.
@@ -336,7 +336,7 @@ describe("the wire details that must not drift", () => {
   it("every op the app can name is one the agent actually handles", () => {
     /* An op the node does not know is a 400 the app cannot distinguish from a real
        failure, so the two lists must not drift. Read off the agent's own HANDLERS. */
-    const agent = readFileSync("voip-node/agent.mjs", "utf8");
+    const agent = readFileSync("voip-node/index.js", "utf8");
     const start = agent.indexOf("const HANDLERS = {");
     expect(start, "HANDLERS must exist").toBeGreaterThan(-1);
     const body = agent.slice(start);
