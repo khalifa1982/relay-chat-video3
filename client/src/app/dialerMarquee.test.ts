@@ -433,8 +433,8 @@ describe("v2.106.78 — the painter's shape", () => {
     expect(still.promptOpacity).toBeGreaterThan(0.9);
     expect(still.nameText).toBe("");
     expect(still.cells.every((c) => c.digit === "" && c.alphabet === null)).toBe(true);
-    // Imported from the ONE canonical implementation rather than hand-rolled —
-    // MatrixReveal is already a duplicate missing the typeof-window guard.
+    // Imported from the ONE canonical implementation rather than hand-rolled: a
+    // private copy is how two surfaces come to disagree about reduced motion.
     expect(PAINTER).toMatch(/import \{ prefersReducedMotion \} from "@\/lib\/relayBackground"/);
   });
 

@@ -100,7 +100,7 @@ describe("the owner's two explicit numbers", () => {
   it("can be skipped by a tap, and by the keyboard", () => {
     /* The 10s is the owner's, but a full-screen surface with no exit is what people
        report as frozen. */
-    expect(SRC).toMatch(/onClick=\{\(\) => doneRef\.current\(\)\}/);
+    expect(SRC).toMatch(/onClick=\{\(\) => leave\(\)\}/);
     expect(SRC).toMatch(/e\.key === "Enter" \|\| e\.key === " "/);
   });
 
@@ -197,6 +197,67 @@ describe("the hyperspace warp", () => {
     expect(ENGINE).toMatch(/const k = warpUntil > t \? Math\.min\(1, \(warpUntil - t\) \/ Math\.max\(1, warpSpan\)\) : 0;/);
     expect(ENGINE).toMatch(/if \(ease > 0\.001\) \{/);
     expect(ENGINE).toMatch(/ctx!\.beginPath\(\); ctx!\.arc\(sx0, yy, s\.r, 0, 6\.28\); ctx!\.fill\(\);/);
+  });
+
+  it("fires TWICE — once arriving, once leaving", () => {
+    /* The owner's two sentences: *"as you move from the login area to this page … it
+       comes super speedily like flying in space"* and *"after 10 seconds, it will move
+       again rapidly to the next page."* One jump on mount (`useState(1)`, which the
+       background's effect fires because the key is truthy), one on the way out. */
+    expect(SRC).toMatch(/const \[warpKey, setWarpKey\] = useState\(1\);/);
+    expect(SRC).toMatch(/setWarpKey\(\(k\) => k \+ 1\);/);
+    expect(SRC).toMatch(/<RelayBackground warpKey=\{warpKey\}/);
+  });
+
+  it("HOLDS the screen for the exit jump instead of vanishing under it", () => {
+    /* Advancing immediately would destroy this canvas before the warp it just started
+       could paint — the jump IS the transition, so it has to be visible on the surface
+       that fired it. */
+    const body = SRC.slice(SRC.indexOf("const leave = useCallback"));
+    expect(body).toMatch(/setTimeout\(\(\) => doneRef\.current\(\), PIN_REVEAL_TIMING\.warpMs\)/);
+  });
+
+  it("leaving is IDEMPOTENT, so a tap during the exit cannot advance twice", () => {
+    const body = SRC.slice(SRC.indexOf("const leave = useCallback"));
+    expect(body).toMatch(/if \(leaving\.current\) return;/);
+    expect(body).toMatch(/leaving\.current = true;/);
+  });
+
+  it("under reduced motion it neither jumps nor waits", () => {
+    // Same rule the engine applies to itself: the effect IS the motion, so there is
+    // nothing to slow the exit down for.
+    const body = SRC.slice(SRC.indexOf("const leave = useCallback"));
+    expect(body).toMatch(/if \(calm\) \{[\s\S]{0,80}doneRef\.current\(\);[\s\S]{0,20}return;/);
+  });
+
+  it("brings its OWN canvas, because nothing else is painting at that moment", () => {
+    /* The login screen has unmounted and the shell has not mounted — exactly one
+       background is ever live, which is the rule AppShell states for itself. */
+    expect(SRC).toMatch(/import \{ RelayBackground \}/);
+    // Dark unconditionally: every colour the handoff fixes is a dark-surface value.
+    expect(SRC).not.toMatch(/<RelayBackground[^>]*\blight\b/);
+    expect(SRC).toMatch(/className="prv-root dark relay-v2"/);
+  });
+
+  it("the content sits above that canvas STRUCTURALLY, not by DOM order", () => {
+    /* `RelayBackground` is `position: fixed; z-index: 0`, and a positioned element at
+       z-index 0 paints in the same step as an `auto` sibling — so without an explicit
+       z-index the order would depend on which element happens to come last. That is
+       the v2.106.27 defect (the canvas painting over the page). */
+    const stack = CSS.slice(CSS.indexOf(".prv-stack {"));
+    expect(stack.slice(0, 400)).toMatch(/z-index: 1;/);
+    // …and the root carries the handoff's own base, since the canvas needs a surface.
+    const root = CSS.slice(CSS.indexOf(".prv-root {"));
+    expect(root.slice(0, 500)).toMatch(/background: #04070a;/);
+  });
+
+  it("a warpKey of 0 never jumps, so every existing mount is unchanged", () => {
+    const BG = codeOnly(read("client/src/app/RelayBackground.tsx"));
+    expect(BG).toMatch(/warpKey = 0/);
+    expect(BG).toMatch(/if \(warpKey\) handle\.current\?\.warp\(\)/);
+    /* Declared AFTER the init effect: effects run in declaration order, so a mount that
+       already carries a key has its handle by the time the warp effect runs. */
+    expect(BG.indexOf("initRelayBackground")).toBeLessThan(BG.indexOf("if (warpKey)"));
   });
 
   it("exists on the no-2D-context handle too", () => {

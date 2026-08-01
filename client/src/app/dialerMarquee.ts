@@ -188,7 +188,7 @@ export const MARQUEE_MIN_VIEWPORT_H = 660;
  * A cell CONVERGES: it rolls alien glyphs while it is far from locking and
  * digits over its last few flicks, so it settles as a number rather than
  * snapping from katakana to a digit in one frame. That is the vocabulary the
- * owner has already seen in this app — MatrixReveal plays it on guest signup. */
+ * owner has already seen in this app — the PIN reveal plays it on the way in. */
 export const MATRIX_GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉ0123456789ABCDEF";
 export const DIGIT_GLYPHS = "0123456789";
 

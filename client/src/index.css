@@ -1083,12 +1083,20 @@ body.relay-app-lock {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: transparent; /* the app's own canvas shows through */
+  /* The screen brings its OWN canvas (the login screen has unmounted and the shell has
+     not mounted, so nothing else is painting), which needs a base underneath it — and
+     the handoff fixes that base at #04070a. */
+  background: #04070a;
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   cursor: pointer;
 }
 .prv-stack {
   position: relative;
+  /* ABOVE the canvas structurally rather than by DOM order: `RelayBackground` is
+     `position: fixed; z-index: 0`, and a positioned element at z-index 0 paints in the
+     same step as an `auto` sibling — so without this the order would depend on which
+     element happens to come last, which is the v2.106.27 defect. */
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;

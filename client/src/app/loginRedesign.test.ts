@@ -255,9 +255,21 @@ describe("shipped capabilities the spec never mentions are still wired", () => {
     expect(SCREEN).toContain("<GuestRestore");
   });
 
-  it("keeps the matrix reveal, and it outlasts identity landing", () => {
-    expect(SCREEN).toContain("MatrixReveal");
-    expect(SCREEN).toContain("if (reveal)");
+  it("no longer plays a reveal of its own — the gate owns the one reveal", () => {
+    /* REWRITTEN FROM `toContain("MatrixReveal")` (#162). That pin froze the reveal at
+       THIS component, and this component is reached by a guest AND by somebody signing
+       in with their email — but the old reveal fired only on the guest branch. The
+       owner's newer design covers *"either guest or member"*, so keeping it here would
+       give a guest two reveals back to back and a member none.
+       The PROPERTY the old pin stood for — a reveal outlasts identity landing — is
+       unchanged and now lives in `pinReveal.test.ts`, one layer up where it holds for
+       every entry path rather than for one of them. */
+    expect(SCREEN).not.toContain("MatrixReveal");
+    expect(SCREEN, "the reveal must not be re-added beside the gate's").not.toMatch(
+      /<PinReveal\b/,
+    );
+    // And the guest submit no longer reads a number back to feed one.
+    expect(SCREEN).not.toMatch(/setReveal\(/);
   });
 
   it("does NOT hijack the /i/<pin> call-link join screen", () => {

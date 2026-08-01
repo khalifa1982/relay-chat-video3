@@ -48,7 +48,6 @@ import {
 import { trpc } from "@/lib/trpc";
 import { useIdentity } from "./useIdentity";
 import { GuestRestore } from "./GuestRestore";
-import { MatrixReveal } from "./MatrixReveal";
 import { RelayBackground } from "./RelayBackground";
 import { useLiveStats } from "./useLiveStats";
 import { useT } from "./i18n";
@@ -562,7 +561,6 @@ export function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [probeUnregistered, setProbeUnregistered] = useState<boolean | null>(null);
-  const [reveal, setReveal] = useState<{ name: string; number: string } | null>(null);
   /** #121 — the masked leading group of this account's number, echoed back once the
    *  email resolves so the person can see they reached their own ID. */
   const [numberHint, setNumberHint] = useState<string | null>(null);
@@ -606,10 +604,10 @@ export function LoginScreen() {
     if (!name) return;
     setError(null);
     try {
-      const res = await startGuest(name);
-      const num = (res as { number?: string })?.number;
-      if (num) setReveal({ name, number: num });
-      else refresh();
+      await startGuest(name);
+      /* No reveal armed here and no number read back: `startGuest` invalidates whoami,
+         and the gate above plays the reveal off the identity landing (#162). */
+      refresh();
     } catch (err) {
       setError(messageOf(err, t("login.err.guestSession")));
     }
@@ -727,18 +725,11 @@ export function LoginScreen() {
     }
   }
 
-  // The guest reveal must outlast `me` flipping truthy, exactly as
-  // OnboardingGate handled it — the gate unmounts us the moment identity lands.
-  if (reveal) {
-    return (
-      <MatrixReveal
-        name={reveal.name}
-        number={reveal.number}
-        onDone={() => { setReveal(null); refresh(); }}
-      />
-    );
-  }
-
+  /* THE GUEST REVEAL MOVED UP TO THE GATE (#162). It used to play here, and only for a
+     guest — the owner's newer design covers *"either guest or member"*, so leaving this
+     one in place would put TWO different number reveals back to back for a guest and
+     none at all for somebody signing in with their email. The gate arms one reveal on
+     the signed-out → signed-in transition, which every entry surface shares. */
   return (
     <div style={{ position: "relative", minHeight: "100dvh", background: T.bg, overflowX: "hidden" }}>
       <RelayBackground business={business} />
