@@ -5169,11 +5169,33 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
           <div
             /* Board 3d: the sheet's material is the shared `.rsheet` recipe (v2.106.10),
                which is dark-scoped and declares NOTHING in light — so `bg-card` stays as
-               the light-theme surface underneath rather than being replaced. */
-            className="rsheet w-full max-w-sm rounded-2xl bg-card border border-border p-5 shadow-2xl"
+               the light-theme surface underneath rather than being replaced.
+
+               ── BOUNDED AND INTERNALLY SCROLLED (v2.106.86, owner: "I select multiple
+               people and you cannot create the group") ──
+               This card had no height bound and no scroll, inside a `fixed inset-0
+               … items-center justify-center` backdrop. Every member chip grows it, and a
+               flex item centred on the cross axis overflows BOTH ends equally — so past a
+               few members the Create button, the LAST child, sits below the viewport with
+               nothing to scroll: the primary action of the screen, unreachable, with no
+               indication that anything is missing.
+
+               Every OTHER sheet in this app already bounds itself and scrolls inside
+               (`GroupCallScreen` 92dvh, `AvatarPicker` 88dvh, the story composer 92dvh);
+               this one was the outlier, so the fix is to bring it into line rather than
+               to invent a shape.
+
+               `--relay-vh` RATHER THAN dvh, and that is the one deliberate difference
+               from those siblings: this sheet is mostly text INPUTS, so the keyboard is
+               up exactly when the bottom matters, and `dvh` does not shrink for it on iOS
+               (v2.106.29 measured that). `--relay-vh` is the measured visible height and
+               is published in the same zoomed unit a `fixed` box is laid out in, so the
+               two agree at every text size. `-2rem` is the backdrop's own `p-4`, which is
+               what keeps the card off the viewport edge. */
+            className="rsheet flex max-h-[calc(var(--relay-vh,100dvh)-2rem)] w-full max-w-sm flex-col rounded-2xl bg-card border border-border p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex shrink-0 items-center justify-between mb-3">
               <h3 className="font-semibold">{mode === "group" ? "New group" : "New conversation"}</h3>
               <Button size="icon" variant="ghost" onClick={resetAll}>
                 <X className="size-4" />
@@ -5189,7 +5211,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
             <div
               role="group"
               aria-label="Conversation type"
-              className="grid grid-cols-2 gap-[7px] rounded-[13px] p-[5px] mb-4 border"
+              className="grid shrink-0 grid-cols-2 gap-[7px] rounded-[13px] p-[5px] mb-4 border"
               style={{ background: "rgba(0,0,0,.32)", borderColor: "rgba(255,255,255,.08)" }}
             >
               <button
@@ -5239,6 +5261,12 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
               </button>
             </div>
 
+            {/* THE ONLY SCROLLING REGION. `min-h-0` is what makes it one at all — a flex
+                item's default `min-height:auto` refuses to shrink below its content, so
+                without it the card would grow past its own `max-h` again and nothing
+                would have changed. The negative margin + matching padding let the
+                scrollbar sit at the card's edge while the content keeps its `p-5`. */}
+            <div className="-mx-5 min-h-0 flex-1 overflow-y-auto px-5">
             {mode === "dm" ? (
               <>
                 {/* Quick action: note to self */}
@@ -5405,31 +5433,45 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     ))}
                   </div>
                 )}
-                <Button
-                  className="w-full mt-4"
-                  onClick={() =>
-                    createGroup.mutate({
-                      title: groupTitle.trim(),
-                      numbers: groupNumbers,
-                      avatarUrl: groupAvatar,
-                    })
-                  }
-                  disabled={pending || groupTitle.trim().length === 0 || groupNumbers.length === 0}
-                >
-                  <Users className="size-4 mr-1.5" />
-                  {/* Board 3d: "Create group · 4 members". The COUNT INCLUDES YOU,
-                      because you are in the group you are creating — a count reading 3
-                      for a group of 4 would be wrong about the thing it names. */}
-                  {createGroup.isPending
-                    ? "Creating…"
-                    : groupNumbers.length
-                      ? `Create group · ${groupNumbers.length + 1} members`
-                      : t("msg.createGroup")}
-                </Button>
               </>
             )}
-            {errorMessage && (
-              <p className="mt-3 text-sm text-destructive">{errorMessage}</p>
+            </div>
+
+            {/* PINNED FOOTER — outside the scroller on purpose. The owner's report is
+                that the Create button "cannot be clicked", so making it merely reachable
+                by scrolling would be the weaker fix: every member added pushes it further
+                down, so the primary action would retreat as you use the screen. Kept in
+                the card's own flex column it is visible at every member count.
+
+                The error line belongs here for the same reason — an error you have to
+                scroll to find is very nearly an error nobody sees. */}
+            {(mode === "group" || errorMessage) && (
+              <div className="shrink-0 pt-4">
+                {mode === "group" && (
+                  <Button
+                    className="w-full"
+                    onClick={() =>
+                      createGroup.mutate({
+                        title: groupTitle.trim(),
+                        numbers: groupNumbers,
+                        avatarUrl: groupAvatar,
+                      })
+                    }
+                    disabled={pending || groupTitle.trim().length === 0 || groupNumbers.length === 0}
+                  >
+                    <Users className="size-4 mr-1.5" />
+                    {/* Board 3d: "Create group · 4 members". The COUNT INCLUDES YOU,
+                        because you are in the group you are creating — a count reading 3
+                        for a group of 4 would be wrong about the thing it names. */}
+                    {createGroup.isPending
+                      ? "Creating…"
+                      : groupNumbers.length
+                        ? `Create group · ${groupNumbers.length + 1} members`
+                        : t("msg.createGroup")}
+                  </Button>
+                )}
+                {errorMessage && <p className="mt-3 text-sm text-destructive">{errorMessage}</p>}
+              </div>
             )}
           </div>
         </div>

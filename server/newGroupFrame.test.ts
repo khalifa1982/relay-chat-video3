@@ -112,7 +112,14 @@ describe("board 3d — the picker's check circle is opt-in", () => {
   it("the sheet carries the shared dark-scoped material", () => {
     // `.rsheet` declares NOTHING in light, so `bg-card` stays as the light surface
     // underneath rather than being replaced (v2.106.10).
-    expect(sheet()).toMatch(/className="rsheet w-full max-w-sm/);
+    //
+    // PINNED AS THE PAIR, not as one class string (v2.106.86): this froze the exact
+    // order `rsheet w-full max-w-sm`, so it broke the moment a height bound joined
+    // the list — while saying nothing about the property it stands for, which is only
+    // that BOTH recipes are on the card. The bound itself is pinned, with its
+    // measurements, in `client/src/app/textScaleFrame.test.ts`.
+    expect(sheet()).toMatch(/className="[^"]*\brsheet\b/);
+    expect(sheet()).toMatch(/className="[^"]*\bmax-w-sm\b/);
     expect(sheet()).toMatch(/bg-card/);
   });
 });

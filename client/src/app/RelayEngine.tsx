@@ -364,8 +364,19 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     if (!d) return;
     // Dragging up/left is negative — the box is anchored bottom-right, so clamp
     // the offset to keep it within the viewport with a small margin.
-    const nx = Math.min(0, Math.max(-(window.innerWidth - 120), d.baseX + (e.clientX - d.startX)));
-    const ny = Math.min(0, Math.max(-(window.innerHeight - 160), d.baseY + (e.clientY - d.startY)));
+    //
+    // MEASURED IN THE SAME UNIT AS THE POINTER (v2.106.86). `e.clientX/Y` are layout
+    // pixels, which the text-size `zoom` has already scaled; `window.innerWidth/Height`
+    // are NOT — they stay in unzoomed device-independent px whatever the scale. Mixing
+    // them let the mini call window be dragged ~15% past the edge at the Large text
+    // size, which on that surface can carry the hang-up button off screen.
+    // `documentElement.clientWidth/Height` are in the pointer's own unit, so the clamp
+    // needs no knowledge of the zoom at all — correct by construction rather than by a
+    // conversion somebody has to remember.
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    const nx = Math.min(0, Math.max(-(vw - 120), d.baseX + (e.clientX - d.startX)));
+    const ny = Math.min(0, Math.max(-(vh - 160), d.baseY + (e.clientY - d.startY)));
     setMiniPos({ x: nx, y: ny });
   };
   const onMiniDragEnd = () => { dragRef.current = null; };

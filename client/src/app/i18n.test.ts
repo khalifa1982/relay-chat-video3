@@ -105,17 +105,29 @@ describe("v2.106.83/84 — the app speaks Arabic, and it is impossible to add a 
        raw number at 1.15 and the shell is 15% too tall — the v2.106.29 defect
        arriving by a different road, on the screen where it costs you the composer.
 
-       Pinned as the division AND as reading the same variable the provider
-       publishes, so the two cannot come to disagree about what the scale is. */
+       ── REWRITTEN v2.106.86, BECAUSE THE OTHER HALF OF THIS PIN FROZE THE DEFECT ──
+       It also required the divisor to be read back from the published `--relay-zoom`,
+       described as "the same variable the provider publishes, so the two cannot come
+       to disagree". That mechanism is wrong by ORDERING: React runs a child's effects
+       before its parent's, and the provider is the parent, so AppShell saw the
+       PREVIOUS scale on exactly the render that changes it. The owner measured the
+       consequence — a dead band under the tab bar at Small, the bar off the bottom at
+       Large. Freezing it here would have forbidden the fix.
+
+       What survives is the PROPERTY: the measurement is divided rather than assigned
+       raw. Where the divisor comes from, and that the effect re-runs at all, are
+       pinned in `textScaleFrame.test.ts` alongside the measurements. */
     const code = codeOnly(SHELL);
-    expect(code).toMatch(/getPropertyValue\("--relay-zoom"\)/);
     expect(code).toMatch(/root\.style\.setProperty\("--relay-vh", Math\.round\(h \/ zoom\) \+ "px"\)/);
-    // An unreadable value must read as 1 — today's behaviour — not as 0, which
-    // would divide the shell to nothing.
-    expect(code).toMatch(/Number\.isFinite\(zoomRaw\) && zoomRaw > 0 \? zoomRaw : 1/);
-    // And the provider is the only writer of that variable.
+    // An unusable factor must read as 1 — the pre-feature behaviour — never as 0,
+    // which would divide the shell to nothing.
+    expect(code).toMatch(/TEXT_SCALE_FACTOR\[scale\] \?\? 1/);
+    /* AND THE RETIRED VARIABLE IS GONE RATHER THAN LEFT PUBLISHED. A value nothing
+       consumes still reads as a contract, so the next person needing the scale
+       reaches for it and reintroduces the ordering bug it caused. */
     const i18n = codeOnly(read("client/src/app/i18n.tsx"));
-    expect(i18n).toMatch(/setProperty\("--relay-zoom"/);
+    expect(i18n).not.toMatch(/setProperty\("--relay-zoom"/);
+    expect(codeOnly(read("client/src/app/AppShell.tsx"))).not.toMatch(/--relay-zoom/);
   });
 
   it("the provider is mounted above the app, inside the theme provider", () => {

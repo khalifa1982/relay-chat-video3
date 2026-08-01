@@ -40,9 +40,19 @@
  * a MEASURED `--relay-vh` (v2.78/v2.106.29 — CSS viewport units mis-report on a real
  * iPhone), and `window.innerHeight` is in UNZOOMED CSS pixels while the layout it
  * feeds is in zoomed ones. Left alone, a 1.15 zoom makes the shell 15% too tall and
- * pushes the composer under the fold — the exact v2.106.29 defect. So the scale is
- * published as `--relay-zoom` and `AppShell` divides by it. That division is the
- * whole reason this lives beside the language rather than in its own corner.
+ * pushes the composer under the fold — the exact v2.106.29 defect. So `AppShell`
+ * DIVIDES that measurement by `TEXT_SCALE_FACTOR[scale]`, taken from this same state
+ * through the hook. That division is the whole reason this lives beside the language
+ * rather than in its own corner.
+ *
+ * AND IT MUST RE-MEASURE WHEN THE SCALE CHANGES (v2.106.86), which is the half that
+ * was missing: `style.zoom` fires NO resize event, so a shell that only listens to
+ * resize/orientation/visualViewport keeps the height it had under the previous scale.
+ * Measured at 390x844 — Small left an 84px dead band under the tab bar and Large
+ * pushed it 127px off the bottom, unclickable. `scale` is therefore a dependency of
+ * that effect, and the factor comes from this state rather than from a published CSS
+ * variable, because a child's effects run before its parent's and the variable would
+ * be one render stale exactly when it matters.
  */
 import { ALL_DICT } from "./dict";
 import type { Entry } from "./dict/types";
@@ -193,10 +203,19 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const root = document.documentElement;
     const factor = TEXT_SCALE_FACTOR[scale];
-    // Published as a variable rather than written as `style.zoom` directly, because
-    // AppShell has to DIVIDE the measured viewport height by it (see the header) —
-    // one source for both readers.
-    root.style.setProperty("--relay-zoom", String(factor));
+    /* `--relay-zoom` USED TO BE PUBLISHED HERE AND IS NOT ANY MORE (v2.106.86).
+       It existed so `AppShell` could divide the measured viewport height by it —
+       "one source for both readers" — and that turned out to be the wrong source:
+       React runs a child's effects BEFORE its parent's, and this provider is the
+       parent, so AppShell read the PREVIOUS scale on exactly the render that changes
+       it. It now takes the factor from `TEXT_SCALE_FACTOR[scale]` through the hook,
+       which cannot be stale because `scale` is what triggered its run.
+
+       That left the variable with no reader anywhere, and a published value nothing
+       consumes is not harmless: it reads as a contract, so the next person to need
+       the scale reaches for it and reintroduces the ordering bug. Removed rather
+       than left as a decoration. `style.zoom` below is the real mechanism and is
+       still readable from the root by anything that genuinely needs it. */
     root.style.zoom = factor === 1 ? "" : String(factor);
     try {
       localStorage.setItem(SCALE_KEY, scale);

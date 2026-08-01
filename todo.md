@@ -18248,6 +18248,115 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.86 — the bottom frame holds at every text size, and the group sheet's action stays reachable
+
+Owner, with three Appearance screenshots and one of the new-group sheet:
+
+> "when you change the font size it goes below the frame which you cannot click it or if
+> you put small size or medium it goes above. there is always space so make sure that the
+> frame is fixed similar to the bar"
+>
+> "if you select several IDs, you cannot go below and click create group. I select
+> multiple people and you cannot create the group"
+
+Two bugs, one shape: a box whose height was decided under assumptions that stopped
+holding, so the thing at its BOTTOM left the screen.
+
+### (1) The tab bar — `style.zoom` fires no resize event
+
+v2.106.83 correctly DIVIDES `--relay-vh` by the text-size zoom (the measurement is in
+unzoomed px, the layout it feeds is zoomed). What it did not do is **re-measure**: that
+effect listens to `resize`, `orientationchange` and the visual viewport, and zoom
+re-lays-out the page without moving `window.innerHeight`, so none of them fire. The
+shell kept whatever scale was in force at the last rotation.
+
+Measured at 390×844 against a replica of the shell's sizing chain, tab-bar bottom vs
+`innerHeight` (0 = flush):
+
+| scale | factor | stale `--relay-vh` | nav bottom | verdict |
+|---|---|---|---|---|
+| sm | 0.90 | 844px | 759.6 | **GAP 84.4px** |
+| md | 1.00 | 844px | 844.0 | OK |
+| lg | 1.15 | 844px | 970.6 | **OVERFLOW 126.6px** |
+
+Both of the owner's screenshots, in both directions, from one cause. With the
+re-measure: **844.2 / 844.0 / 844.1** — flush at all three, no sideways scroll.
+
+**The factor comes from `TEXT_SCALE_FACTOR[scale]`, not from the published
+`--relay-zoom`, and that is an ORDERING decision.** React runs a child's effects before
+its parent's, and `LocaleProvider` is the parent — so reading the published variable
+would return the PREVIOUS scale on exactly the render that changes it.
+
+**`--relay-zoom` is therefore RETIRED**, because it now has no reader anywhere. A
+published value nothing consumes still reads as a contract, so the next person needing
+the scale reaches for it and reintroduces the ordering bug it caused.
+
+### (2) The new-group sheet — a centred card with no bound
+
+Its card had no `max-height` and no scroll, inside `fixed inset-0 … items-center
+justify-center p-4`. A flex item centred on the cross axis overflows BOTH ends equally
+and the backdrop scrolls nothing, so the Create button — the last child — simply left
+the screen as members were added.
+
+Measured against the REAL built stylesheet, member count swept, reachability decided by
+`elementFromPoint` at the button's own centre (on-screen and tappable are different
+claims):
+
+| phone | scale | members | before | after |
+|---|---|---|---|---|
+| 375×667 | lg | **0** | UNREACHABLE | reachable |
+| 375×667 | lg | 3, 6, 12 | UNREACHABLE | reachable |
+| 375×667 | md | 12 | UNREACHABLE | reachable |
+| 390×844 | lg | 12 | overflows | reachable |
+
+On a 375×667 phone at Large text the primary action was unreachable **with no members at
+all**. 5 of 24 combinations broken before, **0 after** — and afterwards the button holds
+a fixed position as members are added, because it is pinned outside the scroller rather
+than merely scrollable-to.
+
+The card is now a bounded flex column with one internal scroller and a `shrink-0`
+footer. Every OTHER sheet in this app already did this (`GroupCallScreen` 92dvh,
+`AvatarPicker` 88dvh, the story composer 92dvh); this one was the outlier, so the fix
+brings it into line rather than inventing a shape. **`--relay-vh` rather than `dvh`** is
+the one deliberate difference: this sheet is mostly text INPUTS, so the keyboard is up
+exactly when the bottom matters, and `dvh` does not shrink for it on iOS (v2.106.29
+measured that).
+
+`min-h-0` on the scroller is load-bearing — a flex item defaults to `min-height:auto`
+and refuses to shrink below its content, so without it the card grows past its own
+`max-h` again and nothing has changed.
+
+### (3) One more instance of the same class, found by sweeping
+
+`RelayEngine`'s minimized-call drag clamped `e.clientX/Y` (layout px, already scaled by
+zoom) against `window.innerWidth/Height` (never scaled) — so at Large the mini window
+could be dragged ~15% past the edge, which on that surface can carry the hang-up button
+off screen. Now clamped against `documentElement.clientWidth/Height`, which is the
+pointer's own unit, so it is correct **by construction** rather than by a conversion
+somebody has to remember.
+
+### Verification
+
+`client/src/app/textScaleFrame.test.ts` (13). **All 11 tripwires verified by MUTATION**
+off a confirmed-GREEN baseline from byte-exact backups, the mutator aborting unless its
+target occurs exactly once and treating a changed test TOTAL as a failure; all sources
+byte-identical afterwards.
+
+**Two pre-existing pins rewritten to the property, and one of them FROZE THE DEFECT** —
+`i18n.test.ts`'s own v2.106.83 assertion required the divisor to be read back from
+`--relay-zoom`, described as "the same variable the provider publishes, so the two
+cannot come to disagree". That mechanism is the ordering bug, so the pin would have
+forbidden this fix. The division survives; where the divisor comes from is pinned beside
+the measurements. `newGroupFrame.test.ts` froze the exact class string `rsheet w-full
+max-w-sm`, so it broke the moment a height bound joined the list while saying nothing
+about the property (both recipes are on the card).
+
+**Not verified on a device**, said plainly: every number here is measured in a real
+browser against the real built stylesheet, but nobody has changed the text size on the
+owner's phone.
+
+No schema change, no new dependency, no new env var, no server change. 5329 tests.
+
 ## v2.106.85 — Arabic reaches the four in-app tabs
 
 - **Dialer / Contacts / History / Messages go through the dictionary** — ~150 strings

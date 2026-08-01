@@ -13,7 +13,7 @@ import {
 import { detectDeviceType } from "@/lib/deviceType";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
-import { useT, type TKey } from "@/app/i18n";
+import { useLocale, TEXT_SCALE_FACTOR, type TKey } from "@/app/i18n";
 import { useIdentity } from "./useIdentity";
 import { useSignOut } from "./useSignOut";
 import { AuthPanel } from "./AuthPanel";
@@ -181,6 +181,10 @@ export function AppShell({
 }
 
 function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: ShellTab }) {
+  /* One translator for BOTH nav surfaces, and the TEXT SCALE beside it — two reads
+     would be two chances for the two navs to disagree about what a tab is called, and
+     the scale is what the viewport measurement below has to divide by. */
+  const { t, scale } = useLocale();
   const { me } = useIdentity();
   // Shared sign-out flow (v2.88): AlertDialog confirm + full session/device
   // teardown, branching guest/member correctly (the old inline handler called
@@ -302,11 +306,25 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
          * offsetTop — is in UNZOOMED CSS pixels, while `--relay-vh` is consumed by a
          * layout that `zoom` has already scaled. Assigning the raw number at zoom 1.15
          * makes the shell 15% too tall and pushes the composer under the fold, which is
-         * the v2.106.29 defect arriving by a different road. Divide by the factor the
-         * LocaleProvider published, so the two cannot disagree about what the scale is;
-         * a missing or unparseable value reads as 1, i.e. exactly today's behaviour. */
-        const zoomRaw = parseFloat(getComputedStyle(root).getPropertyValue("--relay-zoom"));
-        const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0 ? zoomRaw : 1;
+         * the v2.106.29 defect arriving by a different road.
+         *
+         * v2.106.86 — AND THE DIVISION WAS NOT ENOUGH, WHICH IS WHAT THE OWNER SAW.
+         * The factor used to be read back out of the published `--relay-zoom`, and this
+         * effect listens to `resize`, `orientationchange` and the visual viewport. NONE
+         * of those fire when `style.zoom` changes: zoom re-lays-out the page without
+         * moving `window.innerHeight`, so there is no resize event at all. The measured
+         * value therefore kept whatever scale was in force at the LAST rotation — switch
+         * to Large and the shell stayed `innerHeight` layout px rendered at 1.15, i.e.
+         * 15% too tall with the tab bar below the fold; switch to Small and it was 10%
+         * too short, leaving a dead band under the bar. Both of the owner's screenshots.
+         *
+         * So the factor now comes from the SAME STATE the provider derives its own from,
+         * via the hook, and `scale` is a dependency of this effect — which re-measures on
+         * the very commit that changes it. Reading the published variable instead would
+         * ALSO have been wrong by ordering: React runs a child's effects before its
+         * parent's, and the provider is the parent, so this effect would have read the
+         * previous scale on exactly the render that matters. */
+        const zoom = TEXT_SCALE_FACTOR[scale] ?? 1;
         root.style.setProperty("--relay-vh", Math.round(h / zoom) + "px");
       } catch { /* */ }
     };
@@ -325,7 +343,10 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
       vv?.removeEventListener("scroll", set);
       root.style.removeProperty("--relay-vh");
     };
-  }, []);
+    /* `scale` IS A REAL DEPENDENCY, not a lint appeasement: `style.zoom` fires no
+       resize event, so without it nothing would re-measure when the text size
+       changes and the shell would keep the height it had under the previous scale. */
+  }, [scale]);
 
   // Pre-fetch the threads & calls list once we have an identity so the
   // tab badges are warm by the time the user taps them.
@@ -351,7 +372,6 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
   /* One translator for BOTH nav surfaces (the desktop sidebar and the mobile tab bar
      both render from TABS inside this component) — two reads would be two chances for
      the two navs to disagree about what a tab is called. */
-  const t = useT();
   /* The live canvas runs in DARK ONLY — see the mount below for why. Derived here so the
      shell's own background and the mount cannot disagree: two separate reads of the
      theme is how you get an opaque shell over a running canvas, i.e. all of the cost and
