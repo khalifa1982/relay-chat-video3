@@ -22,7 +22,14 @@ name: Deploy to AWS (your-chat.io)
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    # `web-app-main` IS THE WEB APP'S MAINLINE (owner, 2026-08-01). `main` now
+    # carries the Expo/React-Native mobile project, so a push there must NOT
+    # deploy the web fleet — and this workflow does not exist on `main` anyway.
+    # The deploy role's OIDC trust policy was widened to this ref by the owner,
+    # confirmed by readback, which is what makes the dispatch and this push
+    # trigger able to assume it at all.
+    # `main` stays mobile until the clean two-repo split.
+    branches: [web-app-main]
 
 permissions:
   id-token: write

@@ -1,10 +1,15 @@
 name: CI
 
 on:
+  # `web-app-main` is the web app's mainline (owner, 2026-08-01); `main` carries
+  # the Expo mobile project. Both are listed so this keeps working whichever way
+  # the two-repo split lands, and so PRs targeting the web mainline get CI —
+  # `pull_request` workflows are read from the BASE branch, so a PR into a branch
+  # that is not listed here queues no checks at all.
   push:
-    branches: [main, master]
+    branches: [main, master, web-app-main]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, web-app-main]
 
 # Cancel in-flight CI runs when a new commit is pushed to the same branch / PR.
 concurrency:
