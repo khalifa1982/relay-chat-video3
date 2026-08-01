@@ -19,7 +19,20 @@ const SRC = fs.readFileSync(path.resolve(__dirname, "relayClient.ts"), "utf8");
 describe("iOS permission tip — one-time pointer to Safari's permanent Allow", () => {
   it("exists, is iOS-gated, and fires from ensureMedia after a successful grant", () => {
     expect(SRC).toMatch(/function maybeShowIosPermTip\(\) \{[\s\S]*?if \(!IS_IOS\) return;/);
-    expect(SRC).toMatch(/maybeShowIosPermTip\(\);[\s\S]{0,400}ensureLocalLevelMonitor\(\);/);
+    /* THE PROPERTY IS THE ORDER WITHIN THE ACQUISITION, not a character distance
+       (v2.106.88). This was a fixed `{0,400}` window between the two calls, so it broke
+       the moment a comment landed between them — the recurring fixed-slice fragility,
+       and it says nothing about whether the tip still fires from the right place.
+       Bounded by the function itself, and both calls are required to exist first so a
+       missing one cannot pass as an ordering. */
+    const at = SRC.indexOf("async function ensureMediaInner(");
+    expect(at).toBeGreaterThan(-1);
+    const body = SRC.slice(at, SRC.indexOf("\n  function ", at));
+    const tip = body.indexOf("maybeShowIosPermTip()");
+    const mon = body.indexOf("ensureLocalLevelMonitor()");
+    expect(tip).toBeGreaterThan(-1);
+    expect(mon).toBeGreaterThan(-1);
+    expect(tip).toBeLessThan(mon);
   });
 
   it("shows ONCE ever (localStorage flag) and skips installed PWAs (iOS persists grants there)", () => {

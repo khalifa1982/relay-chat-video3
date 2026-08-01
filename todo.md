@@ -18248,6 +18248,80 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.88 — mute survives a microphone reacquisition (call-quality doc, fix 1 of 4)
+
+The owner uploaded `relaycallqualityfixes.md` with four client-side call fixes. Each was
+checked against **this** source before anything was changed. The honest result is **one
+real bug and three refutations** — and the real one was found by chasing the SYMPTOM
+rather than accepting the stated mechanism.
+
+### Fix 1 — the stated mechanism is absent; the symptom was real anyway
+
+The doc says mute "disables a cached stream reference, not the track on the peer
+connection's senders, [because] after `replaceTrack` they are different objects".
+
+**Not true here.** Audio track object identity is preserved across every `replaceTrack`
+in this file: `replaceVideoEverywhere` is video-only, the camera flip rebuilds the
+stream from the *same* `audioTracks` array (and says so), and `recoverDeadLocalTrack`
+installs its fresh track into `localStream` before handing it to the senders.
+`outAudioTrack()` reads `localStream` first. Disabling `localStream`'s audio track
+disables the one the senders hold — they are one object.
+
+**But the symptom exists by a different route.** `ensureMediaInner`'s "cached media is
+dead — reacquiring fresh" branch installs a **wholly new stream**, and a fresh
+`getUserMedia` track defaults to `enabled = true`. Somebody muted when that ran came
+back **unmuted with the mic button still showing "off"**, because nothing touches it.
+The app said muted and the microphone was live — the one bug in this batch with a
+privacy consequence rather than a cosmetic one.
+
+The camera has had a guard for exactly this for releases: `syncCamEnabled`, whose own
+comment reads *"a fresh track defaults to enabled, which would otherwise turn the camera
+back ON"*. Audio never got the mirror. The only place `micOn` was re-applied to a new
+track was the dead-track recovery, which covers the `onended` route and not this one.
+
+`syncMicEnabled()` is that mirror, applied at the acquisition's single exit so a path
+added later inherits it, and `setMic` now goes through the **same helper** — two
+implementations would be two chances for the button and the wire to disagree, and the
+direction that fails is somebody being heard while muted. The cached-and-alive early
+return deliberately does not call it and needs nothing: it hands back the same track
+object, whose `enabled` already carries the mute. Said rather than glossed, because
+"every path" would be an overclaim.
+
+### Fixes 2–4 — refuted, with the evidence pinned so they stay refuted
+
+- **"Remote audio plays twice — element AND the visualizer's graph."** Both analysers
+  are sinks: the mesh speaker monitor and the local level meter each `connect(analyser)`
+  and nothing to `destination`, with comments saying so. The one `connect(destination)`
+  on a remote stream is the deliberate loudspeaker force, and it mutes the element only
+  **after** its own path is wired — so there is exactly one playback path at a time, and
+  a failed tap leaves the element audible rather than silent. The self tile is `muted`.
+- **"Route audio via `RelayNative.postMessage` and follow the shell's ack."** Already
+  shipped in v2.106.76, including the detail the doc does not mention: the two shells
+  disagree about the envelope name, so the web posts both.
+- **"Equal grid, `object-fit: cover` never `fill`."** Already true. Tiles are `cover`;
+  `contain` appears only for a shared **screen**, where cropping would cut off what is
+  being shown. `fill` appears nowhere.
+
+`client/src/lib/muteSurvivesReacquire.test.ts` (9). **All 7 tripwires verified by
+MUTATION** from a byte-exact backup off a confirmed-GREEN baseline; source
+byte-identical afterwards.
+
+**Two of my own assertions survived the first run and were real gaps** — the
+"covers both streams" pin matched `outStream()` and the guard as *text*, so gutting
+either `forEach` left it green while the function kept its shape and its comment and
+disabled nothing. Pinning that a name appears says nothing about what is done with it;
+rewritten to the two writes plus their count, and both now bite.
+
+**One pre-existing pin rewritten to the property**: `iosPermTip.test.ts` bounded the
+tip's position with a fixed `{0,400}`-character window, so a comment between the two
+calls broke it while saying nothing about the ordering it stands for.
+
+**Not verified on a device**, said plainly: there is no microphone here, so what is
+proven is that the mute state is re-applied wherever a stream is installed — not that a
+real handset stays silent.
+
+No schema change, no new dependency, no new env var, no server change. 5348 tests.
+
 ## v2.106.87 — a renumber reaches a client nobody touched
 
 Owner, on a real renumber:

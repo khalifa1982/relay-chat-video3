@@ -2253,6 +2253,26 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     if (activeFilter !== "none" && localStream.getVideoTracks().length > 0) {
       await ensurePipeline();
     }
+    /* THE MUTE STATE SURVIVES A REACQUISITION (v2.106.88).
+     *
+     * A fresh `getUserMedia` track defaults to `enabled = true`, and the branch above
+     * that finds the cached stream dead installs a WHOLLY NEW one — so a person who
+     * was muted when that ran came back UNMUTED, with the mic button still showing
+     * "off" because nothing touches it. The app said muted and the microphone was
+     * live: people hear you while you believe you are silent, which is the one class
+     * of bug here with a privacy consequence rather than a cosmetic one.
+     *
+     * The camera has had a guard for exactly this since the flip work — `syncCamEnabled`,
+     * whose own comment reads "a fresh track defaults to enabled, which would otherwise
+     * turn the camera back ON" — and audio simply never got the mirror. The only place
+     * `micOn` was re-applied to a new track was the dead-track recovery, which covers
+     * the `onended` route and not this one.
+     *
+     * Called at ensureMedia's SINGLE exit rather than beside each `localStream = `
+     * assignment: the paths that reuse the existing audio object (a camera flip, the
+     * voice→video upgrade) do not need it and are unharmed by it, while a path added
+     * later inherits the guarantee instead of having to remember it. */
+    syncMicEnabled();
     ensureLocalLevelMonitor();
     return outStream();
   }
@@ -2263,6 +2283,17 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     pub.getVideoTracks().forEach(t => (t.enabled = camOn));
     if (processedStream && localStream) {
       localStream.getVideoTracks().forEach(t => (t.enabled = camOn));
+    }
+  }
+  /* The audio mirror of `syncCamEnabled`. Both streams are covered for the same
+   * reason that one does: with a filter active the published stream is the canvas
+   * output, and the recovery path adds the live mic to BOTH, so disabling only one
+   * of them leaves a live copy on whichever the senders happen to hold. */
+  function syncMicEnabled() {
+    const pub = outStream();
+    pub.getAudioTracks().forEach(t => (t.enabled = micOn));
+    if (processedStream && localStream) {
+      localStream.getAudioTracks().forEach(t => (t.enabled = micOn));
     }
   }
   // Hot-swap the outgoing VIDEO track on every transport (mesh peers + SFU) with
@@ -3760,7 +3791,11 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   function setMic(on: boolean) {
     if (!localStream) return;
     micOn = on;
-    localStream.getAudioTracks().forEach(t => (t.enabled = on));
+    /* Through the SAME helper the acquisition path uses (v2.106.88), so there is one
+     * implementation of "which tracks carry the mute". Two would be two chances for
+     * the button and the wire to disagree, and the direction that disagreement fails
+     * is somebody being heard while their screen says muted. */
+    syncMicEnabled();
     $("micBtn")?.classList.toggle("off", !on);
     // Unmuting with a DEAD mic (OS killed the track) actually reacquires — the
     // recovery toast tells users to "toggle mute to retry", so the toggle must
