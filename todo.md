@@ -11278,6 +11278,37 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.68 — the preview says who said it (2026-08-01)
+
+The last of the design audit's thread-row findings, and the board's own sample data is what
+settles it: `preview: 'Amira: The final board is up'` for a group, `'You: Voice note · 0:42'`
+for my own.
+
+- [x] **IN A GROUP THE ROW'S TITLE IS THE GROUP**, so the words alone said nothing about who
+      said them — the one place a prefix carries real information, and it was absent.
+- [x] **FIRST NAME ONLY**: the row has one line, and a full name would eat the words it
+      introduces.
+- [x] **NULL FOR A DM, DECIDED SERVER-SIDE** — that row's title already IS the other person,
+      so prefixing their words with their own name says nothing. Set only in the group
+      branch, for the same reason the group id is.
+- [x] **AN UNRESOLVED SENDER YIELDS NULL, NEVER A PLACEHOLDER**: a wrong name on somebody
+      else's message is worse than no name. Resolved from `otherById`, the SAME map the row's
+      title and avatars come from, so a row can never name a member the projection does not
+      otherwise know about.
+- [x] **A LOCKED GROUP LEAKS NO MEMBER NAME**, which would be a worse leak than the preview
+      the lock replaces — gated on `!hidden`, and pinned, because naming who spoke is exactly
+      the activity the lock exists to cover.
+- [x] **INSIDE the truncating span**, so a long name is clipped WITH the words it introduces
+      rather than squeezing them to nothing on a narrow phone.
+- [x] **6 of 6 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+      backups; sources byte-identical afterwards.
+- [x] **A COLLAPSED SLICE IN MY OWN TEST, caught by its own non-empty guard**: `kind:
+      "group",` also occurs ~950 lines EARLIER in `createGroupConversation`, so a bare
+      `indexOf` put the end before the start and the slice was `""` — every assertion in it
+      would have passed vacuously the moment one was a `not.toMatch`.
+- [x] `pnpm verify` green: 285 files, 5111 tests. One additive wire field, no schema change,
+      no new dependency, no new env var.
+
 ## v2.106.67 — the stories strip stops scrolling away, and the Pin chip stops wearing the badge's green (2026-08-01)
 
 Two findings from the design audit, each **checked against the board's own markup before

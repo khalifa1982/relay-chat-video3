@@ -290,3 +290,56 @@ describe("v2.106.67 — the row carries a read receipt, and the count is the boa
     expect(delArm, "delivered must not wear the read colour").not.toMatch(/text-primary(?!-)/);
   });
 });
+
+describe("v2.106.67 — the preview says WHO said it", () => {
+  const DB = read("server/v2db.ts");
+  const ROUTERS = read("server/v2routers.ts");
+
+  it("a GROUP row resolves the sender's FIRST name; a DM row resolves none", () => {
+    /* Board 1c's own sample rows: `'Amira: The final board is up'` for a group,
+       `'You: Voice note · 0:42'` for my own. A DM needs no prefix — the row's title IS
+       the other person, so prefixing their words with their own name says nothing. */
+    expect(DB).toMatch(/lastMessageSender: null as string \| null,/); // the DM default
+    /* SEARCHED FROM THE START OFFSET: `kind: "group",` also occurs ~950 lines EARLIER in
+       `createGroupConversation`, so a bare `indexOf` put the end before the start and the
+       slice collapsed to "" — every assertion in it would have passed vacuously the moment
+       one was a `not.toMatch`. The non-empty guard is what caught it. */
+    const gStart = DB.indexOf('if (kind === "group") {');
+    expect(gStart).toBeGreaterThan(-1);
+    const grp = DB.slice(gStart, DB.indexOf('kind: "group",', gStart));
+    expect(grp.length, "the group-branch slice collapsed").toBeGreaterThan(300);
+    expect(grp, "first name only — a full name eats the words it introduces").toMatch(
+      /displayName\?\.trim\(\)\.split\(\/\\s\+\/\)\[0\]/,
+    );
+    expect(grp, "resolved from the SAME map the row's title comes from").toMatch(/otherById\.get\(senderId\)/);
+    expect(grp, "null for my own — the client says You: without a lookup").toMatch(
+      /latest\?\.mine === true \|\| senderId == null/,
+    );
+    expect(ROUTERS).toMatch(/lastMessageSender: b\.lastMessageSender,/);
+  });
+
+  it("an unresolved sender yields NULL, never a placeholder", () => {
+    // A wrong name on somebody else's message is worse than no name.
+    const gStart = DB.indexOf('if (kind === "group") {');
+    const grp = DB.slice(gStart, DB.indexOf('kind: "group",', gStart));
+    expect(grp.length, "the group-branch slice collapsed").toBeGreaterThan(300);
+    expect(grp).toMatch(/\?\? null\)/);
+    expect(grp, "no invented stand-in").not.toMatch(/"Someone"|"Unknown"|"Member"/);
+    expect(DB).toMatch(/lastMessageSender: senderName \|\| null,/);
+  });
+
+  it("a LOCKED group leaks no member NAME — a worse leak than the preview", () => {
+    /* `preview` is the literal "Locked" when hidden, and the prefix must not survive it:
+       naming who spoke is exactly the activity the lock exists to cover. */
+    const at = MESSAGES.indexOf("{!hidden && t.lastMessageAt &&");
+    expect(at, "the prefix is gone").toBeGreaterThan(-1);
+    const block = MESSAGES.slice(at, at + 400);
+    expect(block).toMatch(/!hidden/);
+    expect(block).toMatch(/t\.lastMessageMine \? "You" : t\.lastMessageSender/);
+    // …and it is INSIDE the truncating span, so a long name is clipped with the words
+    // it introduces rather than squeezing them to nothing.
+    const span = MESSAGES.lastIndexOf('className={"min-w-0 flex-1 truncate ', at);
+    expect(span, "the prefix must sit inside the truncating preview span").toBeGreaterThan(-1);
+    expect(span).toBeLessThan(at);
+  });
+});

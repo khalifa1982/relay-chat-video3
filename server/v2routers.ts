@@ -1863,6 +1863,7 @@ export const v2MessagesRouter = router({
         lastMessageStatusReply: b.lastMessageStatusReply,
         lastMessageMine: b.lastMessageMine,
         lastMessageStatus: b.lastMessageStatus,
+        lastMessageSender: b.lastMessageSender,
         unreadCount: b.unreadCount,
       };
     });

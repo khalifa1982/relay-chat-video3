@@ -4425,6 +4425,17 @@ export interface ThreadSummary {
    * `senderIdentityId` the lines above it read.
    */
   lastMessageStatus: string | null;
+  /**
+   * v2.106.67 — board 1c prefixes a GROUP row's preview with who sent it
+   * (`preview: 'Amira: The final board is up'`), because in a group the row's title is
+   * the group and the words alone say nothing about who said them.
+   *
+   * FIRST NAME only — the row has one line and a full name would eat the words it
+   * introduces. `null` for a DM (the row's title already IS the other person), for my own
+   * message (the client says "You:", which needs no lookup) and for a sender whose
+   * identity did not resolve — never a placeholder, since a wrong name is worse than none.
+   */
+  lastMessageSender: string | null;
 }
 
 /**
@@ -4479,6 +4490,8 @@ export function composeThreadSummaries(input: {
       mine?: boolean;
       /** v2.106.67 — the row's own `status` column, for board 1c's ✓✓ on the preview line. */
       status?: string | null;
+      /** v2.106.67 — who sent it, so a GROUP row can prefix its preview with their name. */
+      senderId?: number | null;
     } | null
   >;
 }): ThreadSummary[] {
@@ -4527,6 +4540,10 @@ export function composeThreadSummaries(input: {
       // NULL unless the newest message is MINE — a receipt is a statement about my own
       // message, and rendering one for a peer's would invert what ✓✓ means.
       lastMessageStatus: latest?.mine === true ? (latest?.status ?? null) : null,
+      // Null by default and set only in the GROUP branch below, for the same reason the
+      // group id is: a DM's row title already IS the other person, so prefixing their
+      // own words with their own name says nothing.
+      lastMessageSender: null as string | null,
       // Null by default and set only in the group branch, so a DM can never carry a
       // group's id by accident.
       groupNumber: null as string | null,
@@ -4540,8 +4557,23 @@ export function composeThreadSummaries(input: {
 
     if (kind === "group") {
       const fallbackTitle = members.map((m) => m.displayName).slice(0, 3).join(", ");
+      /* v2.106.67 — board 1c prefixes a group row's preview with who sent it
+         (`preview: 'Amira: The final board is up'`). FIRST NAME only: the row has one
+         line and a full name would eat the words it introduces.
+
+         NULL rather than a placeholder when the identity did not resolve — a wrong name
+         on somebody else's message is worse than no name — and null for my own, because
+         the client says "You:" without needing a lookup. Resolved from `otherById`, the
+         SAME map the row's title and avatars come from, so a row can never name a
+         member this projection does not otherwise know about. */
+      const senderId = latest?.senderId ?? null;
+      const senderName =
+        latest?.mine === true || senderId == null
+          ? null
+          : (otherById.get(senderId)?.displayName?.trim().split(/\s+/)[0] ?? null);
       result.push({
         ...base,
+        lastMessageSender: senderName || null,
         kind: "group",
         title: convo.title ?? null,
         otherIdentityId: 0,
@@ -4818,6 +4850,7 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
               statusReply: isStatusReply(m.meta),
               mine: m.senderIdentityId === identityId,
               status: m.status ?? null,
+              senderId: m.senderIdentityId,
             }
           : null,
       ])

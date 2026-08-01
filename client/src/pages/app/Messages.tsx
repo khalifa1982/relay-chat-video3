@@ -1036,6 +1036,29 @@ export default function MessagesPage({
                                       dir="auto"
                                       className={"min-w-0 flex-1 truncate " + (unread ? "text-foreground/90" : "")}
                                     >
+                                      {/* v2.106.67 — WHO SAID IT. Board 1c's own sample rows
+                                          are `'Amira: The final board is up'` for a group and
+                                          `'You: Voice note · 0:42'` for my own, and this row
+                                          had neither: in a GROUP the title is the group, so
+                                          the words alone said nothing about who said them.
+
+                                          INSIDE the truncating span rather than beside it, so
+                                          a long name is clipped WITH the words it introduces
+                                          instead of squeezing them to nothing on a narrow
+                                          phone.
+
+                                          THE LOCK COVERS IT BY CONSTRUCTION: `preview` is the
+                                          literal "Locked" when hidden, and this renders only
+                                          when there is a real message to introduce — so a
+                                          locked group cannot leak a member's NAME, which
+                                          would be a worse leak than the preview it replaces.
+                                          `lastMessageSender` is likewise null for a DM
+                                          server-side: the row's title already is that person. */}
+                                      {!hidden && t.lastMessageAt && (t.lastMessageMine || t.lastMessageSender) ? (
+                                        <span className="text-muted-foreground/70">
+                                          {t.lastMessageMine ? "You" : t.lastMessageSender}:{" "}
+                                        </span>
+                                      ) : null}
                                       {preview}
                                     </span>
                                   </>
