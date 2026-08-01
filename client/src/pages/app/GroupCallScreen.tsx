@@ -33,7 +33,7 @@ import { useRelayEngine } from "@/app/RelayEngine";
 import { presenceDot } from "@/app/presenceDot";
 import { matchQuery } from "@/app/searchMatch";
 import { formatPin } from "@/app/TopBar";
-import { buildInviteMessage, shareInviteMessage } from "@/app/inviteMessage";
+import { buildInviteMessage, shareInviteMessage, type Translate } from "@/app/inviteMessage";
 import { useT } from "@/app/i18n";
 import { formatElapsedSince } from "@shared/profileFields";
 
@@ -50,6 +50,7 @@ function initials(name: string): string {
  */
 export function GroupCallScreen({ onClose }: { onClose: () => void }) {
   const engine = useRelayEngine();
+  const t = useT();
   // Cap selection to what the ACTIVE transport can actually connect. QA M19:
   // engine.maxParticipants is the TOTAL room cap (mesh 6 / SFU 10) INCLUDING the
   // caller, but this picker counts the OTHERS to invite — so reserve the
@@ -125,9 +126,9 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
         <div className="flex shrink-0 items-center justify-between border-b border-border/60 p-4">
           <div className="flex items-center gap-2">
             <Users className="size-5 text-primary" />
-            <h3 className="font-semibold">Create group call</h3>
+            <h3 className="font-semibold">{t("groupcall.title")}</h3>
           </div>
-          <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close">
+          <Button size="icon" variant="ghost" onClick={onClose} aria-label={t("groupcall.close")}>
             <X className="size-4" />
           </Button>
         </div>
@@ -143,10 +144,15 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
                 key={n}
                 className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-1 text-xs font-medium text-primary"
               >
-                {nameByNumber.get(n) ?? n}
+                {/* `dir="auto"` because this is a saved contact NAME when there is one —
+                    an Arabic name inside an LTR chip renders its words backwards — and
+                    falls back to the bare 6-digit number, which `auto` resolves LTR. */}
+                <span dir="auto" className="[unicode-bidi:isolate]">
+                  {nameByNumber.get(n) ?? n}
+                </span>
                 <button
                   type="button"
-                  aria-label={`Remove ${n}`}
+                  aria-label={t("groupcall.removeSelected", { name: nameByNumber.get(n) ?? n })}
                   onClick={() => toggle(n)}
                   className="rounded-full hover:bg-primary/20"
                 >
@@ -169,9 +175,15 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
               // own cap now agrees with ours instead of being absent entirely.
               onChange={(e) => setManual(capPinInput(e.target.value))}
               onKeyDown={(e) => e.key === "Enter" && addManual()}
-              placeholder="Add a number (6 digits)"
+              placeholder={t("groupcall.addNumberPlaceholder")}
               maxLength={PIN_INPUT_MAXLENGTH}
               inputMode="numeric"
+              /* The number is Western digits in both languages, so the field stays LTR
+                 however the page is reading. (Worded to name no digit count: this element
+                 is parsed by a sweep that identifies a PIN box from its COPY, and a
+                 comment satisfying that search would make the sweep pass on prose — see
+                 the note on `groupcall.addNumberPlaceholder`.) */
+              dir="ltr"
               className="font-mono tracking-widest"
               disabled={atLimit}
             />
@@ -179,18 +191,22 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
               type="button"
               variant="secondary"
               onClick={addManual}
+              aria-label={t("groupcall.addNumber")}
               disabled={manual.length !== 6 || atLimit}
             >
-              <Plus className="size-4" />
+              <Plus className="size-4" aria-hidden="true" />
             </Button>
           </div>
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            {/* `start-3` is LOGICAL so the glyph moves to the field's trailing edge in
+                Arabic; `top-1/2 -translate-y-1/2` is VERTICAL centring and is
+                direction-independent, so it stays exactly as it is. */}
+            <Search className="absolute start-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search contacts"
-              className="pl-9"
+              placeholder={t("groupcall.searchPlaceholder")}
+              className="ps-9"
             />
           </div>
         </div>
@@ -198,10 +214,11 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
         {/* Contact list */}
         <div className="min-h-0 flex-1 overflow-y-auto">
           {contacts.isLoading ? (
-            <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+            <div className="p-6 text-sm text-muted-foreground">{t("groupcall.loading")}</div>
           ) : list.length === 0 ? (
+            // `text-center` is direction-independent and stays physical.
             <div className="p-8 text-center text-sm text-muted-foreground">
-              {search ? "No matches." : "No contacts yet — add numbers above."}
+              {search ? t("groupcall.noMatches") : t("groupcall.noContacts")}
             </div>
           ) : (
             <ul>
@@ -215,7 +232,7 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
                       disabled={disabled}
                       onClick={() => toggle(c.number)}
                       className={
-                        "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors disabled:opacity-40 " +
+                        "flex w-full items-center gap-3 px-4 py-2.5 text-start transition-colors disabled:opacity-40 " +
                         (on ? "bg-primary/10" : "hover:bg-muted/40")
                       }
                     >
@@ -234,15 +251,29 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
                             <span
                               aria-label={dot.label}
                               title={dot.label}
-                              className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card"
+                              // `-end-0.5` so the LED sits on the disc's trailing corner
+                              // in both directions — the same logical edge GroupInfoSheet
+                              // uses for the identical affordance.
+                              className="absolute -bottom-0.5 -end-0.5 size-3 rounded-full border-2 border-card"
                               style={{ background: dot.color, boxShadow: dot.glow || undefined }}
                             />
                           );
                         })()}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="truncate font-medium">{c.displayName || c.number}</div>
-                        <div className="font-mono text-xs text-muted-foreground">{c.number}</div>
+                        <div className="truncate font-medium" dir="auto">
+                          {c.displayName || c.number}
+                        </div>
+                        {/* The 6-digit number sits directly under a name that may be
+                            Arabic. `dir` goes on an INLINE span, never on the block: on
+                            the block it would also flip `text-align`, so the digits would
+                            align to the opposite edge from the name above them. The span
+                            pins the digits' own order while the column keeps the page's. */}
+                        <div className="font-mono text-xs text-muted-foreground">
+                          <span dir="ltr" className="[unicode-bidi:isolate]">
+                            {c.number}
+                          </span>
+                        </div>
                       </div>
                       <span
                         className={
@@ -275,7 +306,7 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
               }
               style={voice ? { background: "#2563eb" } : undefined}
             >
-              <Phone className="size-4" /> Voice
+              <Phone className="size-4" aria-hidden="true" /> {t("groupcall.voice")}
             </button>
             <button
               type="button"
@@ -285,11 +316,16 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
                 (!voice ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")
               }
             >
-              <Video className="size-4" /> Video
+              <Video className="size-4" aria-hidden="true" /> {t("groupcall.video")}
             </button>
           </div>
           <Button className="w-full" disabled={selected.size === 0} onClick={start}>
-            Start group call{selected.size > 0 ? ` (${selected.size})` : ""}
+            {/* Two keys rather than one with an always-present count: the button still
+                renders (disabled) with nothing picked, and "(0)" there is a number about
+                nothing. */}
+            {selected.size > 0
+              ? t("groupcall.startCount", { n: selected.size })
+              : t("groupcall.start")}
           </Button>
         </div>
       </div>
@@ -358,23 +394,26 @@ export function PartyLinesSection({
   const [deleting, setDeleting] = useState<{ id: number; title: string; number: string } | null>(null);
   const lines = trpc.partyLines.list.useQuery(undefined, {
     enabled: open,
-    refetchInterval: open ? 15_000 : false, // keep "N on the line" fresh
+    refetchInterval: open ? 15_000 : false, // keep the live head-count fresh
   });
   const createLine = trpc.partyLines.create.useMutation({
     onSuccess: (line) => {
       utils.partyLines.list.invalidate();
       setTitle("");
-      toast.success(`Party line created — its number is ${formatPin(line.number)}`);
+      toast.success(t("groupcall.lineCreated", { number: formatPin(line.number) }));
     },
-    onError: (err) => toast.error(err.message || "Couldn't create the party line."),
+    /* The server's own message wins when there is one — it names the actual refusal
+       (a duplicate title, the owner cap) and is not ours to guess at; the translated
+       fallback covers a transport failure that carries no message. */
+    onError: (err) => toast.error(err.message || t("groupcall.createFailed")),
   });
   const removeLine = trpc.partyLines.remove.useMutation({
     onSuccess: () => {
       utils.partyLines.list.invalidate();
       setManageId(null);
-      toast.success("Party line deleted");
+      toast.success(t("groupcall.lineDeleted"));
     },
-    onError: (err) => toast.error(err.message || "Couldn't delete the party line."),
+    onError: (err) => toast.error(err.message || t("groupcall.deleteFailed")),
   });
 
   /**
@@ -397,15 +436,19 @@ export function PartyLinesSection({
   function shareLine(l: { title: string; number: string }) {
     shareInviteMessage(t, {
       ...lineInvite(l),
-      onCopied: () => toast.success("Invite copied"),
-      onCopyFailed: () => toast.error("Couldn't copy the invite"),
+      onCopied: () => toast.success(t("groupcall.inviteCopied")),
+      onCopyFailed: () => toast.error(t("groupcall.inviteCopyFailed")),
     });
   }
   function copyLine(l: { title: string; number: string }) {
     navigator.clipboard
       ?.writeText(buildInviteMessage(t, lineInvite(l)))
-      .then(() => toast.success("Invite copied"))
-      .catch(() => toast.error("Couldn't copy"));
+      .then(() => toast.success(t("groupcall.inviteCopied")))
+      /* Deliberately still the SHORTER wording the copy path has always used. The two
+         are the same act said two ways, which is a copy question rather than a
+         translation one — unifying them here would be changing shipped wording under
+         cover of a localisation sweep. */
+      .catch(() => toast.error(t("groupcall.copyFailed")));
   }
 
   const rows = lines.data ?? [];
@@ -443,11 +486,13 @@ export function PartyLinesSection({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex w-full items-center gap-2 px-4 py-2.5 text-left hover:bg-muted/30 transition-colors"
+        className="flex w-full items-center gap-2 px-4 py-2.5 text-start hover:bg-muted/30 transition-colors"
       >
-        <Radio className="size-4 text-muted-foreground" />
-        <span className="flex-1 text-sm font-medium">Party lines</span>
-        <span className="text-xs text-muted-foreground">{open ? "Hide" : "Manage"}</span>
+        <Radio className="size-4 text-muted-foreground" aria-hidden="true" />
+        <span className="flex-1 text-sm font-medium">{t("groupcall.partyLines")}</span>
+        <span className="text-xs text-muted-foreground">
+          {open ? t("groupcall.hide") : t("groupcall.manage")}
+        </span>
         <ChevronDown className={"size-4 text-muted-foreground transition-transform " + (open ? "rotate-180" : "")} />
       </button>
       {open && (
@@ -457,18 +502,15 @@ export function PartyLinesSection({
               6, so a hardcoded 10 would be a false claim about capacity (the
               v2.106.9 argument). */}
           <p className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-muted-foreground">
-            Dial the number — you drop straight in · up to {lineCap}
+            {t("groupcall.lineHint", { max: lineCap })}
           </p>
-          <p className="text-xs text-muted-foreground">
-            A party line is a room with its own 6-digit number — anyone who dials it
-            lands in the same call. No ringing, no invites: just share the number.
-          </p>
+          <p className="text-xs text-muted-foreground">{t("groupcall.lineAbout")}</p>
           {atOwnerCap ? (
             // Rule 5: at the cap the field is ABSENT rather than a button that
             // always refuses. `max` was already on the wire and read by nothing,
             // so before this you typed a name and got a server refusal.
             <p className="text-xs text-muted-foreground">
-              You have all {maxLines} party lines — delete one to make room.
+              {t("groupcall.atCap", { max: maxLines })}
             </p>
           ) : (
             <div className="flex gap-2">
@@ -478,7 +520,10 @@ export function PartyLinesSection({
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && title.trim()) createLine.mutate({ title: title.trim() });
                 }}
-                placeholder="Line name (e.g. Family room)"
+                placeholder={t("groupcall.lineNamePlaceholder")}
+                // A line name is free text and may be Arabic or English whatever the app's
+                // own language is, so the field follows what is typed rather than the page.
+                dir="auto"
               />
               <Button
                 type="button"
@@ -486,14 +531,14 @@ export function PartyLinesSection({
                 onClick={() => createLine.mutate({ title: title.trim() })}
                 disabled={!title.trim() || createLine.isPending}
               >
-                {createLine.isPending ? "Creating…" : "New line"}
+                {createLine.isPending ? t("groupcall.creating") : t("groupcall.newLine")}
               </Button>
             </div>
           )}
           {lines.isLoading ? (
-            <div className="py-1 text-xs text-muted-foreground">Loading…</div>
+            <div className="py-1 text-xs text-muted-foreground">{t("groupcall.loading")}</div>
           ) : rows.length === 0 ? (
-            <div className="py-1 text-xs text-muted-foreground">No party lines yet.</div>
+            <div className="py-1 text-xs text-muted-foreground">{t("groupcall.noLines")}</div>
           ) : (
             rows.map((l) => {
               const live = l.liveCount > 0;
@@ -552,16 +597,16 @@ export function PartyLinesSection({
                           className="size-1.5 shrink-0 rounded-full motion-safe:animate-pulse"
                           style={{ background: "var(--rb, #3FE0C5)" }}
                         />
-                        Live · {l.liveCount} on the line
+                        {t("groupcall.live", { count: l.liveCount })}
                       </div>
                     ) : (
                       <div className="text-[11.5px] text-muted-foreground">
-                        {createdAgo(l.createdAt, now)}
+                        {createdAgo(t, l.createdAt, now)}
                       </div>
                     )}
                   </div>
-                  {/* One group so the two controls stay together and stay
-                      right-aligned on whichever line they land on. */}
+                  {/* One group so the two controls stay together and stay on the row's
+                      TRAILING edge (`ms-auto`, logical) on whichever line they land on. */}
                   <div className="ms-auto flex shrink-0 items-center gap-2">
                     {canJoin && (
                       <Button
@@ -569,10 +614,14 @@ export function PartyLinesSection({
                         size="sm"
                         variant={live ? "default" : "secondary"}
                         className={"h-11 px-3" + (live ? " rcta" : "")}
-                        aria-label={`Join ${l.title}`}
+                        aria-label={t("groupcall.joinAria", { title: l.title })}
                         onClick={() => joinLine(l)}
                       >
-                        Join
+                        {/* `dialer.join` REUSED rather than re-spelled: the Dialer's
+                            party-line Join and this one are the SAME act — dial the room,
+                            ring nobody — and two private keys is how one product ends up
+                            with two Arabic words for one button. */}
+                        {t("dialer.join")}
                       </Button>
                     )}
                     <Button
@@ -580,11 +629,11 @@ export function PartyLinesSection({
                       size="icon"
                       variant="ghost"
                       className="size-11"
-                      aria-label={`Manage ${l.title}`}
+                      aria-label={t("groupcall.manageAria", { title: l.title })}
                       aria-expanded={manageId === l.id}
                       onClick={() => setManageId((v) => (v === l.id ? null : l.id))}
                     >
-                      <SlidersHorizontal className="size-4" />
+                      <SlidersHorizontal className="size-4" aria-hidden="true" />
                     </Button>
                   </div>
                 </div>
@@ -599,8 +648,11 @@ export function PartyLinesSection({
             // clipped the ⋮ menu in v2.99.0). Paired with the theme tokens
             // because `.rsheet` is dark-scoped and declares nothing in light.
             <div className="rsheet space-y-2 rounded-[15px] border border-border bg-card p-3">
+              {/* `dir="auto"` on the heading, because the LINE'S OWN NAME is what leads
+                  it — an Arabic line name in an English app (or the reverse) has to set
+                  the direction of the sentence it sits inside. */}
               <div className="text-[11px] font-bold" dir="auto">
-                Manage “{managed.title}”
+                {t("groupcall.manageTitle", { title: managed.title })}
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -610,7 +662,7 @@ export function PartyLinesSection({
                   className="h-11"
                   onClick={() => copyLine(managed)}
                 >
-                  <Copy className="size-4" /> Copy dial-in
+                  <Copy className="size-4" aria-hidden="true" /> {t("groupcall.copyDialIn")}
                 </Button>
                 <Button
                   type="button"
@@ -619,7 +671,7 @@ export function PartyLinesSection({
                   className="h-11"
                   onClick={() => shareLine(managed)}
                 >
-                  <Share2 className="size-4" /> Share number
+                  <Share2 className="size-4" aria-hidden="true" /> {t("groupcall.shareNumber")}
                 </Button>
                 <Button
                   type="button"
@@ -629,7 +681,7 @@ export function PartyLinesSection({
                   disabled={removeLine.isPending}
                   onClick={() => setDeleting({ id: managed.id, title: managed.title, number: managed.number })}
                 >
-                  <Trash2 className="size-4" /> Delete
+                  <Trash2 className="size-4" aria-hidden="true" /> {t("groupcall.delete")}
                 </Button>
               </div>
             </div>
@@ -639,14 +691,20 @@ export function PartyLinesSection({
       <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this party line?</AlertDialogTitle>
+            <AlertDialogTitle>{t("groupcall.deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Anyone on the line right now keeps talking, and {deleting ? formatPin(deleting.number) : "the number"}{" "}
-              stops resolving for new dials. That number won't come back — it's retired for good.
+              {/* ONE string with the number substituted INTO it, never an English sentence
+                  split around the interpolation: Arabic puts the clause in a different
+                  order, and a sentence chopped at the English seam can only be
+                  re-assembled into nonsense (the reason `tn` exists). Substitution is by
+                  NAME, so `{number}` lands where each language wants it. */}
+              {t("groupcall.deleteBody", {
+                number: deleting ? formatPin(deleting.number) : t("groupcall.theNumber"),
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogCancel>{t("groupcall.deleteCancel")}</AlertDialogCancel>
             <AlertDialogAction
               destructive
               onClick={() => {
@@ -654,7 +712,7 @@ export function PartyLinesSection({
                 setDeleting(null);
               }}
             >
-              Delete line
+              {t("groupcall.deleteAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -670,10 +728,25 @@ const MAX_PARTY_LINES_FALLBACK = 10;
  * "Created 3h ago", reusing the app's ONE duration formatter rather than rolling
  * another (v2.106.12). Renders nothing for a missing value or a clock that has
  * gone backwards, which `formatElapsedSince` already answers as "".
+ *
+ * TAKES THE TRANSLATOR AS A PARAMETER because a module-level function cannot call a
+ * hook — the same reason `inviteMessage.ts` declares its own `Translate` type. The
+ * alternative (return the bare span and phrase it at the render site) would put the
+ * "" / non-"" decision in one place and the sentence in another, which is how one of
+ * them comes to be forgotten.
+ *
+ * `{ago}` itself is `formatElapsedSince`'s compact form ("3h 20m", "2d") and is NOT
+ * translated — that formatter is shared with `formatLastSeen` and every presence
+ * surface, so localising its unit letters is a change to `shared/profileFields.ts`
+ * and all of its callers, not to this screen.
  */
-function createdAgo(createdAt: Date | string | number | null | undefined, nowMs: number): string {
+function createdAgo(
+  t: Translate,
+  createdAt: Date | string | number | null | undefined,
+  nowMs: number,
+): string {
   if (createdAt == null) return "";
   const ms = createdAt instanceof Date ? createdAt.getTime() : new Date(createdAt).getTime();
   const ago = formatElapsedSince(ms, nowMs);
-  return ago ? `Created ${ago} ago` : "";
+  return ago ? t("groupcall.createdAgo", { ago }) : "";
 }

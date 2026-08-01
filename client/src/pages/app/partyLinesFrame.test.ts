@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "../../../../server/testing/codeOnly";
-import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
+import { copyOnScreen, whyCopyMissing } from "../../../../server/testing/copyOnScreen";
 
 /**
  * BOARD 5a — PARTY LINES (v2.106.22).
@@ -72,7 +72,11 @@ describe("colour vocabulary: green means ONLINE and nothing else", () => {
 
   it("the live count is painted with the cycling accent and reads from liveCount", () => {
     expect(R).toMatch(/color:\s*"var\(--rb, #3FE0C5\)"/);
-    expect(R).toMatch(/Live · \{l\.liveCount\} on the line/);
+    /* THROUGH THE KEY, because the sentence now lives in `dict/groupcall.ts` — and the
+       property was never the words, it is that the figure comes from `liveCount` rather
+       than from a guess. Both halves are asserted, so neither can drift alone. */
+    expect(R).toMatch(/t\("groupcall\.live", \{ count: l\.liveCount \}\)/);
+    expect(copyOnScreen(R, "on the line"), whyCopyMissing(R, "on the line")).toBe(true);
   });
 
   it("the live dot animates OPACITY only, behind a motion-safe gate", () => {
@@ -102,7 +106,8 @@ describe("the caption's capacity claim comes from the live transport", () => {
     // false claim about capacity (the v2.106.9 argument about the board's "2×4 fits
     // up to 8"). Read from the engine so it cannot go stale if the cap moves.
     expect(R).toMatch(/const lineCap = engine\.maxParticipants/);
-    expect(R).toMatch(/up to \{lineCap\}/);
+    expect(R).toMatch(/t\("groupcall\.lineHint", \{ max: lineCap \}\)/);
+    expect(copyOnScreen(R, "up to"), whyCopyMissing(R, "up to")).toBe(true);
     // MAX_PARTICIPANTS is cap−1 because it counts INVITEES; a party line's cap
     // counts everyone who dials in, the caller included. Reusing it would
     // understate a line's capacity by one.
@@ -163,14 +168,21 @@ describe("delete is irreversible and confirms in red", () => {
   it("the copy states all three true consequences", () => {
     const desc = R.slice(R.indexOf("<AlertDialogDescription"), R.indexOf("</AlertDialogDescription>"));
     expect(desc.length).toBeGreaterThan(60);
-    expect(desc).toMatch(/keeps talking/);
-    expect(desc).toMatch(/stops resolving for new dials/);
+    expect(copyOnScreen(desc, "keeps talking"), whyCopyMissing(desc, "keeps talking")).toBe(true);
+    expect(
+      copyOnScreen(desc, "stops resolving for new dials"),
+      whyCopyMissing(desc, "stops resolving for new dials"),
+    ).toBe(true);
     // The reservation ledger is MONOTONIC and `claimedAt` is already stamped, so
     // the reaper's `claimedAt IS NULL` guard can never reclaim the number. This
     // wording is also what trips `systemAlerts.test.ts`'s standing IRREVERSIBLE
     // sweep, so the new dialog is covered by that guard rather than by a
     // hand-kept list.
-    expect(desc).toMatch(/won't come back|retired for good/);
+    const permanent = ["won't come back", "retired for good"];
+    expect(
+      permanent.some((w) => copyOnScreen(desc, w)),
+      `none of ${JSON.stringify(permanent)} reaches this dialog`,
+    ).toBe(true);
   });
 });
 
@@ -243,7 +255,8 @@ describe("the owner cap is stated instead of refused", () => {
     // typed a name and got a server refusal (rule 5).
     expect(R).toMatch(/const atOwnerCap = rows\.length >= maxLines/);
     expect(R).toMatch(/\{atOwnerCap \? \(/);
-    expect(R).toMatch(/You have all \{maxLines\} party lines/);
+    expect(R).toMatch(/t\("groupcall\.atCap", \{ max: maxLines \}\)/);
+    expect(copyOnScreen(R, "You have all"), whyCopyMissing(R, "You have all")).toBe(true);
     expect(R).not.toMatch(/atOwnerCap = false/);
   });
 
@@ -257,7 +270,10 @@ describe("the quiet subline is honest about what it knows", () => {
     // `liveCount: 0` also means "the registry was unreadable", so claiming
     // "nobody on the line" would be a false statement about somebody's call —
     // the refusal v2.105.25 made on the sibling invite screen.
-    expect(R).toMatch(/createdAgo\(l\.createdAt, now\)/);
+    /* `t` is threaded in as the first argument rather than the helper reaching for a hook:
+       a module-level function cannot call one, and passing the translator is what
+       v2.106.85 settled for exactly this shape. */
+    expect(R).toMatch(/createdAgo\(t, l\.createdAt, now\)/);
     expect(R).not.toMatch(/Nobody on the line|Quiet/i);
     expect(R).not.toMatch(/last used/i);
   });
@@ -269,7 +285,7 @@ describe("the quiet subline is honest about what it knows", () => {
     expect(helper).toMatch(/formatElapsedSince\(ms, nowMs\)/);
     // Renders nothing rather than "Created  ago" for a missing value or a clock
     // that has gone backwards (which formatElapsedSince already answers as "").
-    expect(helper).toMatch(/return ago \? `Created \$\{ago\} ago` : ""/);
+    expect(helper).toMatch(/return ago \? t\("groupcall\.createdAgo", \{ ago \}\) : ""/);
     expect(helper).toMatch(/if \(createdAt == null\) return ""/);
   });
 });
@@ -293,9 +309,15 @@ describe("no capability was lost", () => {
     expect(R).toMatch(/navigator\.clipboard/);
     expect(R).toMatch(/\/i\/\$\{l\.number\}/);
     // Every toast still exists — create, delete, and both copy paths.
-    expect(R).toMatch(/Party line created/);
-    expect(R).toMatch(/Party line deleted/);
-    expect(R).toMatch(/Invite copied/);
+    expect(
+      copyOnScreen(R, "Party line created"),
+      whyCopyMissing(R, "Party line created"),
+    ).toBe(true);
+    expect(
+      copyOnScreen(R, "Party line deleted"),
+      whyCopyMissing(R, "Party line deleted"),
+    ).toBe(true);
+    expect(copyOnScreen(R, "Invite copied"), whyCopyMissing(R, "Invite copied")).toBe(true);
   });
 
   it("a CLOSED mount costs nothing, and the dial picker still mounts it closed", () => {
@@ -327,6 +349,6 @@ describe("no capability was lost", () => {
   });
 
   it("'on the line' survives as the phrase, so this and the Dialer state one fact one way", () => {
-    expect(R).toMatch(/on the line/);
+    expect(copyOnScreen(R, "on the line"), whyCopyMissing(R, "on the line")).toBe(true);
   });
 });

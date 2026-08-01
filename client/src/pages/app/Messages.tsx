@@ -632,13 +632,13 @@ export default function MessagesPage({
         {scopedThreads.length > 0 && (
           <div className="px-3 py-2 border-b border-border/60">
             <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+              <Search className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
               <input
                 value={threadSearch}
                 onChange={(e) => setThreadSearch(e.target.value)}
                 placeholder={tr("msg.search")}
                 aria-label={tr("msg.search")}
-                className="h-9 w-full rounded-lg border border-border/60 bg-muted/40 pl-9 pr-3 text-sm outline-none focus:border-primary/50"
+                className="h-9 w-full rounded-lg border border-border/60 bg-muted/40 ps-9 pe-3 text-sm outline-none focus:border-primary/50"
               />
             </div>
           </div>
@@ -715,7 +715,7 @@ export default function MessagesPage({
                       <span className="grid place-items-center" style={{ color: cat.hex }}>
                         {cat.icon}
                       </span>
-                      <span className="flex-1 text-left text-[11px] font-bold uppercase tracking-[0.12em]">
+                      <span className="flex-1 text-start text-[11px] font-bold uppercase tracking-[0.12em]">
                         {tr(cat.labelKey)}
                       </span>
                       <span className="text-[11px] text-muted-foreground">{cat.rows.length}</span>
@@ -908,7 +908,7 @@ export default function MessagesPage({
                                       <span
                                         aria-label={dot.label}
                                         title={dot.label}
-                                        className="absolute bottom-0 right-0 size-[15px] rounded-full border-2 border-card"
+                                        className="absolute bottom-0 end-0 size-[15px] rounded-full border-2 border-card"
                                         style={{ background: dot.color, boxShadow: dot.glow || undefined }}
                                       />
                                     );
@@ -930,7 +930,7 @@ export default function MessagesPage({
                                 (unread ? `, ${t.unreadCount} unread` : "") +
                                 (typing ? ", typing now" : "")
                               }
-                              className="flex min-h-[58px] min-w-0 flex-1 flex-col justify-center gap-[3px] rounded-xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                              className="flex min-h-[58px] min-w-0 flex-1 flex-col justify-center gap-[3px] rounded-xl text-start outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                             >
                               {/* LINE 1 — the name owns the width; only the small
                                   tier mark and the right-aligned time share it. */}
@@ -975,7 +975,7 @@ export default function MessagesPage({
                                   <span
                                     dir="ltr"
                                     className={
-                                      (t.pinned ? "shrink-0 pl-1.5 " : "ms-auto shrink-0 pl-1 ") +
+                                      (t.pinned ? "shrink-0 ps-1.5 " : "ms-auto shrink-0 ps-1 ") +
                                       "text-[11.5px] tabular-nums [unicode-bidi:isolate] " +
                                       /* Board 1c: unread is the ACCENT. `text-primary`, not
                                          the hardcoded `#fb923c` — measured 2.26:1 on the light
@@ -1274,7 +1274,7 @@ function GroupCallsSection({ onOpenPicker }: { onOpenPicker: () => void }) {
         <span className="grid place-items-center" style={{ color: "#22d3ee" }}>
           <PhoneCall className="size-3.5" />
         </span>
-        <span className="flex-1 text-left text-[11px] font-bold uppercase tracking-[0.12em]">
+        <span className="flex-1 text-start text-[11px] font-bold uppercase tracking-[0.12em]">
           Group calls
         </span>
       </div>
@@ -2461,7 +2461,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   <span
                     aria-label={dot.label}
                     title={dot.label}
-                    className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card"
+                    className="absolute -bottom-0.5 -end-0.5 size-2.5 rounded-full border-2 border-card"
                     style={{ background: dot.color, boxShadow: dot.glow || undefined }}
                   />
                 );
@@ -2652,13 +2652,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         <div className="absolute inset-0 z-20 flex flex-col bg-background md:bg-card">
           <div className="px-3 md:px-5 py-2.5 border-b border-border">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+              <Search className="absolute start-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
               <Input
                 autoFocus
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 placeholder={t("msg.searchInChat")}
-                className="pl-10"
+                className="ps-10"
               />
             </div>
           </div>
@@ -2935,7 +2935,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                           </div>
                         )}
                         <div className="text-4xl leading-tight">{m.body}</div>
-                        <div className={"text-[10px] mt-0.5 text-muted-foreground " + (mine ? "text-right" : "")}>
+                        <div className={"text-[10px] mt-0.5 text-muted-foreground " + (mine ? "text-end" : "")}>
                           {formatTime(m.createdAt)}
                           <Receipt status={m.status} mine={!!mine} />
                         </div>
@@ -2973,7 +2973,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   {sr && !(m as { locked?: boolean }).locked && (
                     <div
                       className={
-                        "mb-1 rounded-lg border-l-2 pl-2 py-0.5 text-[11px] leading-tight " +
+                        "mb-1 rounded-lg border-s-2 ps-2 py-0.5 text-[11px] leading-tight " +
                         (mine
                           ? "border-white/50 bg-white/15 text-white/90"
                           : "border-[#a78bfa]/60 bg-[#a78bfa]/10 text-foreground/80")
@@ -3033,7 +3033,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       <div
                         className={
                           "mb-1 rounded-[9px] py-1 ps-2 pe-2.5 leading-tight " +
-                          (mine ? "border-l-[2.5px] border-white/50 bg-white/15" : "border-l-[2.5px]")
+                          (mine ? "border-s-[2.5px] border-white/50 bg-white/15" : "border-s-[2.5px]")
                         }
                         style={
                           mine
@@ -3178,7 +3178,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         type="button"
                         onClick={() => revealExpiring(m)}
                         disabled={loadingThis}
-                        className="my-0.5 flex w-56 max-w-full items-center gap-2.5 rounded-xl bg-[#a78bfa]/10 px-2.5 py-2 text-left transition hover:bg-[#a78bfa]/20 active:scale-[0.98] disabled:opacity-70"
+                        className="my-0.5 flex w-56 max-w-full items-center gap-2.5 rounded-xl bg-[#a78bfa]/10 px-2.5 py-2 text-start transition hover:bg-[#a78bfa]/20 active:scale-[0.98] disabled:opacity-70"
                       >
                         <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#a78bfa]/15 text-[#a78bfa]">
                           <Timer className={"size-4" + (loadingThis ? " animate-spin" : "")} />
@@ -3283,7 +3283,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           onClick={scrollToBottom}
           aria-label={t("msg.scrollToLatest")}
           title={t("msg.scrollToLatestShort")}
-          className="absolute bottom-4 right-4 z-10 grid place-items-center size-10 rounded-full bg-card border border-border shadow-lg text-foreground hover:bg-muted/60 transition-opacity motion-reduce:transition-none"
+          className="absolute bottom-4 end-4 z-10 grid place-items-center size-10 rounded-full bg-card border border-border shadow-lg text-foreground hover:bg-muted/60 transition-opacity motion-reduce:transition-none"
         >
           <ChevronDown className="size-5" />
         </button>
@@ -3305,7 +3305,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           two words and removes the dependency on a default. */}
       <div className="shrink-0 px-3 md:px-5 py-3 border-t border-border bg-card md:rounded-b-2xl">
         {replyingTo && (
-          <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-muted/60 border-l-2 border-[#fb923c] text-sm">
+          <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-muted/60 border-s-2 border-[#fb923c] text-sm">
             <Reply className="size-4 shrink-0 text-[#fb923c]" />
             <div className="flex-1 min-w-0">
               <div className="text-[11px] font-semibold text-[#fb923c]">
@@ -3435,7 +3435,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           </div>
         )}
         {expire !== null && (
-          <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-[#a78bfa]/10 border-l-2 border-[#a78bfa] text-sm">
+          <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-[#a78bfa]/10 border-s-2 border-[#a78bfa] text-sm">
             <Timer className="size-4 shrink-0 text-[#a78bfa]" />
             <span className="flex-1 text-xs text-muted-foreground">
               {expire === "once"
@@ -3650,7 +3650,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <AlertDialogHeader>
             <AlertDialogTitle>{t("msg.infoTitle")}</AlertDialogTitle>
             <AlertDialogDescription asChild>
-              <div className="space-y-2 pt-1 text-left">
+              <div className="space-y-2 pt-1 text-start">
                 {(() => {
                   const m = infoOf;
                   if (!m) return null;
@@ -3732,7 +3732,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   type="button"
                   disabled={forwardBusy}
                   onClick={() => void forwardTo({ id: th.conversationId }, forwarding)}
-                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted disabled:opacity-50"
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted disabled:opacity-50"
                 >
                   <span className="truncate" dir="auto">
                     {th.title || th.peerDisplayName || th.peerNumber || t("msg.conversation")}
@@ -3962,7 +3962,7 @@ function Receipt({ status, mine }: { status?: string | null; mine: boolean }) {
         : "Sent";
   return (
     <span
-      className="ml-1 inline-flex items-center"
+      className="ms-1 inline-flex items-center"
       style={tickStyle}
       title={label}
       aria-label={label}
@@ -4083,7 +4083,7 @@ function ReactionChips({
   const chips = reactionChips(reactions, myPin);
   if (!chips.length) return null;
   return (
-    <div className={"flex flex-wrap gap-1 " + (mine ? "justify-end pr-1" : "justify-start pl-1") + " -mt-1"}>
+    <div className={"flex flex-wrap gap-1 " + (mine ? "justify-end pe-1" : "justify-start ps-1") + " -mt-1"}>
       {chips.map((c) => (
         <button
           key={c.emoji}
@@ -4185,19 +4185,25 @@ function MessageMenu({
           <div
             className={
               // Open toward the screen INTERIOR, never off the edge: the ⋮ for
-              // MY messages sits at the far LEFT of the row (justify-end puts the
-              // menu button before the bubble), so the menu must grow rightward
-              // (left-0); received messages have the ⋮ on the right, so grow
-              // leftward (right-0). The old mapping was reversed, which clipped
-              // the menu off the left edge on wide own-bubbles (e.g. voice notes).
+              // MY messages sits at the row's LEADING edge (justify-end puts the
+              // menu button before the bubble), so the menu must grow away from
+              // it (`start-0`); a received message has its ⋮ on the TRAILING edge,
+              // so it grows the other way (`end-0`). The v2.99.0 mapping was
+              // reversed, which clipped the menu off the edge on wide own-bubbles
+              // (e.g. voice notes).
+              //
+              // LOGICAL, not `left-0`/`right-0`: `justify-end` already flips with
+              // the text direction, so in RTL my ⋮ moves to the physical RIGHT and
+              // a frozen `left-0` would grow the menu straight off the screen —
+              // reinstating the very defect this exists to prevent, in Arabic only.
               "absolute z-50 bottom-8 min-w-36 rounded-xl border border-border bg-card p-1 shadow-xl " +
-              (mine ? "left-0" : "right-0")
+              (mine ? "start-0" : "end-0")
             }
           >
             <button
               type="button"
               onClick={() => { onReply(); setOpen(false); }}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
             >
               <Reply className="size-4" /> Reply
             </button>
@@ -4205,7 +4211,7 @@ function MessageMenu({
               <button
                 type="button"
                 onClick={() => { onReact(); setOpen(false); }}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
               >
                 <SmilePlus className="size-4" /> React
               </button>
@@ -4214,7 +4220,7 @@ function MessageMenu({
               <button
                 type="button"
                 onClick={() => { onCopy(); setOpen(false); }}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
               >
                 <Copy className="size-4" /> Copy
               </button>
@@ -4223,7 +4229,7 @@ function MessageMenu({
               <button
                 type="button"
                 onClick={() => { onForward(); setOpen(false); }}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
               >
                 <Forward className="size-4" /> Forward
               </button>
@@ -4232,7 +4238,7 @@ function MessageMenu({
               <button
                 type="button"
                 onClick={() => { onInfo(); setOpen(false); }}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
               >
                 <Info className="size-4" /> Info
               </button>
@@ -4245,7 +4251,7 @@ function MessageMenu({
               <button
                 type="button"
                 onClick={() => { onHide(); setOpen(false); }}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
               >
                 <EyeOff className="size-4" /> Delete for me
               </button>
@@ -4254,7 +4260,7 @@ function MessageMenu({
               <button
                 type="button"
                 onClick={() => { onDelete(); setOpen(false); }}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm text-destructive hover:bg-destructive/10"
               >
                 <Trash2 className="size-4" /> Unsend
               </button>
@@ -4268,7 +4274,7 @@ function MessageMenu({
               <button
                 type="button"
                 onClick={() => { onAdminDelete(); setOpen(false); }}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm text-destructive hover:bg-destructive/10"
               >
                 <Trash2 className="size-4" /> Remove for everyone
               </button>
@@ -5010,7 +5016,7 @@ function MediaLightbox({
         type="button"
         onClick={onClose}
         aria-label="Close preview"
-        className="absolute right-4 top-4 grid size-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
+        className="absolute end-4 top-4 grid size-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
       >
         <X className="size-5" />
       </button>
@@ -5022,15 +5028,17 @@ function MediaLightbox({
         rel="noreferrer"
         onClick={(e) => e.stopPropagation()}
         aria-label="Download"
-        className="absolute right-16 top-4 grid size-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
+        className="absolute end-16 top-4 grid size-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
       >
         <Download className="size-5" />
       </a>
-      {/* Sender + when, top-left, clear of the two controls top-right. Rendered only
-          when the opener supplied them, so a caller that has not (or an older one)
-          gets exactly the previous chrome rather than an empty row. */}
+      {/* Sender + when on the LEADING top corner, clear of the two controls on the
+          TRAILING one. Both sides are logical (`start-4` / `end-4` + `end-16`), so the
+          pair stays opposite each other in RTL instead of the caption sliding under the
+          close button. Rendered only when the opener supplied them, so a caller that has
+          not (or an older one) gets exactly the previous chrome rather than an empty row. */}
       {(media.sender || media.at) && (
-        <div className="absolute left-4 top-4 max-w-[55vw] text-white" onClick={(e) => e.stopPropagation()}>
+        <div className="absolute start-4 top-4 max-w-[55vw] text-white" onClick={(e) => e.stopPropagation()}>
           {media.sender && <div className="truncate text-sm font-semibold" dir="auto">{media.sender}</div>}
           {media.at && (
             <div className="mt-0.5 font-mono text-[11px] text-white/70" dir="ltr">
@@ -5146,7 +5154,7 @@ function AutoReplyToggle() {
             aria-checked={on}
             disabled={set.isPending}
             onClick={() => set.mutate({ enabled: !on })}
-            className="flex w-full items-start gap-3 rounded-2xl border border-border/60 p-3 text-left active:scale-[0.99] transition-transform"
+            className="flex w-full items-start gap-3 rounded-2xl border border-border/60 p-3 text-start active:scale-[0.99] transition-transform"
           >
             <span
               className={
@@ -5396,7 +5404,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                   type="button"
                   onClick={() => openSelfThread.mutate()}
                   disabled={pending}
-                  className="w-full text-left flex items-center gap-3 rounded-xl border border-border bg-muted/20 hover:bg-muted/40 transition-colors px-3 py-3 mb-4 disabled:opacity-50"
+                  className="w-full text-start flex items-center gap-3 rounded-xl border border-border bg-muted/20 hover:bg-muted/40 transition-colors px-3 py-3 mb-4 disabled:opacity-50"
                 >
                   <span className="size-10 rounded-xl bg-amber-500/15 grid place-items-center text-amber-400 shrink-0">
                     <StickyNote className="size-5" />
@@ -5443,7 +5451,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     onClick={() => openThread.mutate({ number: digitsOf(number) })}
                     disabled={digitsOf(number).length !== 6 || !isNumberQuery(number) || pending}
                   >
-                    <Search className="size-4 mr-1.5" /> Open
+                    <Search className="size-4 me-1.5" /> Open
                   </Button>
                 </div>
                 <SuggestList
@@ -5581,7 +5589,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     }
                     disabled={pending || groupTitle.trim().length === 0 || groupNumbers.length === 0}
                   >
-                    <Users className="size-4 mr-1.5" />
+                    <Users className="size-4 me-1.5" />
                     {/* Board 3d: "Create group · 4 members". The COUNT INCLUDES YOU,
                         because you are in the group you are creating — a count reading 3
                         for a group of 4 would be wrong about the thing it names. */}
@@ -5662,7 +5670,7 @@ function SuggestList({
               type="button"
               disabled={busy}
               onClick={() => onPick(c.number)}
-              className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition hover:bg-foreground/[0.04] active:bg-foreground/[0.07] disabled:opacity-50"
+              className="flex w-full items-center gap-2.5 px-3 py-2.5 text-start transition hover:bg-foreground/[0.04] active:bg-foreground/[0.07] disabled:opacity-50"
             >
               <span className="relative shrink-0">
                 {c.avatarUrl ? (
@@ -5684,7 +5692,7 @@ function SuggestList({
                 )}
                 <span
                   aria-label={dot.label}
-                  className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card"
+                  className="absolute -bottom-0.5 -end-0.5 size-2.5 rounded-full border-2 border-card"
                   style={{ background: dot.color, boxShadow: dot.glow || undefined }}
                 />
               </span>

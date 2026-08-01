@@ -12,6 +12,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "../../../server/testing/codeOnly";
+import { expandCopy } from "../../../server/testing/copyOnScreen";
 import {
   PIN_INPUT_MAXLENGTH,
   PIN_LENGTH,
@@ -22,6 +23,13 @@ import {
 
 const ROOT = path.resolve(__dirname, "..", "..", "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
+
+/* THE SWEEP'S OWN READER. Comments stripped (prose describing a PIN box is not one) and
+   `t("key")` resolved to its English (a placeholder that has moved into `dict/` names no
+   digits, so the predicate would find nothing and the file would report ZERO boxes while
+   still holding one — the v2.106.65 vacuity by a different road). One function, because
+   two call sites reading differently is how this arose. */
+const swept = (p: string) => expandCopy(codeOnly(read(p)));
 
 describe("capPinInput — the cap", () => {
   it("stops at six digits however many are typed or pasted", () => {
@@ -118,7 +126,15 @@ describe("every 6-digit PIN input in the app is capped", () => {
      walks every numeric input in the client and requires each to be bounded.
 
      A PIN box is identified by what it is FOR (its placeholder or label names a 6-digit
-     number), not by which file it is in, so a new one is covered rather than exempt. Two
+     number), not by which file it is in, so a new one is covered rather than exempt.
+
+     THE SOURCE IS RUN THROUGH `expandCopy` FIRST, and that is load-bearing rather than
+     tidy: a screen whose placeholder has moved into `dict/` renders `t("groupcall.…")`,
+     which names no digits at all — so the predicate would find NOTHING and the file would
+     report zero PIN boxes while still holding one. That is the exact vacuity v2.106.65
+     measured and rebuilt this sweep to prevent, arriving by a different road, and it is
+     why the non-vacuity assertion below (every listed file must yield a recognised box)
+     is what actually caught it. Same fix `systemAlerts.test.ts` needed at v2.106.85. Two
      shapes count as capped: routing through `capPinInput`, or the older
      `.replace(/\D/g,"").slice(0, 6)` that the Contacts and group-call pickers already use —
      both bound the digits, and churning working code to unify the spelling would be a bigger
@@ -194,7 +210,7 @@ describe("every 6-digit PIN input in the app is capped", () => {
        so this asserts the two properties that make the sweep mean anything: every listed
        file yields at least one element, and no "element" is implausibly large. */
     for (const f of FILES) {
-      const els = inputsIn(read(f));
+      const els = inputsIn(swept(f));
       expect(els.length, `${f} yielded no <input> — is the sweep still looking at it?`)
         .toBeGreaterThan(0);
       for (const el of els) {
@@ -213,7 +229,7 @@ describe("every 6-digit PIN input in the app is capped", () => {
     // "(6 digits)", which neither `6-digit` nor `six digits` matched, so its one PIN box
     // was skipped even after the parser started finding the element.
     for (const f of FILES) {
-      const six = inputsIn(read(f)).filter((el) => SIX_DIGIT.test(el) && !/maxLength=\{4\}/.test(el));
+      const six = inputsIn(swept(f)).filter((el) => SIX_DIGIT.test(el) && !/maxLength=\{4\}/.test(el));
       expect(six.length, `${f}: no input recognised as a 6-digit PIN box`).toBeGreaterThan(0);
     }
   });
@@ -252,7 +268,7 @@ describe("every 6-digit PIN input in the app is capped", () => {
       // COMMENT-STRIPPED: my own comments in these very inputs quote the `maxLength={9}`
       // they replaced, and the first run of this assertion matched THEM — the prose trap,
       // in the assertion written to catch a regression the prose is describing.
-      for (const el of inputsIn(codeOnly(read(f)))) {
+      for (const el of inputsIn(swept(f))) {
         if (!SIX_DIGIT.test(el) || /maxLength=\{4\}/.test(el)) continue;
         const literal = /maxLength=\{(\d+)\}/.exec(el);
         if (literal && Number(literal[1]) > PIN_INPUT_MAXLENGTH) {

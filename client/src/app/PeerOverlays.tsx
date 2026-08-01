@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { CONTACT_TAGS, TAG_COLOR, TAG_LABEL, contactTagsOf, toggleContactTag } from "@shared/contactTags";
+import {
+  CONTACT_TAGS,
+  TAG_COLOR,
+  contactTagsOf,
+  toggleContactTag,
+  type ContactTag,
+} from "@shared/contactTags";
 import { useLocation } from "wouter";
 import { Phone, Video, MessageSquare, UserPlus, Check, CircleUserRound, ArrowLeft, X, Search, Bell, BellOff } from "lucide-react";
 import { toast } from "sonner";
@@ -10,8 +16,9 @@ import { useRelayEngine } from "./RelayEngine";
 import { useIdentity } from "./useIdentity";
 import { RoleBadge, roleFromFlags } from "./VerifiedBadge";
 import { StatusViewer, type FeedGroup } from "@/pages/app/Status";
-import { profileStatusMeta } from "@shared/profileStatus";
+import { profileStatusMeta, type ProfileStatus } from "@shared/profileStatus";
 import { describePeerPresence } from "@shared/profileFields";
+import { useT, type TKey } from "./i18n";
 
 /**
  * Peer identity surfaces (v2.96, owner spec):
@@ -85,6 +92,58 @@ export function openPeerProfile(number: string, chat?: PeerProfileChatActions): 
 function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
   return parts.map((p) => p[0]?.toUpperCase() ?? "").join("") || "?";
+}
+
+/**
+ * The four label chips reuse `contacts.tag.*` RATHER THAN minting `peer.tag.*`.
+ *
+ * `dict/contacts.ts` records why in its own header: "Family" the section heading and
+ * "Family" the chip are the SAME fact and must never be able to disagree about their
+ * Arabic. A parallel key would hold that only until somebody edited one of the two.
+ *
+ * A module-level constant cannot call a hook, so it carries the KEY and the render site
+ * translates — the `CATEGORY_META` pattern from Contacts.
+ */
+const TAG_LABEL_KEY: Record<ContactTag, TKey> = {
+  vip: "contacts.tag.vip",
+  family: "contacts.tag.family",
+  friend: "contacts.tag.friend",
+  team: "contacts.tag.team",
+};
+
+/**
+ * The PROFILE STATUS label — the other meaning of the word (v2.101.1: a STATUS is the
+ * profile label, a STORY is the ephemeral post).
+ *
+ * `PROFILE_STATUS_META.label` is finished English from a shared module, so it is keyed
+ * here on the status's own key rather than looked up by its text: a `text → key` lookup
+ * would silently drop the translation the moment the English was edited, which is exactly
+ * what this dictionary's keying rule exists to prevent.
+ */
+const PROFILE_STATUS_LABEL_KEY: Record<ProfileStatus, TKey> = {
+  work: "peer.profileStatus.work",
+  vacation: "peer.profileStatus.vacation",
+  travel: "peer.profileStatus.travel",
+  free: "peer.profileStatus.free",
+  busy: "peer.profileStatus.busy",
+};
+
+/**
+ * Which countdown wording a day count needs.
+ *
+ * ENGLISH NEEDS TWO FORMS AND ARABIC NEEDS FOUR, which is the whole reason this is a
+ * function rather than a ternary at the render site: 1 is singular, 2 is the DUAL
+ * («يومين»), 3–10 take the plural of paucity («أيام») and 11+ take the singular
+ * accusative («يومًا»). Rendering "3 يومًا" is wrong in a way every Arabic reader sees.
+ *
+ * Exported as a test seam: which form a count selects is exactly the thing a source pin
+ * cannot answer.
+ */
+export function guestExpiryKey(daysLeft: number): TKey {
+  if (daysLeft <= 0) return "peer.guestExpiresToday";
+  if (daysLeft === 1) return "peer.guestExpiresInDay";
+  if (daysLeft === 2) return "peer.guestExpiresInTwoDays";
+  return daysLeft <= 10 ? "peer.guestExpiresInDaysFew" : "peer.guestExpiresInDaysMany";
 }
 
 /** Per-number status presence, derived from the shared status feed cache. */
@@ -176,6 +235,7 @@ export function PeerAvatar({
   /** Overlays (presence LEDs, direction badges) positioned by the caller. */
   children?: React.ReactNode;
 }) {
+  const t = useT();
   const statusMap = usePeerStatusMap();
   const st = number ? statusMap.get(number) : undefined;
   const label = name || number || "?";
@@ -241,8 +301,18 @@ export function PeerAvatar({
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); open(); }}
-      aria-label={st?.hasAny ? `View ${label}'s story` : `View ${label}'s profile`}
-      title={st?.hasUnseen ? "New story — tap to view" : st?.hasAny ? "View story" : "View profile"}
+      aria-label={
+        st?.hasAny
+          ? t("peer.viewNamedStory", { name: label })
+          : t("peer.viewNamedProfile", { name: label })
+      }
+      title={
+        st?.hasUnseen
+          ? t("peer.newStoryTap")
+          : st?.hasAny
+            ? t("peer.viewStory")
+            : t("peer.viewProfile")
+      }
       className={
         "relative inline-grid place-items-center shrink-0 outline-none rounded-full " +
         "focus-visible:ring-ring/50 focus-visible:ring-[3px] active:scale-95 transition-transform " +
@@ -298,6 +368,7 @@ export function ProfileStatusChip({
   note?: string | null;
   size?: "sm" | "md";
 }) {
+  const t = useT();
   const meta = profileStatusMeta(status);
   if (!meta) return null;
   const n = (note ?? "").trim();
@@ -312,7 +383,12 @@ export function ProfileStatusChip({
       }
     >
       <span aria-hidden="true">{meta.emoji}</span>
-      <span className="font-semibold text-foreground">{meta.label}</span>
+      {/* The shared constant's `label` is finished English; the KEY is what reaches the
+          dictionary. `meta.label` stays the fallback so a status added to the shared
+          module before this map still renders words rather than a blank chip. */}
+      <span className="font-semibold text-foreground">
+        {PROFILE_STATUS_LABEL_KEY[meta.key] ? t(PROFILE_STATUS_LABEL_KEY[meta.key]) : meta.label}
+      </span>
       {n && <span className="truncate text-muted-foreground">· {n}</span>}
     </div>
   );
@@ -325,11 +401,11 @@ export function GuestExpiryNote({
   daysLeft: number | null | undefined;
   size?: "sm" | "md";
 }) {
+  const t = useT();
   if (daysLeft == null) return null;
-  const label =
-    daysLeft <= 0
-      ? "Guest number expires today"
-      : `Guest number expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
+  // Western digits deliberately, in both languages: the count is interpolated, and an
+  // Arabic-Indic numeral beside a substituted Western one reads as a rendering fault.
+  const label = t(guestExpiryKey(daysLeft), { count: daysLeft });
   return (
     <div
       className={
@@ -338,12 +414,13 @@ export function GuestExpiryNote({
       }
     >
       <span className="font-semibold">{label}</span>
-      <span className="opacity-80">Opening RELAY resets the countdown</span>
+      <span className="opacity-80">{t("peer.guestCountdownResets")}</span>
     </div>
   );
 }
 
 export function PeerOverlaysHost() {
+  const t = useT();
   const [, setLocation] = useLocation();
   const engine = useRelayEngine();
   // Who WE are — needed only to answer "is this story mine?" for the synthetic
@@ -441,9 +518,9 @@ export function PeerOverlaysHost() {
   const upsert = trpc.contacts.upsert.useMutation({
     onSuccess: () => {
       utils.contacts.list.invalidate();
-      toast.success("Added to your contacts.");
+      toast.success(t("peer.added"));
     },
-    onError: () => toast.error("Couldn't add the contact — try again."),
+    onError: () => toast.error(t("peer.addFailed")),
   });
   /* Its own mutation rather than reusing `upsert` above: that one reports "Added
      to your contacts", which is the wrong sentence for a tag edit — and a toast
@@ -451,14 +528,14 @@ export function PeerOverlaysHost() {
      the chip itself lighting up IS the feedback; only a failure needs words. */
   const tagWrite = trpc.contacts.upsert.useMutation({
     onSuccess: () => utils.contacts.list.invalidate(),
-    onError: () => toast.error("Couldn't save that label — try again."),
+    onError: () => toast.error(t("peer.labelSaveFailed")),
   });
   const openThread = trpc.messages.openThread.useMutation({
     onSuccess: (res) => {
       setProfileNumber(null);
       setLocation(`/app/messages?c=${res.conversationId}`);
     },
-    onError: (err) => toast.error(err.message || "Couldn't open that conversation."),
+    onError: (err) => toast.error(err.message || t("peer.openFailed")),
   });
 
   const p = lookup.data;
@@ -502,7 +579,7 @@ export function PeerOverlaysHost() {
               identityId: null,
               conversationId: null,
               number: statusNumber,
-              displayName: p?.displayName || "Someone",
+              displayName: p?.displayName || t("peer.someone"),
               avatarUrl: p?.avatarUrl ?? null,
               isMe: !!me?.number && me.number === statusNumber,
             },
@@ -561,17 +638,27 @@ export function PeerOverlaysHost() {
         <DialogContent className="max-w-sm rounded-3xl p-6">
           {p ? (
             <div className="flex flex-col items-center text-center">
-              {/* Tapping the avatar always does something: a status if there is
+              {/* Tapping the avatar always does something: a STORY if there is
                   one, otherwise the full-screen profile view (owner request —
-                  the image must be clickable with or without a status). */}
+                  the image must be clickable with or without a story). */}
               <button
                 type="button"
                 onClick={() => {
                   if (statusInfo?.hasAny && profileNumber) openPeerStatus(profileNumber);
                   else setFullProfile(true);
                 }}
-                aria-label={statusInfo?.hasAny ? `View ${p.displayName || "profile"}'s status` : "View full profile"}
-                title={statusInfo?.hasAny ? "View story" : "View full profile"}
+                /* SAYS "STORY", NOT "STATUS" (v2.101.0). This aria-label used to read
+                   "View X's status" about the ephemeral post while the `title` on the
+                   same element already said "View story" — one control, two words for
+                   one thing. The story-vs-status sweep in `storyVsStatus.test.ts` could
+                   not see it: its extractor matches `aria-label={\`…`, and the ternary
+                   put an expression between the brace and the backtick. */
+                aria-label={
+                  statusInfo?.hasAny
+                    ? t("peer.viewNamedStory", { name: p.displayName || t("peer.profile") })
+                    : t("peer.viewFullProfile")
+                }
+                title={statusInfo?.hasAny ? t("peer.viewStory") : t("peer.viewFullProfile")}
                 className="rounded-full outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] active:scale-95 transition-transform"
               >
                 <PeerAvatar
@@ -583,10 +670,15 @@ export function PeerOverlaysHost() {
                 />
               </button>
               <DialogTitle className="mt-3 flex items-center gap-1.5 text-lg font-bold">
-                <span className="truncate max-w-[14rem]">{p.displayName || "Guest"}</span>
+                <span className="truncate max-w-[14rem]">{p.displayName || t("peer.guest")}</span>
                 <RoleBadge role={roleFromFlags(p.role, p.verified)} size={16} />
               </DialogTitle>
-              <div className="mt-0.5 font-mono text-sm text-muted-foreground" dir="ltr">
+              {/* `dir="ltr"` + an explicit isolate: beside Arabic the bidi algorithm
+                  otherwise reorders the two digit groups around the dash. */}
+              <div
+                className="mt-0.5 font-mono text-sm text-muted-foreground [unicode-bidi:isolate]"
+                dir="ltr"
+              >
                 {p.number.length === 6 ? `${p.number.slice(0, 3)}-${p.number.slice(3)}` : p.number}
               </div>
               {/* Prefer the caller's full last-seen line when it has one: the
@@ -606,21 +698,21 @@ export function PeerOverlaysHost() {
                   onClick={() => { if (profileNumber) openThread.mutate({ number: profileNumber }); }}
                   className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#fb923c]/12 px-2 py-3 text-xs font-semibold text-[#fb923c] active:scale-95 transition-transform"
                 >
-                  <MessageSquare className="size-5" /> Message
+                  <MessageSquare className="size-5" /> {t("peer.message")}
                 </button>
                 <button
                   type="button"
                   onClick={() => { if (profileNumber && engine.dial(profileNumber, { voice: true, displayName: p.displayName })) setProfileNumber(null); }}
                   className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#22c55e]/12 px-2 py-3 text-xs font-semibold text-[#22c55e] active:scale-95 transition-transform"
                 >
-                  <Phone className="size-5" /> Voice
+                  <Phone className="size-5" /> {t("peer.voice")}
                 </button>
                 <button
                   type="button"
                   onClick={() => { if (profileNumber && engine.dial(profileNumber, { voice: false, displayName: p.displayName })) setProfileNumber(null); }}
                   className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#38bdf8]/12 px-2 py-3 text-xs font-semibold text-[#38bdf8] active:scale-95 transition-transform"
                 >
-                  <Video className="size-5" /> Video
+                  <Video className="size-5" /> {t("peer.video")}
                 </button>
               </div>
 
@@ -638,7 +730,7 @@ export function PeerOverlaysHost() {
                     (saved ? "bg-muted/50 text-muted-foreground" : "bg-primary/12 text-primary")
                   }
                 >
-                  {saved ? (<><Check className="size-4" /> In your contacts</>) : (<><UserPlus className="size-4" /> Add to contacts</>)}
+                  {saved ? (<><Check className="size-4" /> {t("peer.inYourContacts")}</>) : (<><UserPlus className="size-4" /> {t("peer.addToContacts")}</>)}
                 </button>
                 {statusInfo?.hasAny && (
                   <button
@@ -650,7 +742,10 @@ export function PeerOverlaysHost() {
                     }}
                     className="flex items-center justify-center gap-2 rounded-2xl bg-[#8b5cf6]/12 px-3 py-2.5 text-sm font-semibold text-[#8b5cf6] active:scale-95 transition-transform"
                   >
-                    <CircleUserRound className="size-4" /> View status
+                    {/* "View STORY". This button opens the story viewer, and calling the
+                        ephemeral post a "status" here was the v2.101.0 vocabulary bug
+                        the sibling `title` above had already got right. */}
+                    <CircleUserRound className="size-4" /> {t("peer.viewStory")}
                   </button>
                 )}
               </div>
@@ -675,14 +770,18 @@ export function PeerOverlaysHost() {
                     className="mb-1.5 font-mono text-[9.5px] font-bold uppercase text-muted-foreground"
                     style={{ letterSpacing: ".22em" }}
                   >
-                    Your labels
+                    {t("peer.yourLabels")}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
-                    {CONTACT_TAGS.map((t) => {
-                      const on = myTags.includes(t);
+                    {/* THE LOOP VARIABLE IS `tag`, NOT `t`. It used to be `t`, which now
+                        shadows the translator — and a shadowed `t` here would silently be
+                        a ContactTag rather than a function. Removing the shadow beats
+                        aliasing around it (v2.106.85). */}
+                    {CONTACT_TAGS.map((tag) => {
+                      const on = myTags.includes(tag);
                       return (
                         <button
-                          key={t}
+                          key={tag}
                           type="button"
                           disabled={tagWrite.isPending}
                           aria-pressed={on}
@@ -693,15 +792,15 @@ export function PeerOverlaysHost() {
                                second control the frame does not draw. */
                             tagWrite.mutate({
                               number: profileNumber,
-                              tags: toggleContactTag(myTags, t),
+                              tags: toggleContactTag(myTags, tag),
                             });
                           }}
                           style={
                             on
                               ? {
-                                  background: TAG_COLOR[t] + "21",
-                                  border: "1px solid " + TAG_COLOR[t] + "73",
-                                  color: TAG_COLOR[t],
+                                  background: TAG_COLOR[tag] + "21",
+                                  border: "1px solid " + TAG_COLOR[tag] + "73",
+                                  color: TAG_COLOR[tag],
                                 }
                               : undefined
                           }
@@ -710,15 +809,20 @@ export function PeerOverlaysHost() {
                             (on ? "" : "border border-border bg-muted/40 text-muted-foreground hover:text-foreground")
                           }
                         >
-                          {on && <Check className="mr-1 inline size-3" />}
-                          {TAG_LABEL[t]}
+                          {/* `me-1`, not `mr-1`: the tick precedes the label in READING
+                              order, so the gap has to swap sides in Arabic. */}
+                          {on && <Check className="me-1 inline size-3" />}
+                          {t(TAG_LABEL_KEY[tag])}
                         </button>
                       );
                     })}
                   </div>
+                  {/* ONE key with the name INSIDE it. This used to be the sentence split
+                      around `{p.displayName}`, which cannot be translated: Arabic does not
+                      put the person between the same two fragments, so the halves could
+                      only be re-assembled into nonsense. */}
                   <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
-                    Only you see these — they are never shared with{" "}
-                    {p.displayName || "them"}.
+                    {t("peer.labelsPrivate", { name: p.displayName || t("peer.them") })}
                   </p>
                 </div>
               )}
@@ -733,7 +837,7 @@ export function PeerOverlaysHost() {
                       onClick={() => { const f = chatActions.onSearch; setProfileNumber(null); f?.(); }}
                       className="flex items-center justify-center gap-2 rounded-2xl bg-muted/60 px-3 py-2.5 text-sm font-semibold text-foreground active:scale-95 transition-transform"
                     >
-                      <Search className="size-4 shrink-0" /> <span className="truncate">Search chat</span>
+                      <Search className="size-4 shrink-0" /> <span className="truncate">{t("peer.searchChat")}</span>
                     </button>
                   )}
                   {chatActions.onToggleMute && (
@@ -746,9 +850,9 @@ export function PeerOverlaysHost() {
                       }
                     >
                       {chatActions.muted ? (
-                        <><BellOff className="size-4 shrink-0" /> <span className="truncate">Muted</span></>
+                        <><BellOff className="size-4 shrink-0" /> <span className="truncate">{t("peer.muted")}</span></>
                       ) : (
-                        <><Bell className="size-4 shrink-0" /> <span className="truncate">Notifications</span></>
+                        <><Bell className="size-4 shrink-0" /> <span className="truncate">{t("peer.notifications")}</span></>
                       )}
                     </button>
                   )}
@@ -757,8 +861,8 @@ export function PeerOverlaysHost() {
             </div>
           ) : (
             <div className="py-10 text-center text-sm text-muted-foreground">
-              <DialogTitle className="sr-only">Profile</DialogTitle>
-              {lookup.isLoading ? "Loading profile…" : "This number isn't on RELAY."}
+              <DialogTitle className="sr-only">{t("peer.profile")}</DialogTitle>
+              {lookup.isLoading ? t("peer.loadingProfile") : t("peer.notOnRelay")}
             </div>
           )}
         </DialogContent>
@@ -772,14 +876,14 @@ export function PeerOverlaysHost() {
           className="dark fixed inset-0 z-[140] flex flex-col text-foreground"
           role="dialog"
           aria-modal="true"
-          aria-label={`${p.displayName || "Profile"} full profile`}
+          aria-label={t("peer.fullProfileOf", { name: p.displayName || t("peer.profile") })}
         >
           <div aria-hidden className="absolute inset-0 bg-background/95 backdrop-blur-xl" onClick={() => setFullProfile(false)} />
           <div className="relative flex items-center justify-between px-5 pt-[max(1rem,env(safe-area-inset-top))]">
             <button
               type="button"
               onClick={() => setFullProfile(false)}
-              aria-label="Back"
+              aria-label={t("peer.back")}
               className="rounded-full p-2 text-muted-foreground hover:bg-muted"
             >
               <ArrowLeft className="size-5" />
@@ -787,7 +891,7 @@ export function PeerOverlaysHost() {
             <button
               type="button"
               onClick={() => { setFullProfile(false); setProfileNumber(null); }}
-              aria-label="Close"
+              aria-label={t("peer.close")}
               className="rounded-full p-2 text-muted-foreground hover:bg-muted"
             >
               <X className="size-5" />
@@ -795,7 +899,7 @@ export function PeerOverlaysHost() {
           </div>
 
           <div className="relative flex flex-1 flex-col items-center overflow-y-auto px-6 pb-10 text-center">
-            {/* Big avatar — tap opens the status when there is one. */}
+            {/* Big avatar — tap opens the STORY when there is one. */}
             <button
               type="button"
               disabled={!statusInfo?.hasAny}
@@ -805,10 +909,14 @@ export function PeerOverlaysHost() {
               <PeerAvatar number={p.number} name={p.displayName} avatarUrl={p.avatarUrl} size={148} clickable={false} />
             </button>
             <div className="mt-4 flex items-center gap-2">
-              <h1 className="text-2xl font-extrabold tracking-tight">{p.displayName || "Guest"}</h1>
+              <h1 className="text-2xl font-extrabold tracking-tight">{p.displayName || t("peer.guest")}</h1>
               <RoleBadge role={roleFromFlags(p.role, p.verified)} size={20} />
             </div>
-            <div className="mt-1 font-mono text-base text-muted-foreground" dir="ltr">
+            {/* As in the popup: isolated, or the digit groups reorder beside Arabic. */}
+            <div
+              className="mt-1 font-mono text-base text-muted-foreground [unicode-bidi:isolate]"
+              dir="ltr"
+            >
               {p.number.length === 6 ? `${p.number.slice(0, 3)}-${p.number.slice(3)}` : p.number}
             </div>
             {describePeerPresence(p) && (
@@ -825,21 +933,21 @@ export function PeerOverlaysHost() {
                 onClick={() => { if (profileNumber) openThread.mutate({ number: profileNumber }); }}
                 className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#fb923c]/12 px-2 py-4 text-sm font-semibold text-[#fb923c] active:scale-95 transition-transform"
               >
-                <MessageSquare className="size-6" /> Message
+                <MessageSquare className="size-6" /> {t("peer.message")}
               </button>
               <button
                 type="button"
                 onClick={() => { if (profileNumber && engine.dial(profileNumber, { voice: true, displayName: p.displayName })) { setFullProfile(false); setProfileNumber(null); } }}
                 className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#22c55e]/12 px-2 py-4 text-sm font-semibold text-[#22c55e] active:scale-95 transition-transform"
               >
-                <Phone className="size-6" /> Voice
+                <Phone className="size-6" /> {t("peer.voice")}
               </button>
               <button
                 type="button"
                 onClick={() => { if (profileNumber && engine.dial(profileNumber, { voice: false, displayName: p.displayName })) { setFullProfile(false); setProfileNumber(null); } }}
                 className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#38bdf8]/12 px-2 py-4 text-sm font-semibold text-[#38bdf8] active:scale-95 transition-transform"
               >
-                <Video className="size-6" /> Video
+                <Video className="size-6" /> {t("peer.video")}
               </button>
             </div>
 
@@ -853,7 +961,7 @@ export function PeerOverlaysHost() {
                   (saved ? "bg-muted/50 text-muted-foreground" : "bg-primary/12 text-primary")
                 }
               >
-                {saved ? (<><Check className="size-4" /> In your contacts</>) : (<><UserPlus className="size-4" /> Add to contacts</>)}
+                {saved ? (<><Check className="size-4" /> {t("peer.inYourContacts")}</>) : (<><UserPlus className="size-4" /> {t("peer.addToContacts")}</>)}
               </button>
             </div>
           </div>

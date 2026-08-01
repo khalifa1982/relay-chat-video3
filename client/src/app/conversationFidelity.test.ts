@@ -104,7 +104,11 @@ describe("board 3c's reply quote", () => {
   it("is accent-tinted with an accent LEFT border, on a received bubble", () => {
     expect(quote).toMatch(/rgba\(var\(--rb-rgb[^)]*\),\s*\.08\)/);
     expect(quote).toMatch(/borderLeftColor: "var\(--rb, #3FE0C5\)"/);
-    expect(quote).toMatch(/border-l-\[2\.5px\]/);
+    /* `border-s-`, not `border-l-`: the quote's rule is a bar on the side the text
+       STARTS from, so in Arabic it belongs on the right. Board 3c draws it left because
+       the board is an English mock — the property is "leading edge", not "left". */
+    expect(quote).toMatch(/border-s-\[2\.5px\]/);
+    expect(quote).not.toMatch(/border-l-/);
     expect(quote).toMatch(/rounded-\[9px\]/);
   });
 

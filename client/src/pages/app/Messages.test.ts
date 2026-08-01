@@ -181,11 +181,16 @@ describe("Messages.tsx — v2.71 iMessage-grade chat UI", () => {
     expect(SRC).toMatch(/last seen \{timeAgo\(thread\.peerLastSeenAt\)\}/);
   });
   it("the message ⋮ menu opens toward the screen INTERIOR, never off the edge (v2.99.0)", () => {
-    // Own messages (justify-end) put the ⋮ at the far LEFT of the row, so the
-    // menu must grow rightward (left-0); received grow leftward (right-0). The
-    // old reversed mapping clipped the menu off the left edge on wide own
-    // bubbles (voice notes). Pin the corrected direction.
-    expect(SRC).toMatch(/\(mine \? "left-0" : "right-0"\)/);
-    expect(SRC).not.toMatch(/\(mine \? "right-0" : "left-0"\)/);
+    /* Own messages (justify-end) put the ⋮ at the row's far START, so the menu must
+       grow toward the interior; received grow the other way. The old REVERSED mapping
+       clipped the menu off the edge on wide own bubbles (voice notes).
+
+       LOGICAL as of #156's RTL pass, and this one is not cosmetic: `left-0` is a fixed
+       side, so in Arabic — where the whole row mirrors — it would grow toward the edge
+       the menu is trying to avoid, i.e. it would reinstate the exact v2.99.0 clipping in
+       the other language. `start-0`/`end-0` follow the row. */
+    expect(SRC).toMatch(/\(mine \? "start-0" : "end-0"\)/);
+    expect(SRC).not.toMatch(/\(mine \? "end-0" : "start-0"\)/);
+    expect(SRC).not.toMatch(/\(mine \? "(left|right)-0"/);
   });
 });

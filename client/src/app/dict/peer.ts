@@ -1,11 +1,142 @@
 import type { Entry } from "./types";
 
 /**
+ * The PEER surfaces — the profile popup, the full-screen profile, the avatar ring
+ * and the guest-expiry note (`client/src/app/PeerOverlays.tsx`).
+ *
  * One module per surface — see `dict/index.ts` for why.
  *
- * PRE-REGISTERED EMPTY (v2.106.93) so the per-screen translation sweep can run several
- * contributors at once without every one of them editing `dict/index.ts`. Fill this in
- * with the screen's strings; both halves are required by `Entry`, which is what makes an
- * untranslated string a compile error rather than a review item.
+ * ── THE STORY / STATUS VOCABULARY IS v2.101.0'S, AND THIS SCREEN WAS BREAKING IT ──────
+ * A STORY is the ephemeral post; a STATUS is the profile label. Two of this screen's
+ * strings called the ephemeral post a "status" — the popup avatar's `aria-label`
+ * ("View X's status") and the button that opens the story viewer ("View status") — while
+ * the `title` on the very same element already said "View story". Both now say STORY, in
+ * both languages, and the Arabic uses «قصة» for the post exactly as `dict/status.ts` does.
+ * The PROFILE LABEL keeps its own words below (`peer.profileStatus.*`), so the two ideas
+ * never collapse onto one Arabic word — which is the way this correction would be undone
+ * silently, in the language where nobody would notice.
+ *
+ * ── THE TAG CHIPS DELIBERATELY HAVE NO KEYS HERE ─────────────────────────────────────
+ * They reuse `contacts.tag.*`. `dict/contacts.ts` records the reason in its own header:
+ * "Family" the section heading and "Family" the chip are the SAME fact and must never be
+ * able to disagree about their Arabic. Minting `peer.tag.*` would guarantee that only for
+ * as long as nobody edited one of the two.
+ *
+ * ── WESTERN DIGITS, AS EVERYWHERE ELSE ───────────────────────────────────────────────
+ * The guest countdown interpolates a number, so it stays Western (v2.106.84): an
+ * Arabic-Indic numeral beside a substituted Western one reads as a rendering fault.
+ *
+ * ── AND THE COUNTDOWN NEEDS FOUR ARABIC FORMS, NOT TWO ───────────────────────────────
+ * English needs day/days. Arabic counts differently and getting it wrong is visible to
+ * every reader: 1 is singular, 2 is the DUAL («يومين»), 3–10 take the plural of paucity
+ * («أيام»), and 11+ take the singular accusative («يومًا»). `guestExpiryKey` in
+ * PeerOverlays.tsx picks the form; two of these share an English half, which is fine —
+ * the dictionary's uniqueness rule is about KEYS.
  */
-export const PEER = {} as const satisfies Record<string, Entry>;
+export const PEER = {
+  // ── The avatar ring (PeerAvatar), on every surface that draws a face ──
+  "peer.viewStory": { en: "View story", ar: "عرض القصة" },
+  "peer.viewProfile": { en: "View profile", ar: "عرض الملف الشخصي" },
+  "peer.newStoryTap": { en: "New story — tap to view", ar: "قصة جديدة — انقر للعرض" },
+  /* The possessive has no Arabic equivalent, so the name MOVES: "X's story" becomes
+     "story of X". Safe because `translate` substitutes by NAME rather than by position. */
+  "peer.viewNamedStory": { en: "View {name}'s story", ar: "عرض قصة {name}" },
+  "peer.viewNamedProfile": {
+    en: "View {name}'s profile",
+    ar: "عرض الملف الشخصي لـ{name}",
+  },
+  "peer.viewFullProfile": { en: "View full profile", ar: "عرض الملف الشخصي الكامل" },
+  /* Same reorder, the other way round: English leads with the name, Arabic ends with it. */
+  "peer.fullProfileOf": { en: "{name} full profile", ar: "الملف الشخصي الكامل لـ{name}" },
+
+  // ── Name fallbacks. Never a raw key, and never blank: these stand in for a person. ──
+  "peer.someone": { en: "Someone", ar: "شخص ما" },
+  "peer.guest": { en: "Guest", ar: "ضيف" },
+  "peer.profile": { en: "Profile", ar: "الملف الشخصي" },
+  "peer.them": { en: "them", ar: "هذا الشخص" },
+
+  // ── The guest-expiry note ──
+  "peer.guestExpiresToday": { en: "Guest number expires today", ar: "ينتهي رقم الضيف اليوم" },
+  "peer.guestExpiresInDay": {
+    en: "Guest number expires in 1 day",
+    ar: "ينتهي رقم الضيف خلال يوم واحد",
+  },
+  "peer.guestExpiresInTwoDays": {
+    en: "Guest number expires in 2 days",
+    ar: "ينتهي رقم الضيف خلال يومين",
+  },
+  "peer.guestExpiresInDaysFew": {
+    en: "Guest number expires in {count} days",
+    ar: "ينتهي رقم الضيف خلال {count} أيام",
+  },
+  "peer.guestExpiresInDaysMany": {
+    en: "Guest number expires in {count} days",
+    ar: "ينتهي رقم الضيف خلال {count} يومًا",
+  },
+  /* The half that makes the figure non-frightening — a bare countdown implies one nobody
+     can stop, and `touchGuestExpiry` really does push it forward on every visit. */
+  "peer.guestCountdownResets": {
+    en: "Opening RELAY resets the countdown",
+    ar: "فتح RELAY يعيد ضبط العدّ التنازلي",
+  },
+
+  // ── The three primary actions, on both profile surfaces ──
+  "peer.message": { en: "Message", ar: "رسالة" },
+  "peer.voice": { en: "Voice", ar: "صوت" },
+  "peer.video": { en: "Video", ar: "فيديو" },
+
+  // ── Saving the person ──
+  "peer.addToContacts": { en: "Add to contacts", ar: "أضف إلى جهات الاتصال" },
+  "peer.inYourContacts": { en: "In your contacts", ar: "في جهات اتصالك" },
+
+  // ── The label chips (board 4a). The LABELS themselves come from `contacts.tag.*`. ──
+  "peer.yourLabels": { en: "Your labels", ar: "تصنيفاتك" },
+  /* ONE sentence with the name inside it, never two fragments glued around an
+     interpolation: the emphasised part does not sit between the same two words in Arabic,
+     so a split sentence can only be re-assembled into nonsense. */
+  "peer.labelsPrivate": {
+    en: "Only you see these — they are never shared with {name}.",
+    ar: "أنت وحدك من يرى هذه التصنيفات — ولا تتم مشاركتها أبدًا مع {name}.",
+  },
+
+  // ── The two conversation-scoped extras (present only when opened from a chat) ──
+  "peer.searchChat": { en: "Search chat", ar: "البحث في المحادثة" },
+  "peer.muted": { en: "Muted", ar: "مكتوم" },
+  "peer.notifications": { en: "Notifications", ar: "الإشعارات" },
+
+  // ── Chrome ──
+  "peer.back": { en: "Back", ar: "رجوع" },
+  "peer.close": { en: "Close", ar: "إغلاق" },
+
+  // ── The two states the popup can be in before it has a person ──
+  "peer.loadingProfile": { en: "Loading profile…", ar: "جارٍ تحميل الملف الشخصي…" },
+  "peer.notOnRelay": { en: "This number isn't on RELAY.", ar: "هذا الرقم غير مسجّل على RELAY." },
+
+  // ── Toasts ──
+  "peer.added": { en: "Added to your contacts.", ar: "تمت الإضافة إلى جهات اتصالك." },
+  "peer.addFailed": {
+    en: "Couldn't add the contact — try again.",
+    ar: "تعذّرت إضافة جهة الاتصال — أعد المحاولة.",
+  },
+  "peer.labelSaveFailed": {
+    en: "Couldn't save that label — try again.",
+    ar: "تعذّر حفظ هذا التصنيف — أعد المحاولة.",
+  },
+  "peer.openFailed": { en: "Couldn't open that conversation.", ar: "تعذّر فتح هذه المحادثة." },
+
+  /* ── THE PROFILE STATUS LABEL — the OTHER meaning of the word ──────────────────────
+     `PROFILE_STATUS_META` is a shared module-level constant, so it cannot call a hook and
+     its `label` is finished English. These translate it AT THE RENDER SITE keyed on the
+     status's own key, which is the `labelKey` pattern this dictionary already uses for
+     `CATEGORY_META` — never a `text → key` lookup, which would silently drop the
+     translation the moment somebody edited the English.
+
+     If the Profile sweep needs these words too, REUSE THESE KEYS rather than minting
+     `profile.status.*`: it is one fact, and two keys is how one fact acquires two Arabic
+     words. */
+  "peer.profileStatus.work": { en: "At work", ar: "في العمل" },
+  "peer.profileStatus.vacation": { en: "On vacation", ar: "في إجازة" },
+  "peer.profileStatus.travel": { en: "Travelling", ar: "مسافر" },
+  "peer.profileStatus.free": { en: "Free to talk", ar: "متفرّغ للحديث" },
+  "peer.profileStatus.busy": { en: "Busy", ar: "مشغول" },
+} as const satisfies Record<string, Entry>;

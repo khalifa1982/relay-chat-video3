@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 import { contactUpdateKeys } from "./v2db";
 import {
   CONTACT_TAGS,
@@ -381,7 +382,11 @@ describe("board 4a — the profile chips are the only multi-tag editor", () => {
   const UI = codeOnly(readFileSync(resolve(process.cwd(), "client/src/app/PeerOverlays.tsx"), "utf8"));
 
   it("assignment toggles through the shared rule", () => {
-    expect(UI).toMatch(/tags: toggleContactTag\(myTags, t\)/);
+    /* The chip's own value, whatever the loop variable is called — v2.106.85 renamed it
+       away from `t` because the translator now owns that name on this surface, and
+       REMOVING a shadow beats aliasing around it. The property is that the write goes
+       through `toggleContactTag` with the current tag set, not what the binding spells. */
+    expect(UI).toMatch(/tags: toggleContactTag\(myTags, \w+\)/);
   });
 
   it("offered ONLY for a saved contact", () => {
@@ -402,7 +407,9 @@ describe("board 4a — the profile chips are the only multi-tag editor", () => {
 
   it("says out loud that the labels are private", () => {
     // Nobody should assign "VIP" believing the other person is told.
-    expect(UI).toMatch(/Only you see these/);
+    expect(copyOnScreen(UI, "Only you see these"), whyCopyMissing(UI, "Only you see these")).toBe(
+      true,
+    );
   });
 });
 
