@@ -517,6 +517,7 @@ class RelayAudioRouter(private val context: Context) {
     private var webView: WebView? = null
     private var currentRoute: String = "speaker"
     private var isActive = false
+    private var audioFocusRequest: android.media.AudioFocusRequest? = null
 
     // Receiver for audio route changes (headset plug/unplug, BT connect/disconnect)
     private val routeChangeReceiver = object : BroadcastReceiver() {
@@ -541,6 +542,23 @@ class RelayAudioRouter(private val context: Context) {
         isActive = true
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
 
+        // Request audio focus so other apps release the mic
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val focusReq = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                .setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                .build()
+            audioManager.requestAudioFocus(focusReq)
+            audioFocusRequest = focusReq
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+        }
+
         // Register for route change events
         val filter = IntentFilter().apply {
             addAction(AudioManager.ACTION_HEADSET_PLUG)
@@ -562,6 +580,14 @@ class RelayAudioRouter(private val context: Context) {
         if (audioManager.isBluetoothScoOn) {
             audioManager.isBluetoothScoOn = false
             audioManager.stopBluetoothSco()
+        }
+        // Abandon audio focus so other apps can use the mic again
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            audioFocusRequest = null
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(null)
         }
         try { context.unregisterReceiver(routeChangeReceiver) } catch (_: Exception) {}
     }
@@ -689,7 +715,7 @@ class RelayNativeInterface(
             val json = JSONObject(jsonString)
             val type = json.optString("type", "")
             when (type) {
-                "webCallEnded" -> handleWebCallEnded(json)
+                "webCallEnded", "callEnded" -> handleWebCallEnded(json)
                 "setAudioRoute" -> handleSetAudioRoute(json)
                 else -> Log.d(TAG, "Unknown message type: \$type")
             }

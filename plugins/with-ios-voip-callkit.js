@@ -251,12 +251,22 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessa
     }
 
     switch type {
-    case "webCallEnded":
+    case "webCallEnded", "callEnded":
       let callId = json["callId"] as? String ?? ""
       NSLog("[RELAY VoIP] Web ended call: %@", callId)
       let callUUID = uuid(for: callId)
       callKitProvider?.reportCall(with: callUUID, endedAt: Date(), reason: .remoteEnded)
       removeCall(callId)
+      // §3 MIC RELEASE: Deactivate audio session with notifyOthersOnDeactivation
+      // so other apps (e.g. voice recorders) can reclaim the mic immediately.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        do {
+          try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+          NSLog("[RELAY VoIP] Audio session deactivated after call end")
+        } catch {
+          NSLog("[RELAY VoIP] Failed to deactivate audio session: %@", error.localizedDescription)
+        }
+      }
 
     case "setAudioRoute":
       let route = json["route"] as? String ?? ""
@@ -407,8 +417,15 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessa
   }
 
   public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
-    NSLog("[RELAY VoIP] Audio session deactivated")
-    // no-op per spec
+    NSLog("[RELAY VoIP] Audio session didDeactivate callback")
+    // §3 MIC RELEASE: Ensure the session is fully deactivated with notification
+    // to other apps. This is the definitive teardown point from CallKit.
+    do {
+      try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+      NSLog("[RELAY VoIP] Audio session deactivated with notifyOthersOnDeactivation")
+    } catch {
+      NSLog("[RELAY VoIP] didDeactivate setActive(false) error: %@", error.localizedDescription)
+    }
   }
 
   // §3.5 item 3: Mute sync — forward CXSetMutedCallAction into the WebView

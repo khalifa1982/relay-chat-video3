@@ -247,10 +247,43 @@ export const CALL_WATCH_JS = `(() => {
         state.active = active;
         state.hasVideo = hasVideo;
         post();
-        // When a call ends, reset the speaker-forced flag for the next call.
+        // When a call ends, tear down all media and notify native.
         if (!active && wasActive) {
           speakerForced = false;
           wasRinging = false;
+          // §1 MIC RELEASE: Stop every track we ever acquired
+          localStreams.forEach(function (s) {
+            try {
+              s.getTracks().forEach(function (t) {
+                try { t.stop(); } catch (e) {}
+              });
+            } catch (e) {}
+          });
+          localStreams.clear();
+          // Also stop tracks held by any remaining peer connection senders
+          peers.forEach(function (pc) {
+            try {
+              var senders = pc.getSenders ? pc.getSenders() : [];
+              senders.forEach(function (sn) {
+                try { if (sn.track) sn.track.stop(); } catch (e) {}
+              });
+            } catch (e) {}
+          });
+          // Notify native shell that the call is truly over (mic release trigger)
+          try {
+            if (window.RelayNative && window.RelayNative.postMessage) {
+              window.RelayNative.postMessage(JSON.stringify({ type: 'callEnded' }));
+            } else if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.RelayNative) {
+              window.webkit.messageHandlers.RelayNative.postMessage(JSON.stringify({ type: 'callEnded' }));
+            }
+          } catch (e) {}
+          // Also send via ReactNativeWebView for RN-side handling
+          try {
+            window.ReactNativeWebView &&
+              window.ReactNativeWebView.postMessage(
+                JSON.stringify({ type: 'webCallEnded', callId: '' })
+              );
+          } catch (e) {}
         }
       }
     };

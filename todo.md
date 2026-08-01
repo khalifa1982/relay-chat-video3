@@ -267,3 +267,16 @@
 - [x] Defect B: Update IncomingCallActivity deep-link URI from manusrelaymobile:// to relay:// (4 URIs)
 - [x] Bump versionCode to 33, version to 1.0.26
 - [x] tsc clean + 65 tests pass
+
+## Round 28 — Microphone Release Fix (relay-mic-release-fix.md)
+
+- [x] §1: Add JS-side media teardown injection (stop all tracks on callEnded/webCallEnded)
+- [x] §1: Send callEnded message to native via RelayNative bridge after track teardown
+- [x] §2: Android — add audio focus request (AUDIOFOCUS_GAIN_TRANSIENT) in RelayAudioRouter.activate()
+- [x] §2: Android — abandon audio focus in RelayAudioRouter.deactivate()
+- [x] §2: Android — handle callEnded message type in RelayNativeInterface (alongside webCallEnded)
+- [x] §3: iOS — deactivate AVAudioSession with .notifyOthersOnDeactivation in webCallEnded handler (0.3s delay)
+- [x] §3: iOS — didDeactivate now calls setActive(false, .notifyOthersOnDeactivation) (was no-op)
+- [x] §3: iOS — handle callEnded message type alongside webCallEnded
+- [x] Verify both callEnded and webCallEnded trigger full teardown on both platforms
+- [x] tsc clean + 65 tests pass
