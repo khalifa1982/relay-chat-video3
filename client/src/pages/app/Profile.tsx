@@ -18,6 +18,7 @@ import {
   Mail,
   MessageSquare,
   Monitor,
+  Languages,
   Moon,
   Palette,
   PhoneMissed,
@@ -100,6 +101,7 @@ import {
   clearBiometric,
 } from "@/app/biometric";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useLocale } from "@/app/i18n";
 
 /**
  * Profile page (`/app/profile`) — the app's control centre (v2.99.89).
@@ -1033,34 +1035,104 @@ function NumberAndFlag({
    ============================================================ */
 function ThemeToggleSection() {
   const { theme, setTheme } = useTheme();
+  const { locale, setLocale, scale, setScale, t } = useLocale();
   const isDark = theme === "dark";
+
+  /* One well per control, all three in the pane the owner named ("in the profile
+     appearance section where you mentioned dark or light themes, add options for
+     Arabic, English, big font size and small font size"). They live together
+     because they are one question — how the app is presented — and splitting them
+     across panes is how somebody changes the language and never finds the size. */
+  const Well = ({ children }: { children: React.ReactNode }) => (
+    <div className="rounded-2xl border border-border bg-card/50 p-1 grid grid-cols-2 gap-1">
+      {children}
+    </div>
+  );
+
   return (
-    <section className="space-y-3">
-      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-        Appearance
-      </Label>
-      <div className="rounded-2xl border border-border bg-card/50 p-1 grid grid-cols-2 gap-1">
-        <Button
-          type="button"
-          variant={isDark ? "default" : "ghost"}
-          className="justify-center gap-2"
-          onClick={() => setTheme("dark")}
-        >
-          <Moon className="size-4" /> Dark
-        </Button>
-        <Button
-          type="button"
-          variant={!isDark ? "default" : "ghost"}
-          className="justify-center gap-2"
-          onClick={() => setTheme("light")}
-        >
-          <Sun className="size-4" /> Light
-        </Button>
+    <section className="space-y-5">
+      <div className="space-y-2.5">
+        <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+          {t("appearance.theme")}
+        </Label>
+        <Well>
+          <Button
+            type="button"
+            variant={isDark ? "default" : "ghost"}
+            className="justify-center gap-2"
+            onClick={() => setTheme("dark")}
+          >
+            <Moon className="size-4" /> {t("appearance.dark")}
+          </Button>
+          <Button
+            type="button"
+            variant={!isDark ? "default" : "ghost"}
+            className="justify-center gap-2"
+            onClick={() => setTheme("light")}
+          >
+            <Sun className="size-4" /> {t("appearance.light")}
+          </Button>
+        </Well>
       </div>
-      <p className="text-xs text-muted-foreground">
-        Switches the entire app theme. Your choice is remembered on this
-        device.
-      </p>
+
+      <div className="space-y-2.5">
+        <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+          {t("appearance.language")}
+        </Label>
+        <Well>
+          {/* Each option is labelled IN ITS OWN LANGUAGE — "English" and "العربية",
+              never "Arabic" written in English. Somebody who has landed in the wrong
+              language has to be able to read their way out, which is exactly the
+              case where a translated label fails them. */}
+          <Button
+            type="button"
+            variant={locale === "en" ? "default" : "ghost"}
+            className="justify-center gap-2"
+            onClick={() => setLocale("en")}
+            lang="en"
+          >
+            <Languages className="size-4" /> English
+          </Button>
+          <Button
+            type="button"
+            variant={locale === "ar" ? "default" : "ghost"}
+            className="justify-center gap-2"
+            onClick={() => setLocale("ar")}
+            lang="ar"
+          >
+            <Languages className="size-4" /> العربية
+          </Button>
+        </Well>
+      </div>
+
+      <div className="space-y-2.5">
+        <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+          {t("appearance.textSize")}
+        </Label>
+        <div className="rounded-2xl border border-border bg-card/50 p-1 grid grid-cols-3 gap-1">
+          {(
+            [
+              ["sm", t("appearance.small"), "text-[11px]"],
+              ["md", t("appearance.normal"), "text-[13px]"],
+              ["lg", t("appearance.large"), "text-[15px]"],
+            ] as const
+          ).map(([key, label, size]) => (
+            <Button
+              key={key}
+              type="button"
+              variant={scale === key ? "default" : "ghost"}
+              className="justify-center"
+              onClick={() => setScale(key)}
+            >
+              {/* The label is rendered at the size it selects, so the control shows
+                  what it does rather than describing it. */}
+              <span className={size}>{label}</span>
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <p className="text-xs text-muted-foreground">{t("appearance.remembered")}</p>
     </section>
   );
 }

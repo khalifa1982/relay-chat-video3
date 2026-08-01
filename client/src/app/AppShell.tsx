@@ -296,7 +296,17 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
          * non-positive reading is the one that cannot be true, so that is what falls back;
          * failing toward "too tall" there is still recoverable, while zero is a blank app. */
         const h = measured > 0 ? measured : Math.max(320, window.innerHeight);
-        root.style.setProperty("--relay-vh", h + "px");
+        /* TEXT SIZE SCALES THE PAGE WITH `zoom`, AND THAT CHANGES THE UNIT THIS VALUE
+         * IS SPENT IN (v2.106.83). Every reading above — innerHeight, vv.height,
+         * offsetTop — is in UNZOOMED CSS pixels, while `--relay-vh` is consumed by a
+         * layout that `zoom` has already scaled. Assigning the raw number at zoom 1.15
+         * makes the shell 15% too tall and pushes the composer under the fold, which is
+         * the v2.106.29 defect arriving by a different road. Divide by the factor the
+         * LocaleProvider published, so the two cannot disagree about what the scale is;
+         * a missing or unparseable value reads as 1, i.e. exactly today's behaviour. */
+        const zoomRaw = parseFloat(getComputedStyle(root).getPropertyValue("--relay-zoom"));
+        const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0 ? zoomRaw : 1;
+        root.style.setProperty("--relay-vh", Math.round(h / zoom) + "px");
       } catch { /* */ }
     };
     set();

@@ -9,6 +9,7 @@ import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { LocaleProvider } from "./app/i18n";
 import "./index.css";
 
 const queryClient = new QueryClient();
@@ -77,7 +78,12 @@ createRoot(document.getElementById("root")!).render(
   <trpc.Provider client={trpcClient} queryClient={queryClient}>
     <QueryClientProvider client={queryClient}>
       <ThemeProvider defaultTheme="dark" switchable>
-        <App />
+        {/* Language + text size sit INSIDE the theme provider and above everything
+            else: both write `<html>`, and the appearance pane changes all three from
+            one screen, so they must share a tree. */}
+        <LocaleProvider>
+          <App />
+        </LocaleProvider>
       </ThemeProvider>
     </QueryClientProvider>
   </trpc.Provider>

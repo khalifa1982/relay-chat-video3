@@ -18248,6 +18248,40 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.83
+
+The app learns Arabic, and text size, from one provider (owner: "you need to add an Arabic
+switch... the system will switch completely... add an option within the settings to adjust
+the font size to big or small").  FOUNDATION ONLY, said plainly: the provider, dictionary,
+RTL, text-size control and the three-way Appearance pane ship here; the per-screen string
+sweep continues, and an absent key renders ENGLISH rather than a raw key.
+
+The dictionary is ONE map of pairs under `satisfies`, so an untranslated string is a TYPE
+ERROR rather than a review item — the owner's "whatever changes you make impact both
+languages" expressed in the type system.  Keyed, not looked up by English text: a copy edit
+would otherwise drop the translation silently, and "Call" the noun and "Call" the verb are
+different words in Arabic.  Two tests stop the cheap fake (pasting English into `ar`): the
+halves must differ except for a language's own endonym, and the Arabic half must contain
+Arabic script.  Each language is labelled in its OWN language, so somebody stranded in the
+wrong one can read their way out.
+
+TEXT SIZE IS `zoom`, AND THE MEASUREMENT DECIDED IT: this app sizes 203 type declarations in
+arbitrary pixels against 541 rem-based, so a root font-size scales ~73% of the text and
+leaves the rest — which reads as broken, not bigger.  It costs one thing: `--relay-vh` is
+measured in UNZOOMED px and spent on a zoomed layout, so the scale is published as
+`--relay-zoom` and AppShell divides by it.  Measured at 390x844: divided, the tab bar bottom
+is exactly 844 = innerHeight at 0.90/1.00/1.15; undivided at 1.15 it is 971 — a 127px
+overflow with the composer 48px below the fold (the v2.106.29 defect).
+
+A harness bug of my own, corrected rather than reported as a finding: the first run
+multiplied getBoundingClientRect by the zoom and called a correct layout a 127px overflow —
+a root zoom is already baked into that rect.
+
+NOT DONE: the per-screen string sweep; the RTL pass over the 92 physical pl-/pr-/ml-/mr-
+sites that will not mirror (vs 49 already logical); the light-theme animated background.
+
+5311 tests.
+
 ## v2.106.82
 
 A deleted person stops sitting in everybody's address book (owner: "i delete this guest
