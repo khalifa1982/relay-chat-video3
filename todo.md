@@ -255,3 +255,15 @@
 - [x] Add BLUETOOTH_CONNECT runtime permission request (Android 12+) before enabling BT SCO
 - [x] Fix Kotlin template: ACTION_ANSWER/DECLINE const val was using escaped ${PACKAGE} → now JS-interpolated
 - [x] tsc clean + 65 tests pass
+
+## Round 26 — Android Build Defects A & B (relay-android-build-fix.md)
+
+- [x] Defect B: Change scheme from "manusrelaymobile" to "relay" in app.config.ts
+- [x] Defect B: Update intentFilters data scheme to "relay" (uses env.scheme which is now "relay")
+- [x] Defect A: Verify RelayNative bridge is in the JS source (14 refs in injected-scripts.ts)
+- [x] Defect A: Verify pushToken plumbing exists (5 refs in use-push-token.ts)
+- [x] Defect A: Verify WebView source URL is https://your-chat.io (DEFAULT_BASE_URL confirmed)
+- [x] Defect A: manus.space refs only in server/_core (platform infra) — no app-level stale refs
+- [x] Defect B: Update IncomingCallActivity deep-link URI from manusrelaymobile:// to relay:// (4 URIs)
+- [x] Bump versionCode to 33, version to 1.0.26
+- [x] tsc clean + 65 tests pass

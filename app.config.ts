@@ -21,16 +21,14 @@ const bundleId =
       return /^[a-zA-Z]/.test(segment) ? segment : "x" + segment;
     })
     .join(".") || "space.manus.app";
-// Extract timestamp from bundle ID and prefix with "manus" for deep link scheme
-// e.g., "space.manus.my.app.t20240115103045" -> "manus20240115103045"
-const timestamp = bundleId.split(".").pop()?.replace(/^t/, "") ?? "";
-const schemeFromBundleId = `manus${timestamp}`;
+// Deep-link scheme: the server fires relay://call/<callId> — must match exactly.
+const schemeFromBundleId = "relay";
 
 // Android native build number (versionCode). The self-hosted APK updater
 // compares the server manifest's buildNumber against THIS value to decide
 // whether a newer APK is available. Bump this every time you publish a new APK
 // (and set the manifest's buildNumber to match the new release).
-const ANDROID_BUILD_NUMBER = 32;
+const ANDROID_BUILD_NUMBER = 33;
 
 const env = {
   // App branding - update these values directly (do not use env vars)
@@ -48,7 +46,7 @@ const config: ExpoConfig = {
   owner: "uaecoms-team",
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.32",
+  version: "1.0.26",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,

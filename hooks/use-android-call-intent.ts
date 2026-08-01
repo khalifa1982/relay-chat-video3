@@ -46,7 +46,7 @@ import { RELAY_APP_URL } from "@/lib/relay-config";
 /**
  * Handles Android call intents by checking the initial URL on app launch.
  * The native IncomingCallActivity/CallActionReceiver will launch the app
- * with a deep link: manusrelaymobile://call?nativeCall=X&mode=Y&action=Z
+ * with a deep link: relay://call?nativeCall=X&mode=Y&action=Z
  */
 export function useAndroidCallIntent(
   webViewRef: React.RefObject<WebView | null>,

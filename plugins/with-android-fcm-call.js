@@ -409,7 +409,7 @@ class IncomingCallActivity : AppCompatActivity() {
         dismissNotification()
 
         // Launch MainActivity with deep link URL so Expo Linking can read it
-        val uri = Uri.parse("manusrelaymobile://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=answer")
+        val uri = Uri.parse("relay://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=answer")
         val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
             setPackage(packageName)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -423,7 +423,7 @@ class IncomingCallActivity : AppCompatActivity() {
         dismissNotification()
 
         // Launch MainActivity with deep link URL for decline
-        val uri = Uri.parse("manusrelaymobile://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=decline")
+        val uri = Uri.parse("relay://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=decline")
         val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
             setPackage(packageName)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -467,7 +467,7 @@ class CallActionReceiver : BroadcastReceiver() {
         when (intent.action) {
             RelayCallFcmService.ACTION_ANSWER -> {
                 // Launch via deep link so Expo Linking can read the call params
-                val uri = android.net.Uri.parse("manusrelaymobile://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=answer")
+                val uri = android.net.Uri.parse("relay://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=answer")
                 val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
                     setPackage(context.packageName)
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -476,7 +476,7 @@ class CallActionReceiver : BroadcastReceiver() {
             }
             RelayCallFcmService.ACTION_DECLINE -> {
                 // Launch via deep link for decline
-                val uri = android.net.Uri.parse("manusrelaymobile://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=decline")
+                val uri = android.net.Uri.parse("relay://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=decline")
                 val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
                     setPackage(context.packageName)
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
