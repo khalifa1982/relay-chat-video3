@@ -18323,6 +18323,56 @@ it will move again rapidly to the next page."*
 alerts, voicemail and the video recorder, each with its own `dict/` module so the type system
 refuses a new untranslated string there.
 
+**(4) THE RTL SWEEP IS FINISHED, AND IS NOW A STANDING RULE.**
+
+Every physical directional property in the app's own screens is logical — `ps-`/`pe-`,
+`ms-`/`me-`, `start-`/`end-`, `border-s-` — and `client/src/app/rtlSweep.test.ts` fails on
+a new one. The conversion is finite; the RULE is not. Every screen added after this
+reintroduces the question, and "we converted 90 sites once" is the shape that decays.
+
+- **Three conversions are cases where doing HALF is worse than doing none**, so each is
+  pinned as a pair:
+  - The **Contacts search fields** — icon and clearing padding mirror together, or the gap
+    lands opposite the glyph it exists to clear and the text runs under it.
+  - **Profile's three toggle knobs** — `start-1` parks the knob at the leading edge in
+    both directions, but `translate-x-5` always moves it RIGHT, so in Arabic the "on"
+    state would carry it clean out of its own track. `rtl:-translate-x-5` sends the travel
+    with the anchor, and the guard asserts the two COUNTS match.
+  - **The story viewer** — a reel is read in the page's own direction, so in Arabic "next"
+    is to the LEFT. A fixed ChevronRight-on-the-right would send somebody BACKWARDS
+    through a story every time they meant to go on, so position and GLYPH move together.
+- **Two exemptions, named rather than counted** (a tolerance is how a real one hides among
+  the accepted ones): `left-1/2` paired with `-translate-x-1/2` is direction-INDEPENDENT
+  centring, where the logical spelling would push the box OFF-centre in RTL (v2.106.79
+  recorded this; the trap is that `start-1/2` LOOKS more correct); and `components/ui/` is
+  vendored shadcn, where converting diverges from upstream so every future `shadcn add`
+  reinstates the physical spelling with no signal.
+- The centring exemption is **EARNED**: a bare `left-1/2` with no transform is still
+  caught, and the sweep asserts real centring sites exist so it cannot rot into a hole.
+- **A bug in my own exemption, caught by RUNNING it rather than reading it**: it tested
+  `m[0]`, and the pattern stops at the first digit — so the match is the string `left-1`
+  and a `^left-1/2` test on it could never fire. The exemption was DEAD and every centred
+  element was being flagged: a guard crying wolf on correct code. It reads the source at
+  the match position now. Three mutations verified it bites, sources byte-identical after.
+- **A JSX syntax error fixed in the same pass**: a `{/* … */}` comment sat between a
+  ternary's `?` and its element in `History.tsx`. After `?` the parser wants ONE
+  expression and reads `{...}` as an object literal, so the file did not compile.
+
+**(5) TWO MORE `dict/` MODULES (`peer`, `groupcall`), AND A PLURAL THAT IS SELECTED.**
+
+- `day${n === 1 ? "" : "s"}` is a sentence assembled from a fragment and cannot be
+  translated at all: English needs one/other, Arabic needs zero/one/two/few/many.
+  `guestExpiryKey` picks a WHOLE key per band, which is also what keeps "expires today"
+  reading as today in both languages.
+- **That one cannot go through `copyOnScreen`, and the limit is worth naming**: the helper
+  resolves LITERAL `t("key")` call sites, and this is `t(guestExpiryKey(days))` — a key
+  chosen at RUNTIME, which no static reader can follow. It is pinned at the selector.
+- **`pinInput.test.ts`'s PIN-box sweep had gone vacuous the same way**: it read RAW source,
+  so a placeholder that had moved into `dict/` named no digits and `GroupCallScreen`
+  reported ZERO PIN boxes while still holding one — the v2.106.65 vacuity by a different
+  road, caught by that release's own non-vacuity assertion rather than by the sweep. All
+  three call sites now go through ONE reader that strips comments and resolves keys.
+
 **(3) TWO PRE-EXISTING GUARDS WERE VACUOUS — reporting safety rather than going red.**
 
 - `groupRoster.test.ts` sliced from an anchor with a bare `indexOf`, and with the anchor moved it
@@ -18335,7 +18385,7 @@ refuses a new untranslated string there.
   v2.106.31 — an exemption left in place after a fix is how a guard rots into a comment).
 
 **19 pre-existing pins repointed** through `copyOnScreen`, each having frozen an English literal
-this release legitimately moves into a dictionary. 5621 tests.
+this release legitimately moves into a dictionary. 5730 tests.
 
 ## v2.106.92 — the light theme gets the moving background (#158); one shared invite message (#161)
 
