@@ -35,7 +35,7 @@ const ANDROID_BUILD_NUMBER = 17;
 const env = {
   // App branding - update these values directly (do not use env vars)
   appName: "RELAY",
-  appSlug: "relay-mobile",
+  appSlug: "relay",
   // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
   // Leave empty to use the default icon from assets/images/icon.png
   logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/86205309/gICDuHUjOkeXoJiJ.png",
@@ -45,6 +45,7 @@ const env = {
 };
 
 const config: ExpoConfig = {
+  owner: "uaecoms-team",
   name: env.appName,
   slug: env.appSlug,
   version: "1.0.17",
@@ -178,6 +179,11 @@ const config: ExpoConfig = {
     // Local plugin: iOS VoIP Push (PushKit) + CallKit for incoming call ringing.
     "./plugins/with-ios-voip-callkit.js",
   ],
+  extra: {
+    eas: {
+      projectId: "e157c3d8-8d70-42ad-a11c-86d75c691039",
+    },
+  },
   experiments: {
     typedRoutes: true,
     reactCompiler: true,
