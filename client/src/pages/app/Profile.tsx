@@ -78,6 +78,7 @@ import {
   type NotifPermission,
 } from "@/app/notifications";
 import { ensurePushSubscription, iosNeedsInstallForPush } from "@/app/pushClient";
+import { isNativeShell } from "@/app/installSurface";
 import { useDnd } from "@/app/dnd";
 import {
   BioSection,
@@ -1486,7 +1487,16 @@ function NotificationsSection() {
                 ? "Allow notifications for this site in your browser settings, then refresh."
                 : "We'll ring this device for incoming calls — we never push promotional content."}
           </p>
-          {iosNeedsInstallForPush() ? (
+          {/* SUPPRESSED INSIDE THE NATIVE SHELL, where it is flatly wrong: a WebView
+              is not `display-mode: standalone` and exposes no PushManager, so
+              `iosNeedsInstallForPush()` is TRUE there and this told the user to tap a
+              Safari Share button that does not exist — in an app that already
+              receives calls over APNs. KEPT for a real iOS Safari tab: this is the
+              SETTINGS pane, reached by someone deliberately asking why they are not
+              being rung, and answering that with silence is the silent-no-op class
+              this repo keeps removing. The intrusive BANNER is the one the owner
+              asked to drop, and it is gone. */}
+          {!isNativeShell() && iosNeedsInstallForPush() ? (
             <p className="text-xs text-sky-500/90 mt-1.5">
               iPhone/iPad: to get rung while RELAY is closed, use Safari's Share →{" "}
               <span className="font-medium">Add to Home Screen</span>, then open RELAY from the icon

@@ -18248,6 +18248,24 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.81
+
+The install banner stops appearing where it is wrong, and becomes a real one-click install
+on desktop (owner: "if the system deduct that the user access it by mobile browser or
+mobile app, no need to show this unless it's been desktop... as you click, automatically
+create a shortcut to the your-chat.io/app link directly").  It was not merely noise on
+mobile — it was a BUG in the native shell. The gate is isIos() && !standalone &&
+!pushSupported(), and all three are true inside the Expo WebView, so the shell told the
+user to tap a Safari Share button that does not exist, in an app that already receives
+calls over APNs.  The desktop half is gated on HOLDING A REAL PROMPT rather than on "is
+this a desktop": Safari and Firefox never fire beforeinstallprompt, so a desktop-gated
+button would be present, tappable and able to do nothing. The shortcut lands on /app with
+no code — manifest.webmanifest already declares start_url: /app, now pinned.  One shared
+installSurface.ts rather than a fourth private RelayNative check. Profile's SETTINGS note
+survives on real iOS Safari and is suppressed only in the shell — a deliberate split,
+since that pane is reached by someone asking why they are not being rung.  NOT VERIFIED ON
+A DEVICE: beforeinstallprompt cannot be synthesised meaningfully here.
+
 ## v2.106.80
 
 "Choose my number" is withdrawn; only the random regenerate remains (owner: "remove choose

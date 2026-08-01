@@ -103,12 +103,25 @@ describe("board 4k — the push banner", () => {
     expect(src).toMatch(/color: "var\(--rb\)"/);
   });
 
-  it("the iOS install note stays sky, because it carries no action", () => {
-    // Deliberate: the install happens in Safari's own share menu, which no button on
-    // this page can open. Painting it in the accent would promise a tap that is not
-    // there. Sky is not overloaded, so it costs nothing to leave it.
+  it("the install row is sky with an ACCENT button — and the reasoning changed", () => {
+    /* This pin used to read "stays sky, because it carries NO action": the iOS tip
+       could not act, since the install happened in Safari's own share menu that no
+       button here can open, so painting it accent would have promised a tap that
+       was not there.
+
+       v2.106.81 replaced it with a DESKTOP install that fires the browser's own
+       prompt — so it does carry an action, and the old reason no longer holds. The
+       colours now split by role rather than by whether an action exists: the
+       CONTAINER stays sky because this is the secondary banner (the accent one is
+       "Get call alerts", the primary), while the BUTTON takes `.rcta`, which is
+       what "the thing to tap" means everywhere else in the app. Two accent banners
+       would be indistinguishable from each other. */
     expect(src).toMatch(/border-sky-400\/25/);
-    expect(src).toMatch(/Install RELAY \(iOS\)/);
+    expect(src).toMatch(/Install RELAY/);
+    expect(src).toMatch(/className="rcta/);
+    // The retired iOS wording is gone — it pointed at the wrong product.
+    expect(src).not.toMatch(/Install RELAY \(iOS\)/);
+    expect(src).not.toMatch(/Add to Home Screen/);
   });
 });
 

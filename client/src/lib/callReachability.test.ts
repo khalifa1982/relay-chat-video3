@@ -180,7 +180,12 @@ describe("issue 2 — iOS ring sound + notifications", () => {
     expect(V2DB).toMatch(/CREATE TABLE IF NOT EXISTS \\`push_subscriptions\\`/);
     expect(V2DB).toMatch(/export async function upsertPushSubscription/);
     expect(PUSHC).toMatch(/pushManager\.subscribe\(\{\s*\n\s*userVisibleOnly: true/);
-    expect(BANNER).toMatch(/iosNeedsInstallForPush\(\)/);
+    /* v2.106.81 removed the iOS Add-to-Home-Screen TIP from this banner (the owner
+       ships real mobile apps now, and inside the Expo WebView the tip named a Safari
+       button that does not exist). This pin stood for the banner being WIRED TO PUSH,
+       not for that tip, so it asserts the surviving plumbing instead. */
+    expect(BANNER).toMatch(/ensurePushSubscription\(/);
+    expect(BANNER).toMatch(/pushSupported\(\)/);
     expect(SHELL).toMatch(/<PushBanner \/>/);
   });
 

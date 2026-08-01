@@ -1,8 +1,14 @@
 import { useEffect, useState } from "react";
-import { BellRing, X, Share } from "lucide-react";
+import { BellRing, X, MonitorDown } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { getNotifPermission, requestNotifPermission, unlockAudio } from "./notifications";
-import { ensurePushSubscription, pushSupported, iosNeedsInstallForPush } from "./pushClient";
+import { ensurePushSubscription, pushSupported } from "./pushClient";
+import {
+  isNativeShell,
+  promptInstall,
+  shouldOfferInstall,
+  subscribeInstallPrompt,
+} from "./installSurface";
 
 const DISMISS_KEY = "relay_push_banner_dismissed";
 
@@ -15,14 +21,24 @@ const DISMISS_KEY = "relay_push_banner_dismissed";
  *     subscription exists server-side (it can vanish after browser updates).
  *   • push supported, permission not asked yet → offer an Enable button
  *     (permission MUST be requested from a user gesture).
- *   • iPhone/iPad in a plain Safari tab (no PushManager) → explain that call
- *     alerts need Add to Home Screen (Apple's rule), dismissible.
+ *   • DESKTOP with a real `beforeinstallprompt` in hand → offer a one-click
+ *     Install that creates a shortcut to /app (v2.106.81).
+ *
+ * NOT shown at all inside the native shell, and no longer shown on a mobile
+ * browser: the owner ships real iOS and Android apps now, so the old "Add to Home
+ * Screen" tip pointed a mobile visitor at the wrong product — and inside the Expo
+ * WebView it named a Safari button that does not exist. See ./installSurface.
  */
 export function PushBanner() {
   const [dismissed, setDismissed] = useState<boolean>(() => {
     try { return localStorage.getItem(DISMISS_KEY) === "1"; } catch { return true; }
   });
   const [perm, setPerm] = useState(() => getNotifPermission());
+  /* `beforeinstallprompt` fires once, early and asynchronously — often BEFORE this
+     component mounts and sometimes after. Subscribing (rather than reading once)
+     is what makes the row appear either way. */
+  const [offerInstall, setOfferInstall] = useState(() => shouldOfferInstall());
+  useEffect(() => subscribeInstallPrompt(() => setOfferInstall(shouldOfferInstall())), []);
   const pubKey = trpc.push.publicKey.useQuery(undefined, {
     staleTime: Infinity,
     refetchOnWindowFocus: false,
@@ -43,22 +59,53 @@ export function PushBanner() {
     try { localStorage.setItem(DISMISS_KEY, "1"); } catch { /* */ }
   };
 
+  /* NOTHING AT ALL INSIDE THE NATIVE SHELL. It receives calls over APNs/FCM, so
+     every prompt here is either noise or — in the case the owner was looking at —
+     actively wrong: the old iOS tip fired inside the Expo WebView, because a
+     WebView is not `display-mode: standalone` and exposes no PushManager, and told
+     the user to tap a Safari Share button that does not exist. */
+  if (isNativeShell()) return null;
+
   if (dismissed || perm === "granted" || perm === "denied") return null;
 
-  // iOS Safari tab: push physically unavailable until installed to Home Screen.
-  if (iosNeedsInstallForPush()) {
+  /* DESKTOP INSTALL — one click, and the browser creates the shortcut itself
+     (owner: *"show it the icon that can be added to the browser or to the desktop
+     — as you click, automatically create a shortcut to the /app link
+     directly"*). It lands on /app with no work here: `manifest.webmanifest`
+     already declares `"start_url": "/app"`.
+
+     GATED ON HOLDING A REAL PROMPT, not on "is this a desktop": Safari and Firefox
+     never fire `beforeinstallprompt` and expose no programmatic install, so a
+     button there would be present, tappable and able to do nothing at all. It is
+     ABSENT instead (v2.103.3). */
+  if (offerInstall) {
     return (
-      <div className="mx-3 mt-2 flex items-start gap-2.5 rounded-2xl border border-sky-400/25 bg-sky-500/10 px-3.5 py-3 text-[13px] leading-snug text-sky-100/90 backdrop-blur">
-        <Share className="mt-0.5 size-4 shrink-0 text-sky-300" />
-        {/* Sky rather than the accent, deliberately: this one carries NO action —
-            the install happens in Safari's own menu, which no button here can open.
-            Painting it in the accent would promise a tap that does not exist. */}
+      <div className="mx-3 mt-2 flex items-center gap-2.5 rounded-2xl border border-sky-400/25 bg-sky-500/10 px-3.5 py-2.5 text-[13px] text-sky-100/90 backdrop-blur">
+        <MonitorDown className="size-4 shrink-0 text-sky-300" />
         <div className="min-w-0 flex-1">
-          <span className="font-semibold text-sky-200">Install RELAY (iOS):</span>{" "}
-          tap Safari&apos;s Share button → <span className="font-medium">Add to Home Screen</span>, then open
-          RELAY from the icon. iOS only rings installed web apps.
+          <span className="font-semibold text-sky-200">Install RELAY</span> — add it to your
+          desktop and open it like an app.
         </div>
-        <button type="button" onClick={dismiss} aria-label="Dismiss" className="rounded-full p-1 text-sky-200/70 hover:bg-white/10">
+        <button
+          type="button"
+          onClick={() => {
+            void promptInstall().then((accepted) => {
+              // Either way the prompt is spent, so the row must go: a button that
+              // works once and then silently does nothing is worse than none.
+              setOfferInstall(false);
+              if (accepted) dismiss();
+            });
+          }}
+          className="rcta shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold"
+        >
+          Install
+        </button>
+        <button
+          type="button"
+          onClick={dismiss}
+          aria-label="Dismiss"
+          className="rounded-full p-1 text-sky-200/70 hover:bg-white/10"
+        >
           <X className="size-4" />
         </button>
       </div>
