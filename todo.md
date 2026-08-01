@@ -18248,6 +18248,24 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.79
+
+The save-contact button gets its words back. v2.106.78 moved it beside the digits at the
+owner's 34px and removed the row below the pad — both still true — but shipped it ICON-
+ONLY, so what it does lived in `title`, which a phone never shows. The words now hang
+beneath it.  This DELIBERATELY REVERSES v2.99.90's icon-only instruction: that release
+removed the text when the control sat in its OWN ROW below the pad, where a label was one
+more line on a card with no spare height. It has since moved beside the digits and is
+absolutely positioned, so the label costs no layout the card had not already spent. A
+later instruction wins.  It hangs from `top-full` rather than joining a centred flex
+column — a column would shift the ICON up by half the label's height and break its
+alignment with the digits beside it. The centring is PHYSICAL (`left-1/2
+-translate-x-1/2`) on purpose: centring is direction-independent, so a logical `start-1/2`
+would push the label the wrong way in RTL. aria-hidden, because the button's own aria-
+label already names the action. Already-saved still renders nothing at all.  NOT MEASURED
+IN A BROWSER: the label is absolutely positioned so it adds no height to the row, but
+nobody has confirmed the words clear the keypad at 320px.
+
 ## v2.106.78 — the dial readout stops repeating your number and starts showing your people (2026-08-01)
 
 Owner, circling the dialed-digit echo area on the same screenshot: *"again my pin is

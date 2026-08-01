@@ -1075,7 +1075,21 @@ function QuickAddContact({ number, displayName }: { number: string; displayName:
      the row it occupied is directly under three call buttons on a card that has no
      spare vertical space. */
   if (isAlready) return null;
-  /* NOT SAVED → ONE GLOSSY ICON (owner: "just show an icon added to contact but a
+  /* NOT SAVED → ONE GLOSSY ICON, WITH THE WORDS UNDER IT (owner, after the move:
+     *"put the bottom, appear the bottom, and below it right at to contact if this
+     number is not in your contact"* — i.e. write "Add to contacts" beneath it).
+     THIS DELIBERATELY REVERSES v2.99.90's icon-only instruction, which is recorded
+     rather than glossed: that release removed the text at the owner's request when
+     the control sat in its own row below the pad, where a label was one more line
+     on a card with no spare height. The control has since MOVED beside the digits
+     and is absolutely positioned, so the label costs the layout nothing it did not
+     already spend — and the icon alone carried its meaning only in `title`, which a
+     phone never shows. A later instruction wins over an earlier one.
+     THE LABEL HANGS FROM `top-full` RATHER THAN JOINING A FLEX COLUMN: stacking
+     both in one centred column would shift the ICON up by half the label's height,
+     visibly breaking its alignment with the digits it sits beside — the icon must
+     stay exactly where it is, and only the words are new.
+     (owner, earlier: "just show an icon added to contact but a
      different color, make it nice color … glossy, glossy, and flashy").
      Pink→fuchsia because every other colour on this screen already means something:
      green is Voice, sky is Video, violet is Group Call, red is erase, amber is Do
@@ -1084,6 +1098,7 @@ function QuickAddContact({ number, displayName }: { number: string; displayName:
      animated — animating the button's own box-shadow repaints it every frame, the
      class of animation v2.99.84 measured and removed. */
   return (
+    <span className="relative inline-grid place-items-center">
     <button
       type="button"
       onClick={() => upsert.mutate({ number, displayName: displayName === number ? undefined : displayName })}
@@ -1122,5 +1137,22 @@ function QuickAddContact({ number, displayName }: { number: string; displayName:
         <UserPlus className="relative size-5" strokeWidth={2.3} />
       )}
     </button>
+      {/* THE WORDS, HANGING BELOW THE ICON. `absolute top-full` keeps the icon
+          exactly where it was so its alignment with the digits is untouched, and
+          `whitespace-nowrap` + a centred translate let the label be wider than the
+          48px button without ever widening the grid cell it sits in. It is
+          aria-hidden because the button's own aria-label already names the action —
+          a screen reader must not hear it twice. */}
+      <span
+        aria-hidden="true"
+        className="
+          absolute top-full left-1/2 -translate-x-1/2 mt-1
+          whitespace-nowrap leading-none text-[9.5px] font-medium tracking-wide
+          text-muted-foreground pointer-events-none
+        "
+      >
+        Add to contacts
+      </span>
+    </span>
   );
 }

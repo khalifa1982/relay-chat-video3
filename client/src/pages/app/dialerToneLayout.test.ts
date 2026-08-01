@@ -147,4 +147,41 @@ describe("v2.99.36 (3) — the Save-to-contacts pill is never clipped", () => {
   it("the card can scroll as a safety valve so no row is ever unreachable", () => {
     expect(DIALER).toMatch(/flex flex-col overflow-y-auto/);
   });
+
+  it("the button carries the words UNDER it, hung from top-full so the icon does not move", () => {
+    /* Owner, after the move: "put the bottom, appear the bottom, and below it
+       right at to contact if this number is not in your contact" — i.e. the words
+       go beneath the icon. This DELIBERATELY REVERSES v2.99.90's icon-only
+       instruction, which that release took when the control was its own row below
+       the pad; it has since moved beside the digits and is absolutely positioned,
+       so the label costs no layout the card had not already spent. A later
+       instruction wins over an earlier one.
+
+       THE PROPERTY, not the styling: the label must hang from `top-full` rather
+       than join a centred flex column with the icon. A column would shift the ICON
+       up by half the label's height and visibly break its alignment with the digits
+       it sits beside — the icon must stay exactly where it is and only the words be
+       new. A mutation that stacks them in one column bites here. */
+    const fn = DIALER.slice(DIALER.indexOf("function QuickAddContact"));
+    expect(fn.length, "found QuickAddContact").toBeGreaterThan(200);
+    const body = fn.slice(0, fn.indexOf("\n}\n") + 1);
+    expect(body, "the label renders").toMatch(/Add to contacts/);
+    expect(body, "it hangs BELOW the icon rather than sharing a column").toMatch(
+      /absolute top-full/,
+    );
+    /* Centring is direction-INDEPENDENT, so the physical pair is correct here and
+       a logical `start-1/2` would push the label the wrong way in RTL. Pinned so
+       nobody "fixes" it into a logical property that breaks Arabic. */
+    expect(body).toMatch(/left-1\/2 -translate-x-1\/2/);
+    /* The button's own aria-label already names the action; the label must not be
+       announced a second time. */
+    const labelIdx = body.indexOf("Add to contacts<");
+    const spanIdx = body.lastIndexOf("<span", labelIdx === -1 ? body.length : labelIdx);
+    expect(body.slice(spanIdx, labelIdx === -1 ? undefined : labelIdx)).toMatch(
+      /aria-hidden="true"/,
+    );
+    /* ALREADY SAVED still renders NOTHING AT ALL — the owner said so twice, and
+       the label must not resurrect a chip for a number that needs no action. */
+    expect(body).toMatch(/if \(isAlready\) return null;/);
+  });
 });
