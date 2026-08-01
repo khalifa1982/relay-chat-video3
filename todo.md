@@ -18248,6 +18248,35 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.90 — the stories screen speaks Arabic (#156)
+
+`dict/status.ts` (~25 entries) and `Status.tsx` wired through it: composer, viewer, reply bar,
+viewers sheet, every toast.
+
+**The v2.101.0 vocabulary is carried into the Arabic rather than left to chance.** A STORY is the
+ephemeral post; a STATUS is the profile label — the owner corrected that three times before it
+stuck — so the two take two different Arabic words. One word for both would undo that correction
+silently, in the language where nobody would notice. Same for the two deletions: an author
+removing their own post and a group admin removing somebody else's are different acts
+(v2.105.27), so the Arabic keeps two verbs.
+
+Western digits throughout, for the v2.106.84 reason: the slide counter and view count are
+interpolated, and a substituted "2" beside an Arabic-Indic numeral on one line reads as a
+rendering fault.
+
+**Three pre-existing pins repointed through `copyOnScreen`**, each having frozen an English
+literal. Deleting them leaves the owner's signed-off wording unguarded; matching the key freezes
+an implementation detail. So they ask the property directly — this sentence reaches this screen —
+which is strictly stronger, because reaching the dictionary also proves an Arabic half exists.
+
+**Not done, named rather than implied**: `GroupInfoSheet.tsx` (~50 strings) and `Admin.tsx` (~17)
+are still English. The groups dict is deliberately NOT created ahead of its wiring — a dictionary
+nothing reads is the "published value nothing consumes" antipattern v2.106.86 retired
+`--relay-zoom` for. Also open: `formatLastSeen`'s relative-time strings, the imperative call
+surfaces (raw DOM, so no hook), and the RTL pass over the physical `pl-/pr-/ml-/mr-` sites.
+
+No schema change, no new dependency, no new env var, no server change. 5372 tests.
+
 ## v2.106.89 — three owner-reported media bugs: iPhone voice notes, one-at-a-time playback, the changed group photo
 
 **Owner, three separate reports.** Each was diagnosed against source and then MEASURED before

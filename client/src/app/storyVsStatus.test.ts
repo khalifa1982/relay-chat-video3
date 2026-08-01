@@ -25,6 +25,7 @@ import path from "node:path";
 import { STORY_KIND_LABEL } from "@shared/statusReply";
 import { previewOfStoryReply } from "@/app/messagePreview";
 import { copyOnScreen } from "../../../server/testing/copyOnScreen";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "../../..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -99,12 +100,25 @@ describe("the ephemeral post is called a STORY", () => {
   });
 
   it("the composer and the viewer say story", () => {
-    expect(STATUS).toMatch(/>New story</);
-    expect(STATUS).toMatch(/placeholder="Type a story…"/);
-    expect(STATUS).toMatch(/Share story/);
-    expect(STATUS).toMatch(/"My story"/);
-    expect(STATUS).toMatch(/Story deleted/);
-    expect(STATUS).toMatch(/aria-label="Reply to this story"/);
+    /* ROUTED THROUGH `copyOnScreen` (v2.106.89): these froze ENGLISH LITERALS, and this
+       screen now renders through the dictionary. Deleting them would leave the owner's
+       own vocabulary decision unguarded, and matching the KEY would freeze an
+       implementation detail while saying nothing about the words — so the property is
+       asked directly (this sentence reaches this screen), which is satisfied by the
+       literal OR by a key whose English half is that sentence. STRICTLY STRONGER than
+       what it replaces, because reaching the dictionary also proves an Arabic half
+       exists — and the Arabic keeps STORY and STATUS apart with two different words, or
+       v2.101.0's whole correction is undone in the second language. */
+    for (const phrase of [
+      "New story",
+      "Type a story…",
+      "Share story",
+      "My story",
+      "Story deleted",
+      "Reply to this story",
+    ]) {
+      expect(copyOnScreen(STATUS, phrase), `"${phrase}" must reach the story screen`).toBe(true);
+    }
   });
 
   it("a story reply in a chat bubble says story", () => {

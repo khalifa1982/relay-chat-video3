@@ -10,6 +10,7 @@ import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 import { AUDIENCE_OPTIONS, audienceOption } from "@/app/statusAudience";
 import { EmojiPicker } from "@/app/EmojiPicker";
 import { REACTION_QUICK } from "@/lib/emojiCatalog";
+import { useT } from "@/app/i18n";
 
 /**
  * Rich user status (v2.95) — WhatsApp/story-style ephemeral updates: text,
@@ -139,6 +140,7 @@ function readMediaDurationMs(file: File): Promise<number | null> {
 /* ───────────────────────── Strip ───────────────────────── */
 
 export function StatusStrip() {
+  const t = useT();
   const feed = trpc.status.feed.useQuery(undefined, { staleTime: 20_000, refetchOnWindowFocus: true });
   const [composerOpen, setComposerOpen] = useState(false);
   const [viewerAt, setViewerAt] = useState<number | null>(null); // index into `groups`
@@ -271,6 +273,7 @@ function StatusAvatar({
 /* ───────────────────────── Composer ───────────────────────── */
 
 function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: () => void }) {
+  const t = useT();
   const [mode, setMode] = useState<"text" | "media">("text");
   const [text, setText] = useState("");
   const [caption, setCaption] = useState("");
@@ -347,7 +350,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
     try {
       if (mode === "text") {
         const body = text.trim();
-        if (!body) { toast.error("Write something first."); setPosting(false); return; }
+        if (!body) { toast.error(t("status.writeFirst")); setPosting(false); return; }
         await post.mutateAsync({
           kind: "text",
           text: body,
@@ -360,7 +363,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
       } else {
         if (!file) { setPosting(false); return; }
         const kind = mediaKindOf(file);
-        if (!kind) { toast.error("Pick an image, video, or audio file."); setPosting(false); return; }
+        if (!kind) { toast.error(t("status.pickMedia")); setPosting(false); return; }
         // M15: for video/audio, capture the real playback length so the viewer
         // holds the slide for its true duration (not a flat 5s). Best-effort —
         // null falls back to DEFAULT_ITEM_MS server- and viewer-side.
@@ -387,7 +390,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
       );
       onPosted();
     } catch (e) {
-      toast.error((e as Error)?.message || "Couldn't post your story.");
+      toast.error((e as Error)?.message || t("status.postFailed"));
       setPosting(false);
     }
   }
@@ -405,7 +408,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
     <div className="fixed inset-0 z-[95] grid place-items-center bg-black/70 backdrop-blur-sm p-3" role="dialog" aria-modal="true">
       <div className="relative w-[min(96vw,440px)] max-h-[92dvh] overflow-y-auto overflow-x-hidden rounded-3xl border border-border/60 bg-card shadow-2xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
-          <h2 className="font-bold">New story</h2>
+          <h2 className="font-bold">{t("status.newStory")}</h2>
           <button type="button" onClick={onClose} aria-label="Close" className="rounded-full p-1.5 text-muted-foreground hover:bg-muted">
             <X className="size-5" />
           </button>
@@ -426,7 +429,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
               onClick={() => setRecOpen(true)}
               className="min-w-0 flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl px-1 py-2 text-sm font-semibold text-muted-foreground"
             >
-              <Video className="size-4 shrink-0" /> <span className="truncate">Record</span>
+              <Video className="size-4 shrink-0" /> <span className="truncate">{t("status.record")}</span>
             </button>
           )}
           <button
@@ -434,7 +437,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
             onClick={() => fileRef.current?.click()}
             className={`min-w-0 flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl px-1 py-2 text-sm font-semibold ${mode === "media" ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
           >
-            <Camera className="size-4 shrink-0" /> <span className="truncate">Library</span>
+            <Camera className="size-4 shrink-0" /> <span className="truncate">{t("status.library")}</span>
           </button>
           <input
             ref={fileRef}
@@ -456,7 +459,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
                 value={text}
                 onChange={(e) => setText(e.target.value.slice(0, 700))}
                 autoFocus
-                placeholder="Type a story…"
+                placeholder={t("status.typeStory")}
                 rows={3}
                 className="w-full resize-none bg-transparent text-center text-xl font-semibold text-white placeholder-white/70 outline-none"
               />
@@ -485,7 +488,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
                 <input
                   value={caption}
                   onChange={(e) => setCaption(e.target.value.slice(0, 700))}
-                  placeholder="Add a caption…"
+                  placeholder={t("status.caption")}
                   className="mt-2 w-full rounded-xl bg-background/70 px-3 py-2 text-sm outline-none"
                 />
               )}
@@ -586,7 +589,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
             disabled={posting || (mode === "text" ? !text.trim() : !file)}
             className="h-12 w-full gap-2 rounded-xl text-base font-semibold"
           >
-            {posting ? "Posting…" : (<><Send className="size-4" /> Share story</>)}
+            {posting ? t("status.posting") : (<><Send className="size-4" /> Share story</>)}
           </Button>
         </div>
       </div>
@@ -607,6 +610,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
 }
 
 function MediaPreview({ file, url }: { file: File; url: string }) {
+  const t = useT();
   if (/^image\//.test(file.type)) return <img src={url} alt="" className="max-h-[300px] w-full rounded-xl object-contain" />;
   if (/^video\//.test(file.type)) return <video src={url} controls playsInline className="max-h-[300px] w-full rounded-xl" />;
   if (/^audio\//.test(file.type)) return (
@@ -615,7 +619,7 @@ function MediaPreview({ file, url }: { file: File; url: string }) {
       <audio src={url} controls className="w-full" />
     </div>
   );
-  return <div className="p-4 text-sm text-muted-foreground">Unsupported file.</div>;
+  return <div className="p-4 text-sm text-muted-foreground">{t("status.unsupportedFile")}</div>;
 }
 
 /* ───────────────────────── Viewer ───────────────────────── */
@@ -641,6 +645,7 @@ export function StatusViewer({
    */
   chain?: boolean;
 }) {
+  const t = useT();
   const [gi, setGi] = useState(startIndex);
   const [ii, setIi] = useState(0);
   const [progress, setProgress] = useState(0); // 0..1 of current item
@@ -956,7 +961,7 @@ export function StatusViewer({
                 );
                 return; // do NOT advance: the item is still there.
               }
-              toast.success("Story deleted");
+              toast.success(t("status.storyDeleted"));
               // Deleting shifts the array under the index, so re-clamp rather than
               // stepping forward blindly: `next()` from the LAST item walked past
               // the end of a list that had just got shorter.
@@ -964,7 +969,7 @@ export function StatusViewer({
             }}
             className="inline-flex items-center gap-1.5 text-sm text-red-400 disabled:opacity-50"
           >
-            <Trash2 className="size-4" /> {remove.isPending ? "Deleting…" : "Delete"}
+            <Trash2 className="size-4" /> {remove.isPending ? t("status.deleting") : "Delete"}
           </button>
         </div>
       )}
@@ -1007,14 +1012,14 @@ export function StatusViewer({
                 utils.status.feed.invalidate(),
                 utils.status.mine.invalidate(),
               ]);
-              toast.success("Story removed");
+              toast.success(t("status.storyRemoved"));
               // Re-clamp rather than stepping on: the array just got shorter.
               setIi((v) => Math.max(0, Math.min(v, (group.items.length - 2) | 0)));
             }}
             className="inline-flex items-center gap-1.5 text-sm text-red-400 disabled:opacity-50"
           >
             <Trash2 className="size-4" />
-            {removeAsAdmin.isPending ? "Removing…" : "Remove as admin"}
+            {removeAsAdmin.isPending ? t("status.removing") : "Remove as admin"}
           </button>
         </div>
       )}
@@ -1050,6 +1055,7 @@ function StatusReplyBar({
   open: boolean;
   setOpen: (v: boolean) => void;
 }) {
+  const t = useT();
   const [text, setText] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -1075,8 +1081,8 @@ function StatusReplyBar({
       if (!res.ok) {
         toast.error(
           res.reason === "own"
-            ? "That's your own story."
-            : "This story is no longer available."
+            ? t("status.ownStory")
+            : t("status.gone")
         );
         return;
       }
@@ -1085,7 +1091,7 @@ function StatusReplyBar({
       setOpen(false);
       toast.success(`Sent to ${ownerName}`);
     } catch {
-      toast.error("Couldn't send that reply. Try again.");
+      toast.error(t("status.replyFailed"));
     } finally {
       setSending(false);
     }
@@ -1141,7 +1147,7 @@ function StatusReplyBar({
             setPickerOpen(next);
             setOpen(next);
           }}
-          aria-label="All emoji"
+          aria-label={t("status.allEmoji")}
           aria-expanded={pickerOpen}
           className="grid size-10 place-items-center rounded-full border border-white/20 text-lg leading-none text-white/70 hover:bg-white/15"
         >
@@ -1164,14 +1170,14 @@ function StatusReplyBar({
           dir="auto"
           maxLength={2000}
           placeholder={`Reply to ${ownerName}…`}
-          aria-label="Reply to this story"
+          aria-label={t("status.replyToStory")}
           className="h-11 min-w-0 flex-1 rounded-full border border-white/20 bg-white/10 px-4 text-sm text-white outline-none placeholder:text-white/40 focus:border-white/40"
         />
         <button
           type="button"
           disabled={!text.trim() || sending}
           onClick={() => void send(text)}
-          aria-label="Send reply"
+          aria-label={t("status.sendReply")}
           className="grid size-11 shrink-0 place-items-center rounded-full bg-white text-black transition disabled:opacity-30"
         >
           <Send className="size-4" />
@@ -1207,6 +1213,7 @@ function StatusBody({ item }: { item: StatusItem }) {
 }
 
 function ViewersSheet({ statusId, onClose }: { statusId: number; onClose: () => void }) {
+  const t = useT();
   const q = trpc.status.viewers.useQuery({ id: statusId }, { staleTime: 5_000 });
   const viewers = q.data?.viewers ?? [];
   return (
@@ -1215,7 +1222,7 @@ function ViewersSheet({ statusId, onClose }: { statusId: number; onClose: () => 
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-border" />
         <div className="mb-2 text-sm font-semibold">Seen by {viewers.length}</div>
         {viewers.length === 0 ? (
-          <div className="py-6 text-center text-sm text-muted-foreground">No views yet.</div>
+          <div className="py-6 text-center text-sm text-muted-foreground">{t("status.noViews")}</div>
         ) : (
           <ul className="space-y-1">
             {viewers.map((v) => (

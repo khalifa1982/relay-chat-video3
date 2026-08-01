@@ -23,6 +23,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "..", "..", "..", "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -98,7 +99,10 @@ describe("the client reads the verdict instead of discarding it", () => {
   });
 
   it("confirms a delete that DID happen", () => {
-    expect(HANDLER).toMatch(/toast\.success\("Story deleted"\)/);
+    /* The COPY moved into the dictionary (v2.106.89); the property is that a delete
+       that really happened is CONFIRMED, not which literal says so. */
+    expect(HANDLER).toMatch(/toast\.success\(/);
+    expect(copyOnScreen(STATUS, "Story deleted")).toBe(true);
   });
 
   it("refreshes BOTH status reads, not just the feed", () => {
@@ -117,7 +121,9 @@ describe("the client reads the verdict instead of discarding it", () => {
 
   it("cannot be double-tapped into two deletes", () => {
     expect(HANDLER).toMatch(/disabled=\{remove\.isPending\}/);
-    expect(STATUS).toMatch(/\{remove\.isPending \? "Deleting…" : "Delete"\}/);
+    // Same: the busy label is a dictionary key now, the GATE is what this pins.
+    expect(STATUS).toMatch(/\{remove\.isPending \? t\("status\.deleting"\) : /);
+    expect(copyOnScreen(STATUS, "Deleting…")).toBe(true);
   });
 });
 
