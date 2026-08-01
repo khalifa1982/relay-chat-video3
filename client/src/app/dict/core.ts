@@ -23,9 +23,12 @@ export const CORE = {
   "appearance.theme": { en: "Theme", ar: "السمة" },
   "appearance.dark": { en: "Dark", ar: "داكن" },
   "appearance.light": { en: "Light", ar: "فاتح" },
+  /* NOTE (v2.106.91): there are deliberately NO `appearance.arabic` / `appearance.english`
+     keys. Each language is labelled in ITS OWN language as a LITERAL ("English",
+     "العربية") and must never be translated — "Arabic" written in English is exactly the
+     label that fails the person it is for, who has landed in a language they cannot read
+     and has to find their way out. Keys for them would invite somebody to "fix" that.  */
   "appearance.language": { en: "Language", ar: "اللغة" },
-  "appearance.english": { en: "English", ar: "English" },
-  "appearance.arabic": { en: "العربية", ar: "العربية" },
   "appearance.textSize": { en: "Text size", ar: "حجم الخط" },
   "appearance.small": { en: "Small", ar: "صغير" },
   "appearance.normal": { en: "Normal", ar: "عادي" },

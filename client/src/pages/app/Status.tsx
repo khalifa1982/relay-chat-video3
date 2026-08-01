@@ -173,7 +173,7 @@ export function StatusStrip() {
               <Plus className="size-3.5" strokeWidth={3} />
             </span>
           </div>
-          <span className="text-[11px] text-muted-foreground truncate w-full text-center">My story</span>
+          <span className="text-[11px] text-muted-foreground truncate w-full text-center">{t("status.myStory")}</span>
         </button>
 
         {others.map((g) => (
@@ -409,7 +409,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
       <div className="relative w-[min(96vw,440px)] max-h-[92dvh] overflow-y-auto overflow-x-hidden rounded-3xl border border-border/60 bg-card shadow-2xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
           <h2 className="font-bold">{t("status.newStory")}</h2>
-          <button type="button" onClick={onClose} aria-label="Close" className="rounded-full p-1.5 text-muted-foreground hover:bg-muted">
+          <button type="button" onClick={onClose} aria-label={t("status.close")} className="rounded-full p-1.5 text-muted-foreground hover:bg-muted">
             <X className="size-5" />
           </button>
         </div>
@@ -814,7 +814,7 @@ export function StatusViewer({
             {group.subject.kind === "group"
               ? group.subject.displayName
               : isMine
-                ? "My story"
+                ? t("status.myStory")
                 : group.subject.displayName}
           </div>
           {/* Relative for the glance, EXACT on press — the owner could not tell when
@@ -840,7 +840,7 @@ export function StatusViewer({
               : timeAgo(item.createdAt)}
           </div>
         </div>
-        <button type="button" onClick={onClose} aria-label="Close" className="rounded-full p-1.5 hover:bg-white/10">
+        <button type="button" onClick={onClose} aria-label={t("status.close")} className="rounded-full p-1.5 hover:bg-white/10">
           <X className="size-6" />
         </button>
       </div>
@@ -857,8 +857,8 @@ export function StatusViewer({
             While the reply band is open the FIRST tap closes it instead of
             navigating, so tapping away dismisses the composer rather than
             skipping the story you were about to reply to (v2.99.80). */}
-        <button type="button" aria-label="Previous" onClick={() => { if (replyOpen) { setReplyOpen(false); return; } if (Date.now() - pressStartRef.current < HOLD_MS) prev(); }} className="absolute inset-y-0 left-0 w-1/3" />
-        <button type="button" aria-label="Next" onClick={() => { if (replyOpen) { setReplyOpen(false); return; } if (Date.now() - pressStartRef.current < HOLD_MS) next(); }} className="absolute inset-y-0 right-0 w-1/3" />
+        <button type="button" aria-label={t("status.previous")} onClick={() => { if (replyOpen) { setReplyOpen(false); return; } if (Date.now() - pressStartRef.current < HOLD_MS) prev(); }} className="absolute inset-y-0 left-0 w-1/3" />
+        <button type="button" aria-label={t("status.next")} onClick={() => { if (replyOpen) { setReplyOpen(false); return; } if (Date.now() - pressStartRef.current < HOLD_MS) next(); }} className="absolute inset-y-0 right-0 w-1/3" />
         {/* desktop chevrons — these bypass the HOLD check, so they need the same
             reply guard or a stray click would advance mid-compose. */}
         <button type="button" onClick={() => { if (replyOpen) { setReplyOpen(false); return; } prev(); }} className="absolute left-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/40 p-2 md:block"><ChevronLeft className="size-5" /></button>

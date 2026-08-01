@@ -18248,6 +18248,41 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.91 — a dead-key sweep, which found an accessibility regression from v2.106.89
+
+Owner asked what was still pending, so the answer needed an audit rather than a reading of the
+task ledger. Sweeping the dictionary for keys nothing reads turned up a real defect **of mine
+from one release earlier**: the thread row's group disc carried `aria-label="Group conversation"`,
+and v2.106.89 swapping in the shared `GroupAvatar` dropped it silently. A screen reader lost the
+only thing distinguishing a group row from a person's, and no existing test could have caught it —
+nothing asserts the absence of an attribute nobody thought about.
+
+**The sweep is now a standing guard** (`dictCoverage.test.ts`), on the v2.106.86 reasoning one
+layer along: a published value nothing consumes reads as a contract, and an unread translation key
+is worse — it looks like *coverage*, so somebody counting keys concludes a screen is translated
+when nothing on it is.
+
+Exemptions are named rather than a threshold: a count-based tolerance is how a real dead key hides
+among accepted ones. The list may not go stale in either direction — a key that gains a reader
+leaves it, a key that is deleted leaves it (the v2.106.31 pattern).
+
+`appearance.arabic` / `appearance.english` are **deleted rather than wired**. Each language is
+labelled in its own language as a literal ("English", "العربية"), permanently: "Arabic" written in
+English is exactly the label that fails the person it is for. Keys would invite somebody to "fix"
+that by translating them, so their absence is asserted alongside the literals.
+
+4 of 4 tripwires mutation-verified. The one survivor was a real gap in my own test, the v2.106.61
+class: the sweep proves a key has a READER — which the call site satisfies — and says nothing
+about whether the component applies it. Dropping `aria-label={label}` left the key "wired" and the
+screen reader with nothing. Pinned on the application now.
+
+**Honest remainder**: `GroupInfoSheet` (~50 strings), `Admin` (~15), `GroupCallScreen`,
+`RelayEngine` and `VoicemailPrompt` still English; `formatLastSeen` returns finished English; the
+RTL pass over physical `pl-/pr-/ml-/mr-` sites not done; light theme has no animated background
+(#158); no call verified on a real device (#131).
+
+No schema change, no new dependency, no new env var, no server change. 5378 tests.
+
 ## v2.106.90 — the stories screen speaks Arabic (#156)
 
 `dict/status.ts` (~25 entries) and `Status.tsx` wired through it: composer, viewer, reply bar,

@@ -269,6 +269,17 @@ describe("(3) a CHANGED group photo appears", () => {
     expect(GROUPAV).toMatch(/style\.display/);
   });
 
+  it("GroupAvatar APPLIES the label it is handed, not merely accepts it", () => {
+    /* FOUND BY MUTATION (v2.106.91), and it is the v2.106.61 class: the coverage sweep
+       proves `msg.groupConversation` has a READER, which the call site satisfies — and
+       says nothing about whether the component does anything with it. Dropping the
+       attribute left the key "wired" and the screen reader with nothing. */
+    expect(GROUPAV).toMatch(/aria-label=\{label\}/);
+    // `role="img"` only when there IS a label — an unlabelled decorative disc must not
+    // announce itself as an image with no name.
+    expect(GROUPAV).toMatch(/role=\{label \? "img" : undefined\}/);
+  });
+
   it("the glyph is UNDERNEATH the photo, not its else-branch", () => {
     /* v2.106.66 made exactly this fix in one sheet and recorded why — hiding a broken
        `<img>` left a hole. The thread row and the header kept the else-branch shape. */

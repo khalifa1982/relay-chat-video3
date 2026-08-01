@@ -32,6 +32,7 @@ export function GroupAvatar({
   className = "",
   ring,
   children,
+  label,
 }: {
   url: string | null | undefined;
   /** For the `alt` text; a group's title, when it has one. */
@@ -44,6 +45,16 @@ export function GroupAvatar({
   ring?: string;
   /** Overlays (a presence LED, a badge…) drawn above the photo. */
   children?: ReactNode;
+  /**
+   * Accessible label for the disc as a whole (v2.106.91).
+   *
+   * REQUIRED BY THE THREAD ROW, and its absence was a REGRESSION I introduced in
+   * v2.106.89: the row used to carry `aria-label="Group conversation"` on the element
+   * this component replaced, and swapping the component in dropped it silently — a
+   * screen reader had no way to tell a group row from a person's. Found by sweeping the
+   * dictionary for keys nothing reads, which is why that sweep is now a standing guard.
+   */
+  label?: string;
 }) {
   // Keyed on the url: a different photo is a different attempt, so a failure can never
   // outlive the url that caused it.
@@ -58,6 +69,8 @@ export function GroupAvatar({
         className
       }
       style={{ width: size, height: size }}
+      aria-label={label}
+      role={label ? "img" : undefined}
     >
       {/* ALWAYS RENDERED, UNDER the photo — this is what makes "degrades to the glyph"
           true rather than aspirational. */}

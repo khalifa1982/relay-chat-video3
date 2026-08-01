@@ -861,6 +861,7 @@ export default function MessagesPage({
                                     <GroupAvatar
                                       url={t.groupAvatarUrl}
                                       name={displayName}
+                                      label={tr("msg.groupConversation")}
                                       size={60}
                                       className="border border-border/60 bg-muted/40"
                                     />
