@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
@@ -95,8 +95,54 @@ describe("v2.99.36 (1) — the number-preview line no longer overlaps", () => {
 });
 
 describe("v2.99.36 (3) — the Save-to-contacts pill is never clipped", () => {
-  it("the pill is a shrink-0 centred row of its own", () => {
-    expect(DIALER).toMatch(/<div className="shrink-0 flex justify-center pt-1 pb-0\.5">/);
+  it("the add-to-contacts button cannot displace the digits it sits beside", () => {
+    /* REWRITTEN v2.106.78 TO THE PROPERTY. This used to assert the exact string
+       `<div className="shrink-0 flex justify-center pt-1 pb-0.5">` — the pill's
+       own ROW — which is the arrangement the owner asked to replace ("in place
+       of showing below, show on the right after the numbers you enter it"). So
+       it froze a location and said nothing about what v2.99.36 was actually for.
+
+       WHAT v2.99.36 WAS FOR: the button was clipped and unreachable, because the
+       card is a no-scroll flex column and it was an EXTRA row at the bottom of
+       it. Two things now deliver that, and both are asserted:
+
+       (1) it is no longer a row at all — it is ABSOLUTELY positioned beside the
+           readout, so it adds no height to a card whose budget the keypad
+           subtracts from by a hardcoded constant, and it cannot push the digits
+           off centre (the readout stays exactly where it has always been);
+       (2) the card can still scroll, which is the safety valve. */
+    const readout = DIALER.slice(DIALER.indexOf("{quickAddTarget ?"));
+    expect(readout.length, "found the mount").toBeGreaterThan(80);
+    const mount = readout.slice(0, 400);
+    expect(mount).toMatch(/absolute/);
+    /* Positioned by a LOGICAL property, so the button swaps sides with the text
+       direction rather than being pinned to the physical right — this app
+       renders Arabic.
+       AND THE UTILITY IS PROVEN TO EXIST, which is not pedantry: the first cut
+       of this used `inset-inline-start-full`, which is the CSS PROPERTY name and
+       not a Tailwind class. It emitted nothing, the absolutely-positioned button
+       fell back to its static position and landed ON TOP of the digits — and a
+       source pin could not tell the difference, because a class that does not
+       exist looks identical to one that does. Only the browser measurement
+       caught it, so the class is now checked against the built stylesheet. */
+    expect(mount).toMatch(/\bstart-full\b/);
+    expect(mount).not.toMatch(/\bleft-full\b|\bright-0\b|inset-inline-start-full/);
+    const built = (() => {
+      const dir = resolve(process.cwd(), "dist/public/assets");
+      if (!existsSync(dir)) return null;
+      const f = readdirSync(dir).find((n) => /^index-.*\.css$/.test(n));
+      return f ? readFileSync(resolve(dir, f), "utf8") : null;
+    })();
+    if (built) {
+      // Skipped when nothing has been built yet — a test must not demand a build
+      // step — but enforced whenever dist/ is present, which includes CI.
+      expect(built, "the .start-full utility really exists").toContain(".start-full");
+      expect(built, "the 34px gap utility really exists").toContain(".ps-\\[34px\\]");
+    }
+    // The owner's own figure: "like 34 space" after the last digit.
+    expect(mount).toMatch(/ps-\[34px\]/);
+    // And it is NOT a flex row in the card's column any more.
+    expect(DIALER).not.toMatch(/<div className="shrink-0 flex justify-center pt-1 pb-0\.5">/);
   });
   it("the card can scroll as a safety valve so no row is ever unreachable", () => {
     expect(DIALER).toMatch(/flex flex-col overflow-y-auto/);

@@ -23,6 +23,7 @@ import { openPeerProfile } from "@/app/PeerOverlays";
 import { playDtmf, disposeDtmf } from "@/lib/dtmf";
 import { useIdentity } from "@/app/useIdentity";
 import { MyNumberCard } from "@/app/ShareNumber";
+import { DialerMarquee } from "@/app/DialerMarquee";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { GroupCallScreen } from "./GroupCallScreen";
@@ -407,6 +408,20 @@ export default function DialerPage() {
   const callable =
     /^\d{6}$/.test(dialed) && dialed !== myNumber && engineReady && !nonexistent;
 
+  /* Who the inline add-to-contacts button is for, or null for "no button".
+     EXTRACTED rather than left inline (v2.106.78) because the button MOVED — it
+     used to sit in its own centred row below the keypad and now sits beside the
+     digits — and the condition is exactly what it always was: a complete 6-digit
+     number that is not yours, is not a party line, and is not a number the
+     lookup proved does not exist. Whether it is ALREADY SAVED is decided one
+     layer down inside QuickAddContact, which returns null in that case — the
+     owner's *"if the number is in your contact, no need to show the button"*,
+     and a rule that has lived there since v2.99.90. */
+  const quickAddTarget =
+    /^\d{6}$/.test(dialed) && dialed !== myNumber && !previewIdentity?.partyLine && !nonexistent
+      ? dialed
+      : null;
+
   const ghost = useMemo(
     () => ghostNumberRule({ typed: dialed, ownNumber: myNumber }),
     [dialed, myNumber]
@@ -577,24 +592,41 @@ export default function DialerPage() {
                 }}
               >
                 {ghost.mode === "typed" ? (
-                  <span
-                    className="text-foreground font-semibold animate-[ghost-flash_220ms_var(--ease-out)]"
-                    aria-live="polite"
-                  >
-                    {ghost.display}
-                  </span>
-                ) : ghost.mode === "ghost" ? (
-                  <span
-                    className="
-                      text-[color:var(--relay-online,theme(colors.primary.DEFAULT))]/70
-                      drop-shadow-[0_0_18px_color-mix(in_oklab,var(--relay-online,#06d6a0)_40%,transparent)]
-                    "
-                    aria-label={`Your number: ${ghost.display}`}
-                  >
-                    {ghost.display}
+                  /* TYPED: the digits, and — when the number is complete, real and
+                     not already saved — the add-to-contacts button INLINE to their
+                     right (owner: *"in place of showing below, show on the right
+                     after the numbers you enter it, make little space after the last
+                     number … if the number is in your contact, no need to show"*).
+                     The button is absolutely positioned so it cannot push the digits
+                     off centre: the readout stays exactly where it has always been,
+                     and the affordance appears beside it rather than moving it. */
+                  <span className="relative inline-flex items-center justify-center">
+                    <span
+                      className="text-foreground font-semibold animate-[ghost-flash_220ms_var(--ease-out)]"
+                      aria-live="polite"
+                    >
+                      {ghost.display}
+                    </span>
+                    {quickAddTarget ? (
+                      <span className="absolute start-full top-1/2 -translate-y-1/2 ps-[34px]">
+                        <QuickAddContact
+                          number={quickAddTarget}
+                          displayName={previewIdentity?.displayName || quickAddTarget}
+                        />
+                      </span>
+                    ) : null}
                   </span>
                 ) : (
-                  <span className="text-muted-foreground/60">— — —</span>
+                  /* IDLE: the marquee.
+                     THE GREEN GHOST OF THE VIEWER'S OWN NUMBER IS GONE FROM HERE,
+                     which is the owner's actual complaint — they circled this slot
+                     and said their number *"is mentioned down, not here"*. It was
+                     the third copy on one screenshot (top bar, MY NUMBER card, this).
+                     v2.106.77 removed the first; this removes the third; the MY
+                     NUMBER card directly above keeps the one you can act on.
+                     Below 660px, where index.css hides that card, the marquee's own
+                     rotation carries the number instead — see buildRotations. */
+                  <DialerMarquee ownNumber={me?.number ?? null} onPick={setDialed} />
                 )}
               </div>
 
@@ -994,25 +1026,16 @@ export default function DialerPage() {
               </div>
             </div>
 
-            {/* Quick-add (v2.99.8): offer Save for a complete 6-digit number
-                that isn't yours, isn't a party line, and isn't already saved.
-                v2.99.17 (owner): NOT for a NONEXISTENT number — you can't save
-                a contact that isn't a real RELAY user. (During the lookup, and
-                on a lookup error, nonexistent is false, so Save still shows for
-                a real user the moment it resolves — or optimistically.) */}
-            {/* v2.99.36 (owner: "save to contact is not showing"): the card is a
-                no-scroll flex column sized to its rows, so this EXTRA row was
-                clipped by the bottom of the card / tab bar. It is now a
-                shrink-0 centred row (and the card can scroll as a safety valve),
-                so the pill is always fully visible and tappable. */}
-            {/^\d{6}$/.test(dialed) && dialed !== myNumber && !previewIdentity?.partyLine && !nonexistent ? (
-              <div className="shrink-0 flex justify-center pt-1 pb-0.5">
-                <QuickAddContact
-                  number={dialed}
-                  displayName={previewIdentity?.displayName || dialed}
-                />
-              </div>
-            ) : null}
+            {/* THE QUICK-ADD BUTTON USED TO BE A ROW OF ITS OWN HERE (v2.99.8,
+                moved to its own row in v2.99.36 after it was clipped). The owner
+                asked for it beside the digits instead — *"in place of showing
+                below, show on the right after the numbers you enter it"* — so it
+                now renders inside the readout above, and this row is gone rather
+                than left as an empty flex child.
+                That also removes a real cost: the row was `shrink-0` in a
+                no-scroll flex column, so it consumed height on every phone the
+                moment six digits were entered, on a card whose budget the keypad
+                subtracts from by a hardcoded constant. */}
           </div>
         </section>
       </div>

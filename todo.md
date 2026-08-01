@@ -18248,6 +18248,138 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.78 — the dial readout stops repeating your number and starts showing your people (2026-08-01)
+
+Owner, circling the dialed-digit echo area on the same screenshot: *"again my pin is
+mentioned down, not here — make a matrix message that press the numbers to dial to find
+your friends family team workers, but make them like it's flashy matrix random colours …
+don't show it all in one time, it's like blinking showing in out … if you have saved
+contacts, it will appear there. The name and the pin on the name on the left and the pin on
+the place of the six digits. It's like marketing, but it will be showing and it will hide …
+it will fetch randomly, but only it will appear your contacts, not other people contact.
+Now, if you don't have contact, it will tell you contact your family and it will show the
+other categories empty, but without showing numbers."*
+
+Plus, in the same message: *"the safe contact bottom showing below, which I don't like it,
+it's better to show on the right after the numbers you enter it … like 34 space … if the
+number is in your contact, no need to show the bottom."*
+
+**THE FINDING THAT WOULD HAVE MADE THE WHOLE FEATURE INERT, and it is not a bug in this
+code — it is a fact about the data.** Rotating the four contact tags is the obvious reading
+of "friends family team workers", and the owner chose those four when asked. But **UNTAGGED
+IS THE DEFAULT STATE OF EVERY CONTACT**: every add-contact call site in the app sends
+`{number, displayName}` and nothing else — the Dialer's save pill, the in-call save,
+History's row action, both peer-profile paths — `tags` is `.optional()` on the server input,
+nothing backfills it, and even the explicit Add-contact dialog opens with an empty list.
+Tags are set only by three deliberate after-the-fact editors. So a four-tag marquee would
+have told somebody with five hundred saved contacts that they have no family, no friends
+and no team: the exact failure the owner described for the ZERO-contact case, delivered to
+the fullest address book in the fleet, as the DEFAULT experience — against their own clause
+*"if you have saved contacts, it will appear there"*. There is a fifth, untagged round, and
+it is driven at 500 rows rather than one.
+
+**IT IS NOT `sectionsFor`'s `other` BUCKET, and that distinction is load-bearing rather
+than pedantic**: that predicate means "in no SECTION", and VIP has no section (it renders as
+a chip). Here VIP has a ROUND, so borrowing it would show a vip-only contact twice.
+
+**THE GREEN GHOST OF THE VIEWER'S OWN NUMBER IS GONE FROM THE READOUT** — the owner's actual
+complaint, and the third copy on one screenshot after v2.106.77 removed the first. **BELOW
+660px IT COMES BACK AS A ROTATION**, because `index.css` hides the MY NUMBER card there and
+the top bar now carries no number either, so on such a phone this is the only copy on the
+screen. **AND THAT COST A TEST EDIT IN A FILE THE DIFF BARELY TOUCHES**: the ghost was
+`Dialer.tsx`'s only UNEARNED presence-green, so deleting it made the file clean and
+`mentions.test.ts`'s staleness loop fired — *"Dialer.tsx is CLEAN now — take it off DEBT"*.
+That is the guard working exactly as designed, and the entry is removed in the same commit.
+
+**THE PROMPT AND THE CONTACT CROSS-FADE IN ONE ROW RATHER THAN STACKING**, which is both the
+owner's own sequence (*"then it will say contact your family. It will show the family
+contact"*) and what keeps the marquee inside the existing `minHeight: clamp(2rem,7vw,3rem)`.
+Not cosmetic: the keypad subtracts a HARDCODED 422px that includes this row and does not
+shrink to absorb anything added to it, so a stacked prompt line would have made the card
+silently start scrolling.
+
+**EVERY OTHER DEFECT WORTH NAMING WAS FOUND BY MEASUREMENT, AND ONE OF THEM REPORTED PASS.**
+The harness drives the real built stylesheet across 5 widths × 6 name shapes:
+
+- **`inset-inline-start-0` AND `inset-inline-start-full` ARE NOT TAILWIND CLASSES.** They
+  are the CSS *property* name. Both emitted nothing, so both absolutely-positioned elements
+  fell back to their static position — the marquee's name sat on top of the digits, and the
+  add-to-contacts button measured **71px to the LEFT** of where it belongs, i.e. on top of
+  the number. The button case reported **PASS**, because my check asked "did it overflow the
+  card" and nothing asked where it actually sat. A class that does not exist is
+  indistinguishable from one that does nothing, so the harness now ABORTS on a selector
+  absent from the built CSS, the gap is asserted at 34px rather than merely bounded, and the
+  test pins the class's existence against `dist/`.
+- **`dir="auto"` ON THE POSITIONED ELEMENT FLIPPED THE POSITIONING, NOT JUST THE TEXT.** An
+  Arabic name resolved the box to RTL and Chromium then resolved `inset-inline-start`
+  against the element's OWN direction: the name jumped to the right-hand edge and collided
+  with the digits at every width. Five failures, all Arabic. The direction now sits on an
+  inner span — the POSITION belongs to the container (`dir="ltr"`, so the six cells cannot
+  reorder), the name's own direction belongs to the text.
+- **A GATE OF MY OWN CRIED WOLF**: the first existence check built a regex and got the
+  escaping backwards — Tailwind writes `.ps-\[34px\]` with a LITERAL backslash, which `\[`
+  in a regex does not match — so it reported a class that exists as missing. A gate that
+  cries wolf is as useless as one that never fires; it is a plain substring check now.
+
+**MEASURED CLEAN AFTERWARDS, 40/40**: row height **32px in every case**, marquee and typed
+alike, so the zero-height-delta claim is structural rather than arithmetic; no name/PIN
+collision at any width for short, typical, long, 21-character, Arabic or CJK names; the add
+button at exactly **34px** with zero overflow and the digits still centred to within a
+pixel; the card never scrolls.
+
+**THE REST OF THE DESIGN, briefly.** Zero `setState` — a state write per 55ms flick would
+re-render the whole Dialer eighteen times a second on the app's default tab — so one rAF
+writes `textContent`/`opacity`/`transform` through refs, re-armed BEFORE its guards (the
+v2.99.67 bug) and stopped while the tab is hidden or a call is up (the marquee must not
+become the only thing ticking on the screen where every cycle belongs to the video encoder).
+No `@keyframes` anywhere, which is stronger than satisfying the standing guard rather than
+equal to it — that guard slices `index.css` only, so a component-local keyframe inherits no
+coverage at all. **TAPPING FILLS THE PAD AND NEVER DIALS**, because the target rotates and a
+mistimed tap would otherwise place a live call to a number the user never saw. The contact
+slide's length is DERIVED as `RELAY_ACCENT_CYCLE_MS / 2`, so "matches the background
+colouring" is a pinned property rather than a coincidence. Only the `contact` variant of the
+slide union carries a number at the TYPE level, so "without showing numbers" is
+unrepresentable rather than merely tested. A failed contacts read degrades to the hint
+ALONE — never an empty category prompt, which over a FAILED read is the v2.106.25 defect
+verbatim.
+
+**AND FOUR ELIGIBILITY RULES, each closing something real**: a malformed stored number, a
+blocked contact, a nameless row, and — the one that is easy to miss — a contact whose
+`identityId` is null, which is a purged person (v2.100.0 deliberately KEEPS third-party
+contact rows because `blocked` lives on them) or a number that never registered. Without it
+the marquee advertises a dead number, the user taps it, the lookup resolves to null and the
+Dialer disables every action: the screen invited a call and then refused it.
+
+**STATED PLAINLY**: in LIGHT theme the accent does not cycle at all — `RelayBackground` is
+mounted only in dark, so `--rb` resolves to a static fallback and `--primary` is a fixed
+measured cyan. The app defaults to dark, so a fresh user does get the movement; a user who
+switches gets a static accent. That is the same trade every accent surface in the app makes
+and it is recorded rather than implied. **AND NOBODY HAS WATCHED IT RESOLVE ON A PHONE** —
+the state machine is driven frame by frame and the geometry is measured in a real browser,
+but the decode's *look* is unverified.
+
+**10 OF 25 TRIPWIRES VERIFIED BY MUTATION AT THE TIME OF THIS COMMIT, ALL TEN BITING** —
+off a confirmed-GREEN baseline from byte-exact backups, the mutator aborting unless its
+target occurs exactly once and treating a changed test TOTAL as a failure; all five
+sources verified byte-identical afterwards. The sweep was interrupted to commit verified-
+green work, and the remaining 15 follow in the next commit — which is why the figure is
+stated as partial rather than rounded up. The ten that bit: the untagged round removed
+(the marquee inert for a default account), the untagged predicate borrowing the SECTION
+set (a vip-only contact shown twice), an empty category rendering a name, an EMPTY
+untagged slide emitted, a purged contact advertised as callable, a blocked contact
+offered, a malformed number offered as dialable, the signature reading row ORDER (the deck
+reshuffling on any contact edit), the list opening on the hint, and a FAILED contacts read
+still showing category prompts.
+
+**THREE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**: `dialerToneLayout.test.ts` froze the
+add button's own centred ROW — the arrangement the owner asked to replace — while saying
+nothing about what v2.99.36 was for (the button being clipped and unreachable);
+`dialerNonexistent.test.ts` froze the pill's exact inline condition, i.e. the fact that the
+decision was made AT THE MOUNT; and `mentions.test.ts` carried the DEBT entry above.
+
+`client/src/app/dialerMarquee.test.ts` (45). No schema change, no new dependency, no new env
+var, no server change. 5289 tests.
+
 ## v2.106.77 — the top bar stops repeating your number (2026-08-01)
 
 Owner, circling the top bar in a screenshot of their own Dialer: *"there is the flag which

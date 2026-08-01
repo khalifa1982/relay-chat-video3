@@ -893,6 +893,55 @@ body.relay-app-lock {
     display: none;
   }
 }
+/* ── THE DIALER'S IDLE MARQUEE (v2.106.78) ──────────────────────────────────
+   STATIC ONLY. Every fade, rise and lock-pop is written imperatively by the rAF
+   loop in DialerMarquee.tsx, so there is deliberately no @keyframes here and
+   nothing to gate on reduced motion at the CSS layer — a JS loop cannot be
+   stopped by a media query, so that gate lives in JS where it can actually bite.
+
+   The whole component is absolutely positioned inside the digits row and
+   contributes NO height: the row's own `minHeight: clamp(2rem, 7vw, 3rem)` still
+   decides the geometry, which is what keeps the keypad's hardcoded 422px budget
+   valid. */
+.relay-v2 .rmarquee-name {
+  /* 26% is the name's whole allowance, and truncation is the POINT: a long name
+     must never displace the digit cells, or "the pin on the place of the six
+     digits" stops being true the moment somebody saves an Abdulrahman. */
+  max-inline-size: 26%;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.relay-v2 .rmarquee-prompt {
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+.relay-v2 .rmarquee-pin {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* DELIBERATELY SMALLER than the live readout's clamp(1.75rem, 6.5vw, 2.75rem).
+     Two reasons, and the second is the load-bearing one: it buys the name its
+     inline-start margin, and it distinguishes a SUGGESTION from the number you
+     actually typed — those must not read as the same thing in the same slot. */
+  font-size: clamp(1.35rem, 5vw, 2rem);
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+.relay-v2 .rmarquee-cell {
+  /* FIXED WIDTH PER CELL — the exact discipline `.dc-dig` already uses on the
+     dial card, and for the recorded reason: a proportional glyph makes each
+     rolled character land on a different width, so the row visibly "breathes
+     sideways" while it resolves. */
+  min-inline-size: 0.62em;
+  text-align: center;
+  /* Bounds invalidation so a textContent write cannot escape into the card's
+     `backdrop-blur-2xl backdrop-saturate-150` surface and force a re-blur —
+     backdrop-filter is the top GPU cost on Android. */
+  contain: layout paint;
+}
 /* A count badge on the accent. Same fill as `.rcta` and the same on-accent text, but no
    glow: a 16px badge with a 30px shadow reads as a smudge, and it sits ON a nav glyph
    rather than on a dark card, so there is nothing for the glow to fall on. */

@@ -477,7 +477,13 @@ describe("green means ONLINE, and only online", () => {
       "client/src/app/TopBar.tsx",
       "client/src/lib/linkify.tsx",
       "client/src/pages/app/Admin.tsx",
-      "client/src/pages/app/Dialer.tsx",
+      /* Dialer.tsx CAME OFF THIS LIST in v2.106.78, and the guard is what told me
+         to remove it — this is the staleness loop working exactly as designed.
+         Its only UNEARNED green was the idle ghost of the viewer's own number,
+         which that release deleted (the owner circled that slot and asked for it
+         gone); the file's remaining green use is EARNED, because its element
+         window carries `st.online`. Left on the list it would have been a
+         permanent exemption nobody notices. */
       "client/src/pages/app/History.tsx",
       "client/src/pages/app/Join.tsx",
       "client/src/pages/app/Profile.tsx",

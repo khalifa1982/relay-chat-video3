@@ -29,8 +29,29 @@ describe("v2.99.17 — nonexistent dialed number disables call/group/save", () =
     expect(DIALER).toMatch(/disabled=\{nonexistent\}/);
   });
 
-  it("the Save-to-contacts pill is hidden for a nonexistent number", () => {
-    expect(DIALER).toMatch(/!previewIdentity\?\.partyLine && !nonexistent \?/);
+  it("the Save-to-contacts button is withheld for a nonexistent number", () => {
+    /* REWRITTEN v2.106.78 TO THE PROPERTY. This used to freeze the pill's exact
+       inline condition, ending `?` — i.e. it pinned the fact that the decision
+       was made AT THE MOUNT, which is precisely what changed when the owner
+       asked for the button to move from its own row below the keypad to inline
+       beside the entered digits. It said nothing about the rule it stands for.
+
+       The rule is: a number the lookup PROVED does not exist gets no
+       add-to-contacts affordance, because you cannot save a contact who is not
+       a RELAY user. So it is asserted on the decision itself wherever that
+       lives, plus the fact that the mount reads that decision rather than
+       re-deriving it — one condition, one place, which is what stops the two
+       drifting the next time the button moves. */
+    const decision = DIALER.slice(DIALER.indexOf("const quickAddTarget"));
+    expect(decision.length, "found the decision").toBeGreaterThan(80);
+    expect(decision.slice(0, 300)).toMatch(/!previewIdentity\?\.partyLine && !nonexistent/);
+    expect(decision.slice(0, 300)).toMatch(/\bdialed !== myNumber\b/);
+    // The mount consumes it and does not restate any of it.
+    expect(DIALER).toMatch(/\{quickAddTarget \?/);
+    expect(
+      (DIALER.match(/const quickAddTarget/g) || []).length,
+      "exactly one decision"
+    ).toBe(1);
   });
 
   it("startCallNow refuses to dial a nonexistent number defensively", () => {
