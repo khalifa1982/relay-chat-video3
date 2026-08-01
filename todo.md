@@ -18248,6 +18248,95 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.93 — the PIN reveal, for a guest AND a member (#162); six more screens speak Arabic (#156)
+
+**(1) #162 — the reveal now happens for everybody, and it is armed on a state TRANSITION.**
+Owner, with `design_handoff_pin_reveal/`: *"once you pass [login], before you go to the dashboard
+screen, there is a PIN number page where it shows you your number (either guest or member)… and
+after viewing the pin it will take you to the main dashboard… as you [move from the login area to
+this] page the background comes super speedily like flying in the space faster… After 10 seconds,
+it will move again rapidly to the next page."*
+
+- **The screen already half-existed and covered the wrong half of the users.** `MatrixReveal`
+  (v2.94.6) played a green rain decode after a GUEST typed a name — and only there. Somebody
+  signing in with an email code, and somebody arriving on an `/i/<pin>` link, saw nothing. So the
+  ask is not "build a reveal", it is "make the reveal a property of GETTING IN".
+- **ARMED ON THE TRANSITION, NOT PER SURFACE, and that is the load-bearing decision.** There are
+  THREE entry paths across TWO components (the guest name form and the email panel both live in
+  `LoginScreen`, the join card in `OnboardingGate`), and a callback per surface is exactly how the
+  fourth one ships without it. `OnboardingGate` instead watches `me` go from absent to present:
+
+  ```tsx
+  const sawSignedOut = useRef(false);
+  useEffect(() => {
+    if (!loading && !me) { sawSignedOut.current = true; return; }
+    if (me && sawSignedOut.current) {
+      sawSignedOut.current = false;
+      if (!callTarget) setRevealing(true);
+    }
+  }, [loading, me, callTarget]);
+  ```
+
+  Every path in and every path added later is covered by construction.
+- **A DASHBOARD RELOAD DOES NOT REPLAY IT, and the reason is `isLoading`'s exact semantics.**
+  react-query's `isLoading` is `isPending && isFetching` — true only on a FIRST fetch with no
+  data — so a reload of `/app/messages` resolves `whoami` without ever passing through
+  `!loading && !me`, the ref stays false, and nothing fires. If it were `isFetching` the screen
+  would replay on every refetch, which is the version people report as maddening.
+- **A CALL-LINK JOIN IS DELIBERATELY EXEMPT.** v2.94.5 made `/i/<pin>` one focused field so a
+  clicker lands *in the call*; a ten-second reveal in front of a ringing phone would undo exactly
+  that, so `callTarget` suppresses it — stated in the code and pinned, so it reads as a decision
+  rather than a path somebody forgot.
+- **`MatrixReveal.tsx` IS DELETED (196 lines), not left beside it.** Two reveals on one transition
+  is two things to keep in step and one of them wins by mount order; the guest submit is now just
+  `await startGuest(trimmed).catch(() => {})`.
+- **THE WARP IS A PROP, NEVER AN IMPERATIVE HANDLE.** `RelayBackground` gained `warpKey`, matching
+  the `business` flag directly above it: the trigger stays declarative, the handle stays private,
+  and a caller cannot hold a stale handle across the rebuild a theme switch performs. The effect
+  is declared AFTER the init effect on purpose — effects run in declaration order, so a mount that
+  arrives already carrying a `warpKey` has its handle by the time it runs.
+- **LEAVING HOLDS THE SCREEN FOR ITS OWN JUMP.** Calling `onDone` immediately would unmount this
+  canvas before the warp it just started could paint, so the exit IS the transition rather than
+  something playing underneath a screen already gone; idempotent, so a tap during the exit cannot
+  fire a second advance, and under reduced motion there is no jump and no wait at all.
+- **A MALFORMED NUMBER ADVANCES AT ONCE.** `isRevealablePin` demands exactly six digits; anything
+  else reports done immediately rather than scrambling onto `undefine`. This sits between a person
+  and their inbox and must never be the reason somebody cannot get in.
+- **TAP TO SKIP**, because a full-screen surface with nothing left to do and no exit is the shape
+  people report as frozen.
+- **VERIFIED IN A REAL BROWSER, not only by source pins** — esbuild-bundled against the real
+  component, driven on a real clock: idle → charge → flash → the six digits settling RIGHT→LEFT one
+  per 150ms onto the real number, the caption arriving, and the canvas present the whole time.
+- **A GUARD WIDENING ABANDONED RATHER THAN WEAKENED, and this is the most useful thing here.**
+  The new CSS tripped `relayAccentVars`' "every rule is scoped" sweep. My first widening allowed
+  any prefix absent from Home/Docs — a planted `.docs-leak` SURVIVED. My second tried exclusivity
+  by substring — `docs-` occurs incidentally in `CallHealthBanner.tsx`, so a single owner made
+  `.docs-leak` survive again, and `.button` would too. That guard had already been widened
+  carefully twice (v2.106.3, v2.106.4), so the answer was to stop widening it: all 36 `.prv-*`
+  rules are scoped under `.relay-v2`, the test was reverted with `git checkout`, and the ORIGINAL
+  guard was re-verified to bite.
+- **AND THE PIN TEST'S OWN SCOPING RULE HAD TO BECOME PER-COMPOUND**, because `.relay-v2
+  .prv-beam.core` carries a modifier: it now walks each space-separated compound and requires
+  `.relay-v2` or a `.prv-` class in it, which is what actually expresses "cannot leak".
+
+**(2) #156 — six more screens speak Arabic**: groups and Admin, the call engine and the system
+alerts, voicemail and the video recorder, each with its own `dict/` module so the type system
+refuses a new untranslated string there.
+
+**(3) TWO PRE-EXISTING GUARDS WERE VACUOUS — reporting safety rather than going red.**
+
+- `groupRoster.test.ts` sliced from an anchor with a bare `indexOf`, and with the anchor moved it
+  returned **-1**, so `slice(start, -1)` ran to the END OF THE FILE and the assertion read
+  something unrelated. The negative-index trap, recorded at v2.99.78, v2.106.56 and v2.106.65,
+  live for a fourth time. Both bounds are now asserted to EXIST before the slice is taken.
+- `mentions.test.ts`' presence-green sweep ran over raw source, so a sentence that had legitimately
+  moved into the dictionary was invisible to it; it runs on `expandCopy(codeOnly(...))` now, and
+  the `MatrixReveal.tsx` DEBT entry is removed because the file is gone (the staleness rule from
+  v2.106.31 — an exemption left in place after a fix is how a guard rots into a comment).
+
+**19 pre-existing pins repointed** through `copyOnScreen`, each having frozen an English literal
+this release legitimately moves into a dictionary. 5621 tests.
+
 ## v2.106.92 — the light theme gets the moving background (#158); one shared invite message (#161)
 
 **(1) #158 — the light theme had no animated background at all.** Owner: *"if you choose the
