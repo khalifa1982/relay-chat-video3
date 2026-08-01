@@ -200,6 +200,25 @@ export class MediaPipeline {
     if (this.rafId === null) this.loop();
   }
 
+  /**
+   * Stop the RAF loop WITHOUT tearing the pipeline down (#145).
+   *
+   * Turning the camera off stops the raw track, and this canvas reads that track — so
+   * without pausing, the loop keeps painting a frozen last frame at 30fps for as long as
+   * the camera is off, on the one screen where every cycle belongs to the video encoder
+   * (the cost class v2.106.56 measured and removed for the background canvas).
+   *
+   * Deliberately NOT `destroy()`: the pipeline holds the user's chosen FILTER, and
+   * rebuilding it would silently reset that to none on the way back. `setInputStream`
+   * restarts the loop by itself (`if (this.rafId === null) this.loop()`), which is exactly
+   * what `reacquireCameraForPublish` calls when the camera comes back — so resuming needs
+   * no second mechanism and no call site has to remember one.
+   */
+  pause() {
+    if (this.rafId !== null) cancelAnimationFrame(this.rafId);
+    this.rafId = null;
+  }
+
   getOutputStream(): MediaStream | null { return this.outputStream; }
   getInputVideoElement(): HTMLVideoElement { return this.inputVideo; }
   getActiveFilter(): FilterDef { return this.filter; }

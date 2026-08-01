@@ -6202,7 +6202,13 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         void (async () => {
           const track = await reacquireCameraForPublish();
           if (track) {
-            await replaceVideoEverywhere(track);
+            /* NOT while a screen share owns the video sender. Since #145 turns the camera
+               OFF by STOPPING it, `!haveLive` is now true for the ordinary
+               camera-off-then-on during a share — and publishing the camera here would
+               END the share, which is not what the camera button means. `stopScreenShare`
+               already swaps `currentCameraVideoTrack()` back in when it finishes, so the
+               fresh track is picked up there instead. */
+            if (!screenSharing) await replaceVideoEverywhere(track);
             syncCamEnabled();
             const st = $("tile-self"); if (st && !screenSharing) st.classList.remove("audio-only");
           } else {
@@ -6214,7 +6220,54 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         })();
       }
       reapplyAudioRouting();
+    } else {
+      void stopCameraCapture();
     }
+  }
+
+  /**
+   * #145 — turning the camera OFF stops it, rather than merely disabling the track.
+   *
+   * `track.enabled = false` keeps the CAPTURE open: the OS camera indicator stays lit, the
+   * sensor keeps running, and the encoder keeps producing black frames that cost real
+   * uplink and real CPU. On a phone that is the heat, and on any device it is a light that
+   * says "this app can see you" when it cannot — the thing somebody turning their camera
+   * off is actually asking to stop.
+   *
+   * The `enabled = false` in `setCam` stays and runs FIRST, deliberately: it takes effect
+   * synchronously, so nothing is published in the window before this async path lands.
+   *
+   * COMING BACK NEEDS NOTHING NEW. `setCam(true)` already reacquires when no live track is
+   * present — that branch exists for the denied-at-join and OS-killed-the-camera cases —
+   * so this composes with a path that is already there and already tested rather than
+   * adding a second way for the camera to return.
+   */
+  async function stopCameraCapture() {
+    if (!localStream) return;
+    /* THE SCREEN KEEPS THE VIDEO SENDER WHILE SHARING. Publishing null here would end the
+       share, and "turn my camera off" is not "stop sharing my screen" — they are two
+       controls. The camera is stopped either way, because during a share it is not being
+       published at all, so holding it open buys nothing and costs the indicator. */
+    if (!screenSharing) {
+      try { await replaceVideoEverywhere(null); } catch { /* */ }
+    }
+    const cam = localStream.getVideoTracks();
+    if (!cam.length) return;
+    /* `onended` is cleared BEFORE stopping. `stop()` does not fire `ended` per spec, but
+       `recoverDeadLocalTrack` is armed on that handler and a recovery storm for a track we
+       killed on purpose would reopen the camera we were asked to close — the same
+       belt-and-braces `stopScreenShare` already applies to its own tracks. */
+    try { cam.forEach(t => { t.onended = null; t.stop(); }); } catch { /* */ }
+    localStream = new MediaStream(localStream.getAudioTracks());
+    /* Pause rather than destroy: the pipeline holds the chosen FILTER, and destroying it
+       would silently reset that to none on the way back. `reacquireCameraForPublish` calls
+       `setInputStream`, which restarts the loop by itself. */
+    if (pipeline) { try { pipeline.pause(); } catch { /* */ } }
+    try {
+      const sv = $("tile-self")?.querySelector("video") as HTMLVideoElement | null;
+      if (sv && !screenSharing) sv.srcObject = localStream;
+    } catch { /* */ }
+    diag("camera stopped (off)");
   }
   // Re-assert the active audio output after a media change. applyAudioSink is a
   // no-op where the browser has no output picker (e.g. Android Chrome);

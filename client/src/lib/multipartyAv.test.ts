@@ -27,7 +27,14 @@ describe("mesh — camera-less participants (the '2/6 cameras dead' class)", () 
 
   it("enabling the camera with NO live local track REACQUIRES on the mesh (v2.72 only gave the SFU this)", () => {
     expect(SRC).toMatch(/const haveLive = localStream\.getVideoTracks\(\)\.some\(t => t\.readyState === "live"\);/);
-    expect(SRC).toMatch(/const track = await reacquireCameraForPublish\(\);\s*\n\s*if \(track\) \{\s*\n\s*await replaceVideoEverywhere\(track\);/);
+    /* REWRITTEN TO THE PROPERTY (#145). This froze the publish as UNCONDITIONAL, and it
+       can no longer be: turning the camera off now STOPS the track, so `!haveLive` fires
+       for the ordinary off→on during a SCREEN SHARE — where publishing the camera would
+       end the share. The rule this test stands for is that a reacquire happens on the
+       mesh at all, and that its result is published; the guard is asserted with it so the
+       exception cannot silently widen into "never publishes". */
+    expect(SRC).toMatch(/const track = await reacquireCameraForPublish\(\);\s*\n\s*if \(track\) \{/);
+    expect(SRC).toMatch(/if \(!screenSharing\) await replaceVideoEverywhere\(track\);/);
   });
 
   it("a failed (re)acquire is HONEST: camera button off + toast, never a fake-on camera", () => {
