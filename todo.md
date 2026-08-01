@@ -18248,6 +18248,60 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.82
+
+A deleted person stops sitting in everybody's address book (owner: "i delete this guest
+737582 but he was in my contact why it didn't deleted from everywhere?? Make sure it's
+completely deleted for everyone when you delete a user").  They found the ONE user-visible
+survivor of the purge cascade, and it was a deliberate decision rather than an oversight:
+IDENTITY_REFERENCING_COLUMNS declared contacts.number as keep-safer, so rows where somebody
+ELSE had saved the purged number were kept.  Everything else the purge leaves behind is
+invisible (an attachments row is a fail-closed lock; conversations.ownerIdentityId reads as
+"no owner"; messages.deletedByIdentityId names nobody), so this was the only place "delete
+him completely" was visibly untrue.
+
+WHY IT WAS KEPT IS CORRECT AND IS ALSO INERT HERE, which is the whole release.  `blocked`
+lives on the contact row and isNumberBlockedBy keys on contacts.number, so deleting it
+silently unblocks whoever had blocked that person (v2.99.28/M13) — true of a LIVE person.
+But step zero of the cascade TOMBSTONES the number in number_reservations with claimedAt
+stamped, and every allocator refuses a number the ledger holds, so after a purge nobody can
+ever hold it again: the block is a deny against a caller who cannot exist.
+
+THE DELETE IS GATED ON THE TOMBSTONE HAVING ACTUALLY STAMPED, not on our intention to.
+tombstoneNumber now returns a boolean, because it swallows its own failure by design (the
+ledger table is made by the boot migrator and a purge must not be blocked by its absence) —
+so "we called it" is not "it worked", and only the second licenses dropping a stranger's
+block.  Unstamped ⇒ the rows stay, i.e. today's behaviour.  Ordering pinned at both entry
+points: a stamp applied after the rows were gone leaves a window where the number is free
+and the blocks are already dropped.
+
+A REAL GAP IN MY OWN TEST, FOUND BY MUTATION, AND EXACTLY THE DANGEROUS CASE: the first
+assertion was "a `return false` exists somewhere in the body", which the two early-outs
+satisfy while the CATCH answers true — so a failed tombstone could report success with
+every test green.  That is M13 re-opened by the fix for it.  Success and failure paths are
+now asserted separately.  6 of 6 tripwires mutation-verified off a confirmed-green
+baseline, source byte-identical afterwards.
+
+HARNESS TRAP, RECORDED AND HIT AGAIN: my mutator counted occurrences with `grep -Fc`, which
+is LINE-based and cannot count a multi-line needle — it reported four targets as occurring
+9, 48, 2 and 3 times and aborted all four.  Exactly the v2.99.76 weakness.  Re-run with a
+real substring count, all four resolved.
+
+A stale justification corrected in the same commit: admin.deleteIdentity's doc comment
+cited the kept contact row as something "deliberately KEPT because deleting it would do
+active harm".  False as of this release, and it is the sentence the next reader would trust.
+
+TWO HALVES OF THE SAME OWNER MESSAGE CONFIRMED RATHER THAN BUILT, and one is not running:
+- "the admin is the only one who can delete" is ALREADY TRUE — deleteIdentity opens with
+  requireAdmin(ctx), re-derived from the users row on that request, and refuses self-delete.
+- "the guest will be deleted after a certain period" is BUILT AND SWITCHED OFF.
+  guestPurgeMode() reads RELAY_GUEST_PURGE and defaults to `off` deliberately (v2.100.0: the
+  only unattended irreversible destructive path in the codebase).  Unless that variable is
+  set on the fleet, no guest has ever been auto-purged and the 30-day clock is not running.
+  Turning it on is an env-set + restart, not a code change; `dry` logs what it WOULD purge.
+
+5302 tests.
+
 ## v2.106.81
 
 The install banner stops appearing where it is wrong, and becomes a real one-click install

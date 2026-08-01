@@ -137,28 +137,90 @@ describe("the cascade is COMPLETE — machine-checked against the schema", () =>
     expect(stale, `stale entries: ${stale.join(", ")}`).toEqual([]);
   });
 
-  it("the three things that must NOT be deleted are declared keep-safer, with their finding", () => {
+  it("the thing that must NOT be deleted is declared keep-safer, with its finding", () => {
     const by = (t: string, c: string) =>
       IDENTITY_REFERENCING_COLUMNS.find((x) => x.table === t && x.column === c);
     // Deleting an attachments row makes the media MORE readable, because
     // authorizeStorageKey cannot classify a key with no row and the proxy serves it
     // (v2.98.4/F3). The row is the lock.
     expect(by("attachments", "uploadedByIdentityId")?.strategy).toBe("keep-safer");
-    // Deleting a third party's contact row silently UNBLOCKS a blocked person,
-    // because `blocked` lives on that row (v2.99.28/M13).
-    expect(by("contacts", "number")?.strategy).toBe("keep-safer");
-    // …while their OWN address book does go.
+    // Their OWN address book goes…
     expect(by("contacts", "ownerId")?.strategy).toBe("cascade");
+    // …and so does the deleted person sitting in EVERYBODY ELSE'S. This one used to
+    // be keep-safer and the owner was right that it made "delete him completely"
+    // visibly untrue (v2.106.82): they deleted guest 737582 and it stayed in their
+    // contacts. The M13 unblock hazard that kept it is real for a LIVE person and
+    // inert for a purged one — see the gating test below, which is where the safety
+    // actually lives.
+    expect(by("contacts", "number")?.strategy).toBe("cascade");
   });
 
-  it("and the code obeys those two decisions", () => {
+  it("and the code obeys those decisions", () => {
     const code = codeOnly(PURGE);
     // Never deletes an attachments row, by any spelling.
     expect(code).not.toMatch(/delete\(attachments\)/);
     expect(code).not.toMatch(/DELETE FROM `?attachments/i);
-    // Deletes contacts by OWNER only — never by number, which is somebody else's row.
+    // Their own address book, scoped to them.
     expect(code).toMatch(/delete\(contacts\)\.where\(eq\(contacts\.ownerId, identityId\)\)/);
-    expect(code).not.toMatch(/delete\(contacts\)[\s\S]{0,80}contacts\.number/);
+    // …and other people's rows that named their number.
+    expect(code).toMatch(/delete\(contacts\)\.where\(eq\(contacts\.number, number\)\)/);
+  });
+
+  it("dropping OTHER people's contact rows is gated on the number really being retired", () => {
+    /* THE WHOLE SAFETY ARGUMENT FOR THE ABOVE, and the reason this is a separate
+       test rather than a line in it.
+
+       `blocked` lives on the contact row and `isNumberBlockedBy` keys on
+       `contacts.number`, so deleting the row unblocks whoever had blocked this
+       person (v2.99.28/M13). What makes that inert here is item 2 of the header:
+       the number is tombstoned in `number_reservations` BEFORE anything is
+       destroyed, and both allocators refuse a number the ledger holds — so after a
+       purge the block is a deny against a caller who can never exist again.
+
+       But `tombstoneNumber` swallows its own failure ON PURPOSE (the ledger table
+       is created by the boot migrator and a purge must not be blocked by its
+       absence), so "we called it" is not "it worked". The delete therefore hangs
+       off its RETURN VALUE. A mutation that hardcodes the flag, or drops the
+       guard, bites here. */
+    const code = codeOnly(PURGE);
+    expect(code, "the delete is guarded").toMatch(
+      /if \(numberRetired && number\) \{\s*await db\.delete\(contacts\)\.where\(eq\(contacts\.number, number\)\)/
+    );
+    // The flag is the tombstone's verdict at BOTH entry points, never a literal.
+    const assigns = [...code.matchAll(/const retired = await tombstoneNumber\(/g)];
+    expect(assigns, "both callers derive it from the tombstone").toHaveLength(2);
+    expect(code, "and never hand cascade a constant").not.toMatch(/cascade\([^)]*,\s*(true|false)\s*\)/);
+    /* …and tombstoneNumber must answer FALSE when the stamp did not land. This is
+       the assertion that carries the whole thing, and a weaker one nearly shipped:
+       "a `return false` exists somewhere in the body" is satisfied by the two
+       early-outs while the catch answers true — mutation-proven. A tombstone that
+       claims success it did not achieve is exactly M13 re-opened, because the
+       number can still be reissued and the blocks are already gone. */
+    const fn = code.slice(code.indexOf("export async function tombstoneNumber"));
+    const body = fn.slice(0, fn.indexOf("\n}") + 1);
+    const split = body.indexOf("} catch");
+    expect(split, "the stamp is wrapped").toBeGreaterThan(-1);
+    expect(body.slice(0, split), "a landed stamp answers true").toMatch(/return true;/);
+    const failure = body.slice(split);
+    expect(failure, "a FAILED stamp answers false").toMatch(/return false;/);
+    expect(failure, "…and never claims a success it did not achieve").not.toMatch(/return true;/);
+  });
+
+  it("the tombstone happens BEFORE the cascade, which is what makes the gate meaningful", () => {
+    /* Order, not presence: a tombstone stamped AFTER the contact rows are gone
+       would leave a window in which the number is free and the blocks are already
+       dropped. Both call sites are checked, because one of them is unattended. */
+    const code = codeOnly(PURGE);
+    for (const site of ["adminPurgeIdentity", "reapExpiredGuests"]) {
+      const at = code.indexOf(`export async function ${site}`);
+      expect(at, `${site} exists`).toBeGreaterThan(-1);
+      const region = code.slice(at);
+      const stamp = region.indexOf("await tombstoneNumber(");
+      const sweep = region.indexOf("await cascade(");
+      expect(stamp, `${site} tombstones`).toBeGreaterThan(-1);
+      expect(sweep, `${site} cascades`).toBeGreaterThan(-1);
+      expect(stamp, `${site}: tombstone precedes cascade`).toBeLessThan(sweep);
+    }
   });
 });
 

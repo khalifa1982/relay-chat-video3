@@ -27,14 +27,7 @@
  *      (`server/storage.ts` exports put/get/sign and nothing else) and inventing
  *      one that half-works would leave media readable rather than gone.
  *
- *   2. THIRD-PARTY `contacts` ROWS THAT SAVED THIS NUMBER ARE KEPT. `blocked`
- *      lives on the contact row and `isNumberBlockedBy` keys on `contacts.number`,
- *      so deleting those rows would silently UNBLOCK whoever had blocked this
- *      person — the v2.99.28/M13 hazard, and a purge must never quietly hand
- *      somebody back a channel they were deliberately denied. The identity's OWN
- *      address book (`contacts.ownerId`) is deleted in full.
- *
- *   3. THE 6-DIGIT NUMBER IS TOMBSTONED, NEVER RELEASED. `number_reservations` is
+ *   2. THE 6-DIGIT NUMBER IS TOMBSTONED, NEVER RELEASED. `number_reservations` is
  *      monotonic on purpose so a number somebody wrote down can never later
  *      connect them to a stranger. Two things make that non-obvious here: the
  *      ledger only exists from v2.99.30, so an older identity may have NO row at
@@ -44,6 +37,21 @@
  *      (the reaper's own guard is `claimedAt IS NULL`), before anything is
  *      destroyed. Without this, purging a pre-ledger guest would put their number
  *      back in circulation.
+ *
+ * AND THE THING THAT IS NO LONGER KEPT, because the owner was right that it made
+ * "delete him completely" untrue in the one place they could see (v2.106.82):
+ * THIRD-PARTY `contacts` ROWS THAT SAVED THIS NUMBER. They used to survive — the
+ * v2.99.28/M13 hazard says deleting a contact row silently UNBLOCKS whoever had
+ * blocked that person, and a purge must never hand somebody back a channel they
+ * deliberately denied. That reasoning is correct for a LIVE person and inert for a
+ * purged one, and the difference is item 2 above: the number is tombstoned BEFORE
+ * anything is destroyed, so nobody can ever hold it again and a block on it is a
+ * deny against a caller who cannot exist. So the delete is conditional ON THE
+ * TOMBSTONE HAVING ACTUALLY STAMPED, not on our intention to stamp it —
+ * `tombstoneNumber` swallows its own failure by design (the ledger table is made
+ * by the boot migrator and a purge must not be blocked by its absence), so an
+ * unstamped number is one that could still be reissued, and there the rows stay.
+ * Evidence, not optimism.
  *
  * ORDER IS THE SAFETY PROPERTY, not consistency. There are ZERO foreign keys in
  * this schema, so nothing detects an orphan and nothing cascades on our behalf.
@@ -144,11 +152,15 @@ export const IDENTITY_REFERENCING_COLUMNS = [
   {
     table: "contacts",
     column: "number",
-    strategy: "keep-safer",
+    strategy: "cascade",
     note:
-      "Rows where SOMEBODY ELSE saved this number. `blocked` lives here and " +
-      "isNumberBlockedBy keys on it, so deleting these would silently unblock a " +
-      "blocked person (v2.99.28/M13). Kept.",
+      "Rows where SOMEBODY ELSE saved this number — the deleted person sitting in " +
+      "everybody's address book, which is the one place 'deleted completely' was " +
+      "visibly untrue (owner, v2.106.82). Kept until then because `blocked` lives " +
+      "here and isNumberBlockedBy keys on it, so deleting the row unblocks whoever " +
+      "had blocked them (v2.99.28/M13) — true of a LIVE person, inert once the " +
+      "number is tombstoned, since a block is then a deny against a caller who can " +
+      "never exist. Deleted ONLY when the tombstone really stamped.",
   },
   {
     table: "conversation_participants",
@@ -464,21 +476,29 @@ export async function claimIdentityForPurge(
  * and none anywhere near this file: the ledger is monotonic, and the one existing
  * deleter (`reapUnclaimedReservations`) is guarded on `claimedAt IS NULL`, which
  * this stamp is what defeats.
+ *
+ * RETURNS WHETHER THE STAMP LANDED, and that boolean is load-bearing rather than
+ * informational: it is what licenses the cascade to delete other people's contact
+ * rows for this number. A failure here is swallowed on purpose, so without a
+ * return value the caller could not tell "the number is dead forever" from "we
+ * tried" — and only the first of those makes dropping a stranger's block safe.
  */
-export async function tombstoneNumber(number: string | null | undefined): Promise<void> {
-  if (!number) return;
+export async function tombstoneNumber(number: string | null | undefined): Promise<boolean> {
+  if (!number) return false;
   const db = await getDb();
-  if (!db) return;
+  if (!db) return false;
   try {
     await db.execute(sql`
       INSERT INTO \`number_reservations\` (\`number\`, \`claimedAt\`)
       VALUES (${number}, NOW())
       ON DUPLICATE KEY UPDATE \`claimedAt\` = COALESCE(\`claimedAt\`, NOW())`);
+    return true;
   } catch (e) {
     // Deliberately loud but non-fatal: the reservation table is created by the
     // boot migrator, and a purge must not be blocked by its absence — but a
     // number that failed to tombstone is the one outcome worth a log line.
     console.warn("[purge] number tombstone failed:", number, (e as Error)?.message || "");
+    return false;
   }
 }
 
@@ -487,8 +507,16 @@ export async function tombstoneNumber(number: string | null | undefined): Promis
  * already WON the claim — this function does not decide eligibility, which is why
  * it is not exported for general use and both entry points below go through the
  * claim first.
+ *
+ * `numberRetired` is the verdict from `tombstoneNumber`, and it gates exactly one
+ * step: dropping this number out of OTHER people's address books. See the header.
  */
-async function cascade(identityId: number, number: string | null, userId: number | null): Promise<void> {
+async function cascade(
+  identityId: number,
+  number: string | null,
+  userId: number | null,
+  numberRetired: boolean
+): Promise<void> {
   const db = await getDb();
   if (!db) return;
 
@@ -517,6 +545,16 @@ async function cascade(identityId: number, number: string | null, userId: number
   // else, and describing a view that is about to stop existing.
   await db.delete(messageHides).where(eq(messageHides.identityId, identityId));
   await db.delete(contacts).where(eq(contacts.ownerId, identityId));
+  // …and the rows where OTHER people saved THEM, which is what makes the deletion
+  // visible: until v2.106.82 a purged person stayed in everybody's address book.
+  // Gated on the tombstone having actually stamped, because that is the whole
+  // safety argument — with the number retired, the `blocked` flag on these rows is
+  // a deny against a caller who can never exist again, so dropping it takes
+  // nothing from anybody. Without the stamp the number could still be reissued and
+  // the M13 unblock hazard is real, so there the rows stay.
+  if (numberRetired && number) {
+    await db.delete(contacts).where(eq(contacts.number, number));
+  }
   await db.delete(partyLines).where(eq(partyLines.ownerIdentityId, identityId));
   await db
     .delete(callHistory)
@@ -672,8 +710,8 @@ export async function adminPurgeIdentity(
   try {
     const claimed = await claimIdentityForPurge(identityId, "admin");
     if (!claimed.ok || !claimed.row) return { ok: false, reason: "not-found" };
-    await tombstoneNumber(claimed.row.number);
-    await cascade(identityId, claimed.row.number, claimed.row.userId);
+    const retired = await tombstoneNumber(claimed.row.number);
+    await cascade(identityId, claimed.row.number, claimed.row.userId, retired);
     return {
       ok: true,
       identityId,
@@ -751,8 +789,8 @@ export async function reapExpiredGuests(): Promise<number> {
     try {
       const claimed = await claimIdentityForPurge(row.id, "guest-expired");
       if (!claimed.ok || !claimed.row) continue; // raced, or no longer eligible
-      await tombstoneNumber(claimed.row.number);
-      await cascade(row.id, claimed.row.number, claimed.row.userId);
+      const retired = await tombstoneNumber(claimed.row.number);
+      await cascade(row.id, claimed.row.number, claimed.row.userId, retired);
       purged++;
     } catch (e) {
       // One bad row must not stop the sweep; the claim stays stamped, so the row

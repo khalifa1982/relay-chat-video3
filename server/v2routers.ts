@@ -5716,11 +5716,16 @@ export const v2AdminRouter = router({
    * The only irreversible action any RELAY surface can take, and it shares its
    * entire implementation with the automatic guest purge — one cascade, two
    * callers, because two copies of "everything" is how the two would come to mean
-   * different things. What is and is not destroyed, and why three things are
+   * different things. What is and is not destroyed, and why a few things are
    * deliberately KEPT because deleting them would do active harm, is documented in
    * `server/purgeIdentity.ts`; the short version is that an `attachments` row is
-   * what holds its media SHUT (v2.98.4/F3) and a third party's contact row is what
-   * holds a BLOCK (v2.99.28/M13).
+   * what holds its media SHUT (v2.98.4/F3).
+   *
+   * A THIRD PARTY'S CONTACT ROW USED TO BE KEPT HERE TOO and no longer is
+   * (v2.106.82) — that row carries `blocked`, so dropping it unblocks whoever had
+   * blocked this person (v2.99.28/M13), which is true of a LIVE person and inert
+   * once the number is tombstoned. Leaving it made "deleted completely" visibly
+   * false: the deleted person stayed in everybody's address book.
    *
    * `TWO_STEP` confirmation is the CLIENT's job and this endpoint does not model
    * it, deliberately: a server-side confirm token would be a second thing to get
