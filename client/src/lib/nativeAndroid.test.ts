@@ -98,7 +98,14 @@ describe("server — FCM transport", () => {
     expect(WEBPUSH).toMatch(/sendFcmData\(fcmTokens/);
     expect(WEBPUSH).toMatch(/r\.invalidTokens\.map\(t => deletePushSubscription\(t\)/);
     expect(FCM).toMatch(/https:\/\/fcm\.googleapis\.com\/v1\/projects\//);
-    expect(FCM).toMatch(/ttl: data\.kind === "incoming-call" \? "70s"/);
+    // REWRITTEN v2.106.74. This froze the bare literal `"70s"` — which WAS the
+    // defect: APNs carried its own, different, private `45`, so one event had two
+    // lifetimes and an iPhone reconnecting at t=50s got nothing where an Android
+    // rang. The property is that a ring is bounded by the SHARED constant (whose
+    // value is tied to the server's pending-ring TTL in callPushExpiry.test.ts)
+    // while everything else keeps the long TTL.
+    expect(FCM).toMatch(/data\.kind === "incoming-call"[\s\S]{0,80}`\$\{CALL_PUSH_EXPIRY_SECONDS\}s`/);
+    expect(FCM).toMatch(/"3600s"/);
   });
 });
 

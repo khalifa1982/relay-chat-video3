@@ -19,6 +19,7 @@
  */
 import crypto from "crypto";
 import fs from "fs";
+import { CALL_PUSH_EXPIRY_SECONDS } from "./callPushPayload";
 
 interface ServiceAccount {
   project_id: string;
@@ -240,7 +241,19 @@ export async function sendFcmData(
             message: {
               token,
               data,
-              android: { priority: "HIGH", ttl: data.kind === "incoming-call" ? "70s" : "3600s" },
+              // A ring's TTL is the SHARED bound, not a literal chosen here: this
+              // line carried a bare "70s" while APNs carried 45, so one event had
+              // two lifetimes and an iPhone reconnecting at t=50s got nothing
+              // where an Android rang. Everything that is not a ring keeps the
+              // long TTL — a message or a missed-call notice is still worth
+              // delivering an hour later, which a ring is not.
+              android: {
+                priority: "HIGH",
+                ttl:
+                  data.kind === "incoming-call"
+                    ? `${CALL_PUSH_EXPIRY_SECONDS}s`
+                    : "3600s",
+              },
             },
           }),
         });

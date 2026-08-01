@@ -121,8 +121,19 @@ describe("both transports send the SAME envelope", () => {
     /* Two literals is how iOS and Android come to disagree about what a call is —
        the class this repo already paid for with the TURN checker (v2.99.71) and the
        token classifier (v2.105.11). */
-    expect(APNS).toMatch(/import \{ buildCallPush.*\} from "\.\/callPushPayload"/);
-    expect(WEBPUSH).toMatch(/import \{ buildCallPush.*\} from "\.\/callPushPayload"/);
+    /* REWRITTEN v2.106.74: this matched a SINGLE-LINE import, so it broke the moment
+       apnsVoip.ts legitimately took a second symbol from the same module and prettier
+       wrapped it — i.e. it pinned the import's FORMATTING, not the property. The
+       property is only that each sender takes its composer from the one module. */
+    const importsComposerFrom = (src: string) =>
+      new RegExp(
+        String.raw`import\s*\{[^}]*\bbuildCallPush\b[^}]*\}\s*from\s*"\./callPushPayload"`,
+        "s"
+      ).test(src);
+    expect(importsComposerFrom(APNS), "apnsVoip.ts imports buildCallPush").toBe(true);
+    expect(importsComposerFrom(WEBPUSH), "webPush.ts imports buildCallPush").toBe(true);
+    // And there is genuinely only ONE composer to import.
+    expect(read("server/callPushPayload.ts").match(/export function buildCallPush/g)?.length).toBe(1);
   });
 
   it("the APNs body IS the composed envelope, with no `aps` wrapper", () => {

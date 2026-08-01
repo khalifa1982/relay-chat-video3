@@ -36,6 +36,46 @@
  * optional `PersistedRoom.groupAdminPins` and the `parties` hint on the invite.
  */
 
+/**
+ * HOW LONG A RING PUSH MAY LIVE — one number, both transports.
+ *
+ * ── WHY THIS EXISTS (2026-08-01) ─────────────────────────────────────────────
+ * v2.106.69 unified the call-push PAYLOAD across APNs and FCM and then left the
+ * two transports to pick their own LIFETIME independently. They diverged, as two
+ * literals for one rule always do: APNs carried a named `VOIP_EXPIRY_SECONDS = 45`
+ * while FCM carried a bare inline `ttl: "70s"` with nothing saying why. So one
+ * event had two lifetimes, and the gap was not academic — a handset that
+ * reconnected between 45s and 70s got a ring on Android and NOTHING on iOS.
+ *
+ * ── WHY 70 AND NOT THE SPEC'S 45 — A STATED DEVIATION ────────────────────────
+ * The owner's push doc says `now+45s` for APNs and `ttl: "45s"` for FCM. That is
+ * a round number rather than a derived one, and the derived one is available:
+ * `PENDING_RING_TTL_MS` (70s) is how long the SERVER keeps the pending ring that
+ * `deliverPendingRing` hands over when the app opens. That makes 70 the exact
+ * point where the two failure modes cross:
+ *
+ *   • SHORTER than the ring's life  → a phone that comes back at t=50s is refused
+ *     the push even though the server still holds a live ring it would have
+ *     served. Cost: a call that could have connected, does not.
+ *   • LONGER than the ring's life   → a push outlives the ring and the phone
+ *     rings for a call the registry has already forgotten. Cost: somebody
+ *     answers into nothing.
+ *
+ * At exactly the TTL the second cost is zero BY CONSTRUCTION rather than by luck:
+ * the server drops the pending ring at the same instant the push stops being
+ * deliverable, so there is no window in which one outlives the other.
+ *
+ * The doc is also internally inconsistent on this point — it asks for a 45s expiry
+ * and a 60s ring timeout in the same section, and an expiry shorter than the ring
+ * it serves cannot be right in either direction.
+ *
+ * Kept in THIS module, which imports nothing, so both transports can reach it with
+ * no risk of an import cycle back into `relay.ts`. `callPushExpiry.test.ts` asserts
+ * it equals `PENDING_RING_TTL_MS / 1000`, so the two cannot drift again — the
+ * parity-check pattern this repo uses wherever one rule has two homes.
+ */
+export const CALL_PUSH_EXPIRY_SECONDS = 70;
+
 export type CallPushType = "incoming_call" | "call_cancel";
 
 export interface CallPushInput {

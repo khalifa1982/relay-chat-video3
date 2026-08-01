@@ -18248,6 +18248,85 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.74 — the ring push had two lifetimes, one per transport (2026-08-01)
+
+Owner, re-uploading `relaypushbackendconfig.md`: *"ok do what the best"*.
+
+**THE FILE IS BYTE-IDENTICAL TO THE TWO EARLIER UPLOADS** — same md5 `7f9a94a5…` at
+01:03, 01:41 and 09:43 — so v2.106.69 and v2.106.71 have both already answered it. The
+useful move was therefore not to re-answer it but to check it clause by clause against
+CURRENT source once more, which is what found real gaps both previous times. It found
+one more.
+
+**WHAT WAS ALREADY TRUE, verified rather than recalled**: the credentials read
+(v2.106.69/.71); the payload carries the spec's `type: "incoming_call"` AND the legacy
+`kind: "incoming-call"` the shipped shells branch on; APNs sends to
+`api.push.apple.com` with `apns-topic`, `apns-push-type: voip`, `apns-priority: 10`, a
+JWT cached 45 min, and NO `aps` block; FCM is data-only (`token` + `data` + `android`,
+no `notification`), `priority: HIGH`, every value a string; the ring reaches EVERY
+`apns-voip` token AND EVERY `fcm` token; the cancel rides `kind: "incoming-call"` so it
+reaches exactly the transports the ring did, with the inner `type` making it a cancel;
+410/UNREGISTERED prune (v2.106.71); the callee's ring timeout is exactly the doc's
+**60s**; the missed-call fallback exists; and all three web-client additions shipped in
+v2.106.69.
+
+**THE GAP: v2.106.69 UNIFIED THE PAYLOAD AND LEFT THE LIFETIME BEHIND.** That release's
+whole argument is that two literals is how iOS and Android come to disagree about what a
+call is — and it applied that to the field set only. The expiry was left at each
+transport to pick for itself, and they diverged exactly as predicted:
+
+    apnsVoip.ts   const VOIP_EXPIRY_SECONDS = 45              (named, commented)
+    fcm.ts        ttl: kind === "incoming-call" ? "70s" : …   (bare inline, no reason)
+
+One event, two lifetimes. **NOT ACADEMIC**: a handset that reconnects between 45s and
+70s gets a ring on Android and NOTHING on iOS — the precise situation a ring push
+exists to serve.
+
+**THE FIX IS ONE CONSTANT, AND ITS VALUE IS DERIVED RATHER THAN CHOSEN.**
+`CALL_PUSH_EXPIRY_SECONDS` lives in `callPushPayload.ts` — the module that imports
+NOTHING, so both transports can reach it with no risk of a cycle back into `relay.ts` —
+and a parity test asserts it equals `PENDING_RING_TTL_MS / 1000`.
+
+**A STATED DEVIATION FROM THE DOC: 70s, NOT ITS 45s.** `PENDING_RING_TTL_MS` is how
+long the server keeps the pending ring `deliverPendingRing` hands over when the app
+opens, which makes 70 the exact point where the two failure modes cross — SHORTER and a
+phone returning at t=50s is refused a push for a ring the server would still have
+served (a call that could have connected, does not); LONGER and the push outlives the
+ring and somebody answers into nothing. At exactly the TTL the second cost is zero **by
+construction** rather than by luck, because the ring and the push stop at the same
+instant. The doc is also internally inconsistent here — it asks for a 45s expiry and a
+60s ring timeout in the same section, and an expiry shorter than the ring it serves
+cannot be right in either direction. Recorded rather than done quietly.
+
+**THE NON-RING TTL IS DELIBERATELY UNTOUCHED** and pinned: everything that is not a
+ring keeps `3600s`, because a message or a missed-call notice is still worth delivering
+an hour later, which a ring is not — and a later tidy-up collapsing both arms onto the
+short bound is a mutation that bites.
+
+**6 of 6 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, all three sources byte-identical afterwards — including the expiry decoupled
+from the ring TTL, APNs reverted to its own private literal, FCM reverted to a bare
+`70s`, both FCM arms collapsed onto the ring bound, the constant module given an import
+(the cycle it exists to avoid), and the expiry dropped below the callee's 60s
+auto-decline.
+
+**ONE PRE-EXISTING PIN REWRITTEN TO THE PROPERTY**: `apnsVoip.test.ts` asserted the
+exact one-line expression AND `VOIP_EXPIRY_SECONDS = 45` — i.e. it froze one
+implementation, forbade the fix, and said nothing about the rule. The literal it froze
+**was the defect**. It now asserts the header is present and computed from a bound
+SHARED with the other transport, and forbids any transport-private expiry returning.
+
+**SAID PLAINLY: NOT VERIFIED ON A HANDSET.** There is no iPhone or Android here and APNs
+and FCM are unreachable from this sandbox. What is proven is that both transports now
+bound a ring by the same number and that the number is the ring's own life. The doc's
+own verification steps still need a device.
+
+**AND THIS CANNOT DEPLOY YET**: `main` was force-pushed to the Expo mobile project, so
+the repo has no workflows at all (`actions_list` → `total_count: 0`) — no CI, no deploy,
+and no `voip-deploy` dispatch. See v2.106.73 and PR #133.
+
+No schema change, no new dependency, no new env var. 5211 tests.
+
 ## v2.106.73 — the permission the header claimed, and two defects the first real run exposed (2026-08-01)
 
 The v2.106.72 fixes went live and `voip-deploy` was dispatched for real. It got further than it

@@ -35,12 +35,14 @@
 import crypto from "crypto";
 import http2 from "http2";
 import fs from "fs";
-import { buildCallPush, type CallPushType } from "./callPushPayload";
+import {
+  buildCallPush,
+  CALL_PUSH_EXPIRY_SECONDS,
+  type CallPushType,
+} from "./callPushPayload";
 
 /** Apple caps a provider token at 1h; refresh well inside that. */
 const TOKEN_TTL_MS = 45 * 60_000;
-/** A ring is worthless late. APNs drops it rather than storing it. */
-const VOIP_EXPIRY_SECONDS = 45;
 
 /**
  * THE OWNER'S STAGED CONFIGURATION, used ONLY when the environment names nothing.
@@ -484,7 +486,14 @@ export async function sendVoipRing(
                 // 10 = deliver immediately. A ring throttled to save battery is
                 // a missed call.
                 "apns-priority": "10",
-                "apns-expiration": String(Math.floor(Date.now() / 1000) + VOIP_EXPIRY_SECONDS),
+                // A ring is worthless late, so APNs drops it rather than storing
+                // it. The bound is the SHARED one — see `CALL_PUSH_EXPIRY_SECONDS`
+                // for why it is the server's pending-ring TTL and not a literal
+                // picked here, which is how this diverged from FCM in the first
+                // place.
+                "apns-expiration": String(
+                  Math.floor(Date.now() / 1000) + CALL_PUSH_EXPIRY_SECONDS
+                ),
                 // Present ONLY for token auth. Sending an empty or bogus bearer
                 // alongside a client certificate is how a working cert setup
                 // earns a 403 that reads like a bad certificate.

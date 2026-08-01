@@ -791,12 +791,24 @@ describe("v2.105.12 — the request headers ARE the protocol", () => {
     expect(SRC).toMatch(/"apns-priority": "10"/);
   });
 
-  it("addresses the VoIP topic and sets a SHORT expiry", () => {
+  it("addresses the VoIP topic and BOUNDS the ring rather than storing it", () => {
     expect(SRC).toMatch(/"apns-topic": cfg\.topic/);
     // A ring that arrives after the caller gave up rings a phone for nobody, so
     // APNs must DROP it rather than store and retry.
-    expect(SRC).toMatch(/"apns-expiration": String\(Math\.floor\(Date\.now\(\) \/ 1000\) \+ VOIP_EXPIRY_SECONDS\)/);
-    expect(SRC).toMatch(/VOIP_EXPIRY_SECONDS = 45/);
+    //
+    // REWRITTEN v2.106.74. This froze `VOIP_EXPIRY_SECONDS = 45` and the exact
+    // one-line expression — i.e. it pinned ONE IMPLEMENTATION of the rule, and in
+    // doing so forbade the fix while saying nothing about the property. The
+    // literal was the defect: FCM carried its own, different, bare `70s`, so one
+    // event had two lifetimes and an iPhone reconnecting at t=50s got nothing
+    // where an Android rang. The property is that the header is present and
+    // computed from a bound SHARED with the other transport; which number that is
+    // lives in `callPushExpiry.test.ts`, which ties it to the ring's own TTL.
+    expect(SRC).toMatch(
+      /"apns-expiration":\s*String\(\s*Math\.floor\(Date\.now\(\) \/ 1000\) \+ CALL_PUSH_EXPIRY_SECONDS\s*\)/
+    );
+    // No transport-private expiry may come back.
+    expect(SRC).not.toMatch(/VOIP_EXPIRY_SECONDS/);
   });
 
   it("carries the ROOM in the payload, and no `aps` block", () => {
