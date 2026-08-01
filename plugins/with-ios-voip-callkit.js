@@ -138,8 +138,7 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate {
   }
 
   func setupCallKit() {
-    let config = CXProviderConfiguration()
-    config.localizedName = "RELAY"
+    let config = CXProviderConfiguration(localizedName: "RELAY")
     config.supportsVideo = true
     config.maximumCallsPerCallGroup = 1
     config.maximumCallGroups = 1
