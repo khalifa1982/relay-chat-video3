@@ -23,6 +23,7 @@ import { openPeerProfile } from "@/app/PeerOverlays";
 import { playDtmf, disposeDtmf } from "@/lib/dtmf";
 import { useIdentity } from "@/app/useIdentity";
 import { MyNumberCard } from "@/app/ShareNumber";
+import { shareInviteMessage } from "@/app/inviteMessage";
 import { useT, translate, type TKey } from "@/app/i18n";
 import { DialerMarquee } from "@/app/DialerMarquee";
 import { demotablePollInterval } from "@/app/useRealtime";
@@ -409,19 +410,18 @@ export default function DialerPage() {
   function shareInvite() {
     const num = enginePin ?? me?.number ?? null;
     if (!num) return;
-    const url = `${window.location.origin}/i/${num}`;
-    const title = "Call me on RELAY";
-    if (typeof navigator !== "undefined" && navigator.share) {
-      // Pass title + url separately so the OS share sheet lays them out cleanly
-      // (header on top, link below) instead of concatenating into one block.
-      navigator.share({ title, text: title, url }).catch(() => {});
-    } else {
-      // Clipboard fallback: header line + link line.
-      navigator.clipboard
-        ?.writeText(`${title}\n${url}`)
-        .then(() => toast.success(t("dialer.inviteCopied")))
-        .catch(() => toast.error(t("dialer.copyFailed")));
-    }
+    /* THE WORDING AND THE LAYOUT LIVE IN `inviteMessage.ts` (v2.106.92), not here.
+       This site's own previous comment claimed that passing `title` + `url` separately
+       makes the share sheet "lay them out cleanly (header on top, link below) instead of
+       concatenating into one block" — the owner's screenshot disproves it: WhatsApp joins
+       them with a SPACE and the sentence wraps into the URL. The layout is only ours to
+       control if we hand over ONE field. */
+    shareInviteMessage(t, {
+      who: { name: me?.displayName, pin: num },
+      url: `${window.location.origin}/i/${num}`,
+      onCopied: () => toast.success(t("dialer.inviteCopied")),
+      onCopyFailed: () => toast.error(t("dialer.copyFailed")),
+    });
   }
 
   const previewIdentity = previewQuery.data ?? null;

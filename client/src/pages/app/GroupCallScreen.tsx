@@ -33,6 +33,8 @@ import { useRelayEngine } from "@/app/RelayEngine";
 import { presenceDot } from "@/app/presenceDot";
 import { matchQuery } from "@/app/searchMatch";
 import { formatPin } from "@/app/TopBar";
+import { buildInviteMessage, shareInviteMessage } from "@/app/inviteMessage";
+import { useT } from "@/app/i18n";
 import { formatElapsedSince } from "@shared/profileFields";
 
 function initials(name: string): string {
@@ -343,6 +345,11 @@ export function PartyLinesSection({
 }) {
   const engine = useRelayEngine();
   const utils = trpc.useUtils();
+  const t = useT();
+  /* Cached app-wide (same query key the shell runs), so this costs no request. It names
+     the INVITER in the shared message; a not-yet-resolved query falls back to the
+     anonymous phrasing rather than interpolating "undefined". */
+  const me = trpc.identity.whoami.useQuery(undefined, { staleTime: 30_000 });
   const [open, setOpen] = useState(defaultOpen);
   const [title, setTitle] = useState("");
   /** Which row's manage card is expanded (in flow, below the list). */
@@ -370,22 +377,34 @@ export function PartyLinesSection({
     onError: (err) => toast.error(err.message || "Couldn't delete the party line."),
   });
 
+  /**
+   * THE SCREENSHOT THE OWNER SENT WAS THIS FUNCTION'S OUTPUT (v2.106.92).
+   *
+   * It read `Join "Gigh Meeting" on RELAY — dial 794 254` followed by the URL, and
+   * arrived as ONE wrapped line with the six digits rendered as a green underlined
+   * PHONE LINK — so the most tappable thing in the invite dialled the recipient's own
+   * carrier. Both halves are fixed in `inviteMessage.ts`, which every share site now
+   * shares; Share and Copy hand it the same arguments so they can no longer say
+   * different things about one party line.
+   */
+  function lineInvite(l: { title: string; number: string }) {
+    return {
+      who: { name: me.data?.displayName, pin: me.data?.number },
+      title: l.title,
+      url: `${window.location.origin}/i/${l.number}`,
+    };
+  }
   function shareLine(l: { title: string; number: string }) {
-    const url = `${window.location.origin}/i/${l.number}`;
-    const text = `Join "${l.title}" on RELAY — dial ${formatPin(l.number)}`;
-    if (typeof navigator !== "undefined" && navigator.share) {
-      navigator.share({ title: text, text, url }).catch(() => {});
-    } else {
-      navigator.clipboard
-        ?.writeText(`${text}\n${url}`)
-        .then(() => toast.success("Invite copied"))
-        .catch(() => toast.error("Couldn't copy the invite"));
-    }
+    shareInviteMessage(t, {
+      ...lineInvite(l),
+      onCopied: () => toast.success("Invite copied"),
+      onCopyFailed: () => toast.error("Couldn't copy the invite"),
+    });
   }
   function copyLine(l: { title: string; number: string }) {
     navigator.clipboard
-      ?.writeText(`${l.title} — dial ${formatPin(l.number)} on RELAY or open ${window.location.origin}/i/${l.number}`)
-      .then(() => toast.success("Dial-in copied"))
+      ?.writeText(buildInviteMessage(t, lineInvite(l)))
+      .then(() => toast.success("Invite copied"))
       .catch(() => toast.error("Couldn't copy"));
   }
 

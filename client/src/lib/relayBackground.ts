@@ -44,6 +44,11 @@ export interface RelayBackgroundOpts {
   lowPower?: boolean;
   /** Test seam: force the reduced-motion decision. */
   reducedMotion?: boolean;
+  /**
+   * Which tone map to paint with (#158). Defaults to DARK, so every existing call site
+   * is byte-identical and the light variant is strictly additive.
+   */
+  tone?: RelayTone;
 }
 
 /** The 12-entry cycling palette from the spec. Exported so the UI can prove it
@@ -127,11 +132,80 @@ export function prefersReducedMotion(): boolean {
   }
 }
 
+/**
+ * THE TONE MAP — the only thing that differs between the two themes (#158).
+ *
+ * Owner: *"if you choose the light theme, ensure that the 3D background also changes …
+ * the background will be a very light black or gray that is moving."* Until now the
+ * light theme had NO animated background at all: `AppShell` mounted the canvas only in
+ * dark, because this engine is built end to end for a near-black surface — the base is
+ * `#04070a`, the stars are near-WHITE, particles are brightened TOWARD white, and the
+ * vortex composites with `lighter`, which is additive and therefore invisible on a pale
+ * surface. Painting the same frames on white would have produced a blank canvas.
+ *
+ * ONE ENGINE, TWO PALETTES — not a second engine. The motion, the geometry and the
+ * accent cycle stay byte-identical, so the two themes cannot come to disagree about the
+ * SHAPE of the background; only how a value is mapped to a tone changes. That is also
+ * what keeps the accent honest: `publishAccentVars` runs from the same loop either way.
+ *
+ * `toward` is the load-bearing member. Dark brightens a channel toward 255 to make a
+ * particle glow out of black; light must DARKEN toward 0, or every particle lands within
+ * a few percent of the paper and nothing is visible. Same for the composite operation:
+ * `lighter` adds, which is a no-op against white, so light uses `multiply`.
+ */
+export interface RelayTone {
+  /** Page base. Light is the owner's "very light black or gray", not pure white. */
+  base: string;
+  /** Stars / grid ink. */
+  ink: [number, number, number];
+  starAlpha: [number, number];
+  gridAlpha: number;
+  /** Glow alphas — a pale surface needs them stronger to register at all. */
+  glow: [number, number];
+  /** Additive on dark; multiplicative on light, where additive is invisible. */
+  composite: GlobalCompositeOperation;
+  /** Where a channel travels as a particle gets brighter/denser. */
+  toward: number;
+  vortexAlpha: number;
+}
+
+export const RELAY_TONE_DARK: RelayTone = {
+  base: "#04070a",
+  ink: [215, 240, 233],
+  starAlpha: [0.1, 0.24],
+  gridAlpha: 0.045,
+  glow: [0.1, 0.14],
+  composite: "lighter",
+  toward: 255,
+  vortexAlpha: 0.28,
+};
+
+export const RELAY_TONE_LIGHT: RelayTone = {
+  /* "A very light black or gray" — #eef1f0, a hair off white with the same cool cast the
+     dark palette has, so the accent reads as the same hue family in both. Pure white
+     would make every mark a hard edge and lose the depth the glows give. */
+  base: "#eef1f0",
+  ink: [26, 46, 42],
+  /* Ink on paper needs LESS alpha than light on black to read at the same strength —
+     a dark mark on a pale surface has far more contrast to spend. */
+  starAlpha: [0.06, 0.16],
+  gridAlpha: 0.07,
+  glow: [0.16, 0.2],
+  composite: "multiply",
+  toward: 0,
+  vortexAlpha: 0.16,
+};
+
 export function initRelayBackground(
   cv: HTMLCanvasElement,
   opts: RelayBackgroundOpts = {},
 ): RelayBackgroundHandle {
   const ctx = cv.getContext("2d");
+  const TONE = opts.tone ?? RELAY_TONE_DARK;
+  /* Toward WHITE on dark, toward BLACK on light — the single expression that decides
+     whether a particle glows out of the surface or is inked onto it. Without the flip,
+     every mark on the light canvas lands within a few percent of the paper. */
+  const mix = (c: number, k: number) => (c + (TONE.toward - c) * k) | 0;
   const R = Math.random;
   const hex2 = (h: string) => {
     const s = h.replace("#", "");
@@ -238,25 +312,25 @@ export function initRelayBackground(
     px += (tx - px) * 0.04; py += (ty - py) * 0.04; sy += (syT - sy) * 0.06;
 
     // ---- base + glows ------------------------------------------------------
-    ctx!.fillStyle = "#04070a";
+    ctx!.fillStyle = TONE.base;
     ctx!.fillRect(0, 0, w, h);
     let g = ctx!.createRadialGradient(w * 0.5 - px * 40, h * 0.34 - py * 30, 0, w * 0.5, h * 0.34, Math.max(w, h) * 0.55);
-    g.addColorStop(0, A(0.1)); g.addColorStop(1, "rgba(0,0,0,0)");
+    g.addColorStop(0, A(TONE.glow[0])); g.addColorStop(1, "rgba(0,0,0,0)");
     ctx!.fillStyle = g; ctx!.fillRect(0, 0, w, h);
     g = ctx!.createRadialGradient(w * 0.5, h * 1.42, h * 0.3, w * 0.5, h * 1.42, h * 0.95);
-    g.addColorStop(0, A(0.14)); g.addColorStop(1, "rgba(0,0,0,0)");
+    g.addColorStop(0, A(TONE.glow[1])); g.addColorStop(1, "rgba(0,0,0,0)");
     ctx!.fillStyle = g; ctx!.fillRect(0, 0, w, h);
 
     // ---- drifting grid -----------------------------------------------------
-    ctx!.strokeStyle = "rgba(148,180,170,.045)"; ctx!.lineWidth = 1; ctx!.beginPath();
+    ctx!.strokeStyle = `rgba(${TONE.ink[0]},${TONE.ink[1]},${TONE.ink[2]},${TONE.gridAlpha})`; ctx!.lineWidth = 1; ctx!.beginPath();
     for (let x = 0.5 + ((px * -12) % 72); x < w; x += 72) { ctx!.moveTo(x, 0); ctx!.lineTo(x, h); }
     for (let y = 0.5 + ((py * -12 - sy * 0.3) % 72); y < h; y += 72) { ctx!.moveTo(0, y); ctx!.lineTo(w, y); }
     ctx!.stroke();
 
     // ---- stars -------------------------------------------------------------
     for (const s of stars) {
-      const a = 0.1 + 0.24 * (0.5 + 0.5 * Math.sin(t * 0.001 * s.s + s.p));
-      ctx!.fillStyle = `rgba(215,240,233,${a})`;
+      const a = TONE.starAlpha[0] + TONE.starAlpha[1] * (0.5 + 0.5 * Math.sin(t * 0.001 * s.s + s.p));
+      ctx!.fillStyle = `rgba(${TONE.ink[0]},${TONE.ink[1]},${TONE.ink[2]},${a})`;
       const yy = (((s.y * h - py * 22 * s.d - sy * 0.12 * s.d) % h) + h) % h;
       ctx!.beginPath(); ctx!.arc(s.x * w - px * 22 * s.d, yy, s.r, 0, 6.28); ctx!.fill();
     }
@@ -275,7 +349,7 @@ export function initRelayBackground(
         + Math.cos(y * 0.009 + Math.sin(x * 0.008 - ft * 0.5) * 2);
       x += 12 * Math.cos(n * 4.5); y += 12 * Math.sin(n * 4.5);
       const k = Math.pow(0.988, Math.hypot(x - AX, y - AY));
-      const sr = (cr + (255 - cr) * k) | 0, sg = (cg + (255 - cg) * k) | 0, sb = (cb + (255 - cb) * k) | 0;
+      const sr = mix(cr, k), sg = mix(cg, k), sb = mix(cb, k);
       ctx!.fillStyle = `rgba(${sr},${sg},${sb},${(0.07 + 0.6 * k).toFixed(3)})`;
       ctx!.fillRect(x + (AX - x) * k, y + (AY - y) * k, 1.6, 1.6);
     }
@@ -285,10 +359,10 @@ export function initRelayBackground(
     const T = vt, vs = (Math.min(w, h) * 1.3) / 400;
     const wx = 0.5 + 0.33 * Math.sin(wt * 0.12 + 1.4), wy = 0.46 + 0.3 * Math.sin(wt * 0.085);
     const vox = w * wx - vs * 200 - px * 26, voy = h * wy - vs * 240 - py * 22 - sy * 0.22;
-    const vr = (cr + (255 - cr) * 0.55) | 0, vg = (cg + (255 - cg) * 0.55) | 0, vb = (cb + (255 - cb) * 0.55) | 0;
+    const vr = mix(cr, 0.55), vg = mix(cg, 0.55), vb = mix(cb, 0.55);
     const vp = vs * 0.85;
-    ctx!.globalCompositeOperation = "lighter";
-    ctx!.fillStyle = `rgba(${vr},${vg},${vb},.28)`;
+    ctx!.globalCompositeOperation = TONE.composite;
+    ctx!.fillStyle = `rgba(${vr},${vg},${vb},${TONE.vortexAlpha})`;
     for (let i = VORTEX; i--;) {
       const y = i / 235, k = (4 + Math.cos(i / 9 - T * 2)) * Math.cos(i / 35), e = y / 7 - 13;
       const d = Math.hypot(k, e) + Math.sin(e / 9 + T / 2) - 4;

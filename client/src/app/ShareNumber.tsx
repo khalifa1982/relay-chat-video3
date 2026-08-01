@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/drawer";
 import { trpc } from "@/lib/trpc";
 import { CountryFlag } from "./CountryFlag";
+import { shareInviteMessage, type Translate } from "./inviteMessage";
+import { useT } from "./i18n";
 
 /** The app-wide invite link for a number. One format, so the QR and the share text agree. */
 export function inviteUrlFor(number: string): string {
@@ -68,20 +70,21 @@ export function copyOwnNumber(number: string) {
     .catch(() => toast.error("Couldn't copy the number"));
 }
 
-/** Share the invite link, falling back to the clipboard where the Web Share API is absent
- *  (every desktop browser) — a share button that silently does nothing is worse than one
- *  that copies. */
-export function shareOwnNumber(number: string) {
-  const title = "Reach me on RELAY";
-  const url = inviteUrlFor(number);
-  if (typeof navigator !== "undefined" && navigator.share) {
-    navigator.share({ title, text: `${title} — ${spacedNumber(number)}`, url }).catch(() => {});
-  } else {
-    navigator.clipboard
-      ?.writeText(`${title}\n${url}`)
-      .then(() => toast.success("Invite link copied"))
-      .catch(() => toast.error("Couldn't copy the link"));
-  }
+/**
+ * Share the invite link.
+ *
+ * The MESSAGE is built by `buildInviteMessage` (v2.106.92) rather than here — there were
+ * four share sites with three different wordings, which is how the run-on, phone-linkified
+ * text the owner screenshotted came to exist. This function's only job is to supply who is
+ * sharing and where the link points.
+ */
+export function shareOwnNumber(t: Translate, number: string, myName?: string | null) {
+  shareInviteMessage(t, {
+    who: { name: myName, pin: number },
+    url: inviteUrlFor(number),
+    onCopied: () => toast.success("Invite copied"),
+    onCopyFailed: () => toast.error("Couldn't copy the invite"),
+  });
 }
 
 /* ============================================================
@@ -103,6 +106,8 @@ export function ShareNumberSheet({
     staleTime: 60 * 60 * 1000,
     retry: false,
   });
+  const t = useT();
+  const me = trpc.identity.whoami.useQuery(undefined, { staleTime: 30_000 });
   const pretty = spacedNumber(number);
   const inviteUrl = inviteUrlFor(number);
 
@@ -137,7 +142,7 @@ export function ShareNumberSheet({
             </Button>
             <Button
               type="button"
-              onClick={() => shareOwnNumber(number)}
+              onClick={() => shareOwnNumber(t, number, me.data?.displayName)}
               className="gap-2 border-0 text-[#08211d] hover:brightness-95"
               style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)" }}
             >
@@ -174,11 +179,21 @@ export function MyNumberCard({
   className?: string;
 }) {
   const [qrOpen, setQrOpen] = useState(false);
+  const t = useT();
+  /* Same query key the shell already runs, so react-query serves it from cache — this
+     costs no request. It supplies the NAME the invite leads with; without it the message
+     falls back to its anonymous phrasing rather than interpolating "undefined". */
+  const me = trpc.identity.whoami.useQuery(undefined, { staleTime: 30_000 });
   if (!number || number.length !== 6) return null;
   const actions: { key: string; label: string; icon: React.ReactNode; run: () => void }[] = [
     { key: "copy", label: "Copy my number", icon: <Copy className="size-4" />, run: () => copyOwnNumber(number) },
     { key: "qr", label: "Show my QR code", icon: <QrCode className="size-4" />, run: () => setQrOpen(true) },
-    { key: "share", label: "Share my number", icon: <Share2 className="size-4" />, run: () => shareOwnNumber(number) },
+    {
+      key: "share",
+      label: "Share my number",
+      icon: <Share2 className="size-4" />,
+      run: () => shareOwnNumber(t, number, me.data?.displayName),
+    },
   ];
   return (
     <>

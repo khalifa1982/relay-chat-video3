@@ -18248,6 +18248,62 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.92 — the light theme gets the moving background (#158); one shared invite message (#161)
+
+**(1) #158 — the light theme had no animated background at all.** Owner: *"if you choose the
+light theme, ensure that the 3D background also changes... the background will be a very light
+black or gray that is moving."* Found by auditing rather than by listing, after they pushed back
+with *"im sure there is something missing"*.
+
+- `liveBackground = theme === "dark"` was the gate. **Flipping it alone would have shipped a
+  canvas nobody could see**: the engine is built end to end for a near-black surface — base
+  `#04070a`, near-WHITE ink, `globalCompositeOperation: "lighter"` (ADDITIVE, so a no-op against
+  paper), and particle channels brightened TOWARD 255. So this is a TONE MAP (`RelayTone`,
+  `RELAY_TONE_DARK` / `RELAY_TONE_LIGHT`), not a colour swap.
+- **`toward` is the load-bearing member.** Dark brightens a channel out of black; light must
+  darken it onto the page, or every mark lands within a few percent of the base.
+- **MEASURED in a real browser** against the transpiled engine, counting pixels that differ from
+  the base by a visible margin: light **95.8% visible / 63.9% strong / max delta 221**; dark
+  64.9% / 9.4% / 251. The light canvas paints more strongly than the dark one.
+- **The tone is a PROP, never a `useTheme()` read inside the canvas.** The login screen and the
+  passcode lock mount it before the shell exists and are dark by design; a self-deciding component
+  would flip two surfaces nobody asked to change. Pinned by asserting the component never imports
+  `useTheme`. A theme switch REBUILDS (the composite op is captured at init).
+- **`accentNav` stopped riding the same boolean.** `accentNav = liveBackground` held only while
+  the canvas was dark-only — one boolean answering two questions. Left alone it would have turned
+  the accent nav on over a pale card and reinstated the measured 1.7:1 failure of v2.106.2.
+- **Four pre-existing pins rewritten to the property; all four had frozen "dark only"** — two
+  required `const liveBackground = theme === "dark"` verbatim, one froze `accentNav = liveBackground`,
+  two froze the propless `<RelayBackground />`.
+
+**(2) #161 — the shared invite arrived as one ugly, phone-linkified line.** Owner, with a
+screenshot: *"put the username and then space between two brackets... make a BR break... and also
+below put kind of a stand-up code for the relay... make it unique. don't make the message very
+long."*
+
+- The old text was `Join "Gigh Meeting" on RELAY — dial 794 254` + the URL, arriving as ONE
+  wrapped line, with the six digits rendered as a green underlined **phone link** — so the most
+  tappable thing in the invite dialled the recipient's own carrier.
+- **`Dialer.tsx`'s own comment was wrong and is corrected in place**: passing `title` + `url`
+  separately does NOT lay them out cleanly — WhatsApp joins them with a space. The layout belongs
+  to the receiving app the moment you hand it two fields, so everything is composed into `text`
+  and `url` is deliberately not passed.
+- **One composer, four call sites** (`client/src/app/inviteMessage.ts`). There were four
+  share/copy sites with three different wordings, which is how this text came to exist. Share and
+  Copy of a party line now build from one `lineInvite(l)`.
+- Three blocks: `Name (NNN-NNN) invited you to join RELAY` / the link / `⚡ RELAY — six digits, no
+  phone number.` `inviteWhoLabel` returns NULL unless BOTH halves are known, so a whoami query in
+  flight falls back to the anonymous phrasing rather than interpolating `undefined`.
+- Arabic leads with the verb, so `{who}` and `{title}` appear in a different order in the two
+  halves — safe only because `translate` substitutes by name, and asserted.
+- **Honest limit**: phone-linkification is REDUCED, not eliminated — the heuristics are the
+  client's and there is no iPhone here.
+
+14/14 tripwires verified by mutation off a confirmed-green baseline; all six sources byte-identical
+afterwards. Two existing guards caught me (`noHardcodedDomains` on my own doc comment;
+`partyLinesFrame` on the moved `navigator.share`) and one assertion of mine was wrong about the
+code (the dark-literal sweep matched `RELAY_TONE_DARK` itself). 5409 tests.
+
 ## v2.106.91 — a dead-key sweep, which found an accessibility regression from v2.106.89
 
 Owner asked what was still pending, so the answer needed an audit rather than a reading of the

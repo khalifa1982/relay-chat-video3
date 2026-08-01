@@ -386,13 +386,24 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
      shell's own background and the mount cannot disagree: two separate reads of the
      theme is how you get an opaque shell over a running canvas, i.e. all of the cost and
      none of the effect. */
-  const liveBackground = theme === "dark";
-  /* The redesigned nav — one CYCLING accent pill instead of five fixed hues — is
-     dark-only for the same reason the canvas is, and for one more: the accent palette is
-     built against a near-black background, so on a light card its default teal is about
-     1.7:1, i.e. an unreadable 9px label. See the TABS comment. Derived from the same
-     read as `liveBackground` so the two can never disagree about which design is live. */
-  const accentNav = liveBackground;
+  /* THE ANIMATED BACKGROUND RUNS IN BOTH THEMES NOW (#158). It used to be dark-only —
+     the engine is built for a near-black surface, so painting the same frames on white
+     produced nothing — and the owner asked for the light theme to move too. The canvas
+     is mounted unconditionally and told WHICH tone map to paint; see `RELAY_TONE_LIGHT`. */
+  const liveBackground = true;
+  const lightBackground = theme !== "dark";
+  /* The redesigned nav — one CYCLING accent pill instead of five fixed hues — stays
+     DARK-ONLY, and #158 is exactly why that had to be re-derived rather than left alone.
+     The accent palette is built against a near-black background, so on a light card its
+     default teal MEASURES about 1.7:1 — an unreadable 9px label (v2.106.2).
+
+     It used to read `= liveBackground`, on the reasoning that the two "can never disagree
+     about which design is live". That held only while the canvas was dark-only: one
+     boolean was answering two different questions, and making the background run in light
+     too would have silently turned the accent nav on over a pale surface and reinstated a
+     measured contrast failure. It asks the THEME directly now, which is the question it
+     was always really about. */
+  const accentNav = theme === "dark";
   // Universal Back: Profile is the one drill-in route off the tab bar (message
   // threads handle their own in-page back). Go back in history, or fall back to
   // the dialer if there's nowhere to go.
@@ -641,7 +652,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
           The accent vars are published either way: the engine publishes them when it is
           mounted, and `index.css` carries a static fallback for when it is not — so a
           light-mode user still gets a coherent accent, just not a moving one. */}
-      {liveBackground && <RelayBackground />}
+      {liveBackground && <RelayBackground light={lightBackground} />}
       {/* The "while you were away" banner is GONE from the main screen
           (v2.99.67, owner: "the missed call notification, the way how it works,
           it's not nice. Don't show it on the main screen as a side banner from up

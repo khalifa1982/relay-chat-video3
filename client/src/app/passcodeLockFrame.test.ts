@@ -281,8 +281,11 @@ describe("board 2f — structure", () => {
     // gate — not that it is propless.
     expect(shell).toMatch(/<PasscodeGate>[\s\S]*<Inner[\s>]/);
     const inner = fnBody(shell, "Inner");
-    expect(inner).toMatch(/<RelayBackground \/>/);
-    expect(CODE.match(/<RelayBackground/g)).toHaveLength(1);
+    // Matched on the ELEMENT (`\b`), not the propless spelling: the canvas legitimately
+    // took a `light` prop in v2.106.92 so it can paint a light tone too, and the property
+    // here is only WHERE it is mounted.
+    expect(inner).toMatch(/<RelayBackground\b/);
+    expect(CODE.match(/<RelayBackground\b/g)).toHaveLength(1);
   });
 
   it("the notch cannot sit on the brand row", () => {

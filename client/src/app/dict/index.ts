@@ -17,6 +17,7 @@ import { CONTACTS } from "./contacts";
 import { PROFILE } from "./profile";
 import { CALLS } from "./calls";
 import { STATUS } from "./status";
+import { INVITE } from "./invite";
 
 export const ALL_DICT = {
   ...CORE,
@@ -29,4 +30,5 @@ export const ALL_DICT = {
   ...PROFILE,
   ...CALLS,
   ...STATUS,
+  ...INVITE,
 } as const;

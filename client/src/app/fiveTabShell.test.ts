@@ -156,14 +156,22 @@ describe("five tabs, in the board's order", () => {
 });
 
 describe("the accent nav is dark-only, and derived from ONE read", () => {
-  it("accentNav is defined from liveBackground, not a second theme read", () => {
-    // Two independent reads of the theme is how you get an accent pill on a light card,
-    // or an opaque bar over a running canvas (the v2.106.0 comment on liveBackground).
+  it("accentNav is ONE derivation, read by both navs, never re-derived inside them", () => {
+    // Two independent reads of the theme is how you get an accent pill on a light card.
     // NOT a count over the whole file: the sidebar's own Dark/Light toggle legitimately
     // reads `theme === "dark"` twice, so a count would fail on correct code — the same
     // mistake this suite's first draft made and phase 1's before it. Scoped to the two
     // nav regions instead, which is where the property actually lives.
-    expect(SHELL_CODE).toMatch(/const accentNav = liveBackground;/);
+    //
+    // REWRITTEN AT v2.106.92. It used to require `const accentNav = liveBackground;`, on
+    // the reasoning that the two "can never disagree about which design is live" — and
+    // that held only while the canvas was DARK-ONLY. One boolean was answering two
+    // different questions, so making the background run in light too (#158) would have
+    // silently turned the accent nav on over a pale surface and reinstated the measured
+    // 1.7:1 contrast failure v2.106.2 exists to avoid. The property is that the nav's
+    // accent is a DARK-THEME decision derived exactly once.
+    expect(SHELL_CODE).toMatch(/const accentNav = theme === "dark";/);
+    expect(SHELL_CODE.match(/const accentNav =/g) ?? []).toHaveLength(1);
     const bottomNav = SHELL_CODE.slice(
       SHELL_CODE.indexOf("relay-appshell-chrome md:hidden"),
       SHELL_CODE.indexOf("</nav>", SHELL_CODE.indexOf("relay-appshell-chrome md:hidden")),

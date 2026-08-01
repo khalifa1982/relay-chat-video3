@@ -263,29 +263,35 @@ describe("the app-wide mount", () => {
   it("is exactly ONE canvas, in the shell", () => {
     /* The engine runs its own rAF per canvas, so a mount per route would multiply the
        cost by the number of live screens — the v2.99.67 class. */
-    expect(src).toMatch(/<RelayBackground \/>/);
-    expect(src.match(/<RelayBackground/g) ?? []).toHaveLength(1);
+    expect(src).toMatch(/<RelayBackground\b/);
+    expect(src.match(/<RelayBackground\b/g) ?? []).toHaveLength(1);
   });
 
-  it("runs in DARK only, and the shell's own background agrees", () => {
-    /* The board is a dark design while this app defaults to LIGHT, so light mode keeps
-       today's opaque surfaces rather than shipping near-black text on a near-black live
-       canvas. */
-    expect(src).toMatch(/const liveBackground = theme === "dark";/);
-    expect(src).toMatch(/\{liveBackground && <RelayBackground \/>\}/);
+  it("runs in BOTH themes, and the shell's own background agrees with it", () => {
+    /* REWRITTEN AT v2.106.92, and the pin it replaces had FROZEN what the owner asked to
+       change: it required `const liveBackground = theme === "dark"` and a bare
+       `{liveBackground && <RelayBackground />}`, i.e. it forbade the light theme ever
+       having an animated background — which is the whole of #158 (*"if you choose the
+       light theme, ensure that the 3D background also changes… a very light black or
+       gray that is moving"*).
+
+       The property it actually stood for is that the shell's OWN fill must not sit
+       opaquely over a running canvas — all of the cost, none of the effect. With the
+       canvas now unconditional, that becomes the simpler claim: the fill is always
+       transparent, and there is no theme-conditional `bg-background` left to disagree
+       with it. */
+    expect(src).toMatch(/const liveBackground = true;/);
+    expect(src).toMatch(/\{liveBackground && <RelayBackground light=\{lightBackground\} \/>\}/);
     expect(src).toMatch(/liveBackground \? "bg-transparent" : "bg-background"/);
   });
 
-  it("both background decisions read ONE flag, never the theme twice", () => {
-    /* Two separate theme reads is how you get an opaque shell over a running canvas —
-       all of the cost and none of the effect.
-       The first draft of this asserted `theme === "dark"` occurs once in the FILE, and
-       it was simply wrong about the code: the sidebar's Dark/Light segmented control
-       legitimately reads the theme too. The property is about the BACKGROUND decision. */
-    expect(src.match(/const liveBackground =/g) ?? []).toHaveLength(1);
-    expect(src.match(/liveBackground/g)?.length).toBeGreaterThanOrEqual(3); // def + mount + bg class
-    /* Neither the mount nor the shell's background class re-derives the theme.
-       BOUNDED ON REAL CODE (`<aside`), not on the comment that follows: `code()` strips
+  it("the canvas's TONE is the only thing the theme decides", () => {
+    /* One derivation, read by the mount. A second theme read here is how the canvas comes
+       to paint its dark palette under a light shell (the reason the original pin existed);
+       the tone flag replaces the mount flag rather than joining it. */
+    expect(src.match(/const lightBackground =/g) ?? []).toHaveLength(1);
+    expect(src).toMatch(/const lightBackground = theme !== "dark";/);
+    /* BOUNDED ON REAL CODE (`<aside`), not on the comment that follows: `code()` strips
        comments, so an anchor inside one returns -1 and `slice(start, -1)` runs to
        end-of-file — which swallowed the sidebar's own legitimate theme toggle. That is
        the inverted prose-anchor trap, and it has now bitten twice (v2.105.26). */

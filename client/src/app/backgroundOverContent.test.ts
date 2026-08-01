@@ -125,24 +125,38 @@ describe("the shell's content is painted ABOVE the background canvas", () => {
 });
 
 describe("one theme read decides both the mount and the surface", () => {
-  it("`liveBackground` is derived once and drives the canvas AND the shell's fill", () => {
+  it("the canvas mounts unconditionally and the shell's fill agrees with it", () => {
     /* v2.106.0's own comment: "two theme reads is how you get an opaque shell over a
        running canvas". Both reads here agreed with each other — and both were wrong,
        because the context they read was not the user's. The single-derivation rule is
-       still right and is kept; what was missing was that the context be correct. */
+       still right and is kept; what was missing was that the context be correct.
+
+       REWRITTEN AT v2.106.92: this used to require `theme === "dark"` on the mount, i.e.
+       it FROZE the light theme having no animated background — the exact thing #158 asks
+       to change. What it stands for survives and is asserted below: the shell's own fill
+       must never sit opaquely over a running canvas. With the canvas unconditional that
+       is a stronger, simpler claim, since there is no longer a theme-conditional
+       `bg-background` that could come to disagree with it. */
     const code = codeOnly(SHELL);
-    expect(code).toMatch(/const liveBackground = theme === "dark";/);
-    expect(code).toMatch(/\{liveBackground && <RelayBackground \/>\}/);
+    expect(code).toMatch(/const liveBackground = true;/);
+    expect(code).toMatch(/\{liveBackground && <RelayBackground light=\{lightBackground\} \/>\}/);
     expect(code).toMatch(/liveBackground \? "bg-transparent" : "bg-background"/);
     /* ONE DERIVATION, not one mention. Counting `theme === "dark"` across the file was
        wrong about the code — the sidebar's own Dark/Light toggle legitimately reads it
        for `aria-pressed` and its label, which is a rendering question rather than a
        "which design is live" question. CLAUDE.md already records this exact mistake
-       being made once before in this file; what matters is that the FLAG is derived
-       once and that both consumers read the flag rather than re-deriving it. */
+       being made once before in this file; what matters is that the TONE flag is derived
+       once and that the mount reads the flag rather than re-deriving it. */
     expect([...code.matchAll(/const liveBackground = /g)].length).toBe(1);
+    expect([...code.matchAll(/const lightBackground = /g)].length).toBe(1);
     const bgUse = code.slice(code.indexOf("{liveBackground && <RelayBackground"));
     expect(bgUse).not.toMatch(/^\{theme === "dark" && <RelayBackground/);
     expect(code).not.toMatch(/theme === "dark" \? "bg-transparent"/);
+    /* The tone is a PROP, never a `useTheme()` read inside the canvas: the login and
+       passcode screens mount it above the provider and are dark by design, so a component
+       that decided its own tone would flip those to paper the moment the user's stored
+       preference said light. */
+    const bg = codeOnly(readFileSync("client/src/app/RelayBackground.tsx", "utf8"));
+    expect(bg).not.toMatch(/useTheme/);
   });
 });
