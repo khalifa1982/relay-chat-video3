@@ -85,7 +85,17 @@ describe("staged call progress — Calling → Ringing → Connecting → connec
 
   it("the FULL in-call interface appears only upon establishment (markEstablished exits pre-connect)", () => {
     expect(CLIENT).toMatch(/function markEstablished\(\) \{[\s\S]*?exitPreConnect\(\);/);
-    expect(CLIENT).toMatch(/function hangUp[\s\S]{0,700}exitPreConnect\(\);/);
+    /* 2026-08-01 REBOUNDED. This sliced a FIXED 700 characters from `function hangUp`,
+       so it broke the moment a line was legitimately added near the top of that
+       function (the native `webCallEnded` notify) while saying nothing about the
+       property: an ended call must leave the pre-connect dial card. The recurring
+       fixed-slice fragility CLAUDE.md records at v2.99.78 — now bounded by the
+       function's OWN end, with the slice asserted to be real first. */
+    const hAt = CLIENT.indexOf("function hangUp");
+    expect(hAt, "hangUp is gone").toBeGreaterThan(-1);
+    const hang = CLIENT.slice(hAt, CLIENT.indexOf("\n  }", hAt));
+    expect(hang.length, "the hangUp slice collapsed").toBeGreaterThan(400);
+    expect(hang).toMatch(/exitPreConnect\(\);/);
   });
 });
 

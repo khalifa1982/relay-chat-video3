@@ -17,6 +17,8 @@ import { isNativeAndroid, nativeEnsureNotifPermission, nativeGetPushToken } from
 import { VoicemailPrompt, type FailedDialInfo } from "./VoicemailPrompt";
 import { trpc } from "@/lib/trpc";
 import { mountNativeTokenBridge } from "./nativeTokenBridge";
+import { mountNativeCallBridge, parseNativeCallIntent } from "@/lib/nativeCallBridge";
+import { consumeNativeCallSearch } from "@/lib/bootUrl";
 
 interface RelayEngineValue {
   /** Programmatic dial. Returns true if the engine accepted the request.
@@ -170,6 +172,39 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     return mountNativeTokenBridge((endpoint, kind) => {
       pushSubscribe.mutate({ endpoint, kind });
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.id]);
+
+  // NATIVE CALL EVENTS (2026-08-01) — the other half of the push spec. The shells
+  // own the OS ring (CallKit / a full-screen intent); this app owns the call. So
+  // Answer/Decline taps on a screen the OS drew have to reach the engine.
+  //
+  // Two arrivals, one handler:
+  //   • IN-PAGE — a `relay:native` CustomEvent while the WebView was already alive.
+  //   • COLD START — the app was killed, the push woke it, and the shell opened us
+  //     at `?nativeCall=…&action=answer`. Read from the BOOT capture and consumed
+  //     once, so a stale query param can never re-answer a finished call on a later
+  //     navigation (the M48 lesson, in `bootUrl.ts`).
+  //
+  // Mounted for every signed-in session: a WebView is indistinguishable from a
+  // browser in here, and an ordinary browser simply never dispatches these.
+  useEffect(() => {
+    if (!me) return;
+    const apply = (e: { type: string; callId: string; mode?: "voice" | "video" }) => {
+      const h = handleRef.current;
+      if (!h) return;
+      if (e.type === "callAnswered") h.answerNativeCall(e.callId, { voice: e.mode !== "video" });
+      else h.endNativeCall(e.callId);
+    };
+    const intent = parseNativeCallIntent(consumeNativeCallSearch() ?? "");
+    if (intent) {
+      apply(
+        intent.action === "answer"
+          ? { type: "callAnswered", callId: intent.callId, mode: intent.mode }
+          : { type: "callDeclined", callId: intent.callId },
+      );
+    }
+    return mountNativeCallBridge(apply);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me?.id]);
 

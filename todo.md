@@ -18247,3 +18247,59 @@ One additive nullable column, one additive index, no new dependency, no new env 
       account skipping `choose` straight to the passcode and calling loginWithPin; the Business toggle
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
+
+## v2.106.69 — the push backend, configured to the credentials that were already staged (2026-08-01)
+
+Owner: *"Did you activate the new nod structure? [uploaded `relaypushbackendconfig.md`] Configure it."*
+The doc reports both credential pipes **staged and proven on production** — a real VoIP push rendered
+full-screen CallKit on a physical iPhone, and the FCM OAuth mint answered the project. Diffing it
+against the code found four real gaps.
+
+- [x] **FCM was NOT configured on the fleet.** The service account is staged as
+      `GOOGLE_APPLICATION_CREDENTIALS=/home/relay/fcm-sa.json`; `server/fcm.ts` read only
+      `FIREBASE_SERVICE_ACCOUNT_JSON`. So `fcmConfig()` returned null, every Android push was
+      skipped, and the admin Push Doctor said "Firebase is NOT configured" over a credential that
+      was sitting right there and working. Now either variable, in either shape (inline JSON or a
+      path — the SHAPE decides, as `readPem` already does for `APNS_P8_KEY`), with the legacy name
+      tried first so every working deployment is byte-identical and an unreadable first value
+      falling THROUGH rather than failing shut.
+- [x] `FCM_PROJECT_ID` honoured as a **cross-check, never an override** — the token is minted by the
+      service account and valid only for its own project, so the JSON wins and a mismatch warns once.
+- [x] **A 400 no longer prunes the token.** FCM answers 400 INVALID_ARGUMENT for a malformed
+      MESSAGE as readily as a malformed token, so one bad payload of ours would have deregistered
+      every Android handset in the fleet in parallel — the v2.105.13 shape. Prune on 404/UNREGISTERED,
+      and on a 400 only when the response names the registration token.
+- [x] **One envelope for both platforms** (`server/callPushPayload.ts`): the spec's
+      `{type, callId, roomId, mode, callerName, callerAvatar, ts}`, composed in one place. Every
+      value a string (a non-string is the 400 above, i.e. a pruned registration). `callId` IS the
+      room id, which is what makes cancel correct by construction. Legacy `kind`/`callerPin`/`video`
+      kept alongside, because the shell already on the owner's iPhone reads them.
+- [x] **FCM stopped dropping the call block** — an Android ring arrived with no room, so the shell
+      could render a full-screen ring and then had nothing to join.
+- [x] **`call_cancel` exists.** A pushed callee has no socket for the websocket `ring-cancel`, so
+      their handset rang out its full 45s expiry after the caller gave up. `PendingRing.pushed`
+      records how a ring was delivered; the cancel fires from `cancelPendingRings` via
+      `reg.onCancelRingPush` — on the registry, not a parameter, so none of the three call sites can
+      forget it.
+- [x] The ring carries `callerAvatar`, resolved best-effort with its own catch.
+- [x] **Web client:** `relay:native` CustomEvent accepted beside the shipped
+      `postMessage`/`SET_PUSH_TOKEN` contract, through one admit path; new
+      `client/src/lib/nativeCallBridge.ts` for `callAnswered`/`callDeclined`/`callEndedNative`, the
+      `?nativeCall=…&action=answer` cold start, and `window.RelayNative.postMessage({webCallEnded})`
+      fired from the engine's own `hangUp` funnel.
+- [x] **The armed native answer is bounded** (`nativeAnswerMatches`, pure): 70s and a room match,
+      both load-bearing — an arm that never expired would silently answer the next call to arrive.
+
+25 of 25 tripwires mutation-verified; the one survivor was the negative-index trap in an ordering
+test, now asserting both indices exist first. Three pre-existing pins rewritten to the property
+(one frozen object literal, two fixed-length `hangUp` slices).
+
+**NOT verified on a handset** — no iPhone, no Android, and APNs/FCM unreachable from this sandbox.
+
+### Still open after this release
+- [ ] Verify a real ring end to end: iPhone with the app killed → CallKit; the first `kind='fcm'`
+      row → Android. Both need a device.
+- [ ] **mediasoup is NOT activated**: there is no client-side mediasoup adapter at all
+      (`grep -rn mediasoup client/src/` returns comments only), so no call can use it whatever the
+      server selects. The registry, the node agent, the pool and `planDialTransport` all exist and
+      are wired; the cutover is the client transport.

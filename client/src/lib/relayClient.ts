@@ -27,6 +27,12 @@ import { isNativeAndroid, nativeSetSpeaker, nativeSetInCall } from "./nativeBrid
 import { DEVICE_ID_HEADER, getDeviceId } from "./deviceId";
 import { describePeerPresence, formatElapsedSince } from "@shared/profileFields";
 import { describeProfileStatus } from "@shared/profileStatus";
+import {
+  NATIVE_ANSWER_TTL_MS,
+  nativeAnswerMatches,
+  notifyNativeCallEnded,
+  type NativeAnswerArm,
+} from "./nativeCallBridge";
 
 interface IceConfig {
   iceServers: Array<{ urls: string; username?: string; credential?: string }>;
@@ -225,6 +231,17 @@ export interface RelayHandle {
   /** Live-call rejoin (v2.99.9): ask to rejoin the live call `number` is in
    *  (History "Join"). The server verifies we were previously in that room and
    *  asks the host to approve. */
+  /**
+   * The native shell reports that the OS call screen was ANSWERED for `callId`
+   * (which is the signaling room — see server/callPushPayload.ts).
+   *
+   * Accepts immediately when that ring is already on screen, and otherwise ARMS a
+   * single-use, 70s-bounded intent so a cold start completes the call the moment
+   * the server redelivers the ring. Returns whether it accepted straight away.
+   */
+  answerNativeCall: (callId: string, opts?: { voice?: boolean }) => boolean;
+  /** The native shell reports Decline / the OS call ended. Never throws. */
+  endNativeCall: (callId: string) => void;
   knock: (number: string) => void;
   /** Host-side: approve / deny a pending knock for our call. */
   approveKnock: (roomId: string, pin: string) => void;
@@ -915,6 +932,34 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // treatment as Do-Not-Disturb, but per-number.
   let blockedPins = new Set<string>();
   let pendingRing: PendingRing | null = null;
+/**
+ * NATIVE ANSWER, ARMED (2026-08-01).
+ *
+ * A VoIP push rang the phone and the person tapped Answer on the OS call screen.
+ * On a COLD START the WebView opens fresh, so the in-page ring has not arrived
+ * yet — the server redelivers it on register (`deliverPendingRing`), which is
+ * some hundreds of milliseconds later. So the intent is ARMED and the ring is
+ * accepted when it lands.
+ *
+ * ── THE TTL IS THE SAFETY PROPERTY, NOT A TIDY-UP ────────────────────────────
+ * An arm that never expired would silently answer the NEXT call to arrive —
+ * possibly minutes later, possibly from somebody else — opening the microphone
+ * with no gesture. Bounded to the ring's own life (the server's
+ * PENDING_RING_TTL_MS is 70s), and matched on the ROOM, so it can only ever
+ * complete the call the OS actually reported.
+ */
+let nativeAnswerRoom: NativeAnswerArm | null = null;
+function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
+  // The DECISION is `nativeAnswerMatches` in nativeCallBridge.ts — pure, so the
+  // TTL and the room match can be driven in a test. Only the single-use clearing
+  // lives here, because that needs the state.
+  const hit = nativeAnswerMatches(nativeAnswerRoom, roomId, Date.now());
+  if (hit) nativeAnswerRoom = null;
+  else if (nativeAnswerRoom && Date.now() - nativeAnswerRoom.at > NATIVE_ANSWER_TTL_MS) {
+    nativeAnswerRoom = null; // expired for a different room too — do not keep it
+  }
+  return hit;
+}
   // Call waiting: a second incoming call while already in a call.
   let waitingRing: PendingRing | null = null;
   let waitingTimeoutT: ReturnType<typeof setTimeout> | null = null;
@@ -3286,6 +3331,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
       return;
     }
     pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, video: !!m.video, at: Date.now() };
+    // The OS call screen already reported an answer for THIS room (native shell,
+    // cold start or in-page). Complete it rather than presenting a ring the user
+    // has visibly already accepted — the consent gesture happened on a screen the
+    // OS drew, before this document existed.
+    const armed = nativeAnswerArmed(m.roomId!);
+    if (armed) { void acceptInvite({ voice: armed.voice }); return; }
     // Mutual-consent protocol: a VOICE call is answered as voice — the Video
     // answer button only appears when the CALLER dialed this as a video call
     // (answering with it is the callee's consent). v2.97: the buttons carry
@@ -6337,6 +6388,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
     sendWS({ type: "leave", reason });
     // Native Android: leave OS call mode + drop the ongoing-call service.
     if (isNativeAndroid()) void nativeSetInCall(false);
+    // WEB → NATIVE (2026-08-01): tell a WebView shell the call is over so it tears
+    // the OS call screen down; otherwise the phone keeps showing a call that ended.
+    // HERE rather than at the hang-up BUTTON, because this function is the funnel
+    // every teardown reaches — remote-left, kicked, connection-lost and the server
+    // errors all land in it. Degrades silently with no shell, which is every
+    // ordinary browser. `roomId` is read BEFORE the teardown below clears it.
+    if (roomId) notifyNativeCallEnded(roomId);
+    // A native answer that never completed must not survive the call it was for.
+    nativeAnswerRoom = null;
     // The user explicitly ended the call — don't auto-rejoin it on a later reload.
     clearPendingRejoin();
     stopRingtone();
@@ -6773,6 +6833,27 @@ export function startRelay(root: HTMLElement): RelayHandle {
       try { refreshAllTileAddMarks(); } catch { /* */ }
     },
     setOnSaveContact(cb) { onSaveContact = cb; },
+    answerNativeCall(callId, opts) {
+      const voice = !!opts?.voice;
+      // Already on screen? Complete it now.
+      if (pendingRing && pendingRing.roomId === callId) {
+        void acceptInvite({ voice });
+        return true;
+      }
+      // Otherwise arm it. `nativeAnswerArmed` enforces the 70s bound and the room
+      // match, so a stale arm can never answer a later call.
+      nativeAnswerRoom = { roomId: callId, voice, at: Date.now() };
+      return false;
+    },
+    endNativeCall(callId) {
+      // Disarm first, unconditionally — an arm left behind after a decline is the
+      // one that would auto-answer something else.
+      if (nativeAnswerRoom && nativeAnswerRoom.roomId === callId) nativeAnswerRoom = null;
+      if (pendingRing && pendingRing.roomId === callId) { declineInvite(); return; }
+      // In the call the shell is talking about? End it. Never end a DIFFERENT
+      // call: the shell may be reporting a stale OS screen.
+      if (inCall && roomId === callId) hangUp("native-end");
+    },
     knock(number) {
       if (!/^\d{6}$/.test(number) || !me.pin || number === me.pin) return;
       if (!ws || ws.readyState !== 1) { toast("Not connected — try again in a moment.", true); return; }

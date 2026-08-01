@@ -35,6 +35,7 @@
 import crypto from "crypto";
 import http2 from "http2";
 import fs from "fs";
+import { buildCallPush, type CallPushType } from "./callPushPayload";
 
 /** Apple caps a provider token at 1h; refresh well inside that. */
 const TOKEN_TTL_MS = 45 * 60_000;
@@ -352,6 +353,14 @@ export interface VoipRingPayload {
   /** The room the callee must join to answer. Without it the ring is undialable. */
   roomId: string;
   video: boolean;
+  /** Absent is normal — the shell falls back to initials. Never blocks the ring. */
+  callerAvatar?: string | null;
+  /**
+   * Defaults to a ring. A `call_cancel` is the SAME transport to the SAME tokens,
+   * because a cancel that took another route could arrive at a device the ring
+   * never reached — or worse, not reach the one it did.
+   */
+  type?: CallPushType;
 }
 
 export interface VoipSendResult {
@@ -387,15 +396,22 @@ export async function sendVoipRing(
     if (!jwt) return out;
   }
 
-  const body = JSON.stringify({
-    // A VoIP push has no `aps.alert` — iOS delivers it to PushKit, not to the
-    // notification centre. Everything the shell needs is top-level data.
-    callerName: payload.callerName,
-    callerPin: payload.callerPin,
-    roomId: payload.roomId,
-    video: payload.video ? "1" : "0",
-    kind: "incoming-call",
-  });
+  // A VoIP push has no `aps.alert` — iOS delivers it to PushKit, not to the
+  // notification centre — so the payload object IS the body, exactly as the push
+  // spec asks. The envelope is composed by the SHARED builder so iOS and Android
+  // receive the identical field set; see `callPushPayload.ts` for why that is one
+  // module rather than a literal at each transport.
+  const body = JSON.stringify(
+    buildCallPush({
+      type: payload.type ?? "incoming_call",
+      roomId: payload.roomId,
+      callerName: payload.callerName,
+      callerPin: payload.callerPin,
+      video: payload.video,
+      callerAvatar: payload.callerAvatar,
+      nowMs: Date.now(),
+    }),
+  );
 
   let session: http2.ClientHttp2Session | null = null;
   try {

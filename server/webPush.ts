@@ -23,6 +23,7 @@ import { listPushSubscriptions, deletePushSubscription, pushEnabledForIdentity }
 import { sendFcmData } from "./fcm";
 import { sendExpoPush } from "./expoPush";
 import { sendVoipRing } from "./apnsVoip";
+import { buildCallPush, type CallPushType } from "./callPushPayload";
 import { appBaseUrl } from "./appUrl";
 
 export interface PushPayload {
@@ -45,6 +46,14 @@ export interface PushPayload {
     callerPin: string;
     roomId: string;
     video: boolean;
+    /** Absent is normal — the shell falls back to initials. Never blocks a ring. */
+    callerAvatar?: string | null;
+    /**
+     * `incoming_call` (default) or `call_cancel`. A cancel rides the SAME kind and
+     * therefore the SAME transports as the ring it stops — a cancel routed
+     * differently could reach a device the ring never did, or miss the one it did.
+     */
+    type?: CallPushType;
   };
 }
 
@@ -172,6 +181,16 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
       body: payload.body ?? "",
       tag: payload.tag ?? "",
       url: payload.url ?? "",
+      // THE CALL BLOCK WAS DROPPED HERE, AND ANDROID COULD NOT ANSWER (2026-08-01).
+      // Only the APNs branch below read `payload.call`, so an FCM ring arrived
+      // carrying `kind: "incoming-call"` and NO ROOM — the shell could render a
+      // full-screen ring and then had nothing to join, which is worse than not
+      // ringing because the user acts on it. The composed envelope is spread LAST
+      // so `kind` resolves to the call discriminator rather than the notification
+      // one; every value is already a string (see `buildCallPush`).
+      ...(payload.kind === "incoming-call" && payload.call
+        ? buildCallPush({ type: "incoming_call", nowMs: Date.now(), ...payload.call })
+        : {}),
     });
     fcmDelivered = r.delivered;
     await Promise.all(r.invalidTokens.map(t => deletePushSubscription(t).catch(() => {})));

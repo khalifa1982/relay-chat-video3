@@ -59,7 +59,24 @@ describe("server: an unreachable callee still fails fast; a WOKEN one is paged",
     // this pin — deliverPendingRing refuses an entry the caller is not offering,
     // so one without the other pages into a void.
     expect(branch).toMatch(/callerNow\.ringing\.add\(to\);/);
-    expect(branch).toMatch(/reg\.pendingRings\.set\(to, \{ from: callerPin, roomId: pagingRoom, video: wantVideo, at: Date\.now\(\) \}\)/);
+    /* 2026-08-01 REWRITTEN TO THE PROPERTY. This froze the exact ONE-LINE object
+       literal `{ from: callerPin, roomId: pagingRoom, video: wantVideo, at: Date.now() }`,
+       so it broke the moment a field legitimately joined it (`pushed: true`, which is
+       what tells the hang-up path this callee's handset needs a pushed cancel) while
+       saying nothing about the rule it stands for: the pending ring must name THIS
+       caller and THE ROOM the push just advertised, or `deliverPendingRing` hands the
+       callee a ring into a room the caller is not in. */
+    const set = branch.slice(branch.indexOf("reg.pendingRings.set(to, {"));
+    expect(set.length, "the pending ring is gone").toBeGreaterThan(40);
+    const record = set.slice(0, set.indexOf("});") + 3);
+    expect(record).toMatch(/from: callerPin/);
+    expect(record).toMatch(/roomId: pagingRoom/);
+    expect(record).toMatch(/video: wantVideo/);
+    expect(record).toMatch(/at: Date\.now\(\)/);
+    /* And it must be MARKED as pushed. Without this the caller hanging up sends only
+       the websocket `ring-cancel`, which by definition cannot reach a handset that
+       was woken by a push — so it rings out its full 45s expiry into a dead call. */
+    expect(record).toMatch(/pushed: true/);
     expect(branch).toMatch(/paging: true/);
     // NO miss is recorded on the paging branch — the call is still ringing, and a
     // missed-call row for a call about to be answered is simply wrong.

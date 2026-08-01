@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.106.68)", () => {
-    expect(APP_VERSION).toBe("2.106.68");
+  it("is the current release (2.106.69)", () => {
+    expect(APP_VERSION).toBe("2.106.69");
   });
 });
 
@@ -147,10 +147,17 @@ describe("auto Picture-in-Picture (enable once)", () => {
   });
   it("stops priming when the call ends (no idle compositor leak)", () => {
     expect(RELAY_CLIENT).toMatch(/function unprimeAutoPip\(\)/);
-    const hang = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf("function hangUp"));
-    // Window widened (2000 → 2800) for the v2.78.1 waiting-ring promotion
-    // block inserted earlier in hangUp; the unprime call itself is unchanged.
-    expect(hang.slice(0, 2800)).toMatch(/unprimeAutoPip\(\)/);
+    /* 2026-08-01 REBOUNDED. It sliced a FIXED 2800 characters from `function hangUp`
+       — widened once already, from 2000, for the same reason — so it broke again the
+       moment a line was legitimately added near the top of that function. Dropping
+       the cap is not the fix either: an unbounded slice runs to END OF FILE and would
+       be satisfied by an `unprimeAutoPip()` anywhere below, which is the mirror
+       fragility. Bounded by hangUp's OWN end, with the slice proven real first. */
+    const hAt = RELAY_CLIENT.indexOf("function hangUp");
+    expect(hAt, "hangUp is gone").toBeGreaterThan(-1);
+    const hang = RELAY_CLIENT.slice(hAt, RELAY_CLIENT.indexOf("\n  }", hAt));
+    expect(hang.length, "the hangUp slice collapsed").toBeGreaterThan(400);
+    expect(hang).toMatch(/unprimeAutoPip\(\)/);
   });
 });
 
