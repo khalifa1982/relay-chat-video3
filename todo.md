@@ -227,3 +227,16 @@
 - [x] Inject FCM token into WebView via relay:native CustomEvent on page load
 - [x] Add OEM autostart/background permission hint for Xiaomi/Oppo/Vivo devices
 - [x] tsc clean + tests pass
+
+## Round 24 — iOS Audio Session, Route Switching, Mute Sync (relay-push-ios-app-config.md §3.5 + §4)
+
+- [x] Fix didActivate: remove setActive(true), use .videoChat for video / .voiceChat for voice, add .allowBluetoothA2DP
+- [x] Track currentCallIsVideo state from incoming push payload (native + JS-side uuidToMode map)
+- [x] Add setAudioRoute bridge message handler (speaker/earpiece/bluetooth) in native Swift
+- [x] Add AVAudioSession.routeChangeNotification observer → inject audioRouteChanged into WebView
+- [x] Add CXSetMutedCallAction handler → inject callMuted into WebView
+- [x] Register RelayNative WKScriptMessageHandler natively for webCallEnded + setAudioRoute messages
+- [x] Verify WebView config: allowsInlineMediaPlayback + mediaPlaybackRequiresUserAction={false} already set
+- [x] Add RELAY_NATIVE_BRIDGE_JS shim so web can use window.RelayNative.postMessage()
+- [x] Fix JS-side mode propagation: answerCall now uses actual mode from push payload
+- [x] tsc clean + 65 tests pass

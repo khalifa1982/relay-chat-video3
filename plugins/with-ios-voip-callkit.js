@@ -8,13 +8,13 @@
  *     bridge is even initialized.
  *  3. Set up CallKit (CXProvider) natively so the incoming-call UI appears
  *     within ~2 seconds of the push arriving, even if the app was killed.
+ *  4. Register a native WKScriptMessageHandler ("RelayNative") for web→native
+ *     bridge messages (webCallEnded, setAudioRoute).
+ *  5. Handle audio session routing (speaker/earpiece/bluetooth) natively.
+ *  6. Sync mute state from CallKit system UI → WebView.
+ *  7. Observe AVAudioSession.routeChangeNotification → inject into WebView.
  *
- * The native code:
- *  - Registers for VoIP push tokens via PushKit on launch.
- *  - On token update: forwards to react-native-voip-push-notification's JS bridge.
- *  - On incoming push: parses payload, reports to CallKit IMMEDIATELY, then
- *    forwards to react-native-voip-push-notification for JS processing.
- *  - CallKit setup is done natively in AppDelegate so `didLoadWithEvents` works.
+ * Compliant with relay-push-ios-app-config.md §3.5 and §4.
  */
 const {
   withAppDelegate,
@@ -57,7 +57,9 @@ function withVoipAppDelegate(config) {
 
     // --- Add imports at the top (after existing imports) ---
     const importsToAdd = `import PushKit
-import CallKit`;
+import CallKit
+import WebKit
+import AVFoundation`;
 
     // Insert after the last existing import line
     const importInsertionPoint = contents.lastIndexOf("import ");
@@ -90,6 +92,8 @@ import CallKit`;
   private var callKitController: CXCallController?
   /// Map callId (from server payload) → UUID used with CallKit
   private var callIdToUUID: [String: UUID] = [:]
+  /// Track whether the current call is video (for audio session mode)
+  private var currentCallIsVideo: Bool = false
 `;
 
     if (!contents.includes("voipRegistry")) {
@@ -114,6 +118,7 @@ import CallKit`;
     // RELAY: Initialize VoIP Push + CallKit
     setupVoIPPush()
     setupCallKit()
+    setupAudioRouteObserver()
 
 `;
 
@@ -128,7 +133,7 @@ import CallKit`;
     const voipExtension = `
 
 // MARK: - RELAY VoIP Push + CallKit Extension
-extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate {
+extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessageHandler {
 
   // ─── Setup ────────────────────────────────────────────────────────────
   func setupVoIPPush() {
@@ -150,6 +155,40 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate {
     RNCallKeep.setup(["appName": "RELAY", "supportsVideo": true, "maximumCallGroups": 1, "maximumCallsPerCallGroup": 1] as [String: Any])
   }
 
+  /// Observe AVAudioSession route changes → inject into WebView
+  func setupAudioRouteObserver() {
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(audioRouteChanged(_:)),
+      name: AVAudioSession.routeChangeNotification,
+      object: nil
+    )
+  }
+
+  @objc private func audioRouteChanged(_ notification: Notification) {
+    let session = AVAudioSession.sharedInstance()
+    let route = session.currentRoute
+    var routeName = "earpiece"
+    for output in route.outputs {
+      switch output.portType {
+      case .builtInSpeaker:
+        routeName = "speaker"
+      case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
+        routeName = "bluetooth"
+      case .headphones, .headsetMic:
+        routeName = "earpiece"
+      default:
+        routeName = "earpiece"
+      }
+    }
+    // Inject route change into WebView
+    let js = "window.dispatchEvent(new CustomEvent('relay:native',{detail:{type:'audioRouteChanged',route:'\\(routeName)'}}));"
+    DispatchQueue.main.async {
+      self.findWebView()?.evaluateJavaScript(js, completionHandler: nil)
+    }
+    NSLog("[RELAY VoIP] Audio route changed to: %@", routeName)
+  }
+
   /// Get or create a UUID for a given callId string
   private func uuid(for callId: String?) -> UUID {
     guard let id = callId, !id.isEmpty else { return UUID() }
@@ -165,6 +204,94 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate {
     callIdToUUID.removeValue(forKey: id)
   }
 
+  /// Find the WKWebView in the view hierarchy
+  private func findWebView() -> WKWebView? {
+    guard let window = UIApplication.shared.connectedScenes
+      .compactMap({ $0 as? UIWindowScene })
+      .flatMap({ $0.windows })
+      .first(where: { $0.isKeyWindow }) else { return nil }
+    return findWKWebView(in: window)
+  }
+
+  private func findWKWebView(in view: UIView) -> WKWebView? {
+    if let webView = view as? WKWebView { return webView }
+    for subview in view.subviews {
+      if let found = findWKWebView(in: subview) { return found }
+    }
+    return nil
+  }
+
+  /// Register the RelayNative script message handler on the WKWebView
+  /// Called after the WebView is available in the view hierarchy
+  func registerRelayNativeHandler() {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+      guard let self = self, let webView = self.findWebView() else {
+        // Retry after a delay if WebView not yet available
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+          guard let self = self, let webView = self.findWebView() else { return }
+          webView.configuration.userContentController.add(self, name: "RelayNative")
+          NSLog("[RELAY VoIP] RelayNative handler registered (delayed retry)")
+        }
+        return
+      }
+      webView.configuration.userContentController.add(self, name: "RelayNative")
+      NSLog("[RELAY VoIP] RelayNative handler registered")
+    }
+  }
+
+  // ─── WKScriptMessageHandler (RelayNative bridge: web → native) ────────
+  public func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+    guard message.name == "RelayNative" else { return }
+    guard let body = message.body as? String,
+          let data = body.data(using: .utf8),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let type = json["type"] as? String else {
+      NSLog("[RELAY VoIP] RelayNative: invalid message body")
+      return
+    }
+
+    switch type {
+    case "webCallEnded":
+      let callId = json["callId"] as? String ?? ""
+      NSLog("[RELAY VoIP] Web ended call: %@", callId)
+      let callUUID = uuid(for: callId)
+      callKitProvider?.reportCall(with: callUUID, endedAt: Date(), reason: .remoteEnded)
+      removeCall(callId)
+
+    case "setAudioRoute":
+      let route = json["route"] as? String ?? ""
+      NSLog("[RELAY VoIP] setAudioRoute: %@", route)
+      handleSetAudioRoute(route)
+
+    default:
+      NSLog("[RELAY VoIP] RelayNative: unknown message type: %@", type)
+    }
+  }
+
+  /// Handle audio route switching from web
+  private func handleSetAudioRoute(_ route: String) {
+    let session = AVAudioSession.sharedInstance()
+    do {
+      switch route {
+      case "speaker":
+        try session.overrideOutputAudioPort(.speaker)
+      case "earpiece":
+        try session.overrideOutputAudioPort(.none)
+      case "bluetooth":
+        try session.overrideOutputAudioPort(.none)
+        if let bt = session.availableInputs?.first(where: {
+          [.bluetoothHFP, .bluetoothLE].contains($0.portType)
+        }) {
+          try session.setPreferredInput(bt)
+        }
+      default:
+        NSLog("[RELAY VoIP] Unknown audio route: %@", route)
+      }
+    } catch {
+      NSLog("[RELAY VoIP] Failed to set audio route '%@': %@", route, error.localizedDescription)
+    }
+  }
+
   // ─── PushKit Delegate ─────────────────────────────────────────────────
   public func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
     // Hex-encode the VoIP push token
@@ -172,6 +299,9 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate {
     // Forward to react-native-voip-push-notification JS bridge
     RNVoipPushNotificationManager.didUpdate(pushCredentials, forType: type.rawValue)
     NSLog("[RELAY VoIP] Token registered: %@", String(token.prefix(12)) + "...")
+
+    // Also register the RelayNative handler now that the app is fully up
+    registerRelayNativeHandler()
   }
 
   public func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
@@ -186,6 +316,9 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate {
     let mode = d["mode"] as? String ?? "voice"
     let hasVideo = mode == "video"
     let callUUID = uuid(for: callId)
+
+    // Track video/voice mode for audio session configuration
+    currentCallIsVideo = hasVideo
 
     NSLog("[RELAY VoIP] Received push: type=%@, callId=%@, caller=%@, mode=%@", pushType, callId, callerName, mode)
 
@@ -244,8 +377,6 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate {
 
   public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
     NSLog("[RELAY VoIP] Call answered via CallKit")
-    // Configure audio session for WebRTC
-    configureAudioSession()
     action.fulfill()
     // The JS side handles the rest via RNCallKeep 'answerCall' event
   }
@@ -261,24 +392,34 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate {
     // The JS side handles the rest via RNCallKeep 'endCall' event
   }
 
+  // §3.5 item 1: Claim the audio session — fixes dead audio + dead mute
   public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-    NSLog("[RELAY VoIP] Audio session activated by CallKit")
-    // Audio session is now active — WebRTC in the WebView can use it
+    NSLog("[RELAY VoIP] Audio session activated by CallKit (isVideo=%d)", currentCallIsVideo ? 1 : 0)
+    // Set category with correct mode based on call type
+    // .voiceChat defaults to earpiece (correct for voice calls)
+    // .videoChat defaults to speaker (correct for video calls)
+    try? audioSession.setCategory(
+      .playAndRecord,
+      mode: currentCallIsVideo ? .videoChat : .voiceChat,
+      options: [.allowBluetooth, .allowBluetoothA2DP]
+    )
+    // Do NOT call setActive(true) — CallKit already activated it.
   }
 
   public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
     NSLog("[RELAY VoIP] Audio session deactivated")
+    // no-op per spec
   }
 
-  // ─── Audio Session Configuration ─────────────────────────────────────
-  private func configureAudioSession() {
-    do {
-      let session = AVAudioSession.sharedInstance()
-      try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
-      try session.setActive(true)
-    } catch {
-      NSLog("[RELAY VoIP] Failed to configure audio session: %@", error.localizedDescription)
+  // §3.5 item 3: Mute sync — forward CXSetMutedCallAction into the WebView
+  public func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
+    let muted = action.isMuted
+    NSLog("[RELAY VoIP] Mute action from CallKit: muted=%d", muted ? 1 : 0)
+    let js = "window.dispatchEvent(new CustomEvent('relay:native',{detail:{type:'callMuted',muted:\\(muted)}}));"
+    DispatchQueue.main.async {
+      self.findWebView()?.evaluateJavaScript(js, completionHandler: nil)
     }
+    action.fulfill()
   }
 }
 `;

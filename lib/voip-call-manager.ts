@@ -51,6 +51,8 @@ let initialized = false;
 
 // Map UUID → callId for reverse lookup
 const uuidToCallId: Map<string, string> = new Map();
+// Map UUID → mode ("voice" | "video") for call type tracking
+const uuidToMode: Map<string, string> = new Map();
 
 /**
  * Initialize the VoIP call manager. Call this once at app startup (in _layout.tsx).
@@ -95,8 +97,10 @@ export function initVoipCallManager() {
     // The native side already reported to CallKit — we just track the UUID mapping
     const callId = notification?.callId;
     const uuid = notification?.uuid;
+    const mode = notification?.mode || "voice";
     if (callId && uuid) {
       uuidToCallId.set(uuid.toLowerCase(), callId);
+      uuidToMode.set(uuid.toLowerCase(), mode);
     }
     // Signal completion to PushKit
     if (notification?.uuid) {
@@ -116,8 +120,10 @@ export function initVoipCallManager() {
       } else if (name === "RNVoipPushRemoteNotificationReceivedEvent") {
         const callId = data?.callId;
         const uuid = data?.uuid;
+        const mode = data?.mode || "voice";
         if (callId && uuid) {
           uuidToCallId.set(uuid.toLowerCase(), callId);
+          uuidToMode.set(uuid.toLowerCase(), mode);
         }
       }
     }
@@ -132,8 +138,8 @@ export function initVoipCallManager() {
   RNCallKeep.addEventListener("answerCall", ({ callUUID }: { callUUID: string }) => {
     console.log("[RELAY VoIP] Call answered via CallKit, UUID:", callUUID);
     const callId = uuidToCallId.get(callUUID.toLowerCase()) || callUUID;
-    // Determine mode from the notification payload (default to voice)
-    const mode = "voice"; // Will be overridden by actual payload data
+    // Determine mode from the notification payload
+    const mode = uuidToMode.get(callUUID.toLowerCase()) || "voice";
 
     if (isWebViewReady && webViewRef?.current) {
       // Warm start: inject event into WebView
@@ -150,6 +156,7 @@ export function initVoipCallManager() {
     const callId = uuidToCallId.get(callUUID.toLowerCase()) || callUUID;
     injectCallDeclined(callId);
     uuidToCallId.delete(callUUID.toLowerCase());
+    uuidToMode.delete(callUUID.toLowerCase());
   });
 
   // Audio session activated by CallKit
@@ -166,7 +173,8 @@ export function initVoipCallManager() {
       const { name, data } = event;
       if (name === "RNCallKeepPerformAnswerCallAction") {
         const callId = uuidToCallId.get(data?.callUUID?.toLowerCase()) || data?.callUUID || "";
-        pendingCallAnswer = { callId, mode: "voice" };
+        const mode = uuidToMode.get(data?.callUUID?.toLowerCase()) || "voice";
+        pendingCallAnswer = { callId, mode };
       } else if (name === "RNCallKeepPerformEndCallAction") {
         const callId = uuidToCallId.get(data?.callUUID?.toLowerCase()) || data?.callUUID || "";
         injectCallDeclined(callId);

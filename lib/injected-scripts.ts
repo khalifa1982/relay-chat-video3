@@ -623,6 +623,51 @@ export const HANGUP_ICON_FIX_JS = `(() => {
 })();
 true;`;
 
+/**
+ * RELAY_NATIVE_BRIDGE_JS — Expose window.RelayNative.postMessage() shim.
+ *
+ * The native iOS app registers a WKScriptMessageHandler named "RelayNative".
+ * The web app at your-chat.io uses window.RelayNative.postMessage(jsonString)
+ * to send messages like webCallEnded and setAudioRoute to native.
+ *
+ * On iOS WKWebView, the actual native path is:
+ *   window.webkit.messageHandlers.RelayNative.postMessage(string)
+ *
+ * This shim ensures window.RelayNative.postMessage works regardless of
+ * whether the web app uses the webkit path or the convenience alias.
+ * It also listens for relay:native CustomEvents (audioRouteChanged, callMuted)
+ * injected by native and forwards them to the web app's event system.
+ */
+export const RELAY_NATIVE_BRIDGE_JS = `(() => {
+  try {
+    if (window.__relayNativeBridge) return;
+    window.__relayNativeBridge = true;
+
+    // Shim: window.RelayNative.postMessage(jsonString)
+    // Routes to the native WKScriptMessageHandler on iOS
+    if (!window.RelayNative) {
+      window.RelayNative = {
+        postMessage: function(msg) {
+          try {
+            // iOS WKWebView native path
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.RelayNative) {
+              window.webkit.messageHandlers.RelayNative.postMessage(msg);
+              return;
+            }
+            // Fallback: also post via ReactNativeWebView for RN-side handling
+            if (window.ReactNativeWebView) {
+              window.ReactNativeWebView.postMessage(msg);
+            }
+          } catch (e) {
+            console.warn('[RelayNative bridge] postMessage error:', e);
+          }
+        }
+      };
+    }
+  } catch (e) {}
+})();
+true;`;
+
 /** Combined script injected once on load. */
 export const INJECTED_JS =
-  SESSION_PERSIST_JS + "\n" + VERSION_WATCH_JS + "\n" + CALL_WATCH_JS + "\n" + HANGUP_ICON_FIX_JS;
+  RELAY_NATIVE_BRIDGE_JS + "\n" + SESSION_PERSIST_JS + "\n" + VERSION_WATCH_JS + "\n" + CALL_WATCH_JS + "\n" + HANGUP_ICON_FIX_JS;
