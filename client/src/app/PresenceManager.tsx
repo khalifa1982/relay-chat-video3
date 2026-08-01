@@ -44,7 +44,34 @@ export function PresenceManager() {
   const [location] = useLocation();
   const inApp = location.startsWith("/app");
   const id = whoami.data?.id;
+  const utils = trpc.useUtils();
+  /* THE BEAT IS ALSO HOW A RENUMBER REACHES A TAB NOBODY TOUCHED (v2.106.86).
+   *
+   * Owner: a user whose PIN was changed by the operator CLI while he was ONLINE kept
+   * calling with his OLD pin — because the signaling registry is keyed on the pin the
+   * CLIENT registered, and nothing told his client. The `number` SSE event cannot
+   * fire for that writer (it talks straight to MySQL), and `whoami`'s
+   * `refetchOnWindowFocus` never fires for an app sitting in the foreground, which is
+   * exactly the state he was in.
+   *
+   * The heartbeat's reply now carries the authoritative number, so ONE comparison
+   * here closes it for every out-of-band writer within a beat. Invalidate rather than
+   * write the cache directly: `whoami` carries more than the number, and a hand-patched
+   * entry would be a second, partial copy of a payload the server owns. The re-register
+   * then happens where it always has — `setPreferredPin`, off the refreshed value.
+   *
+   * `mutate` with a per-call `onSuccess`, not the hook-level one, so this reacts only
+   * to beats and never to some future caller of the same mutation. */
   const heartbeat = trpc.directory.heartbeat.useMutation();
+  const onBeat = (res: { number?: string | null }) => {
+    const truth = res?.number;
+    // Only a well-formed number that DISAGREES is worth a refetch — an absent field
+    // (an older server mid-deploy) must read as "no news", never as a change.
+    if (!truth || !/^\d{6}$/.test(truth)) return;
+    if (whoami.data?.number && whoami.data.number !== truth) {
+      void utils.identity.whoami.invalidate();
+    }
+  };
   const goOffline = trpc.directory.goOffline.useMutation();
   const markIdle = trpc.directory.markIdle.useMutation();
   // A stable per-tab id for the M12 multi-tab ref-count (see tabPresence.ts).
@@ -64,7 +91,7 @@ export function PresenceManager() {
       // hidden case has its own beat (`idleTick`), and the visibilitychange handler
       // heartbeats the instant we return to visible, so nothing is lost.
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      heartbeat.mutate();
+      heartbeat.mutate(undefined, { onSuccess: onBeat });
       touchTab(id, tabId, Date.now()); // M12: record this tab as live
     };
     tick();
@@ -134,7 +161,7 @@ export function PresenceManager() {
       // an actual close.
       if (document.visibilityState === "hidden") idleTick();
       else if (!cancelled) {
-        heartbeat.mutate(); // back → online instantly, and idle is cleared with it
+        heartbeat.mutate(undefined, { onSuccess: onBeat }); // back → online instantly, and idle is cleared with it
         touchTab(id, tabId, Date.now());
       }
     };

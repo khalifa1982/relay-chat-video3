@@ -96,7 +96,11 @@ describe("PresenceManager — client beacon wiring", () => {
     expect(PRESENCE_MANAGER).toMatch(/visibilityState\s*===\s*["']hidden["']/);
   });
   it("heartbeats immediately on return-to-visible so a tab switch flips right back online", () => {
-    expect(PRESENCE_MANAGER).toMatch(/else if \(!cancelled\) \{\s*\n\s*heartbeat\.mutate\(\)/);
+    // Matched on the CALL rather than its exact argument list (v2.106.87): this froze
+    // `heartbeat.mutate()`, so it broke the moment that beat took a success handler
+    // while saying nothing about the property — that returning to a tab beats at once
+    // instead of waiting up to 30s for the interval.
+    expect(PRESENCE_MANAGER).toMatch(/else if \(!cancelled\) \{\s*\n\s*heartbeat\.mutate\(/);
   });
   it("keeps the tRPC goOffline as the non-beacon fallback and removes every listener on cleanup", () => {
     expect(PRESENCE_MANAGER).toMatch(/goOffline\.mutate\(\)/);

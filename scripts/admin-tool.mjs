@@ -47,11 +47,23 @@
  * re-registers: unreachable at the number they now own, while the dialer still
  * reports them online.
  *
- * The client-side self-heal covers it (the whoami query refetches on focus, and the
- * engine re-registers when idle), so the window is bounded rather than permanent.
+ * THE SELF-HEAL THAT COVERS IT — AND THE HOLE IT USED TO HAVE (v2.106.86). This
+ * paragraph used to read "the whoami query refetches on focus, and the engine
+ * re-registers when idle, so the window is bounded rather than permanent". The second
+ * half was true and the first was the bug: an app sitting in the FOREGROUND never
+ * blurs, so it never refetches — and being online is exactly the state somebody is in
+ * when an operator renumbers them. The owner hit it: a user whose PIN was changed
+ * while online kept calling with the old one, and the caller-ID on those calls led
+ * the recipient to save the dead number as a SECOND contact for the same person.
+ *
+ * The presence heartbeat now returns the authoritative number on every beat, so an
+ * open client notices within ~30s whatever wrote the change. That costs no extra
+ * query — the identity row is already resolved for that request — and it covers any
+ * future out-of-band writer for free.
+ *
  * Do NOT add a signalling table for this script to write — that would be a second,
  * parallel notification mechanism for something already covered. Use the panel when
- * the server is up, and tell the person to reopen the app if it is urgent.
+ * the server is up; the person does not need to do anything either way.
  */
 import mysql from "mysql2/promise";
 import crypto from "node:crypto";
@@ -418,13 +430,24 @@ try {
                   [to],
                 );
                 console.log("OK — renumbered and propagated");
-                // v2.99.83: say the quiet part. This path cannot notify the
-                // server, so the operator needs to know the person is not
-                // instantly reachable at the new number.
+                // v2.99.83: say the quiet part. This path cannot notify the server,
+                // so the operator needs to know the person is not INSTANTLY reachable
+                // at the new number.
+                //
+                // v2.106.86 — and the window is now bounded, which it was not. The
+                // old note said "until their client re-registers (reopening the app is
+                // immediate)", and that was the whole defect: a client only re-registers
+                // when `whoami` changes, `whoami` only refetched on window FOCUS, and an
+                // app sitting in the foreground never blurs. A user who was online when
+                // his number changed therefore kept calling with the OLD pin
+                // indefinitely — reported by the owner, on a real renumber.
+                // The presence heartbeat now carries the authoritative number, so any
+                // open client converges within one beat with nothing for anyone to do.
                 console.log(
                   "NOTE: no notification was sent — this identity stays registered " +
                     "on " + number + " in the signaling layer until their client " +
-                    "re-registers (reopening the app is immediate)."
+                    "picks up the change, which the presence heartbeat does within " +
+                    "~30s while the app is open (reopening it is immediate)."
                 );
               } catch (e) {
                 await db.rollback();

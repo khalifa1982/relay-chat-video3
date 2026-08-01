@@ -18248,6 +18248,77 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.87 — a renumber reaches a client nobody touched
+
+Owner, on a real renumber:
+
+> "there was a user. his pin is 543-101 Mansoor. when he was online I changed his PIN to
+> 222-222. he was calling me after the change [and it] is showing me his old pin on the
+> call but the front end showing the new pin, and his number was staying in my contact
+> list for both — which I told you, when you change it, automatically change everywhere."
+
+### One stale value, both symptoms
+
+The call-routing registry is **in memory and keyed on the 6-digit PIN**, and a client
+only ever registers a pin it believes is its own — so a renumber has to reach the
+CLIENT before routing can be right. Three paths were supposed to do that, and all three
+miss the case the owner hit:
+
+1. the `number` SSE event, fired by `notifyNumberChanged` — but the operator CLI
+   (`scripts/admin-tool.mjs`) writes **straight to MySQL**, importing only
+   `mysql2/promise`, so no server hook can fire. Its own header says so.
+2. `whoami`'s `refetchOnWindowFocus` (v2.99.83), added as the backstop for exactly that
+   path — but **an app in the foreground never blurs**. He was *online*, which is
+   precisely the state in which it cannot fire.
+3. a reload, which is something a user has to think of doing.
+
+So he stayed registered as 543101 indefinitely. His calls carried the old pin (symptom
+one); the recipient's client saw an unsaved number and offered to save it, and the
+address book ended up holding **both** numbers for one person (symptom two, same
+cause). The database was correct throughout — which is exactly why "the front end
+showing the new pin".
+
+### The fix, and why it is the cheap one
+
+`requireIdentity` already re-reads the identity row on **every heartbeat**, so the true
+number is in hand 30 seconds at a time, for free, for every online client. The beat now
+returns it. That costs no query, no endpoint, no secret and no second implementation of
+the propagation rule — and it closes the **class** rather than the instance, covering
+any out-of-band writer including ones nobody has written yet.
+
+The client compares and invalidates `whoami`; `setPreferredPin` then does the
+re-register it has always done. **The server deliberately does not compare**, because
+it would have to be *told* what the client thinks its number is, and a client-supplied
+value is a worse authority than the row just read.
+
+A **missing** `number` reads as no-news, never as a change — a rolling deploy serves
+both bundles for ~60s, and treating an older server's reply as a change would turn every
+one of its clients into a 30-second poll.
+
+### Corrections to claims that had gone stale
+
+`admin-tool.mjs`'s header said the window is "bounded rather than permanent" because
+"the whoami query refetches on focus". The second half was the bug, and the operator
+note told them to have the person reopen the app. Both now describe what actually
+happens (v2.106.77's rule: a stale reason is worse than none).
+
+`server/renumberReachesClient.test.ts` (10). **All 6 tripwires verified by MUTATION**
+from byte-exact backups off a confirmed-GREEN baseline; sources byte-identical
+afterwards.
+
+**Two pre-existing pins rewritten to the property**, both having frozen the exact
+`heartbeat.mutate()` call shape so a success handler broke them while saying nothing
+about what they stand for (the hidden-guard ordering; the return-to-visible beat). The
+ordering one also gained the guard it was missing: `indexOf` answers -1 for an absent
+needle and -1 is less than any real offset, so it would have passed **vacuously** with
+the hidden-guard deleted (v2.99.78).
+
+**Not verified against production**, said plainly: no route to the fleet from here, so
+what is proven is that the beat carries the number and that the client acts on it — not
+that Mansoor's next call carries 222-222.
+
+No schema change, no new dependency, no new env var. 5339 tests.
+
 ## v2.106.86 — the bottom frame holds at every text size, and the group sheet's action stays reachable
 
 Owner, with three Appearance screenshots and one of the new-group sheet:

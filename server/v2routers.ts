@@ -1554,7 +1554,43 @@ export const v2DirectoryRouter = router({
         /* watches are best-effort */
       }
     }
-    return { ok: true, at: new Date() };
+    /* THE AUTHORITATIVE NUMBER, CARRIED BACK ON EVERY BEAT (v2.106.86).
+     *
+     * Owner: "his pin is 543-101. when he was online I changed his PIN to 222-222.
+     * he was calling me after the change [and it] is showing me his old pin on the
+     * call, but the front end showing the new pin."
+     *
+     * Both halves of that are explained by ONE stale value. The signaling registry
+     * is in memory and keyed on the 6-digit PIN, and a client only ever registers a
+     * pin it believes is its own — so a renumber must reach the CLIENT before the
+     * routing layer can be right. Three paths were supposed to make that happen and
+     * all three miss the case the owner hit:
+     *
+     *   - the `number` SSE event, fired by `notifyNumberChanged` — but the operator
+     *     CLI (`scripts/admin-tool.mjs`) writes STRAIGHT to MySQL, importing only
+     *     `mysql2/promise`, so no server hook can fire. Its own header says so.
+     *   - `whoami`'s `refetchOnWindowFocus` (v2.99.83), added as the backstop for
+     *     exactly that path — but an app sitting in the FOREGROUND never blurs, so
+     *     it never refetches. He was online, which is precisely when it cannot fire.
+     *   - a reload, which is a thing the user has to think of doing.
+     *
+     * So he stayed registered as 543101 indefinitely: his calls carried the old pin,
+     * the owner's client offered to save it as a new contact, and the address book
+     * ended up holding both numbers for one person — the second symptom, from the
+     * same cause.
+     *
+     * This costs NOTHING to add and closes the class rather than the instance.
+     * `requireIdentity` has already re-read the identity row for this request, so the
+     * true number is in hand; returning it lets the client notice a change made by
+     * ANY writer — the CLI, a direct SQL edit, a future tool nobody has written yet —
+     * within one beat. No new query, no new endpoint, no new secret, and no second
+     * implementation of the propagation rule.
+     *
+     * The client compares and invalidates `whoami`; `setPreferredPin` then does the
+     * re-register it has always done. The server does not compare, because it would
+     * have to be TOLD what the client thinks its number is, and a value the client
+     * supplies is a worse authority than the one we just read. */
+    return { ok: true, at: new Date(), number: me.number };
   }),
 
   /**

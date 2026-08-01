@@ -50,10 +50,18 @@ describe("v2.99.25 QA H6 — the presence heartbeat never re-marks a hidden tab 
     const fn = PRESENCE.slice(at, PRESENCE.indexOf("\n    };", at));
     expect(fn.length).toBeGreaterThan(200);
     expect(fn).toMatch(/document\.visibilityState === "hidden"\) return;/);
-    // the hidden-guard must precede the heartbeat call inside tick
+    // the hidden-guard must precede the heartbeat call inside tick.
+    //
+    // MATCHED ON THE CALL, NOT ITS ARGUMENT LIST (v2.106.87): this froze
+    // `heartbeat.mutate()` exactly, so it broke the moment the beat took a success
+    // handler — while saying nothing about the ORDER, which is the property. Both
+    // offsets are required to EXIST before they are compared, because `indexOf`
+    // answers -1 for a missing needle and -1 is less than any real offset, so the
+    // ordering claim would pass vacuously with the guard deleted (v2.99.78).
     const guardAt = fn.indexOf('visibilityState === "hidden"');
-    const beatAt = fn.indexOf("heartbeat.mutate()");
+    const beatAt = fn.indexOf("heartbeat.mutate(");
     expect(guardAt).toBeGreaterThan(0);
+    expect(beatAt).toBeGreaterThan(0);
     expect(guardAt).toBeLessThan(beatAt);
   });
 });
