@@ -114,7 +114,7 @@ export function GroupLockGate({
           keep — every member still has these messages, and this account on another
           device shows them unlocked. */}
       <p className="max-w-xs text-xs leading-relaxed text-muted-foreground">
-        <ShieldQuestion className="mb-0.5 mr-1 inline size-3.5" aria-hidden="true" />
+        <ShieldQuestion className="mb-0.5 me-1 inline size-3.5" aria-hidden="true" />
         This hides the chat on this device only. Everyone in the group still has these
         messages, and your other devices still show them.
       </p>

@@ -1678,8 +1678,8 @@ function EmailToggleRow({
       >
         <span
           className={
-            "absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform duration-200 " +
-            (checked ? "translate-x-5" : "translate-x-0")
+            "absolute top-1 start-1 size-5 rounded-full bg-white shadow transition-transform duration-200 " +
+            (checked ? "translate-x-5 rtl:-translate-x-5" : "translate-x-0")
           }
           style={{ transitionTimingFunction: "var(--ease-out)" }}
         />
@@ -1917,8 +1917,8 @@ function DndSection() {
         >
           <span
             className={
-              "absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform duration-200 " +
-              (dnd ? "translate-x-5" : "translate-x-0")
+              "absolute top-1 start-1 size-5 rounded-full bg-white shadow transition-transform duration-200 " +
+              (dnd ? "translate-x-5 rtl:-translate-x-5" : "translate-x-0")
             }
             style={{ transitionTimingFunction: "var(--ease-out)" }}
           />
@@ -2090,8 +2090,8 @@ function PasscodeSection({ displayName }: { displayName: string }) {
             >
               <span
                 className={
-                  "absolute top-1 left-1 size-5 rounded-full bg-white shadow transition-transform duration-200 " +
-                  (bioOn ? "translate-x-5" : "translate-x-0")
+                  "absolute top-1 start-1 size-5 rounded-full bg-white shadow transition-transform duration-200 " +
+                  (bioOn ? "translate-x-5 rtl:-translate-x-5" : "translate-x-0")
                 }
                 style={{ transitionTimingFunction: "var(--ease-out)" }}
               />

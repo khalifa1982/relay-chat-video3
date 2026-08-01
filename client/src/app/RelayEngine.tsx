@@ -703,7 +703,7 @@ function InCallSaveContacts({
       type="button"
       disabled={upsert.isPending}
       onClick={() => upsert.mutate({ number: candidate.pin, displayName: candidate.name || undefined })}
-      className="fixed top-3 left-3 z-[70] grid size-10 place-items-center rounded-full bg-black/60 text-[color:var(--relay-online,#06d6a0)] shadow-lg backdrop-blur-md hover:bg-black/75 active:scale-95 transition-transform outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+      className="fixed top-3 start-3 z-[70] grid size-10 place-items-center rounded-full bg-black/60 text-[color:var(--relay-online,#06d6a0)] shadow-lg backdrop-blur-md hover:bg-black/75 active:scale-95 transition-transform outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
       aria-label={`Save ${candidate.name || candidate.pin} to contacts`}
       title={`Save ${candidate.name || candidate.pin} to contacts`}
     >

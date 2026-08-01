@@ -338,12 +338,18 @@ export default function ContactsPage() {
       {/* Top row: search field + violet "add by PIN" (opens the same Add dialog). */}
       <div className="px-4 md:px-0 pt-1 flex items-center gap-2.5">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
+          {/* THE ICON AND THE FIELD'S PADDING ARE ONE DECISION AND MUST MIRROR TOGETHER.
+              The icon is absolutely positioned at the field's LEADING edge and `ps-10`
+              is the space reserved to clear it; converting one alone puts the glyph on
+              the opposite edge from its own gap, so in Arabic the typed text runs
+              straight underneath it. `top-1/2 -translate-y-1/2` is the BLOCK axis and
+              stays physical — it does not mirror. */}
+          <Search className="absolute start-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
           <Input
             placeholder={t("contacts.search")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="h-11 pl-10 rounded-xl bg-secondary/60"
+            className="h-11 ps-10 rounded-xl bg-secondary/60"
           />
         </div>
         <button
@@ -501,7 +507,7 @@ export default function ContactsPage() {
                   }
                   size="sm"
                 >
-                  <UserPlus className="size-4 mr-1.5" /> {t("contacts.addContact")}
+                  <UserPlus className="size-4 me-1.5" /> {t("contacts.addContact")}
                 </Button>
               </EmptyContent>
             )}
@@ -555,7 +561,7 @@ export default function ContactsPage() {
                         The heading sits on a plain surface, not on an accent tint, which is
                         what makes `text-primary` the right half of the v2.106.31 rule. */}
                     <span
-                      className="flex-1 text-left font-mono text-[11px] font-semibold uppercase text-primary"
+                      className="flex-1 text-start font-mono text-[11px] font-semibold uppercase text-primary"
                       style={{ letterSpacing: ".26em" }}
                     >
                       {t(section.labelKey)}
@@ -794,7 +800,13 @@ function ContactRow({
             <span
               aria-label={dot.label}
               title={c.inCall ? t("contacts.onACall") : dot.label}
-              className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card"
+              /* `-end-0.5` so the LED hangs off the avatar's TRAILING corner in both
+                 directions, which is the edge Messages' thread rows and History's
+                 `PresenceLed` already use for this same affordance — one presence dot
+                 sitting on a different corner per screen, in Arabic only, is exactly
+                 the divergence those sweeps closed. `-bottom-0.5` is the block axis
+                 and is direction-independent. */
+              className="absolute -bottom-0.5 -end-0.5 size-3 rounded-full border-2 border-card"
               style={{ background: dot.color, boxShadow: dot.glow || undefined }}
             />
           );
@@ -804,7 +816,7 @@ function ContactRow({
       <button
         type="button"
         onClick={() => openPeerProfile(c.number)}
-        className="flex flex-1 min-w-0 items-center gap-3 text-left outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-lg"
+        className="flex flex-1 min-w-0 items-center gap-3 text-start outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-lg"
         aria-label={`View ${c.displayName || c.number}'s profile`}
       >
         <div className="flex-1 min-w-0">
@@ -983,7 +995,7 @@ function ContactRow({
                 <DropdownMenuItem key={cat} onClick={() => onSetCategory(cat)}>
                   <CIcon className={"size-4 " + CATEGORY_META[cat].tint} />
                   {t(CATEGORY_META[cat].labelKey)}
-                  {active && <CheckCircle2 className="size-3.5 ml-auto text-primary" />}
+                  {active && <CheckCircle2 className="size-3.5 ms-auto text-primary" />}
                 </DropdownMenuItem>
               );
             })}
@@ -1142,9 +1154,11 @@ function AddContactDialog({
                 maxLength={PIN_INPUT_MAXLENGTH}
                 inputMode="numeric"
                 autoFocus={!editing.id}
-                className="font-mono text-lg tracking-[0.35em] pl-10"
+                className="font-mono text-lg tracking-[0.35em] ps-10"
               />
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+              {/* Same pairing as the list's search field: the glyph's edge and the
+                  padding that clears it are one decision. */}
+              <Search className="absolute start-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
             </div>
             {!editing.id && (
               <p className="text-xs text-muted-foreground mt-1.5">
@@ -1191,7 +1205,8 @@ function AddContactDialog({
                     )}
                     <span
                       className={
-                        "absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full border-2 border-card " +
+                        // Trailing corner, matching the row LED above.
+                        "absolute -bottom-0.5 -end-0.5 size-3.5 rounded-full border-2 border-card " +
                         (lookup.data!.isOnline
                           ? "bg-[color:var(--relay-online)]"
                           : "bg-[color:var(--relay-offline)]")

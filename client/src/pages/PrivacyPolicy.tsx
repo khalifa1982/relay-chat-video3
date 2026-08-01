@@ -198,7 +198,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <section>
       <h2 className="text-lg font-bold mb-3" style={{ color: "oklch(0.22 0.03 265)" }}>{title}</h2>
-      <div className="space-y-3 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1.5 [&_li]:text-slate-600 [&_strong]:text-slate-800">
+      <div className="space-y-3 [&_ul]:list-disc [&_ul]:ps-5 [&_ul]:space-y-1.5 [&_li]:text-slate-600 [&_strong]:text-slate-800">
         {children}
       </div>
     </section>

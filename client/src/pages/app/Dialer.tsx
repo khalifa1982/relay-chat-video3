@@ -502,7 +502,7 @@ export default function DialerPage() {
                 className="shrink-0 text-destructive hover:text-destructive"
                 onClick={() => { engine.dial(missedLatest.number, { voice: true }); setShowMissed(false); }}
               >
-                <Phone className="size-4 mr-1" /> {t("dialer.callBack")}
+                <Phone className="size-4 me-1" /> {t("dialer.callBack")}
               </Button>
             )}
             <button

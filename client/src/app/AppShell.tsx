@@ -903,7 +903,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
               type="button"
               onClick={goBack}
               aria-label="Back"
-              className="mr-0.5 grid size-9 shrink-0 place-items-center rounded-xl text-foreground hover:bg-muted/50 active:scale-95 transition outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+              className="me-0.5 grid size-9 shrink-0 place-items-center rounded-xl text-foreground hover:bg-muted/50 active:scale-95 transition outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
             >
               <ArrowLeft className="size-5" />
             </button>
@@ -1024,7 +1024,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
                   // would have been a silent no-op that no source test could catch.
                   <DropdownMenuItem onClick={() => openPeerStatus(me.number)}>
                     <Sparkles className="size-4 text-[#a855f7]" /> Open my story
-                    <span className="ml-auto text-xs text-muted-foreground">
+                    <span className="ms-auto text-xs text-muted-foreground">
                       {statusItems.length}
                     </span>
                   </DropdownMenuItem>
