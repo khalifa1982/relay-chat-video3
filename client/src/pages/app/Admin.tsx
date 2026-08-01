@@ -44,7 +44,7 @@
        vars) — they are the entire point of the readout and cannot fit there at
        390px, so they stay on their own line under the label.
    ============================================================ */
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -68,11 +68,46 @@ import {
   Trash2,
   MoreVertical,
 } from "lucide-react";
-import { RoleBadge, roleLabel } from "@/app/VerifiedBadge";
+import { RoleBadge } from "@/app/VerifiedBadge";
+import type { IdentityRole } from "@/app/VerifiedBadge";
 import { formatPin } from "@/app/TopBar";
 import { GROUP_PALETTE, peerPaletteIndex } from "@/app/peerColors";
 import { useLiveStats } from "@/app/useLiveStats";
 import { PIN_INPUT_MAXLENGTH, capPinInput, pinDigits } from "@/app/pinInput";
+import { useLocale, useT } from "@/app/i18n";
+import type { TKey } from "@/app/i18n";
+
+/** The translator, as the render sites receive it. Named so a module-level helper can
+ *  take one as a parameter — a constant or a plain function cannot call a hook. */
+type Translate = ReturnType<typeof useT>;
+
+/**
+ * The tier word for a role, as a dictionary KEY.
+ *
+ * WHY THIS IS NOT `roleLabel()` ANY MORE, and why that is not a second source of truth.
+ * `roleLabel` (app/VerifiedBadge.tsx) returns finished ENGLISH, so a row tag rendered
+ * through it stays English on an Arabic screen. That file is a shared component outside
+ * this screen's sweep, so the tier words move into this screen's dictionary instead —
+ * and the two are held in agreement by an assertion in `adminLocale.test.ts` requiring
+ * each ENGLISH half to equal `roleLabel()` exactly. That is stronger than sharing the
+ * function was: it also fails if somebody edits VerifiedBadge's spelling.
+ *
+ * The three tiers stay three distinct words in BOTH languages — they are three things
+ * the server can really express, and this console's whole job is moving people between
+ * them.
+ */
+const TIER_KEY: Record<IdentityRole, TKey> = {
+  guest: "admin.tier.guest",
+  registered: "admin.tier.registered",
+  admin: "admin.tier.admin",
+};
+
+/** The tier word, translated, or null where `roleLabel` would return null (a party
+ *  line has no badge and no tier). */
+function tierWord(t: Translate, role: IdentityRole | null | undefined): string | null {
+  if (!role || !TIER_KEY[role]) return null;
+  return t(TIER_KEY[role]);
+}
 
 /* ── the board's gold, in one place ───────────────────────────────────────────
    Board rule 5: GOLD (#e8c94a) means admin / owner / locked. Frame 2h spends it on
@@ -169,14 +204,15 @@ function initialsOf(name: string, number: string) {
  * server cannot express would be a badge that lies about the account behind it.
  */
 function AdminChip() {
+  const t = useT();
   return (
     <span
-      title="You are signed in as a RELAY administrator"
+      title={t("admin.chipTitle")}
       className={"inline-flex shrink-0 items-center gap-1.5 rounded-[14px] px-2.5 py-1 " + GOLD_CHIP}
     >
       <ShieldCheck className={"size-3 " + GOLD_TEXT} aria-hidden="true" />
       <span className={"font-mono text-[9px] font-semibold tracking-[0.16em] " + GOLD_TEXT}>
-        ADMIN
+        {t("admin.chip")}
       </span>
     </span>
   );
@@ -222,17 +258,23 @@ function ToolCard({ tone, children }: { tone: "gold" | "danger"; children: React
  * does for the same figure).
  */
 function StatTiles() {
+  const t = useT();
   const live = useLiveStats();
-  const cells: { label: string; value: number | null; live?: boolean }[] = [
-    { label: "Users", value: live ? live.registeredUsers : null },
-    { label: "Guests", value: live ? live.guestsServed : null },
-    { label: "Parties", value: live ? live.totalParties : null },
-    { label: "Online", value: live ? live.onlineNow : null, live: true },
+  /* `id` is the STABLE identity of a tile and `label` is what it says. They were one
+     field until this screen was translated, and merging them again would break two
+     things at once: React would remount every tile on a language change (the key would
+     move), and "which tile carries the live dot" would become a question about English
+     rather than about the tile. */
+  const cells: { id: string; label: string; value: number | null; live?: boolean }[] = [
+    { id: "users", label: t("admin.stat.users"), value: live ? live.registeredUsers : null },
+    { id: "guests", label: t("admin.stat.guests"), value: live ? live.guestsServed : null },
+    { id: "parties", label: t("admin.stat.parties"), value: live ? live.totalParties : null },
+    { id: "online", label: t("admin.stat.online"), value: live ? live.onlineNow : null, live: true },
   ];
   return (
     <dl className="grid grid-cols-4 gap-2">
       {cells.map((c) => (
-        <div key={c.label} className={STAT_TILE}>
+        <div key={c.id} className={STAT_TILE}>
           <dd className="flex items-center justify-center gap-1 overflow-hidden whitespace-nowrap font-mono text-[clamp(0.9rem,4vw,1.125rem)] font-semibold leading-none tabular-nums">
             {c.value === null ? "—" : c.value.toLocaleString("en-US")}
             {c.live && c.value !== null && (
@@ -256,6 +298,8 @@ function StatTiles() {
 }
 
 export default function Admin() {
+  const t = useT();
+  const { tn } = useLocale();
   const amIAdmin = trpc.admin.amIAdmin.useQuery(undefined, { staleTime: 60_000 });
   const [query, setQuery] = useState("");
   const [submitted, setSubmitted] = useState("");
@@ -297,21 +341,22 @@ export default function Admin() {
   const [inviteError, setInviteError] = useState<string | null>(null);
   const invite = trpc.admin.inviteGuestRegistration.useMutation({
     onSuccess: () => {
-      toast.success("Suggested. It shows in their app next time they open it.");
+      toast.success(t("admin.type.suggested"));
       setInviteError(null);
       utils.admin.findIdentities.invalidate().catch(() => {});
     },
     // Verbatim: the server names "already has an account", a malformed address and
     // "that address belongs to somebody" separately, and those are three different
-    // next steps for the operator.
-    onError: (e) => setInviteError(e.message || "Couldn't save that suggestion."),
+    // next steps for the operator. Only the FALLBACK is translated — a server message
+    // that exists must reach the operator as the server worded it.
+    onError: (e) => setInviteError(e.message || t("admin.type.suggestFailed")),
   });
   const withdrawInvite = trpc.admin.clearGuestRegistrationInvite.useMutation({
     onSuccess: () => {
       setInviteError(null);
       utils.admin.findIdentities.invalidate().catch(() => {});
     },
-    onError: (e) => setInviteError(e.message || "Couldn't withdraw that suggestion."),
+    onError: (e) => setInviteError(e.message || t("admin.type.withdrawFailed")),
   });
   /** Which row's DELETE panel is open, and the number typed to confirm it (v2.100.0). */
   const [deleting, setDeleting] = useState<number | null>(null);
@@ -319,7 +364,7 @@ export default function Admin() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const purge = trpc.admin.deleteIdentity.useMutation({
     onSuccess: () => {
-      toast.success("Deleted. Their number is retired and will not be reissued.");
+      toast.success(t("admin.delete.done"));
       setDeleting(null);
       setConfirmNum("");
       setDeleteError(null);
@@ -327,14 +372,21 @@ export default function Admin() {
     },
     // The server names the self-deletion refusal specifically, because "another
     // admin has to do it" is a different next step from "that id doesn't exist".
-    onError: (e) => setDeleteError(e.message || "Couldn't delete that person."),
+    onError: (e) => setDeleteError(e.message || t("admin.delete.failed")),
   });
   const setNumber = trpc.admin.setIdentityNumber.useMutation({
     onSuccess: (res) => {
+      /* A toast is ONE flat string with no way to isolate a run, so the Arabic says
+         "من … إلى …" where the English uses an arrow: two Western 6-digit numbers on
+         either side of "→" inside an RTL paragraph can have their parts reordered, and
+         there is no span to hang `unicode-bidi: isolate` on. */
       toast.success(
         res.unchanged
-          ? "That was already their number."
-          : `Changed ${formatPin(res.oldNumber)} → ${formatPin(res.newNumber)}`,
+          ? t("admin.number.unchanged")
+          : t("admin.number.changed", {
+              from: formatPin(res.oldNumber),
+              to: formatPin(res.newNumber),
+            }),
       );
       setEditing(null);
       setWanted("");
@@ -343,7 +395,7 @@ export default function Admin() {
     },
     // The server names each refusal; showing its own message means a typo and a
     // collision read differently, which is the point of naming them.
-    onError: (e) => setError(e.message || "Couldn't change that number."),
+    onError: (e) => setError(e.message || t("admin.number.failed")),
   });
 
   const digits = pinDigits(wanted);
@@ -360,10 +412,8 @@ export default function Admin() {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
         <ShieldCheck className="size-8 text-muted-foreground" />
-        <p className="text-sm font-semibold">Administrators only</p>
-        <p className="max-w-xs text-xs text-muted-foreground">
-          This account doesn't hold the admin role. Nothing on this page is available to it.
-        </p>
+        <p className="text-sm font-semibold">{t("admin.onlyTitle")}</p>
+        <p className="max-w-xs text-xs text-muted-foreground">{t("admin.onlyBody")}</p>
       </div>
     );
   }
@@ -376,7 +426,7 @@ export default function Admin() {
           carries both the shield and the tier, in the colour the board reserves
           for exactly this. */}
       <div className="flex items-center gap-2.5">
-        <h1 className="text-[21px] font-bold leading-none">Admin</h1>
+        <h1 className="text-[21px] font-bold leading-none">{t("admin.title")}</h1>
         <AdminChip />
       </div>
 
@@ -394,32 +444,31 @@ export default function Admin() {
         className="flex gap-2"
       >
         <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          {/* LOGICAL, not `left-3.5`: this glyph marks the field's LEADING edge, which
+              is the right-hand side in Arabic. `top-1/2 -translate-y-1/2` stays
+              physical because vertical centring is direction-independent. */}
+          <Search className="pointer-events-none absolute start-3.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Find a person — name or number"
-            aria-label="Find a person"
+            placeholder={t("admin.search.placeholder")}
+            aria-label={t("admin.search.aria")}
             dir="auto"
-            className="w-full rounded-[13px] border border-border bg-card/60 py-2.5 pl-9 pr-3 text-[12.5px] outline-none placeholder:text-muted-foreground focus:border-primary dark:border-white/10 dark:bg-white/5"
+            className="w-full rounded-[13px] border border-border bg-card/60 py-2.5 ps-9 pe-3 text-[12.5px] outline-none placeholder:text-muted-foreground focus:border-primary dark:border-white/10 dark:bg-white/5"
           />
         </div>
         <Button type="submit" size="sm" variant="outline" className="rounded-[13px]">
-          Find
+          {t("admin.search.submit")}
         </Button>
       </form>
 
-      <p className="text-[10.5px] leading-relaxed text-muted-foreground">
-        Changing a number updates everyone who saved it. Messages, calls, contacts and
-        statuses all stay with the person — only the number moves, and the old one is never
-        reissued to anybody else.
-      </p>
+      <p className="text-[10.5px] leading-relaxed text-muted-foreground">{t("admin.blurb")}</p>
 
       {found.isLoading ? (
-        <div className="p-6 text-center text-sm text-muted-foreground">Loading…</div>
+        <div className="p-6 text-center text-sm text-muted-foreground">{t("admin.loading")}</div>
       ) : (found.data?.rows.length ?? 0) === 0 ? (
         <div className="p-6 text-center text-sm text-muted-foreground">
-          {submitted ? `Nobody matches “${submitted}”.` : "No identities yet."}
+          {submitted ? t("admin.noMatches", { query: submitted }) : t("admin.noneYet")}
         </div>
       ) : (
         <ul className="space-y-1.5">
@@ -449,10 +498,10 @@ export default function Admin() {
                         dir="auto"
                         title={r.displayName || undefined}
                       >
-                        {r.displayName || "Unnamed"}
+                        {r.displayName || t("admin.unnamed")}
                       </span>
                       <RoleBadge role={r.role} caption={false} size={11} />
-                      <span className={"ms-auto " + ROLE_TAG}>{roleLabel(r.role)}</span>
+                      <span className={"ms-auto " + ROLE_TAG}>{tierWord(t, r.role)}</span>
                     </div>
                     <div className="mt-0.5 flex items-baseline gap-1.5">
                       <span
@@ -462,8 +511,12 @@ export default function Admin() {
                         {formatPin(r.number)}
                       </span>
                       {r.email && (
+                        // An address is LTR text sitting beside a display name that may
+                        // be Arabic, so it is isolated as well as directed — without the
+                        // isolation its parts reorder against the RTL run around it
+                        // (the v2.99.77 PinTag lesson, which the PIN above already has).
                         <span
-                          className="min-w-0 truncate text-[9.5px] text-muted-foreground/70"
+                          className="min-w-0 truncate text-[9.5px] text-muted-foreground/70 [unicode-bidi:isolate]"
                           dir="ltr"
                           title={r.email}
                         >
@@ -480,7 +533,7 @@ export default function Admin() {
                     <DropdownMenuTrigger asChild>
                       <button
                         type="button"
-                        aria-label={`Account tools for ${r.displayName || r.number}`}
+                        aria-label={t("admin.row.toolsFor", { who: r.displayName || r.number })}
                         className="grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
                       >
                         <MoreVertical className="size-4" aria-hidden="true" />
@@ -488,7 +541,7 @@ export default function Admin() {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-60">
                       <DropdownMenuLabel className={GOLD_LABEL}>
-                        Account tools
+                        {t("admin.menu.title")}
                       </DropdownMenuLabel>
                       <DropdownMenuItem
                         onClick={() => {
@@ -498,13 +551,17 @@ export default function Admin() {
                         }}
                       >
                         <Hash className="size-4" />
-                        {editing === r.id ? "Hide number editor" : "Change number"}
+                        {editing === r.id
+                          ? t("admin.menu.hideNumber")
+                          : t("admin.menu.changeNumber")}
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={() => setChecking(checking === r.id ? null : r.id)}
                       >
                         <BellRing className="size-4" />
-                        {checking === r.id ? "Hide notifications" : "Notifications"}
+                        {checking === r.id
+                          ? t("admin.menu.hideNotifications")
+                          : t("admin.menu.notifications")}
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={() => {
@@ -513,7 +570,9 @@ export default function Admin() {
                         }}
                       >
                         <ShieldCheck className="size-4" />
-                        {typing === r.id ? "Hide account type" : "Account type"}
+                        {typing === r.id
+                          ? t("admin.menu.hideAccountType")
+                          : t("admin.menu.accountType")}
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
@@ -525,7 +584,9 @@ export default function Admin() {
                         }}
                       >
                         <Trash2 className="size-4" />
-                        {deleting === r.id ? "Hide delete" : "Delete account"}
+                        {deleting === r.id
+                          ? t("admin.menu.hideDelete")
+                          : t("admin.menu.deleteAccount")}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -533,21 +594,29 @@ export default function Admin() {
                 {checking === r.id && <PushCheck identityId={r.id} />}
                 {deleting === r.id && (
                   <ToolCard tone="danger">
-                    <div className={DANGER_LABEL + " mb-2"}>
-                      Delete this account
-                    </div>
+                    <div className={DANGER_LABEL + " mb-2"}>{t("admin.delete.label")}</div>
                     <p className="text-xs font-semibold text-destructive">
-                      Delete this person completely. This cannot be undone.
+                      {t("admin.delete.warning")}
                     </p>
-                    <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-muted-foreground">
-                      <li>Their messages, threads, contacts, stories, call log and devices go.</li>
+                    {/* `ps-4`, not `pl-4`: the list marker sits on the READING edge, so
+                        it has to move to the right in Arabic. */}
+                    <ul className="mt-1.5 list-disc space-y-0.5 ps-4 text-[11px] leading-relaxed text-muted-foreground">
+                      <li>{t("admin.delete.bulletData")}</li>
+                      <li>{t("admin.delete.bulletThreads")}</li>
+                      {/* `tn`, not `t`: the number is a NODE so it can be LTR-ISOLATED.
+                          Six Western digits inside an Arabic sentence reorder without it,
+                          and the whole point of this line is that the operator can read
+                          the number that is about to be retired. Keeping the placeholder
+                          inside the sentence also lets Arabic put it where the language
+                          wants — it leads with the verb here and English does not. */}
                       <li>
-                        Anyone who was in a 1:1 chat with them loses that conversation from their own
-                        inbox. Group chats survive for their other members.
-                      </li>
-                      <li>
-                        {formatPin(r.number)} is retired for good — it is never handed to anybody
-                        else.
+                        {tn("admin.delete.bulletNumber", {
+                          number: (
+                            <span dir="ltr" className="font-mono [unicode-bidi:isolate]">
+                              {formatPin(r.number)}
+                            </span>
+                          ),
+                        })}
                       </li>
                       {/* Said plainly rather than implied away. Deleting an attachments row would
                           make its media MORE readable, not less (v2.98.4/F3: the storage proxy
@@ -557,14 +626,11 @@ export default function Admin() {
                           by any signed-in RELAY user (it renders on the incoming-ring card), and
                           that does not change here — the bytes stay because there is no
                           storage-delete path in this codebase to remove them with. */}
-                      <li>
-                        Files they sent stay in storage and stay locked shut. Their profile photo
-                        stays too — no more readable than before, but not erased.
-                      </li>
-                      <li>A block anyone placed on them stays in place.</li>
+                      <li>{t("admin.delete.bulletFiles")}</li>
+                      <li>{t("admin.delete.bulletBlocks")}</li>
                     </ul>
                     <p className="mt-2.5 text-[10px] text-muted-foreground">
-                      Type their 6-digit number to enable Delete.
+                      {t("admin.delete.typeToEnable")}
                     </p>
                     <div className="mt-1.5 flex flex-wrap items-center gap-2">
                       <input
@@ -582,7 +648,7 @@ export default function Admin() {
                           setConfirmNum(capPinInput(e.target.value));
                           setDeleteError(null);
                         }}
-                        aria-label={`Type ${r.number} to confirm deleting this person`}
+                        aria-label={t("admin.delete.confirmAria", { number: r.number })}
                         className="w-36 rounded-[11px] border border-destructive/40 bg-background px-3 py-2 text-center font-mono text-lg tracking-[0.12em] outline-none focus:border-destructive"
                       />
                       {/* Typing the number is the confirmation, not a Yes/No. The panel lists
@@ -600,7 +666,7 @@ export default function Admin() {
                         }
                         onClick={() => purge.mutate({ identityId: r.id })}
                       >
-                        {purge.isPending ? "Deleting…" : "Delete permanently"}
+                        {purge.isPending ? t("admin.delete.busy") : t("admin.delete.action")}
                       </Button>
                     </div>
                     {deleteError && <p className="mt-2 text-xs text-destructive">{deleteError}</p>}
@@ -608,7 +674,7 @@ export default function Admin() {
                 )}
                 {typing === r.id && (
                   <ToolCard tone="gold">
-                    <div className={GOLD_LABEL + " mb-2"}>Change account type</div>
+                    <div className={GOLD_LABEL + " mb-2"}>{t("admin.type.label")}</div>
                     {r.isGuest ? (
                       /* A guest has no account row at all — that is what being a guest
                          IS — so there is no role to write. Said here rather than offered
@@ -617,10 +683,9 @@ export default function Admin() {
                          therefore ONE lit segment for a guest: the two transitions the
                          server refuses are not drawn as taps at all. */
                       <div className="space-y-2">
-                        <TierWell current="Guest" />
+                        <TierWell current={t("admin.tier.guest")} />
                         <p className="text-xs text-muted-foreground">
-                          Guests have no account behind them, so there's no role to change. They
-                          keep their number and everything in it when they register themselves.
+                          {t("admin.type.guestExplain")}
                         </p>
                         {/* SUGGEST AN ADDRESS (v2.105.15, #111).
                             This puts a prompt in THEIR app and does nothing else — it
@@ -631,13 +696,13 @@ export default function Admin() {
                             somebody else. The copy says so, because an operator should
                             not have to guess how far a button reaches. */}
                         <p className="text-xs text-muted-foreground">
-                          You can suggest the address they should use. They see it in their app,
-                          can change it, and finish registering themselves — this doesn't create
-                          an account or send anything.
+                          {t("admin.type.suggestExplain")}
                         </p>
                         {r.regInviteEmail && (
                           <p className="text-xs">
-                            <span className="text-muted-foreground">Already suggested: </span>
+                            <span className="text-muted-foreground">
+                              {t("admin.type.alreadySuggested")}
+                            </span>
                             <span
                               className="break-all font-medium"
                               dir="ltr"
@@ -660,7 +725,9 @@ export default function Admin() {
                               setInviteEmail((m) => ({ ...m, [r.id]: e.target.value }));
                               setInviteError(null);
                             }}
-                            aria-label={`Suggested registration address for ${r.displayName || r.number}`}
+                            aria-label={t("admin.type.emailAria", {
+                              who: r.displayName || r.number,
+                            })}
                             className="min-w-0 flex-1 rounded-[11px] border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
                           />
                           <Button
@@ -678,7 +745,7 @@ export default function Admin() {
                               })
                             }
                           >
-                            {invite.isPending ? "Saving…" : "Suggest"}
+                            {invite.isPending ? t("admin.type.suggesting") : t("admin.type.suggest")}
                           </Button>
                           {r.regInviteEmail && (
                             <Button
@@ -689,7 +756,7 @@ export default function Admin() {
                               disabled={withdrawInvite.isPending}
                               onClick={() => withdrawInvite.mutate({ identityId: r.id })}
                             >
-                              Withdraw
+                              {t("admin.type.withdraw")}
                             </Button>
                           )}
                         </div>
@@ -704,8 +771,12 @@ export default function Admin() {
                          the same thing here as in the tab bar's pill and the new-group
                          sheet, and gold stays spent on admin-ness and on the CTAs. */
                       <TierWell
-                        current={r.role === "admin" ? "Admin" : "Registered"}
-                        other={r.role === "admin" ? "Registered" : "Admin"}
+                        current={
+                          r.role === "admin" ? t("admin.tier.admin") : t("admin.tier.registered")
+                        }
+                        other={
+                          r.role === "admin" ? t("admin.tier.registered") : t("admin.tier.admin")
+                        }
                         busy={setType.isPending}
                         onPick={() =>
                           setType.mutate({
@@ -720,7 +791,7 @@ export default function Admin() {
                 )}
                 {editing === r.id && (
                   <ToolCard tone="gold">
-                    <div className={GOLD_LABEL + " mb-2"}>Change number</div>
+                    <div className={GOLD_LABEL + " mb-2"}>{t("admin.number.label")}</div>
                     <div className="flex flex-wrap items-center gap-2">
                       <input
                         // Text with a numeric keypad: type="number" brings spinners,
@@ -737,7 +808,7 @@ export default function Admin() {
                           setWanted(capPinInput(e.target.value));
                           setError(null);
                         }}
-                        aria-label={`New number for ${r.displayName || r.number}`}
+                        aria-label={t("admin.number.aria", { who: r.displayName || r.number })}
                         className="w-36 rounded-[11px] border border-border bg-background px-3 py-2 text-center font-mono text-lg tracking-[0.12em] outline-none focus:border-primary"
                       />
                       <Button
@@ -749,14 +820,12 @@ export default function Admin() {
                           setNumber.mutate({ identityId: r.id, number: digits })
                         }
                       >
-                        {setNumber.isPending ? "Changing…" : "Apply"}
+                        {setNumber.isPending ? t("admin.number.applying") : t("admin.number.apply")}
                       </Button>
                     </div>
                     {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
                     {!error && wanted.length > 0 && !ok && (
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        Six digits, and it can't start with 000 or 111.
-                      </p>
+                      <p className="mt-2 text-xs text-muted-foreground">{t("admin.number.rule")}</p>
                     )}
                   </ToolCard>
                 )}
@@ -796,11 +865,12 @@ function TierWell({
   busy?: boolean;
   onPick?: () => void;
 }) {
+  const t = useT();
   return (
     <div
       className="flex gap-1.5 rounded-[13px] border border-border p-[5px] dark:border-transparent dark:bg-black/30"
       role="group"
-      aria-label="Account type"
+      aria-label={t("admin.type.aria")}
     >
       <span
         aria-current="true"
@@ -820,7 +890,7 @@ function TierWell({
           onClick={onPick}
           className="flex-1 rounded-[10px] border border-border bg-muted/50 py-2 text-center text-[11px] font-semibold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60 dark:border-white/12 dark:bg-white/5"
         >
-          {busy ? "Saving…" : other}
+          {busy ? t("admin.type.saving") : other}
         </button>
       )}
     </div>
@@ -901,34 +971,49 @@ function Row({ ok, label, detail }: { ok: boolean; label: string; detail?: strin
  * are the same empty list and opposite jobs, and telling somebody to add a node when the
  * agent is not running has them launch a second box that also fails to register.
  */
-function poolDetail(p: {
-  configured: boolean;
-  reason: string;
-  total: number;
-  eligible: number;
-  saturated: number;
-  drainingCount: number;
-}): string {
-  if (!p.configured) return "Needs REDIS_URL. Every call is on the mesh, which is the current design.";
+/* THE TRANSLATOR IS A PARAMETER, not a hook call: this is a module-level function and a
+   function that is not a component cannot call one. The alternative — returning a key and
+   translating at the render site — cannot work here, because three of these lines
+   interpolate a COUNT, so the key alone does not carry the sentence. */
+function poolDetail(
+  p: {
+    configured: boolean;
+    reason: string;
+    total: number;
+    eligible: number;
+    saturated: number;
+    drainingCount: number;
+  },
+  t: Translate,
+): string {
+  if (!p.configured) return t("admin.pool.unconfigured");
   switch (p.reason) {
     case "ok":
-      return `Rooms are being distributed by load.${p.drainingCount ? ` ${p.drainingCount} draining.` : ""}`;
+      /* TWO WHOLE SENTENCES rather than one with an appended fragment. The English used
+         to concatenate " {n} draining." onto the end, which is a sentence chopped at the
+         English seam — Arabic cannot always re-assemble that in the same order, and this
+         dictionary's rule is that a placeholder stays INSIDE its sentence. */
+      return p.drainingCount
+        ? t("admin.pool.okDraining", { count: p.drainingCount })
+        : t("admin.pool.ok");
     case "no-nodes":
-      return "Nothing has registered — check the node agent is running and can reach Redis. Not a capacity problem.";
+      return t("admin.pool.noNodes");
     case "all-stale":
-      return `All ${p.total} registered but not heartbeating. Check the agents and their clocks.`;
+      return t("admin.pool.allStale", { total: p.total });
     case "all-draining":
-      return "Every node is being retired. Clear the drain flag, or add a node.";
+      return t("admin.pool.allDraining");
     case "all-excluded":
-      return "Nodes heartbeat but fail signaling — a wrong VOIP_NODE_SECRET does exactly this.";
+      return t("admin.pool.allExcluded");
     case "all-saturated":
-      return `${p.saturated} node(s) at their CPU or room ceiling. THIS is the signal to add a node.`;
+      return t("admin.pool.allSaturated", { saturated: p.saturated });
     default:
-      return "Mediasoup is switched off for this fleet; calls use the mesh.";
+      return t("admin.pool.disabled");
   }
 }
 
 function MediaCheck() {
+  const t = useT();
+  const { tn } = useLocale();
   const q = trpc.admin.mediaDiagnostics.useQuery(undefined, { staleTime: 30_000 });
   if (q.isLoading) {
     return (
@@ -936,7 +1021,7 @@ function MediaCheck() {
         className="rsheet flex items-center gap-2 rounded-[20px] border bg-card p-4 text-xs text-muted-foreground"
         style={{ borderColor: GOLD_HAIRLINE }}
       >
-        <Loader2 className="size-3.5 animate-spin" /> Reading the media config…
+        <Loader2 className="size-3.5 animate-spin" /> {t("admin.media.reading")}
       </div>
     );
   }
@@ -948,7 +1033,7 @@ function MediaCheck() {
         className="rsheet rounded-[20px] border bg-card p-4 text-xs text-destructive"
         style={{ borderColor: DANGER_HAIRLINE }}
       >
-        Couldn&apos;t read the media config.
+        {t("admin.media.readFailed")}
       </p>
     );
   }
@@ -958,7 +1043,7 @@ function MediaCheck() {
       className="rsheet space-y-2 rounded-[20px] border bg-card p-4"
       style={{ borderColor: GOLD_HAIRLINE }}
     >
-      <h3 className={GOLD_LABEL}>Call media — this fleet</h3>
+      <h3 className={GOLD_LABEL}>{t("admin.media.label")}</h3>
       <ul className="text-xs">
         {/* `ok` is TRUE, deliberately: the mesh is the transport this fleet is meant
             to be on, so drawing it as a fault would make the one row that always
@@ -966,19 +1051,34 @@ function MediaCheck() {
             card. The DETAIL carries the cost honestly instead. */}
         <Row
           ok
-          label={transport === "mesh" ? "WebRTC mesh in use" : `${transport} in use`}
-          detail="Peer-to-peer — each phone in an N-party call runs N−1 encoders, so 6 is the cap."
+          label={
+            transport === "mesh"
+              ? t("admin.media.mesh")
+              : t("admin.media.transportInUse", { transport })
+          }
+          detail={t("admin.media.meshCost")}
         />
         <Row
           ok={turn.turnsTls > 0}
-          label={`Relays: ${turn.hosts.length} host${turn.hosts.length === 1 ? "" : "s"}, ${turn.turnsTls} TLS`}
+          label={
+            turn.hosts.length === 1
+              ? t("admin.media.relaysOne", { tls: turn.turnsTls })
+              : t("admin.media.relaysMany", { hosts: turn.hosts.length, tls: turn.turnsTls })
+          }
           detail={
             turn.hosts.length
-              ? `${turn.hosts.join(", ")} · ${turn.stun} STUN · ${turn.turnUdp} UDP · ${turn.turnTcp} TCP`
-              : "No TURN advertised — a call behind a strict NAT has no fallback."
+              ? /* NOT a dictionary entry, on purpose: protocol names and Western digits
+                   with no prose in them, so an entry's two halves would have been
+                   identical — a translation that translates nothing. See dict/admin.ts. */
+                `${turn.hosts.join(", ")} · ${turn.stun} STUN · ${turn.turnUdp} UDP · ${turn.turnTcp} TCP`
+              : t("admin.media.noTurn")
           }
         />
-        <Row ok={turn.secretSet} label="TURN secret set" detail="Credentials are minted per call, never shown." />
+        <Row
+          ok={turn.secretSet}
+          label={t("admin.media.turnSecret")}
+          detail={t("admin.media.turnSecretDetail")}
+        />
         {/* THE CAPACITY ROW, AND ITS `ok` IS NOT "are there nodes".
             An unconfigured pool is the fleet's normal state today, so drawing that red
             would make this card cry wolf on every load — the thing that teaches an
@@ -988,59 +1088,93 @@ function MediaCheck() {
           ok={!voipPool.configured || voipPool.reason === "ok" || voipPool.reason === "disabled"}
           label={
             !voipPool.configured
-              ? "Media node pool: not configured"
-              : `Media nodes: ${voipPool.eligible} of ${voipPool.total} accepting rooms`
+              ? t("admin.media.poolOff")
+              : t("admin.media.poolOn", {
+                  eligible: voipPool.eligible,
+                  total: voipPool.total,
+                })
           }
-          detail={poolDetail(voipPool)}
+          detail={poolDetail(voipPool, t)}
         />
       </ul>
       {voipPool.nodes.length > 0 && (
         <ul className="space-y-1 text-[10.5px] text-muted-foreground">
           {voipPool.nodes.map((n) => (
             <li key={n.instanceId} className="flex flex-wrap items-baseline gap-x-2">
-              <span className="font-mono" dir="ltr">
+              {/* dir=ltr + isolation on BOTH identifiers: an instance id and an address
+                  are LTR runs sitting in what is an RTL paragraph in Arabic, and without
+                  isolation their parts reorder. The id used to carry only `dir`. */}
+              <span className="font-mono [unicode-bidi:isolate]" dir="ltr">
                 {n.instanceId}
               </span>
-              <span>{n.az}</span>
-              {/* dir=ltr + isolation: an address must not be reordered by an RTL locale. */}
+              <span className="[unicode-bidi:isolate]" dir="ltr">
+                {n.az}
+              </span>
               <span className="font-mono [unicode-bidi:isolate]" dir="ltr">
                 {n.publicIp}
               </span>
               <span>
-                {n.routers} room{n.routers === 1 ? "" : "s"} · {n.consumers} consumers ·{" "}
-                {Math.round(n.cpuLoad * 100)}% cpu/core
+                {n.routers === 1
+                  ? t("admin.media.nodeRoomsOne", {
+                      consumers: n.consumers,
+                      cpu: Math.round(n.cpuLoad * 100),
+                    })
+                  : t("admin.media.nodeRoomsMany", {
+                      rooms: n.routers,
+                      consumers: n.consumers,
+                      cpu: Math.round(n.cpuLoad * 100),
+                    })}
               </span>
-              {n.draining && <span className="font-semibold text-destructive">draining</span>}
-              {n.ageMs > 15_000 && <span className="font-semibold text-destructive">stale</span>}
+              {n.draining && (
+                <span className="font-semibold text-destructive">{t("admin.media.draining")}</span>
+              )}
+              {n.ageMs > 15_000 && (
+                <span className="font-semibold text-destructive">{t("admin.media.stale")}</span>
+              )}
             </li>
           ))}
         </ul>
       )}
+      {/* `tn`, so the bolded control name stays a NODE inside the sentence. Splitting
+          this as `{t(part1)}<b>Stats</b>{t(part2)}` is the shortcut this dictionary
+          forbids: Arabic puts the verb first, so the emphasised run does not sit between
+          the same two fragments and the halves could only be re-assembled into nonsense.
+
+          THE WORD "Stats" IS DELIBERATELY NOT TRANSLATED. It is the literal face of the
+          in-call button (`lib/relayAssets.ts`, `<span class="ctrl-lbl">Stats</span>`),
+          which this sweep does not cover — telling somebody in Arabic to tap a control
+          whose label reads "Stats" would send them looking for one that is not there. */}
       <p className="text-[10.5px] leading-relaxed text-muted-foreground">
-        In a call, tap <span className="font-semibold">Stats</span> in the control bar for live
-        round-trip, packet loss, and whether media is going through a relay.
+        {tn("admin.media.statsHint", {
+          stats: <span className="font-semibold">Stats</span>,
+        })}
       </p>
     </div>
   );
 }
 
 function PushCheck({ identityId }: { identityId: number }) {
+  const t = useT();
   const q = trpc.admin.pushDiagnostics.useQuery({ identityId }, { staleTime: 5_000 });
   const test = trpc.admin.sendTestPush.useMutation({
     onSuccess: (r) =>
       r.delivered > 0
-        ? toast.success(`Sent to ${r.delivered} device${r.delivered === 1 ? "" : "s"}.`)
+        ? toast.success(
+            r.delivered === 1
+              ? t("admin.push.sentOne")
+              : t("admin.push.sentMany", { count: r.delivered }),
+          )
         : // Zero is the informative case: the send path ran and nothing was
           // reachable, which is different from the request failing.
-          toast.error("Nothing was reachable — no device accepted it."),
-    onError: (e) => toast.error(e.message || "Couldn't send the test."),
+          toast.error(t("admin.push.nothingReachable")),
+    onError: (e) => toast.error(e.message || t("admin.push.testFailed")),
   });
 
   if (q.isLoading) {
     return (
       <ToolCard tone="gold">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin" /> Checking…
+          <Loader2 className="size-3.5 animate-spin" /> {t("admin.push.checking")}
         </div>
       </ToolCard>
     );
@@ -1048,7 +1182,7 @@ function PushCheck({ identityId }: { identityId: number }) {
   if (!q.data) {
     return (
       <ToolCard tone="danger">
-        <p className="text-xs text-destructive">Couldn't read the notification state.</p>
+        <p className="text-xs text-destructive">{t("admin.push.readFailed")}</p>
       </ToolCard>
     );
   }
@@ -1062,61 +1196,91 @@ function PushCheck({ identityId }: { identityId: number }) {
 
   return (
     <ToolCard tone="gold">
-      <div className={GOLD_LABEL + " mb-2"}>Push doctor — per transport</div>
+      <div className={GOLD_LABEL + " mb-2"}>{t("admin.push.label")}</div>
       <div className="space-y-3 text-xs">
         <ul>
           <Row
             ok={native.length > 0}
             label={
-              native.length > 0
-                ? `${native.length} phone app device${native.length === 1 ? "" : "s"} registered`
-                : "No phone-app device registered"
+              native.length === 0
+                ? t("admin.push.noDevices")
+                : native.length === 1
+                  ? t("admin.push.devicesOne")
+                  : t("admin.push.devicesMany", { count: native.length })
             }
             detail={
               native.length > 0
-                ? native.map((x) => `${x.kind} · ${x.prefix}… (${x.length} chars)`).join("  ·  ")
-                : "The app has never handed us a push token. Nothing the server does can fix this — the shell must post {type:\"SET_PUSH_TOKEN\", token} into the page."
+                ? native
+                    .map((x) =>
+                      t("admin.push.deviceEntry", {
+                        kind: x.kind,
+                        prefix: x.prefix,
+                        length: x.length,
+                      }),
+                    )
+                    .join("  ·  ")
+                : t("admin.push.noDevicesDetail")
             }
           />
           <Row
             ok={mismatched.length === 0}
-            label={mismatched.length === 0 ? "Every token is routable" : `${mismatched.length} token filed under the wrong transport`}
+            label={
+              mismatched.length === 0
+                ? t("admin.push.routable")
+                : mismatched.length === 1
+                  ? t("admin.push.mismatchedOne")
+                  : t("admin.push.mismatchedMany", { count: mismatched.length })
+            }
             detail={
               mismatched.length === 0
                 ? undefined
-                : mismatched.map((x) => `stored ${x.kind}, looks like ${x.derived}`).join("; ")
+                : mismatched
+                    .map((x) =>
+                      t("admin.push.mismatchEntry", { kind: x.kind, derived: x.derived }),
+                    )
+                    .join("; ")
             }
           />
           <Row
             ok={d.pushEnabled}
-            label={d.pushEnabled ? "Their push switch is on" : "THEY turned push notifications off"}
-            detail={d.pushEnabled ? undefined : "Profile → Notifications on their device."}
+            label={d.pushEnabled ? t("admin.push.switchOn") : t("admin.push.switchOff")}
+            detail={d.pushEnabled ? undefined : t("admin.push.switchOffDetail")}
           />
           <Row
             ok={d.transports.fcm}
-            label={d.transports.fcm ? "Firebase is configured on the server" : "Firebase is NOT configured on the server"}
+            label={d.transports.fcm ? t("admin.push.fcmOn") : t("admin.push.fcmOff")}
             detail={
-              d.transports.fcm
-                ? "FIREBASE_SERVICE_ACCOUNT_JSON is present and parses."
-                : "Only needed for RAW device tokens. Expo tokens go through Expo and need nothing here."
+              d.transports.fcm ? t("admin.push.fcmOnDetail") : t("admin.push.fcmOffDetail")
             }
           />
-          <Row ok={d.transports.expo} label="Expo delivery is available" detail={d.transports.expoAccessToken ? "EXPO_ACCESS_TOKEN set." : "No access token — fine unless the Expo account enforces one."} />
-          <Row ok={d.transports.webpush} label={d.transports.webpush ? "Browser push is configured" : "Browser push is NOT configured"} />
+          <Row
+            ok={d.transports.expo}
+            label={t("admin.push.expo")}
+            detail={
+              d.transports.expoAccessToken
+                ? t("admin.push.expoTokenSet")
+                : t("admin.push.expoTokenMissing")
+            }
+          />
+          <Row
+            ok={d.transports.webpush}
+            label={d.transports.webpush ? t("admin.push.webOn") : t("admin.push.webOff")}
+          />
           {/* A locked iPhone's real call screen comes ONLY from APNs VoIP, so an
               iOS device holding an apns token on a keyless fleet is the one
               combination that stores a token nothing can deliver to. */}
           <Row
             ok={d.transports.apnsVoip}
-            label={d.transports.apnsVoip ? "iPhone ring (APNs VoIP) is configured" : "iPhone ring (APNs VoIP) is NOT configured"}
+            label={d.transports.apnsVoip ? t("admin.push.apnsOn") : t("admin.push.apnsOff")}
             detail={
               d.transports.apnsVoip
-                ? `A locked iPhone shows the full-screen call screen. Credential: ${
-                    d.transports.apnsVoipMode === "cert"
-                      ? "VoIP Services certificate"
-                      : "signing key (.p8)"
-                  }.`
-                : "Needs either APNS_P8_KEY + APNS_KEY_ID + APNS_TEAM_ID, or APNS_VOIP_CERT_PEM + APNS_VOIP_KEY_PEM, plus a topic (APNS_VOIP_TOPIC or APNS_BUNDLE_ID). Android is unaffected."
+                ? t("admin.push.apnsOnDetail", {
+                    credential:
+                      d.transports.apnsVoipMode === "cert"
+                        ? t("admin.push.apnsCert")
+                        : t("admin.push.apnsKey"),
+                  })
+                : t("admin.push.apnsOffDetail")
             }
           />
           {/* A certificate expires on a date nobody is watching — ringing would just
@@ -1132,12 +1296,18 @@ function PushCheck({ identityId }: { identityId: number }) {
                   ok={days > 30}
                   label={
                     days <= 0
-                      ? `The VoIP certificate EXPIRED ${Math.abs(days)} days ago — iPhones cannot ring`
+                      ? t("admin.push.certExpired", { days: Math.abs(days) })
                       : days <= 30
-                        ? `The VoIP certificate expires in ${days} days — reissue it now`
-                        : `The VoIP certificate is valid for ${days} more days`
+                        ? t("admin.push.certExpiring", { days })
+                        : t("admin.push.certValid", { days })
                   }
-                  detail={`Expires ${when.toISOString().slice(0, 10)}. Apple lets two certificates exist at once, so you can reissue and swap with no downtime.`}
+                  /* The DATE stays an ISO `YYYY-MM-DD` slice rather than a localised
+                     one: it is Western digits by construction, unambiguous in every
+                     locale, and it is the form an operator compares against Apple's
+                     own console. */
+                  detail={t("admin.push.certDetail", {
+                    date: when.toISOString().slice(0, 10),
+                  })}
                 />
               );
             })()
@@ -1145,8 +1315,8 @@ function PushCheck({ identityId }: { identityId: number }) {
           {/* The most likely reading of "it's not showing": testing by CALLING. */}
           <Row
             ok={d.ringPushed}
-            label={d.ringPushed ? "A CALL pushes a ring" : "A CALL does not push at all"}
-            detail={`What pushes: ${d.sendsFor.join(", ")}.`}
+            label={d.ringPushed ? t("admin.push.ringOn") : t("admin.push.ringOff")}
+            detail={t("admin.push.sendsFor", { kinds: d.sendsFor.join(", ") })}
           />
         </ul>
         <Button
@@ -1157,7 +1327,7 @@ function PushCheck({ identityId }: { identityId: number }) {
           onClick={() => test.mutate({ identityId })}
         >
           <BellRing className="size-3.5" />
-          {test.isPending ? "Sending…" : "Send a test notification"}
+          {test.isPending ? t("admin.push.testing") : t("admin.push.test")}
         </Button>
       </div>
     </ToolCard>

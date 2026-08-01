@@ -12,6 +12,7 @@ import { isGroupLocked, removeGroupLock, setGroupLock, useGroupLocks } from "@/a
 import { GROUP_PALETTE, peerPaletteIndex } from "@/app/peerColors";
 import { presenceDot } from "@/app/presenceDot";
 import { PIN_INPUT_MAXLENGTH, capPinInput, isCompletePin } from "@/app/pinInput";
+import { useT, type TKey } from "@/app/i18n";
 
 /* ══ BOARD 2i / 5g / 4h / 4i — the frame's own values, declared once ══════════════
  *
@@ -168,18 +169,24 @@ function MemberDot({ p }: { p?: { isOnline: boolean; idle: boolean; inCall: bool
 type InviteAudience = "all" | "guest" | "registered";
 
 /* Ordered as the frame orders the segmented control — narrowest audience first, so the
- * control reads left-to-right as "fewer people … more people". */
-const AUDIENCE_OPTIONS: { value: InviteAudience; label: string; hint: string }[] = [
-  { value: "guest", label: "Guests only", hint: "only guest accounts can join." },
+ * control reads from the leading edge as "fewer people … more people". In RTL the whole
+ * row mirrors with the document's `dir`, so the ordering keeps its meaning.
+ *
+ * KEYS, NOT STRINGS. This table is module-level data and a constant cannot call a hook,
+ * so it carries `labelKey`/`hintKey` and the render site translates — the standing rule
+ * for every constant that reaches the screen. */
+const AUDIENCE_OPTIONS: { value: InviteAudience; labelKey: TKey; hintKey: TKey }[] = [
+  { value: "guest", labelKey: "groups.audienceGuest", hintKey: "groups.audienceGuestHint" },
   {
     value: "registered",
-    label: "Registered",
-    hint: "only accounts with a verified email can join.",
+    labelKey: "groups.audienceRegistered",
+    hintKey: "groups.audienceRegisteredHint",
   },
-  { value: "all", label: "Everyone", hint: "guests and registered accounts can join." },
+  { value: "all", labelKey: "groups.audienceAll", hintKey: "groups.audienceAllHint" },
 ];
 
 function InviteLinkSection({ conversationId }: { conversationId: number }) {
+  const t = useT();
   const [link, setLink] = useState<string | null>(null);
   const [linkAudience, setLinkAudience] = useState<InviteAudience>("all");
   const [audience, setAudience] = useState<InviteAudience>("all");
@@ -189,21 +196,21 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
       setLink(`${window.location.origin}${r.path}`);
       setLinkAudience(r.audience);
     },
-    onError: (e) => toast.error(e.message || "Couldn't create an invite link."),
+    onError: (e) => toast.error(e.message || t("groups.createLinkFailed")),
   });
   const revoke = trpc.messages.revokeGroupInvites.useMutation({
     onSuccess: () => {
       // The old link is dead, so holding onto it on screen would be a lie.
       setLink(null);
       setConfirmRevoke(false);
-      toast.success("Invite links revoked — old links no longer work.");
+      toast.success(t("groups.revokedToast"));
     },
-    onError: (e) => toast.error(e.message || "Couldn't revoke the invite links."),
+    onError: (e) => toast.error(e.message || t("groups.revokeFailed")),
   });
 
   return (
     <section className={CARD}>
-      <div className={LABEL}>Who can join with the invite link</div>
+      <div className={LABEL}>{t("groups.audienceTitle")}</div>
       {/* WHO THE NEXT LINK IS FOR. Stays visible after minting, because changing it and
           tapping again is how an admin gets a SECOND link for a different audience —
           both remain valid, which is the whole reason the audience lives in the token.
@@ -211,7 +218,7 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
           BOTH HALVES OF THE CONTROL ARE CONVERTED to the frame's values, selected AND
           unselected: a half-converted segmented control puts a raised grey tile beside a
           cycling accent one and the two visibly disagree about what selected means. */}
-      <div role="radiogroup" aria-label="Who can join with this link" className="flex gap-1.5">
+      <div role="radiogroup" aria-label={t("groups.audienceAria")} className="flex gap-1.5">
         {AUDIENCE_OPTIONS.map((o) => (
           <button
             key={o.value}
@@ -236,7 +243,7 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
                   }
             }
           >
-            {o.label}
+            {t(o.labelKey)}
           </button>
         ))}
       </div>
@@ -245,7 +252,17 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
           minting a registered-only link and the two lines legitimately disagree. Saying
           which is which is the whole point of a per-link audience. */}
       <p className="mt-2.5 text-[11px] text-muted-foreground">
-        The next link you create: {AUDIENCE_OPTIONS.find((o) => o.value === audience)?.hint}
+        {/* ONE sentence with the clause substituted, never "The next link you create: " +
+            a fragment: the caption and the hint are a single statement, and Arabic does
+            not put its colon-and-clause in the same place a two-node concatenation would
+            force. `audience` is always one of the three, so the fallback is unreachable —
+            it exists because the lookup's type is optional, and `all` is the default. */}
+        {t("groups.nextLinkIs", {
+          what: t(
+            AUDIENCE_OPTIONS.find((o) => o.value === audience)?.hintKey ??
+              "groups.audienceAllHint",
+          ),
+        })}
       </p>
       {link ? (
         <div className="mt-3 space-y-2">
@@ -265,23 +282,28 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
               type="button"
               onClick={() => {
                 navigator.clipboard?.writeText(link).then(
-                  () => toast.success("Link copied"),
-                  () => toast.error("Couldn't copy — select and copy it by hand."),
+                  () => toast.success(t("groups.linkCopied")),
+                  () => toast.error(t("groups.copyFailed")),
                 );
               }}
               className="-me-1 grid min-h-11 shrink-0 place-items-center px-2 font-mono text-[11px] font-semibold tracking-[.1em]"
               style={{ color: ACCENT }}
             >
-              <Copy className="size-3.5" aria-hidden /> <span className="sr-only">Copy link</span>
+              <Copy className="size-3.5" aria-hidden />{" "}
+              <span className="sr-only">{t("groups.copyLink")}</span>
             </button>
           </div>
+          {/* TWO WHOLE SENTENCES, not one sentence split around a variable: which
+              audience the link carries, then how long it lasts. Both are complete in
+              either language, so concatenating them is safe where splitting one would
+              not be. */}
           <p className="text-[11px] text-muted-foreground">
             {linkAudience === "registered"
-              ? "Only registered accounts can join with this link."
+              ? t("groups.linkForRegistered")
               : linkAudience === "guest"
-                ? "Only guest accounts can join with this link."
-                : "Anyone with this link can join."}{" "}
-            It expires in 7 days, and whoever joins sees only messages sent from then on.
+                ? t("groups.linkForGuests")
+                : t("groups.linkForAnyone")}{" "}
+            {t("groups.linkExpiry")}
           </p>
         </div>
       ) : null}
@@ -291,14 +313,15 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
         disabled={create.isPending}
         className="rchip-accent mt-3 min-h-11 w-full rounded-[13px] px-4 text-[12px] font-bold disabled:opacity-60"
       >
-        {create.isPending ? "Creating…" : link ? "Create another link" : "Create an invite link"}
+        {create.isPending
+          ? t("groups.creatingLink")
+          : link
+            ? t("groups.createAnotherLink")
+            : t("groups.createLink")}
       </button>
       {confirmRevoke ? (
         <div className="mt-3 rounded-[13px] border border-border/60 bg-muted/40 p-3">
-          <p className="text-[11px] leading-relaxed">
-            Revoke every invite link for this group? Anyone holding one can no longer join.
-            Members who already joined stay in the group.
-          </p>
+          <p className="text-[11px] leading-relaxed">{t("groups.revokeConfirm")}</p>
           <div className="mt-2.5 flex gap-2">
             <button
               type="button"
@@ -306,14 +329,14 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
               disabled={revoke.isPending}
               className="min-h-11 flex-1 rounded-[9px] bg-destructive px-3 text-[12px] font-bold text-destructive-foreground disabled:opacity-60"
             >
-              {revoke.isPending ? "Revoking…" : "Revoke"}
+              {revoke.isPending ? t("groups.revoking") : t("groups.revoke")}
             </button>
             <button
               type="button"
               onClick={() => setConfirmRevoke(false)}
               className="min-h-11 flex-1 rounded-[9px] border border-border px-3 text-[12px] font-semibold"
             >
-              Keep it
+              {t("groups.keepLink")}
             </button>
           </div>
         </div>
@@ -326,7 +349,7 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
           onClick={() => setConfirmRevoke(true)}
           className="mt-2 min-h-11 rounded-[9px] border border-destructive/40 bg-destructive/10 px-3 text-[11px] font-bold text-destructive"
         >
-          Revoke all invite links
+          {t("groups.revokeAll")}
         </button>
       )}
     </section>
@@ -354,6 +377,7 @@ function InviteLinkSection({ conversationId }: { conversationId: number }) {
  * lock is SET, so what 4i contributes here is its vocabulary and its footer note.
  */
 function GroupLockSection({ conversationId }: { conversationId: number }) {
+  const t = useT();
   useGroupLocks();
   const locked = isGroupLocked(conversationId);
   const [code, setCode] = useState("");
@@ -364,26 +388,26 @@ function GroupLockSection({ conversationId }: { conversationId: number }) {
     if (mode === "set") {
       const r = await setGroupLock(conversationId, code);
       if (r === "ok") {
-        toast.success("Locked. It hides on this device when you reload or leave the chat.");
+        toast.success(t("groups.lockedToast"));
         setMode("idle");
         setCode("");
         return;
       }
       toast.error(
         r === "bad-code"
-          ? "Use exactly four digits."
+          ? t("groups.lockBadCode")
           : r === "needs-app-passcode"
-            ? "Set an app passcode first — Profile → App lock."
-            : "This browser won't let RELAY store the lock."
+            ? t("groups.lockNeedsPasscodeToast")
+            : t("groups.lockStoreFailed")
       );
       return;
     }
     if (await removeGroupLock(conversationId, code)) {
-      toast.success("Lock removed on this device.");
+      toast.success(t("groups.lockRemovedToast"));
       setMode("idle");
       setCode("");
     } else {
-      toast.error("That's not the group code or your app passcode.");
+      toast.error(t("groups.lockWrongCode"));
     }
   }
 
@@ -397,13 +421,13 @@ function GroupLockSection({ conversationId }: { conversationId: number }) {
         >
           <Lock className="size-3" style={{ color: GOLD }} aria-hidden="true" />
         </span>
-        <Label className="text-[12.5px] font-semibold">Lock this chat on this device</Label>
+        <Label className="text-[12.5px] font-semibold">{t("groups.lockTitle")}</Label>
         {locked && (
           <span
             className="ms-auto shrink-0 rounded-[10px] px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[.14em]"
             style={{ background: gold(0.14), border: `1px solid ${gold(0.45)}`, color: GOLD }}
           >
-            Locked
+            {t("groups.lockedBadge")}
           </span>
         )}
       </div>
@@ -411,15 +435,12 @@ function GroupLockSection({ conversationId }: { conversationId: number }) {
           permission, which it is not: every member still has these messages and this
           account on another device still shows them. */}
       <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-        Hides the chat and its preview behind a 4-digit code on this device. It is not a
-        permission — everyone in the group still has these messages, and your other
-        devices still show them.
+        {t("groups.lockExplain")}
       </p>
 
       {!canLock ? (
         <p className="mt-2.5 text-[11px] font-medium text-muted-foreground">
-          Set an app passcode first (Profile → App lock). It is the only way back if you
-          forget the group code.
+          {t("groups.lockNeedsPasscode")}
         </p>
       ) : mode === "idle" ? (
         <button
@@ -431,7 +452,7 @@ function GroupLockSection({ conversationId }: { conversationId: number }) {
           className="mt-2.5 min-h-11 rounded-[9px] px-3 text-[11px] font-bold"
           style={{ background: gold(0.12), border: `1px solid ${gold(0.4)}`, color: GOLD }}
         >
-          {locked ? "Remove the lock" : "Set a 4-digit code"}
+          {locked ? t("groups.lockRemoveCta") : t("groups.lockSet")}
         </button>
       ) : (
         <div className="mt-2.5 flex flex-wrap items-center gap-2">
@@ -442,7 +463,9 @@ function GroupLockSection({ conversationId }: { conversationId: number }) {
             maxLength={4}
             dir="ltr"
             value={code}
-            aria-label={mode === "set" ? "New group lock code" : "Group lock code or app passcode"}
+            aria-label={
+              mode === "set" ? t("groups.lockNewCodeAria") : t("groups.lockAnyCodeAria")
+            }
             placeholder="••••"
             onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 4))}
             className="h-11 w-24 text-center font-mono tracking-[0.3em] tabular-nums"
@@ -454,7 +477,7 @@ function GroupLockSection({ conversationId }: { conversationId: number }) {
             className="min-h-11 rounded-[9px] px-3 text-[11px] font-bold disabled:opacity-40"
             style={{ background: gold(0.16), border: `1px solid ${gold(0.5)}`, color: GOLD }}
           >
-            {mode === "set" ? "Lock" : "Remove"}
+            {mode === "set" ? t("groups.lockDo") : t("groups.lockRemove")}
           </button>
           <button
             type="button"
@@ -464,14 +487,17 @@ function GroupLockSection({ conversationId }: { conversationId: number }) {
             }}
             className="min-h-11 rounded-[9px] border border-border px-3 text-[11px] font-semibold"
           >
-            Cancel
+            {/* The shared verb — `common.cancel` already has readers on four other
+                screens, and a private "Cancel" here would be a second Arabic word for
+                one button. */}
+            {t("common.cancel")}
           </button>
         </div>
       )}
       {/* Board 4i's own footer note, and it is TRUE here rather than aspirational: the
           thread row redacts a locked group's preview (v2.105.20). */}
       <p className="mt-2.5 text-[9.5px] text-muted-foreground">
-        Locked groups never show previews in the thread list.
+        {t("groups.lockNoPreviews")}
       </p>
     </section>
   );
@@ -531,6 +557,7 @@ export function GroupInfoSheet({
   status: string | null;
   statusNote: string | null;
 }) {
+  const t = useT();
   const utils = trpc.useUtils();
   const [pickingAvatar, setPickingAvatar] = useState(false);
   const [name, setName] = useState(title ?? "");
@@ -555,7 +582,7 @@ export function GroupInfoSheet({
       await utils.messages.threads.invalidate();
       await utils.messages.conversationInfo.invalidate({ conversationId });
     },
-    onError: (e) => toast.error(e.message || "Couldn't save that — nothing changed."),
+    onError: (e) => toast.error(e.message || t("groups.saveFailed")),
   });
 
   /**
@@ -571,7 +598,7 @@ export function GroupInfoSheet({
     onSuccess: async () => {
       await utils.messages.conversationInfo.invalidate({ conversationId });
     },
-    onError: (e) => toast.error(e.message || "Couldn't change that — nothing changed."),
+    onError: (e) => toast.error(e.message || t("groups.changeFailed")),
   });
   // Read from the SERVER's own answer, never inferred client-side: this sheet gates
   // nothing (the server is the gate), so this only decides what to OFFER.
@@ -588,16 +615,21 @@ export function GroupInfoSheet({
     onSuccess: async (res) => {
       setAddNumber("");
       setAddError(null);
+      /* Four whole sentences, not two with a pronoun interpolated — see dict/groups.ts. */
       toast.success(
         res.added
-          ? `Added ${res.displayName || "them"} to the group.`
-          : `${res.displayName || "They"} were already in this group.`,
+          ? res.displayName
+            ? t("groups.addedNamed", { name: res.displayName })
+            : t("groups.addedUnnamed")
+          : res.displayName
+            ? t("groups.alreadyNamed", { name: res.displayName })
+            : t("groups.alreadyUnnamed"),
       );
       await utils.messages.conversationInfo.invalidate({ conversationId });
     },
     // The server's own wording: "not a RELAY user yet" and "already in this group" need
     // different things from the reader, which is why they are named separately.
-    onError: (e) => setAddError(e.message || "Couldn't add them."),
+    onError: (e) => setAddError(e.message || t("groups.addFailed")),
   });
   /** Which member a Remove has been requested for, held until it is confirmed. */
   const [removing, setRemoving] = useState<{ id: number; name: string } | null>(null);
@@ -608,14 +640,14 @@ export function GroupInfoSheet({
     },
     onError: (e) => {
       setRemoving(null);
-      toast.error(e.message || "Couldn't remove them.");
+      toast.error(e.message || t("groups.removeFailed"));
     },
   });
   const setCanAdd = trpc.messages.setGroupMembersCanAdd.useMutation({
     onSuccess: async () => {
       await utils.messages.conversationInfo.invalidate({ conversationId });
     },
-    onError: (e) => toast.error(e.message || "Couldn't change that — nothing changed."),
+    onError: (e) => toast.error(e.message || t("groups.changeFailed")),
   });
 
   /**
@@ -673,7 +705,7 @@ export function GroupInfoSheet({
     if (!number) return;
     try {
       await navigator.clipboard.writeText(number);
-      toast.success("Group ID copied.");
+      toast.success(t("groups.idCopied"));
     } catch {
       // A denied clipboard is not an error worth a red toast — the digits are on
       // screen and can be read.
@@ -687,7 +719,7 @@ export function GroupInfoSheet({
         className="dark fixed inset-0 z-[120] grid place-items-end sm:place-items-center p-0 sm:p-4 text-foreground"
         role="dialog"
         aria-modal="true"
-        aria-label="Group info"
+        aria-label={t("groups.info")}
       >
         <div aria-hidden className="glass-overlay absolute inset-0" onClick={onClose} />
         {/* Board 2i's sheet: near-black gradient, hairline, deep drop shadow, radius 24.
@@ -705,11 +737,11 @@ export function GroupInfoSheet({
           }}
         >
           <div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-[15px]">
-            <h2 className="text-[15px] font-bold">Group info</h2>
+            <h2 className="text-[15px] font-bold">{t("groups.info")}</h2>
             <button
               type="button"
               onClick={onClose}
-              aria-label="Close"
+              aria-label={t("groups.close")}
               className="-me-2 grid size-11 place-items-center rounded-full text-muted-foreground hover:bg-muted"
             >
               <X className="size-[17px]" />
@@ -722,7 +754,7 @@ export function GroupInfoSheet({
               <button
                 type="button"
                 onClick={() => setPickingAvatar(true)}
-                aria-label="Change the group photo"
+                aria-label={t("groups.changePhoto")}
                 className="group relative rounded-[26px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               >
                 {/* The disc is UNDERNEATH the photo rather than its else-branch, which is
@@ -750,27 +782,38 @@ export function GroupInfoSheet({
                     />
                   ) : null}
                 </span>
+                {/* LOGICAL, not `-right-1`: the camera badge marks the trailing corner
+                    of the disc, so it belongs on whichever side the reader's language
+                    ends on — the same `-end-` the member rows' presence LED already
+                    uses, which is what keeps the two corners agreeing in RTL. */}
                 <span
                   aria-hidden="true"
-                  className="absolute -bottom-1 -right-1 grid size-8 place-items-center rounded-full border-2 border-card bg-primary text-primary-foreground"
+                  className="absolute -bottom-1 -end-1 grid size-8 place-items-center rounded-full border-2 border-card bg-primary text-primary-foreground"
                 >
                   <Camera className="size-4" />
                 </span>
               </button>
 
               <div className="mt-[11px] text-center text-lg font-bold">
-                {title?.trim() || "Untitled group"}
+                {title?.trim() || t("groups.untitled")}
               </div>
               {/* "N members · N online" — the count is the frame's, and the online half
                   is withheld until a real answer lands (see the query above). */}
               {info.data && (
+                /* THE COUNT IS INTERPOLATED INTO THE SENTENCE, not concatenated in front
+                   of a bare noun: Arabic does not always put the number where English
+                   does, and a `{n} + " " + word` pair forces it to. The digits stay
+                   WESTERN in both halves (v2.106.84) — this is a number people read out
+                   loud beside a 6-digit ID that is Western everywhere in the product. */
                 <div className="mt-1 text-[11px] text-muted-foreground">
-                  {memberCount} {memberCount === 1 ? "member" : "members"}
+                  {t(memberCount === 1 ? "groups.memberCountOne" : "groups.memberCountMany", {
+                    n: memberCount,
+                  })}
                   {onlineCount != null && onlineCount > 0 && (
                     <>
                       {" · "}
                       <span style={{ color: "var(--relay-green-text, #06d6a0)" }}>
-                        {onlineCount} online
+                        {t("groups.onlineCount", { n: onlineCount })}
                       </span>
                     </>
                   )}
@@ -792,16 +835,14 @@ export function GroupInfoSheet({
                   >
                     {number.slice(0, 3)}-{number.slice(3)}
                     <Copy aria-hidden="true" className="size-[11px]" />
-                    <span className="sr-only">Copy this group's ID</span>
+                    <span className="sr-only">{t("groups.copyId")}</span>
                   </button>
                   <span className="text-[10px] text-muted-foreground">
-                    · group number — dialable
+                    {t("groups.idCaption")}
                   </span>
                 </div>
               ) : (
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  This group has no ID — it was created before group IDs existed.
-                </p>
+                <p className="mt-2 text-[11px] text-muted-foreground">{t("groups.noId")}</p>
               )}
               {/* Board 5g's status chip. Not a control: the picker below is where it is
                   set, so a tappable-looking chip here would be a second one. */}
@@ -821,7 +862,7 @@ export function GroupInfoSheet({
             {/* Name */}
             <div>
               <Label htmlFor="group-name" className={LABEL}>
-                Group name
+                {t("groups.nameLabel")}
               </Label>
               {/* The accent focus ring board 3d gives the group-name field, on
                   `focus-within` rather than permanently: an always-lit field stops
@@ -831,7 +872,7 @@ export function GroupInfoSheet({
                   id="group-name"
                   value={name}
                   maxLength={128}
-                  placeholder="Untitled group"
+                  placeholder={t("groups.untitled")}
                   disabled={save.isPending}
                   onFocus={() => setEditingName(true)}
                   onChange={(e) => setName(e.target.value)}
@@ -843,13 +884,16 @@ export function GroupInfoSheet({
                 />
               </div>
               <p className="mt-1.5 text-[11px] text-muted-foreground">
-                Leave it blank to fall back to the members' names.
+                {t("groups.nameHint")}
               </p>
             </div>
 
             {/* Status — the SAME picker a person's profile uses. */}
             <div>
-              <div className={LABEL}>Status</div>
+              {/* «الحالة» — the profile label. The ephemeral post is a STORY and takes a
+                  different Arabic word (`dict/status.ts`); v2.101.0 settled that and it
+                  must not quietly re-merge in the second language. */}
+              <div className={LABEL}>{t("groups.statusLabel")}</div>
               <ProfileStatusPicker
                 idPrefix="group-status"
                 value={status}
@@ -857,7 +901,7 @@ export function GroupInfoSheet({
                 pending={save.isPending}
                 // A group has no presence, so there is nothing for "presence decides"
                 // to mean here — hence its own empty hint rather than the person one.
-                emptyHint="No status — nothing extra is shown beside the group's name."
+                emptyHint={t("groups.statusEmptyHint")}
                 onPick={(k: ProfileStatus | null) =>
                   save.mutate({ conversationId, profileStatus: k ?? "" })
                 }
@@ -869,7 +913,10 @@ export function GroupInfoSheet({
                 name · role tag · PIN, with the admin/remove controls on the same flex row
                 so they WRAP under the name on a narrow phone rather than squeezing it. */}
             <section className={CARD}>
-              <div className={LABEL}>Members{info.data ? ` · ${memberCount}` : ""}</div>
+              <div className={LABEL}>
+                {t("groups.members")}
+                {info.data ? ` · ${memberCount}` : ""}
+              </div>
               {/* A FAILED READ SAYS SO. This sheet read only `info.data`, so a failed
                   `conversationInfo` degraded in the worst possible way: an unexplained
                   card with no rows AND — because `iAmAdmin` derives from the same
@@ -882,20 +929,20 @@ export function GroupInfoSheet({
                   briefly asserts a group with no members in it. */}
               {info.isError ? (
                 <div className="py-3 text-[12px] text-muted-foreground">
-                  Couldn&apos;t load the member list.{" "}
+                  {t("groups.loadFailed")}{" "}
                   <button
                     type="button"
                     onClick={() => void info.refetch()}
                     className="font-semibold underline underline-offset-2"
                   >
-                    Retry
+                    {t("groups.retry")}
                   </button>
-                  <div className="mt-1 text-[11px]">
-                    Your controls are hidden until this loads — nothing has changed.
-                  </div>
+                  <div className="mt-1 text-[11px]">{t("groups.controlsHidden")}</div>
                 </div>
               ) : !info.data ? (
-                <div className="py-3 text-[12px] text-muted-foreground">Loading members…</div>
+                <div className="py-3 text-[12px] text-muted-foreground">
+                  {t("groups.loadingMembers")}
+                </div>
               ) : null}
               <ul>
                 {(info.data?.members ?? []).map((m) => (
@@ -922,8 +969,10 @@ export function GroupInfoSheet({
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5">
                         <span className="min-w-0 truncate text-[12.5px] font-semibold">
-                          {m.displayName || "Someone"}
-                          {m.isMe && <span className="text-muted-foreground"> · you</span>}
+                          {m.displayName || t("groups.someone")}
+                          {m.isMe && (
+                            <span className="text-muted-foreground"> · {t("groups.you")}</span>
+                          )}
                         </span>
                         {/* CREATOR is a fact, not a power — a creator and an admin can do
                             exactly the same things, so it is labelled separately and only
@@ -937,11 +986,11 @@ export function GroupInfoSheet({
                             a later visual spec overrules. */}
                         {m.isCreator ? (
                           <span className={ROLE_TAG} style={ROLE_TAG_CREATOR}>
-                            Creator
+                            {t("groups.roleCreator")}
                           </span>
                         ) : m.isAdmin ? (
                           <span className={ROLE_TAG} style={ROLE_TAG_ADMIN}>
-                            Admin
+                            {t("groups.roleAdmin")}
                           </span>
                         ) : null}
                       </span>
@@ -968,7 +1017,11 @@ export function GroupInfoSheet({
                         className="min-h-11 shrink-0 rounded-[9px] border px-2.5 text-[11px] font-semibold transition-colors disabled:opacity-50"
                         style={{ borderColor: gold(0.35), color: GOLD }}
                       >
-                        {m.isAdmin ? "Remove admin" : "Make admin"}
+                        {/* «إلغاء الإشراف» / «تعيين مشرفًا» — revoking an ADMINSHIP, which
+                            is a different act from removing the PERSON on the button
+                            beside it («إزالة»). English spells both "remove"; Arabic must
+                            not, or the two controls on one row read the same. */}
+                        {m.isAdmin ? t("groups.removeAdmin") : t("groups.makeAdmin")}
                       </button>
                     )}
                     {/* REMOVE FROM GROUP (v2.105.16). Admin-only with NO toggle — "all
@@ -982,11 +1035,15 @@ export function GroupInfoSheet({
                       <button
                         type="button"
                         disabled={removeMember.isPending}
-                        onClick={() => setRemoving({ id: m.id, name: m.displayName || "Someone" })}
-                        aria-label={`Remove ${m.displayName || "this member"} from the group`}
+                        onClick={() =>
+                          setRemoving({ id: m.id, name: m.displayName || t("groups.someone") })
+                        }
+                        aria-label={t("groups.removeMemberAria", {
+                          name: m.displayName || t("groups.thisMember"),
+                        })}
                         className="min-h-11 shrink-0 rounded-[9px] border border-destructive/40 bg-destructive/10 px-2.5 text-[11px] font-bold text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-50"
                       >
-                        Remove
+                        {t("groups.remove")}
                       </button>
                     )}
                   </li>
@@ -1001,8 +1058,7 @@ export function GroupInfoSheet({
               {removing && (
                 <div className="mt-3 rounded-[13px] border border-border/60 bg-muted/40 p-3">
                   <p className="text-[11px] leading-relaxed">
-                    Remove {removing.name} from this group? They lose access to it. Messages
-                    they already sent stay — those are part of everybody's history here.
+                    {t("groups.removeConfirm", { name: removing.name })}
                   </p>
                   <div className="mt-2.5 flex gap-2">
                     <button
@@ -1013,14 +1069,14 @@ export function GroupInfoSheet({
                       disabled={removeMember.isPending}
                       className="min-h-11 flex-1 rounded-[9px] bg-destructive px-3 text-[12px] font-bold text-destructive-foreground disabled:opacity-60"
                     >
-                      {removeMember.isPending ? "Removing…" : "Remove"}
+                      {removeMember.isPending ? t("groups.removing") : t("groups.remove")}
                     </button>
                     <button
                       type="button"
                       onClick={() => setRemoving(null)}
                       className="min-h-11 flex-1 rounded-[9px] border border-border px-3 text-[12px] font-semibold"
                     >
-                      Keep them
+                      {t("groups.keepMember")}
                     </button>
                   </div>
                 </div>
@@ -1035,7 +1091,7 @@ export function GroupInfoSheet({
                 <div className="mt-3 space-y-2 border-t border-white/[0.06] pt-3">
                   <div className="flex items-center gap-1.5" style={{ color: ACCENT }}>
                     <Plus className="size-3" aria-hidden="true" />
-                    <span className="text-[11.5px] font-bold">Add by 6-digit number</span>
+                    <span className="text-[11.5px] font-bold">{t("groups.addByNumber")}</span>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <input
@@ -1055,7 +1111,7 @@ export function GroupInfoSheet({
                         setAddNumber(capPinInput(e.target.value));
                         setAddError(null);
                       }}
-                      aria-label="Add someone to this group by their 6-digit number"
+                      aria-label={t("groups.addByNumberAria")}
                       className="h-11 w-32 rounded-[9px] border border-border bg-background px-3 text-center font-mono text-sm tracking-[0.12em] outline-none focus:border-primary"
                     />
                     <button
@@ -1064,28 +1120,31 @@ export function GroupInfoSheet({
                       onClick={() => addMember.mutate({ conversationId, number: addNumber })}
                       className="rchip-accent min-h-11 rounded-[9px] px-4 text-[12px] font-bold transition disabled:opacity-50"
                     >
-                      {addMember.isPending ? "Adding…" : "Add"}
+                      {addMember.isPending ? t("groups.adding") : t("groups.add")}
                     </button>
                   </div>
                   {/* The server's own message: "not a RELAY user" and "already a member"
                       need different things from the reader. */}
                   {addError && <p className="text-[11px] text-destructive">{addError}</p>}
                   <p className="text-[9.5px] text-muted-foreground">
-                    They'll see messages from when they join, not the history before it.
+                    {t("groups.joinerSeesHint")}
                   </p>
                 </div>
               )}
 
+              {/* THREE WHOLE SENTENCES, concatenated — never one sentence split across a
+                  conditional. Each stands on its own in either language, so the join is
+                  safe where chopping a sentence at an English seam would not be. */}
               <p className="mt-3 text-[9.5px] leading-relaxed text-muted-foreground">
-                Any member can change the name, photo and status.{" "}
+                {t("groups.anyMemberEdits")}{" "}
                 {info.data
                   ? info.data.hasAdmin
-                    ? "Admins can also remove anyone's message."
+                    ? t("groups.adminsRemoveMessages")
                     : // SAID PLAINLY rather than hidden: a group created before group IDs
                       // existed has no creator recorded, so it has no admin and no way to
                       // appoint one. Nothing about it regresses — every member keeps what
                       // they have today — but the feature does not reach it.
-                      "This group was created before admins existed, so it has none. Start a new group to use admin controls."
+                      t("groups.noAdminsEver")
                   : ""}
               </p>
             </section>
@@ -1107,11 +1166,10 @@ export function GroupInfoSheet({
               >
                 <span className="min-w-0 flex-1">
                   <span className="block text-[12.5px] font-semibold">
-                    All members can add people
+                    {t("groups.membersCanAdd")}
                   </span>
                   <span className="mt-0.5 block text-[9.5px] text-muted-foreground">
-                    Off = only the creator and admins can add. Removing people stays
-                    admin-only either way.
+                    {t("groups.membersCanAddHint")}
                   </span>
                 </span>
                 {/* Board 5g's 34×20 switch with a 16px knob. The ON fill is the cycling
@@ -1126,9 +1184,17 @@ export function GroupInfoSheet({
                       : "rgba(255,255,255,.12)",
                   }}
                 >
+                  {/* LOGICAL, not `left-`: a switch's knob rests at the START of the
+                      track when off and travels toward the END when on, so in RTL the
+                      whole control mirrors. `start-` is `inset-inline-start`, which is
+                      what makes that true without a second class per direction.
+                      (`inset-inline-start-…` is the CSS PROPERTY name and emits nothing
+                      — the v2.106.78 trap; `start-…` is the Tailwind utility.)
+                      The interpolation is still a CHOICE BETWEEN TWO COMPLETE LITERALS,
+                      so the JIT can see both — a composed class comes out unstyled. */}
                   <span
                     className={`absolute top-0.5 block size-4 rounded-full bg-[#eafff6] transition-all ${
-                      info.data?.membersCanAdd ? "left-[16px]" : "left-0.5"
+                      info.data?.membersCanAdd ? "start-[16px]" : "start-0.5"
                     }`}
                   />
                 </span>
@@ -1147,7 +1213,7 @@ export function GroupInfoSheet({
 
           {save.isPending && (
             <div className="border-t border-white/[0.07] px-4 py-2.5 text-[11px] text-muted-foreground">
-              Saving…
+              {t("groups.saving")}
             </div>
           )}
           {!save.isPending && save.isSuccess && (
@@ -1162,7 +1228,7 @@ export function GroupInfoSheet({
                replaced never read this file, which is how it reached an eighth
                occurrence. */
             <div className="flex items-center gap-1.5 border-t border-white/[0.07] px-4 py-2.5 text-[11px] text-emerald-400">
-              <Check className="size-3.5" /> Saved
+              <Check className="size-3.5" /> {t("groups.saved")}
             </div>
           )}
         </div>
@@ -1175,9 +1241,13 @@ export function GroupInfoSheet({
       <AvatarPicker
         open={pickingAvatar}
         onClose={() => setPickingAvatar(false)}
-        title="Choose a group photo"
-        removeLabel="the group photo"
-        displayName={title ?? "Group"}
+        title={t("groups.choosePhoto")}
+        /* A NOUN PHRASE handed to another component's sentence ("Couldn't remove …").
+           Arabic puts the object in the same slot after the verb, so it substitutes
+           cleanly — and it is forward-compatible: when `AvatarPicker` is swept, its
+           half of that sentence becomes Arabic around an already-Arabic object. */
+        removeLabel={t("groups.photoLabel")}
+        displayName={title ?? t("groups.fallbackName")}
         onSave={async (url) => {
           await save.mutateAsync({ conversationId, avatarUrl: url });
         }}

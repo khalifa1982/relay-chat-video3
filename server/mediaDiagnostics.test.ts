@@ -19,6 +19,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen, keysForEnglish } from "./testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -89,11 +90,12 @@ describe("it can NEVER return a credential — the load-bearing half", () => {
 describe("what it reports", () => {
   it("which transport every call is on", () => {
     expect(PROC).toMatch(/transport: "mesh" as const/);
-    expect(PANEL).toMatch(/transport === "mesh" \? "WebRTC mesh in use"/);
+    expect(PANEL).toMatch(/transport === "mesh"/);
+    expect(copyOnScreen(PANEL, "WebRTC mesh in use")).toBe(true);
     // It explains its own cost, because that is the number that matters: N−1
     // encoders per phone is the biggest lever on call CPU and latency, and it is
     // also why the cap is 6.
-    expect(PANEL).toMatch(/N−1 encoders/);
+    expect(copyOnScreen(PANEL, "N−1 encoders")).toBe(true);
   });
 
   it("the transport row is not drawn as a fault", () => {
@@ -126,12 +128,12 @@ describe("it degrades rather than misleads", () => {
   it("a failed read is reported as a FAILURE, not as 'not configured'", () => {
     // Those need different next steps; conflating them sends somebody to the wrong
     // file. The same distinction the push doctor draws between dbOk and an empty list.
-    expect(PANEL).toMatch(/Couldn&apos;t read the media config\./);
+    expect(copyOnScreen(PANEL, "Couldn't read the media config.")).toBe(true);
     expect(PANEL).toMatch(/if \(!q\.data\)/);
   });
 
   it("no TURN at all is called out, because it is a real gap and not a neutral zero", () => {
-    expect(PANEL).toMatch(/No TURN advertised/);
+    expect(copyOnScreen(PANEL, "No TURN advertised")).toBe(true);
   });
 
   it("the relay read is guarded, so one bad value cannot 500 the page", () => {
@@ -162,7 +164,12 @@ describe("it is a FLEET readout, not a per-person one", () => {
        line 7 — so it resolved to char 201 and the ordering assertion failed on
        perfectly correct code. The prose-anchor trap, for the fourth time in this
        session's releases. */
-    const search = PANEL.indexOf('aria-label="Find a person"');
+    /* RE-ANCHORED on the field's own BINDING rather than its aria-label: the label is
+       translated now, so an English literal there would resolve to -1 and `indexOf`
+       returning -1 is less than any real offset — the ordering assertion would have
+       passed VACUOUSLY. `value={query}` is unique to the search input and language-
+       independent. */
+    const search = PANEL.indexOf("value={query}");
     expect(mount).toBeGreaterThan(-1);
     expect(search).toBeGreaterThan(-1);
     expect(search).toBeGreaterThan(mount);
@@ -172,6 +179,11 @@ describe("it is a FLEET readout, not a per-person one", () => {
   it("points at the in-call readout for the live numbers", () => {
     // The two halves are complementary: this says what the fleet is CONFIGURED with,
     // the v2.105.21 chip says what a call is actually DOING.
-    expect(PANEL.replace(/\s+/g, " ")).toMatch(/tap <span[^>]*>Stats<\/span> in the control bar/);
+    expect(PANEL).toMatch(/<span className="font-semibold">Stats<\/span>/);
+    // The sentence around it is rendered through `tn` (see identityPurge for why that
+    // is invisible to copyOnScreen), so the hint is located by its key instead.
+    const hint = keysForEnglish("in the control bar");
+    expect(hint.length).toBeGreaterThan(0);
+    expect(hint.some((k) => PANEL.includes(`tn("${k}"`))).toBe(true);
   });
 });

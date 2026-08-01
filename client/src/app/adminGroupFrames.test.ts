@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { codeOnly } from "../../../server/testing/codeOnly";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
 const ADMIN = codeOnly(readFileSync("client/src/pages/app/Admin.tsx", "utf8"));
 const GROUP = codeOnly(readFileSync("client/src/app/GroupInfoSheet.tsx", "utf8"));
@@ -119,8 +120,15 @@ describe("board 2i — the invite link is still a deliberate act", () => {
 
   it("revoke says what actually happens — members who joined stay", () => {
     // Somebody would otherwise reasonably assume revoking a link ejects whoever used it.
-    expect(GROUP).toMatch(/revoke/i);
-    expect(GROUP.toLowerCase()).toMatch(/stay|remain|already joined/);
+    //
+    // ROUTED THROUGH `copyOnScreen` AT v2.106.93: the sentence moved into the dictionary
+    // when this sheet was localised, so a raw match on the component froze the copy's
+    // LOCATION rather than the promise it makes. `copyOnScreen` is satisfied by the
+    // literal OR by a key whose English half carries it — strictly stronger here, because
+    // reaching the dictionary also proves an Arabic half exists, i.e. the warning is not
+    // silently English-only for the people most likely to misread a revoke.
+    expect(copyOnScreen(GROUP, "Revoke")).toBe(true);
+    expect(copyOnScreen(GROUP, "Members who already joined stay in the group.")).toBe(true);
   });
 
   it("the group's 6-digit id cannot be reordered by an RTL name", () => {
@@ -185,7 +193,12 @@ describe("both frames — the palette rules", () => {
     const adminUses = [...ADMIN.matchAll(/--relay-online/g)].length;
     expect(adminUses, "unexpected --relay-online uses in Admin").toBeLessThanOrEqual(2);
     // The tile that carries the live dot must be the Online one.
-    expect(ADMIN).toMatch(/label: "Online"[^}]*live: true/);
+    /* REPOINTED (localisation sweep): this froze `label: "Online"` — the English
+       literal, i.e. exactly what moving this screen into the dictionary changes. The
+       property is that the tile carrying the live dot is the ONLINE one, now expressed
+       through the tile's language-independent `id` (which is also what React keys on,
+       so a language change cannot remount the row). */
+    expect(ADMIN).toMatch(/id: "online"[^}]*live: true/);
     // No other stat may claim to be live.
     expect([...ADMIN.matchAll(/live: true/g)].length).toBe(1);
     // The group sheet makes no presence claim of its own beyond the member rows' own

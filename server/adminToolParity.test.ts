@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { NUMBER_BEARING_COLUMNS } from "./v2db";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen } from "./testing/copyOnScreen";
 
 const read = (...p: string[]) => fs.readFileSync(path.resolve(__dirname, ...p), "utf8");
 const TOOL = read("..", "scripts", "admin-tool.mjs");
@@ -246,7 +247,7 @@ describe("the panel is reachable, and invisible to everyone else", () => {
 
   it("renders a refusal rather than a blank page for a non-admin", () => {
     expect(ADMIN_UI).toMatch(/if \(!amIAdmin\.data\?\.admin\) \{/);
-    expect(ADMIN_UI).toMatch(/Administrators only/);
+    expect(copyOnScreen(ADMIN_UI, "Administrators only")).toBe(true);
   });
 
   it("asks the SERVER whether this account is an admin", () => {
