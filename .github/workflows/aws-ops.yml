@@ -72,10 +72,31 @@
 #                a per-box problem cannot hide behind a healthy sibling; the
 #                elbv2:DescribeTargetHealth read is OPTIONAL and degrades to "not
 #                reported" rather than to a false finding. Nothing is mutated.
+
 #   voip-deploy — sts:GetCallerIdentity, ec2:DescribeInstances, ssm:SendCommand,
-#                ssm:ListCommandInvocations. Targets tag:Name=relay-voip ONLY, so
-#                it cannot select an app instance; the remote script refuses
-#                loudly if it lands on one anyway.
+#                ssm:ListCommandInvocations, ssm:GetCommandInvocation. Targets the
+#                tag:Name=relay-voip family ONLY, so it cannot select an app
+#                instance; the remote script refuses loudly if it lands on one
+#                anyway.
+#                THIS LIST WAS A CLAIM, NOT A FACT, UNTIL 2026-08-01. It was
+#                written when the action was built and nobody checked the role
+#                actually HELD it — the first real run died on
+#                `AccessDeniedException ... ssm:SendCommand ... no identity-based
+#                policy allows` after correctly selecting all eight nodes. A
+#                comment listing a permission is not a permission.
+#                The owner attached it OUT-OF-BAND as the inline policy
+#                `relay-voip-ssm` on relay-github-deploy, tag-scoped to the
+#                relay-voip family and the AWS-RunShellScript document, and proved
+#                it with AWS's policy simulator: allowed on a media node,
+#                implicitDeny on a TURN host. Node 9 needs no IAM edit — it is
+#                born tagged, so it is born deployable.
+#                THERE IS DELIBERATELY NO ACTION HERE THAT GRANTS IT. A
+#                self-granting step needs either iam:PutRolePolicy on the role
+#                itself (which makes the role account administrator, reachable by
+#                anyone who can merge to main) or IAM-write on the app instance
+#                role (a standing escalation door on production web servers).
+#                Neither is worth a convenience; `iam-grant-ses` is an older
+#                expedient and not a pattern to copy.
 #   ses        — ses:GetAccount, ses:ListEmailIdentities,
 #                ses:GetSuppressedDestination, ses:CreateEmailIdentity,
 #                ses:PutAccountDetails (all sesv2 API; each step degrades to a
@@ -1537,7 +1558,11 @@ jobs:
           echo "SSM command: $CMD"
           # Generous on purpose: a FIRST install compiles mediasoup's C++ worker, which is
           # minutes, and giving up early would report a failure for a deploy still working.
-          for i in $(seq 1 120); do
+          # 300x10s = 50 minutes, because --max-concurrency 1 makes this SEQUENTIAL: eight
+          # nodes each needing a compile would outrun the old 20-minute budget and the poll
+          # would give up on a deploy that was still going — a false failure on the run that
+          # matters most. SSM's own executionTimeout is per-invocation, not for the set.
+          for i in $(seq 1 300); do
             S=$(aws ssm list-command-invocations --command-id "$CMD" --query 'CommandInvocations[].Status' --output text)
             case "$S" in *InProgress*|*Pending*|"") sleep 10 ;; *) break ;; esac
           done
@@ -1549,10 +1574,30 @@ jobs:
           # healthy sibling must not be able to hide a broken node.
           for idx in $(seq 0 $((COUNT - 1))); do
             IID=$(aws ssm list-command-invocations --command-id "$CMD" --query "CommandInvocations[$idx].InstanceId" --output text)
-            OUT=$(aws ssm list-command-invocations --command-id "$CMD" --details \
-              --query "CommandInvocations[$idx].CommandPlugins[0].Output" --output text)
+            # GetCommandInvocation, NOT the list's --details output.
+            # ListCommandInvocations TRUNCATES inline output at roughly 2,500
+            # characters; GetCommandInvocation returns roughly 24,000. The verdict
+            # marker `VOIP_EXIT=` is the LAST thing deploy-remote.sh prints, so on a
+            # first install — which compiles the mediasoup worker and prints pages —
+            # the marker is precisely what gets cut off. That reports FAILURE over a
+            # node that deployed perfectly: the false-negative inverse of the bug
+            # this script exists to prevent, and it would have bitten on the very
+            # first apply. Falls back to the list output so a role granted only the
+            # older permission still works rather than reading nothing at all.
+            OUT=$(aws ssm get-command-invocation --command-id "$CMD" --instance-id "$IID" \
+              --query 'StandardOutputContent' --output text 2>/dev/null) || OUT=""
+            if [ -z "$OUT" ]; then
+              OUT=$(aws ssm list-command-invocations --command-id "$CMD" --details \
+                --query "CommandInvocations[$idx].CommandPlugins[0].Output" --output text)
+            fi
             echo "------------------------- $IID -------------------------"
-            echo "$OUT" | head -c 6000
+            # Head AND tail: the verdict lives at the END, so a head-only view of a
+            # long install shows everything except the part you need.
+            echo "$OUT" | head -c 3000
+            if [ "$(printf %s "$OUT" | wc -c)" -gt 3000 ]; then
+              echo ""; echo "        […] …tail…"
+              echo "$OUT" | tail -c 2000
+            fi
             if ! echo "$OUT" | grep -q "VOIP_EXIT=0"; then
               echo "::error::$IID did not report VOIP_EXIT=0"
               FAILED=1

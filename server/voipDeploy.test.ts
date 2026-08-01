@@ -284,10 +284,15 @@ describe("the payload is built correctly", () => {
     // Widened again v2.106.72: the artifact may now be RESOLVED from either root, so "absent"
     // is `-z` (nothing resolved) as well as `! -x` (resolved but not runnable). Enumerated as
     // a set rather than one literal so the order of the conjuncts is free.
-    const gateLine = REMOTE.split("\n").find((l) => l.includes('if [ "$DEPS_BEFORE" != "$DEPS_AFTER" ]'));
+    // REWRITTEN AGAIN v2.106.73. It froze the gate with the fingerprint comparison FIRST — and
+    // that ordering was the defect: on a first apply the fingerprint always differs, so the
+    // install always ran and the pre-built worker was never reused. The property is that a
+    // missing artifact forces an install and a fingerprint change only counts on an update.
+    const gateLine = REMOTE.split("\n").find((l) => l.includes('"$HAD_MANIFEST"'));
     expect(gateLine, "the install gate must exist").toBeTruthy();
     expect(gateLine!).toContain('[ -z "$WORKER_BIN" ]');
     expect(gateLine!).toContain('[ ! -x "$WORKER_BIN" ]');
+    expect(gateLine!).toContain('[ "$DEPS_BEFORE" != "$DEPS_AFTER" ]');
     // The fingerprint must be taken BEFORE the extract, or it always compares equal.
     expect(REMOTE.indexOf("DEPS_BEFORE=")).toBeLessThan(REMOTE.indexOf("tar -xzf"));
     // And the pins really are exact in the manifest this ships.
@@ -441,7 +446,7 @@ describe("the mediasoup worker binary is what gets verified", () => {
     /* `pnpm install` exits 0 while printing "Ignored build scripts", so its exit code is not
        evidence the worker exists — and the skip path runs no install at all. The check must
        therefore sit AFTER the whole if/else, unconditionally. */
-    const gate = REMOTE.indexOf('if [ "$DEPS_BEFORE" != "$DEPS_AFTER" ]');
+    const gate = REMOTE.indexOf('if [ -z "$WORKER_BIN" ] || [ ! -x "$WORKER_BIN" ] ||');
     const skipMsg = REMOTE.indexOf("skipping the install");
     const verify = REMOTE.lastIndexOf('if [ ! -x "$WORKER_BIN" ]');
     expect(gate).toBeGreaterThan(0);
@@ -590,5 +595,131 @@ describe("the agent's install contract matches the provisioned nodes", () => {
     const agent = fs.readFileSync(path.join(ROOT, "voip-node", "index.js"), "utf8");
     expect(agent).toMatch(/const SECRET = process\.env\.VOIP_NODE_SECRET/);
     expect(agent).toMatch(/if \(!SECRET\) throw new Error\(/);
+  });
+});
+
+/**
+ * v2.106.73 — THE PERMISSION THE HEADER CLAIMED AND THE ROLE DID NOT HAVE.
+ *
+ * The first real `voip-deploy` run selected all eight nodes correctly and then died:
+ * `AccessDeniedException ... ssm:SendCommand ... because no identity-based policy allows`.
+ * aws-ops.yml's header had declared that permission since v2.106.45 — a comment listing a
+ * permission is not a permission.
+ *
+ * The grant is attached OUT-OF-BAND (inline policy `relay-voip-ssm` on relay-github-deploy,
+ * tag-scoped, simulator-verified: allowed on a media node, implicitDeny on a TURN host).
+ *
+ * A `voip-grant-ssm` ACTION was written and then DELETED before it shipped, and the reason is
+ * worth keeping: a self-granting step needs either `iam:PutRolePolicy` on the role itself —
+ * which makes the deploy role account administrator, reachable by anyone who can merge to
+ * `main` — or IAM-write on the app INSTANCE role, a standing escalation door on production web
+ * servers. `iam-grant-ses` does the second as a fallback; that is an older expedient, not a
+ * pattern to copy, and the app instances do not in fact hold that power. So the rule this file
+ * enforces is simply that no action here grants IAM to itself.
+ */
+describe("no action in aws-ops grants IAM to the role that runs it", () => {
+  it("voip-deploy carries no IAM write of any kind", () => {
+    const step = voipStep();
+    for (const verb of ["put-role-policy", "attach-role-policy", "put-user-policy", "create-policy"]) {
+      expect(step, `voip-deploy must never call iam ${verb}`).not.toContain(verb);
+    }
+  });
+
+  it("the retired self-grant action is really gone, not merely unreferenced", () => {
+    // Half-removing it — dropping the option while leaving the step — would leave a
+    // dispatchable-by-hand IAM granter in the file with nothing pointing at it.
+    expect(OPS, "no step").not.toContain("voip-grant-ssm");
+    expect(OPS, "and no option").not.toMatch(/options: \[[^\]]*voip-grant-ssm/);
+  });
+
+  it("the header says the grant is attached out-of-band, and why there is no action for it", () => {
+    /* Without this the next reader sees a documented permission with no way to obtain it and
+       writes the self-granting step again — which is exactly how the escalation door gets
+       reopened by somebody being helpful. */
+    const hdr = OPS.slice(0, OPS.indexOf("on:\n  workflow_dispatch"));
+    expect(hdr).toMatch(/relay-voip-ssm/);
+    expect(hdr).toMatch(/OUT-OF-BAND/);
+    expect(hdr).toMatch(/account administrator|escalation door/);
+  });
+
+  it("the ONE pre-existing self-grant is named as an expedient, so it is not read as a pattern", () => {
+    // iam-grant-ses still exists and still does this. It is not being removed here — that is
+    // the owner's call on a live SES path — but it must not read as the house style.
+    expect(OPS).toContain("iam-grant-ses");
+    expect(OPS).toMatch(/`iam-grant-ses` is an older\n#                expedient and not a pattern to copy/);
+  });
+});
+
+describe("a FIRST apply reuses the pre-built worker instead of recompiling", () => {
+  it("a manifest appearing where there was none does not count as a dependency change", () => {
+    /* FOUND BY THE FIRST DRY RUN, in my own v2.106.72 gate. On a fresh node $AGENT_DIR holds
+       no package.json, so DEPS_BEFORE is the hash of nothing and DEPS_AFTER is the hash of
+       ours — "changed" by construction, on EVERY first apply. The install would therefore run
+       on all eight nodes and recompile mediasoup, ~2 minutes each, defeating the pre-built
+       worker the reuse path exists for and pushing a sequential 8-node rollout past the poll
+       budget. HAD_MANIFEST is what tells a first apply apart from an update. */
+    expect(REMOTE).toMatch(/HAD_MANIFEST=0/);
+    expect(REMOTE).toMatch(/\[ -f "\$AGENT_DIR\/package\.json" \] && HAD_MANIFEST=1/);
+    // It must be read BEFORE the extract, or it is always 1 and the fix is inert.
+    expect(REMOTE.indexOf("HAD_MANIFEST=1")).toBeLessThan(REMOTE.indexOf("tar -xzf"));
+    // ANCHORED ON HAD_MANIFEST, which only the install gate carries: `if [ -z "$WORKER_BIN" ]`
+    // also opens the worker-RESOLUTION block twelve lines earlier, and anchoring there read
+    // that line instead — a false failure on correct source.
+    const gate = REMOTE.split("\n").find((l) => l.includes('"$HAD_MANIFEST"'));
+    expect(gate, "the install gate must exist").toBeTruthy();
+    expect(gate!, "a fingerprint change only counts when there WAS a manifest").toContain(
+      '[ "$HAD_MANIFEST" = "1" ] && [ "$DEPS_BEFORE" != "$DEPS_AFTER" ]',
+    );
+    // A missing or unusable worker must still force the install, whatever the manifest says.
+    expect(gate!).toContain('[ -z "$WORKER_BIN" ]');
+    expect(gate!).toContain('[ ! -x "$WORKER_BIN" ]');
+  });
+
+  it("the unit line prints ONE state, not the answer and its fallback", () => {
+    /* `systemctl is-active` PRINTS its answer and EXITS non-zero for anything but active, so
+       an `|| echo absent` fallback fires alongside the real word — the first dry run reported
+       "inactive / absent / enabled" on all eight nodes. */
+    const line = REMOTE.split("\n").find((l) => l.startsWith('echo "unit: $SVC'));
+    expect(line, "the unit line must exist").toBeTruthy();
+    expect(line!, "no second word on the failure path").not.toMatch(/\|\| echo (absent|not-enabled)/);
+    expect(line!).toMatch(/systemctl is-active "\$SVC" 2>\/dev\/null \|\| true/);
+  });
+
+  it("the poll budget outlasts a sequential eight-node compile", () => {
+    /* --max-concurrency 1 makes this SEQUENTIAL. Eight nodes each needing a ~2-minute compile
+       outruns a 20-minute poll, and giving up early reports a FAILURE for a deploy that is
+       still running — on the one run where that is most expensive. */
+    const step = voipStep();
+    const m = step.match(/for i in \$\(seq 1 (\d+)\); do\n\s*S=\$\(aws ssm list-command-invocations/);
+    expect(m, "the poll loop must exist").toBeTruthy();
+    expect(Number(m![1]) * 10, "seconds of poll budget").toBeGreaterThanOrEqual(2400);
+  });
+});
+
+describe("voip-deploy reads the whole output, not a truncated prefix", () => {
+  it("the verdict is read from GetCommandInvocation, which does not truncate at 2,500", () => {
+    /* ListCommandInvocations truncates inline output at roughly 2,500 characters and
+       GetCommandInvocation returns roughly 24,000. `VOIP_EXIT=` is the LAST line
+       deploy-remote.sh prints, so on a first install — which compiles the mediasoup worker and
+       prints pages — the marker is exactly what gets cut off, and every node reports failure
+       over a perfectly good deploy. */
+    const step = voipStep();
+    expect(step).toMatch(/aws ssm get-command-invocation --command-id "\$CMD" --instance-id "\$IID"/);
+    expect(step).toMatch(/StandardOutputContent/);
+    // The fallback keeps a role with only the older permission working.
+    const at = step.indexOf("get-command-invocation");
+    expect(step.slice(at, at + 600)).toMatch(/if \[ -z "\$OUT" \][\s\S]{0,300}list-command-invocations/);
+  });
+
+  it("the displayed excerpt includes the END, where the verdict is", () => {
+    // A head-only view of a long install shows everything except the part that matters.
+    const step = voipStep();
+    expect(step).toMatch(/head -c 3000/);
+    expect(step).toMatch(/tail -c 2000/);
+  });
+
+  it("the grep for the marker runs on the FULL output, never the excerpt", () => {
+    const step = voipStep();
+    expect(step).toMatch(/echo "\$OUT" \| grep -q "VOIP_EXIT=0"/);
   });
 });

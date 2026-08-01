@@ -53,6 +53,26 @@ Test fixtures deliberately use RFC 5737 documentation ranges (192.0.2.0/24, 198.
 rather than these addresses, so an infrastructure change can never require a test edit — and
 so no routable production address sits in a public repository.
 
+## The CI role's SSM grant — attached, and deliberately not self-granted
+
+`aws-ops.yml`'s header declared since v2.106.45 that `voip-deploy` needs `ssm:SendCommand`, and
+nobody checked the role HELD it. The first real run selected all eight nodes correctly and then
+died on `AccessDeniedException ... no identity-based policy allows the ssm:SendCommand action`.
+**A comment listing a permission is not a permission.**
+
+It is attached now, out-of-band, as the inline policy **`relay-voip-ssm`** on
+`relay-github-deploy` — tag-scoped to the `relay-voip` family and the `AWS-RunShellScript`
+document, and proved with AWS's own policy simulator rather than by reading JSON: `allowed` on a
+media node, `implicitDeny` on a TURN host. Node 9 needs no IAM edit; it is born tagged, so it is
+born deployable.
+
+**There is deliberately no action in this repo that grants it.** A self-granting step needs
+either `iam:PutRolePolicy` on the role itself — which makes the deploy role account
+administrator, reachable by anyone who can merge to `main` — or IAM-write on the app *instance*
+role, a standing escalation door on production web servers. One was drafted here, mirroring
+`iam-grant-ses`'s fallback, and removed before it shipped: that fallback is an older expedient,
+not a pattern to copy, and the app instances do not in fact hold that power.
+
 ## The fleet is EIGHT nodes, and the install layout is not ours to choose
 
 As of 2026-08-01 infra runs **eight** identical media nodes (c6i.large, 2 mediasoup workers

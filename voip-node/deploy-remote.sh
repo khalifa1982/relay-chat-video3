@@ -82,7 +82,11 @@ for f in /etc/relay-voip/agent.env /etc/relay-voip/env; do
 done
 
 echo "--- BEFORE ---"
-echo "unit: $SVC ($(systemctl is-active "$SVC" 2>/dev/null || echo absent) / $(systemctl is-enabled "$SVC" 2>/dev/null || echo not-enabled))"
+# `systemctl is-active` PRINTS its answer and EXITS NON-ZERO for anything but active, so a
+# `|| echo absent` fallback fires ALONGSIDE the real answer — the first dry run reported
+# "inactive / absent / enabled" on all eight nodes. `|| true` keeps the exit code from
+# tripping anything without adding a second word.
+echo "unit: $SVC ($(systemctl is-active "$SVC" 2>/dev/null || true) / $(systemctl is-enabled "$SVC" 2>/dev/null || true))"
 # The condition is what actually gates an ENABLED unit, and an unmet one looks exactly like
 # "never started" in `is-active`. Report it explicitly or the single most likely failure of
 # this whole exercise is invisible in the log.
@@ -156,6 +160,14 @@ fi
 # actually needed. This matters more than it looks: mediasoup compiles a C++ worker, which
 # takes MINUTES, and re-running it for a one-line change would time the SSM command out and
 # leave the node mid-install.
+# HAD is what tells a FIRST apply apart from an update, and without it the reuse below can
+# never engage on the run that matters. On a fresh node $AGENT_DIR holds no manifest, so
+# DEPS_BEFORE is the hash of nothing and DEPS_AFTER is the hash of ours — "changed" by
+# construction, on every first apply, which would have forced a ~2-minute mediasoup compile on
+# all eight nodes and defeated the pre-built worker entirely. A manifest appearing where there
+# was none is not evidence that a dependency moved.
+HAD_MANIFEST=0
+[ -f "$AGENT_DIR/package.json" ] && HAD_MANIFEST=1
 DEPS_BEFORE=$(cat "$AGENT_DIR/package.json" "$AGENT_DIR/pnpm-lock.yaml" 2>/dev/null | sha256sum | cut -d' ' -f1)
 tar -xzf /tmp/voip-node.tgz -C "$AGENT_DIR" --strip-components=1 || fail "REFUSED: extract failed" 95
 rm -f /tmp/voip-node.tgz
@@ -209,7 +221,7 @@ if [ -z "$WORKER_BIN" ]; then
   done
 fi
 
-if [ "$DEPS_BEFORE" != "$DEPS_AFTER" ] || [ -z "$WORKER_BIN" ] || [ ! -x "$WORKER_BIN" ]; then
+if [ -z "$WORKER_BIN" ] || [ ! -x "$WORKER_BIN" ] || { [ "$HAD_MANIFEST" = "1" ] && [ "$DEPS_BEFORE" != "$DEPS_AFTER" ]; }; then
   echo "dependencies changed, or no usable worker binary — installing with the lockfile"
   # --frozen-lockfile is load-bearing rather than tidy: the versions are pinned EXACTLY
   # because the worker is host-specific (a prebuilt binary validated against this host when

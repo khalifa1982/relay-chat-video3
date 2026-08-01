@@ -18248,6 +18248,74 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.73 — the permission the header claimed, and two defects the first real run exposed (2026-08-01)
+
+The v2.106.72 fixes went live and `voip-deploy` was dispatched for real. It got further than it
+ever had and then stopped, and both halves of that are worth recording.
+
+**THE TAG FIX WORKED, MEASURED IN PRODUCTION.** The run printed eight instance ids matching the
+fleet exactly and `count: 8`. An hour earlier the same line read *"no running instance"*.
+
+**THEN IT DIED ON A PERMISSION THIS FILE HAD BEEN CLAIMING FOR TWENTY-EIGHT RELEASES.**
+`aws-ops.yml`'s header has listed `ssm:SendCommand` under `voip-deploy` since v2.106.45 — and
+nobody checked the role HELD it. `deploy.yml` proves the role can command the APP fleet, so the
+existing allow is resource-scoped and the media nodes sat outside it. **A comment listing a
+permission is not a permission**, and the header now says so in place.
+
+**THE GRANT IS ATTACHED OUT-OF-BAND, AND THE ACTION I WROTE FOR IT WAS DELETED BEFORE IT
+SHIPPED.** I drafted a `voip-grant-ssm` step mirroring `iam-grant-ses`, whose attempt-2 fallback
+sends an SSM command telling the app fleet's INSTANCE ROLE to call `iam:PutRolePolicy`. The
+owner pointed out what I had propagated without examining: that only works if production web
+servers hold IAM write, i.e. a standing escalation door, and they verified those instances
+rightly do not have it. They also corrected a factual claim of mine — `ses-management` lives on
+the DEPLOY role, not the instance role, so the actual precedent is attach-to-the-deploy-role,
+which is what they did: inline policy `relay-voip-ssm`, tag-scoped, proved with AWS's policy
+simulator (`allowed` on a media node, `implicitDeny` on a TURN host) rather than by reading
+JSON hopefully. The action is gone and the header now records WHY there is none, because the
+next reader who sees a documented permission with no way to obtain it writes that step again.
+
+**THE SECOND DRY RUN CAME BACK CLEAN ON ALL EIGHT** — unit `relay-voip-agent` enabled, entrypoint
+correctly ABSENT (the condition the apply satisfies), mediasoup **3.19.3** already compiled at
+`/opt/relay-voip/node_modules`, service user `relayvoip`, `agent.env` present and naming
+`VOIP_NODE_SECRET`, `VOIP_EXIT=0` eight times.
+
+**AND READING THAT REPORT FOUND A REAL DEFECT IN MY OWN v2.106.72 GATE, which is the most
+valuable thing in this release.** The install gate opened
+`if [ "$DEPS_BEFORE" != "$DEPS_AFTER" ] || …` — and on a fresh node `$AGENT_DIR` holds no
+manifest, so DEPS_BEFORE is the hash of NOTHING and DEPS_AFTER the hash of ours. **"Changed" by
+construction, on every first apply.** The install would therefore have run on all eight nodes and
+recompiled mediasoup ~2 minutes each — defeating the version-checked reuse that release built
+specifically to avoid it, and, because `--max-concurrency 1` makes the rollout SEQUENTIAL, very
+likely outrunning the 20-minute poll and reporting a FAILURE for a deploy still working. A
+manifest appearing where there was none is not evidence that a dependency moved: `HAD_MANIFEST`
+tells a first apply apart from an update, and a missing or unusable worker still forces the
+install whatever the fingerprint says. The poll budget goes to 50 minutes for the same reason —
+SSM's `executionTimeout` is per-invocation, not for the set.
+
+**A COSMETIC DEFECT WITH A REAL CAUSE, also from reading the report**: every node printed
+`unit: relay-voip-agent (inactive / absent / enabled)`. `systemctl is-active` PRINTS its answer
+AND exits non-zero for anything but active, so the `|| echo absent` fallback fired alongside the
+real word. One state per field now.
+
+**7 of 7 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact backups,
+both sources byte-identical afterwards — including the first-apply reuse reverted, `HAD_MANIFEST`
+read after the extract (which makes the fix inert while looking present), a missing worker no
+longer forcing an install, the poll budget lowered, and the retired self-grant action re-added.
+A further 13 were verified on the grant action before it was withdrawn.
+
+**A DEFECT IN MY OWN TEST, caught by it failing on CORRECT source**: the new gate pin anchored on
+`if [ -z "$WORKER_BIN" ]`, which ALSO opens the worker-RESOLUTION block twelve lines earlier — so
+it read that line and reported a failure against a correct gate. Re-anchored on `HAD_MANIFEST`,
+which only the install gate carries. **TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, both
+having frozen the old gate's exact expression — one of them mine from the same day, and the
+expression it froze *was* the defect: it put the fingerprint comparison first, which is precisely
+what made the reuse unreachable on the run that matters.
+
+**SAID PLAINLY: STILL NOTHING WRITTEN TO ANY NODE.** Two dry runs, zero bytes changed on the
+fleet. The apply is the next dispatch.
+
+No schema change, no new dependency, no new env var. 5205 tests.
+
 ## v2.106.72 — the deploy would have selected ZERO of the eight nodes, and started nothing on them anyway (2026-08-01)
 
 Owner, uploading `scale-voip-nodes.sh` and `claudecodenodeintegration.md`: *"Have you done this"*.
