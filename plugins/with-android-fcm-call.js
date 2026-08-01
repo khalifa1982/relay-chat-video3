@@ -57,8 +57,8 @@ class RelayCallFcmService : FirebaseMessagingService() {
         const val CHANNEL_ID = "incoming_calls"
         const val NOTIFICATION_ID = 7788
         const val ONGOING_CALL_NOTIFICATION_ID = 7789
-        const val ACTION_ANSWER = "\${PACKAGE}.ACTION_ANSWER"
-        const val ACTION_DECLINE = "\${PACKAGE}.ACTION_DECLINE"
+        const val ACTION_ANSWER = "${PACKAGE}.ACTION_ANSWER"
+        const val ACTION_DECLINE = "${PACKAGE}.ACTION_DECLINE"
         const val EXTRA_CALL_ID = "callId"
         const val EXTRA_ROOM_ID = "roomId"
         const val EXTRA_MODE = "mode"

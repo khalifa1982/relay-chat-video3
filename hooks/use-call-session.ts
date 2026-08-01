@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, type AppStateStatus, NativeModules, Platform } from "react-native";
+import { AppState, type AppStateStatus, NativeModules, PermissionsAndroid, Platform } from "react-native";
 import { setAudioModeAsync } from "expo-audio";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 
@@ -91,6 +91,27 @@ async function exitCallAudioMode() {
  * for bidirectional audio regardless of when the switch happens.
  */
 export async function setAudioRoute(route: AudioRoute): Promise<void> {
+  // BLUETOOTH_CONNECT is a runtime permission on Android 12+ (API 31).
+  // Request it before attempting Bluetooth SCO, or the route switch silently fails.
+  if (route === "bluetooth" && Platform.OS === "android" && Platform.Version >= 31) {
+    try {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        {
+          title: "Bluetooth Permission",
+          message: "RELAY needs Bluetooth access to route call audio to your headset.",
+          buttonPositive: "Allow",
+        }
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        // Permission denied — fall back to speaker instead of silently failing
+        return;
+      }
+    } catch {
+      // Non-fatal — proceed anyway
+    }
+  }
+
   try {
     await setAudioModeAsync({
       playsInSilentMode: true,

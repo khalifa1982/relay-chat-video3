@@ -252,4 +252,6 @@
 - [x] Update relay-webview.tsx webCallEnded handler to also work on Android
 - [x] Update RELAY_NATIVE_BRIDGE_JS to detect native Android interface and skip shim
 - [x] Add BLUETOOTH_CONNECT + MODIFY_AUDIO_SETTINGS permissions
+- [x] Add BLUETOOTH_CONNECT runtime permission request (Android 12+) before enabling BT SCO
+- [x] Fix Kotlin template: ACTION_ANSWER/DECLINE const val was using escaped ${PACKAGE} → now JS-interpolated
 - [x] tsc clean + 65 tests pass
