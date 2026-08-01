@@ -18248,6 +18248,23 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.80
+
+"Choose my number" is withdrawn; only the random regenerate remains (owner: "remove choose
+my number, just keep random number option"). v2.99.75 built it; a later instruction wins.
+Button, dialog, state, mutation and three now-dead imports are gone from Profile.tsx.  The
+server procedure is deliberately left registered and that is STATED: nothing in the client
+calls identity.setNumber any more (swept across every non-test client file), but it is
+still reachable directly — this removes the OPTION from the product, not the capability
+from the server. Deleting the endpoint is flagged for the owner, not taken unilaterally.
+Three pre-existing pins rewritten to the property, all three having frozen what was asked
+to be removed. The pinInput sweep is the one worth naming: dropping a file from a coverage
+list is how a real box later becomes exempt, so the removal is EARNED by a new assertion
+that Profile contains NO 6-digit input at all.  The prose trap fired for the 18th time,
+inside the assertion written to prove the call is gone — the comment explaining why the
+endpoint stays names it. Runs on codeOnly now, with a companion assertion proving the
+strip removes something real.
+
 ## v2.106.79
 
 The save-contact button gets its words back. v2.106.78 moved it beside the digits at the

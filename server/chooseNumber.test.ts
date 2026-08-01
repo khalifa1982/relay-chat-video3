@@ -264,56 +264,64 @@ describe("the endpoint", () => {
   });
 });
 
-describe("Profile lets the owner do it themselves", () => {
-  it("offers both a chosen and a random number", () => {
-    expect(PROFILE).toMatch(/Choose my number/);
+describe("the chooser is GONE from Profile (owner withdrew it)", () => {
+  /* v2.99.75 built "Choose my number" and this describe froze its dialog, its
+     input type, its copy and its non-closing submit. The owner has now withdrawn
+     the feature — *"remove choose my number just keep random number option"* — so
+     every one of those pins froze exactly what was asked to be removed. Rewritten
+     to the PROPERTY: the chooser is absent from the CLIENT, and the RANDOM
+     regenerate — the one a guest could always use — survives untouched. */
+
+  it("no client code calls the chooser any more", () => {
+    /* COMMENT-STRIPPED, because the prose trap fires here for the 18th time in
+       this repo: the comment in Profile.tsx explaining WHY the server procedure is
+       left in place necessarily names `identity.setNumber`, and a raw `not.toMatch`
+       is satisfied by the very sentence documenting the removal. The companion
+       assertion below proves the strip removes something real, so it cannot be
+       hiding a live call instead. */
+    const profileCode = codeOnly(PROFILE);
+    expect(PROFILE, "the prose really does name it").toMatch(/identity\.setNumber/);
+    expect(profileCode, "…and stripping comments removes that mention").not.toMatch(
+      /identity\.setNumber/,
+    );
+    expect(profileCode).not.toMatch(/Choose my number/);
+    /* And nowhere else in the client either: a control that merely MOVED is not a
+       control that was removed, and Profile alone cannot tell you that. */
+    const clientRoot = path.resolve(__dirname, "..", "client", "src");
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)) {
+          if (/identity\.setNumber/.test(codeOnly(fs.readFileSync(full, "utf8"))))
+            offenders.push(full);
+        }
+      }
+    };
+    walk(clientRoot);
+    expect(offenders, "no client file calls identity.setNumber").toEqual([]);
+  });
+
+  it("the RANDOM regenerate is still there and is now the only number control", () => {
     expect(PROFILE).toMatch(/Random number/);
-    expect(PROFILE).toMatch(/trpc\.identity\.setNumber\.useMutation/);
+    expect(PROFILE).toMatch(/identity\.regenerateNumber/);
   });
 
-  it("the dialog does NOT close on submit", () => {
-    // The number may be taken, and closing before the server answers would hide
-    // the one message that tells the person to pick a different one.
-    const onClick = PROFILE.slice(
-      PROFILE.indexOf("if (!wantedOk) return;"),
-      PROFILE.indexOf("if (!wantedOk) return;") + 220
-    );
-    expect(onClick).toMatch(/choose\.mutate\(\{ number: wantedDigits \}\)/);
-    expect(codeOnly(onClick)).not.toMatch(/setChooseOpen\(false\)/);
-    expect(PROFILE).toMatch(/e\.preventDefault\(\);/);
+  it("removing the UI did not silently drop the regenerate's own confirmation", () => {
+    // A regenerate is irreversible for the OLD number, so it stays confirmed.
+    expect(PROFILE).toMatch(/setConfirmRegen\(true\)/);
   });
 
-  it("surfaces the server's own reason rather than a generic failure", () => {
-    expect(PROFILE).toMatch(/onError: \(e\) => setChooseError\(e\.message/);
-  });
-
-  it("uses a text input with a numeric keypad, not type=number", () => {
-    // type="number" brings spinners, accepts "1e5", and drops a leading zero.
-    expect(PROFILE).toMatch(/inputMode="numeric"/);
-    expect(PROFILE).toMatch(/id="relay-wanted-number"/);
-    const field = PROFILE.slice(
-      PROFILE.indexOf('id="relay-wanted-number"') - 200,
-      PROFILE.indexOf('id="relay-wanted-number"') + 400
-    );
-    expect(codeOnly(field)).not.toMatch(/type="number"/);
-    // LTR-isolated so an RTL locale cannot reorder the digits being typed.
-    expect(field).toMatch(/dir="ltr"/);
-  });
-
-  it("the client's own shape check AGREES with the server's", () => {
-    // Two gates disagreeing about one rule is the recurring bug in this codebase.
-    // The client only gates the BUTTON; the server re-validates regardless, which
-    // is why this is a UX check and not the security boundary.
-    /* REWRITTEN (v2.106.63): this froze the hand-rolled strip, now the shared `pinDigits`.
-       The property is that the client derives the digits behind whatever grouping was
-       typed before shape-checking them — the same reduction the server does. */
-    expect(PROFILE).toMatch(/const wantedDigits = pinDigits\(wanted\);/);
-    expect(PROFILE).toMatch(/\/\^\\d\{6\}\$\/\.test\(wantedDigits\) && !\/\^\(000\|111\)\/\.test\(wantedDigits\)/);
-  });
-
-  it("tells the truth about what happens to their data", () => {
-    expect(PROFILE).toMatch(/Everyone who saved you is updated\s*\n?\s*automatically/);
-    expect(PROFILE).toMatch(/messages, calls and contacts all stay exactly as they/);
-    expect(PROFILE).toMatch(/is never given to anyone else/);
+  it("the server procedure is left in place ON PURPOSE, and that is stated", () => {
+    /* Said plainly rather than left as an oversight: this removes the OPTION from
+       the product, not the capability from the server. `identity.setNumber` is
+       still registered and still guarded (registered-only, rate-limited), so a
+       direct API call can still reach it. Removing the endpoint is a separate
+       decision — flagged to the owner rather than taken unilaterally, because the
+       admin renumber path and this one are different functions and conflating them
+       is how a support tool gets deleted by accident. */
+    expect(PROFILE).toMatch(/DELIBERATELY LEFT IN PLACE/);
+    expect(ROUTERS).toMatch(/setNumber:/);
   });
 });

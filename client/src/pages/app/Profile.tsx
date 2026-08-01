@@ -48,7 +48,6 @@ import { CountryFlag } from "@/app/CountryFlag";
 // Two copies of a display rule is how the two surfaces end up disagreeing about
 // the same number — the class this codebase keeps re-learning.
 import { formatPin } from "@/app/TopBar";
-import { PIN_INPUT_MAXLENGTH, capPinInput, pinDigits } from "@/app/pinInput";
 import {
   Drawer,
   DrawerClose,
@@ -920,27 +919,17 @@ function NumberAndFlag({
   const regen = trpc.identity.regenerateNumber.useMutation({
     onSuccess: (res) => announce(res.number),
   });
-  /* ── Choose your own number (v2.99.75) ───────────────────────────
-     Same propagation as a regenerate: the server moves the identity and rewrites
-     every saved copy in ONE transaction, so contacts, blocks, threads, messages
-     and call history all follow the person rather than the digits. */
-  const [chooseOpen, setChooseOpen] = useState(false);
-  const [wanted, setWanted] = useState("");
-  const [chooseError, setChooseError] = useState<string | null>(null);
-  const choose = trpc.identity.setNumber.useMutation({
-    onSuccess: (res) => {
-      setChooseOpen(false);
-      setWanted("");
-      setChooseError(null);
-      announce(res.number);
-    },
-    // The server names each refusal for a reason — a typo and a number somebody
-    // else already holds need different things from the person reading this.
-    onError: (e) => setChooseError(e.message || "Couldn't change your number."),
-  });
-  // Accept the grouping people naturally type; the server re-validates regardless.
-  const wantedDigits = pinDigits(wanted);
-  const wantedOk = /^\d{6}$/.test(wantedDigits) && !/^(000|111)/.test(wantedDigits);
+  /* CHOOSING YOUR OWN NUMBER IS GONE (owner: "remove choose my number, just keep
+     random number option"). v2.99.75 built it; the owner has now withdrawn it, and
+     a later instruction wins. Only the RANDOM regenerate remains — which is also
+     the one a guest could always use, so removing the chooser costs a guest nothing.
+     THE SERVER PROCEDURE `identity.setNumber` IS DELIBERATELY LEFT IN PLACE and is
+     now called by nothing in the client. Said plainly so it is a decision rather
+     than an oversight: it stays reachable by a direct API call, so this removes the
+     OPTION from the product, not the capability from the server. Removing the
+     endpoint is a separate change and is flagged for the owner rather than taken
+     unilaterally, because the admin renumber path and this one are different
+     functions and conflating them is how a support tool gets deleted by accident. */
   const copyNumber = () => copyNumberToClipboard(number);
   // Same /i/<pin> invite link the share sheet + Dialer use, so the launcher
   // button's QR is itself a real, scannable code (not just an icon).
@@ -984,34 +973,12 @@ function NumberAndFlag({
           </button>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border/60 pt-3">
-          {/* Choosing your own number needs a registered account — the server throws
-              FORBIDDEN for a guest, because a chosen number is first-come and
-              permanent while a guest identity is session-scoped, so a guest claim
-              would squat a memorable number and then strand it. Offering the button
-              anyway would have meant a guest tapping it, typing a number, and being
-              refused for who they are rather than what they typed. A REGENERATE is
-              still theirs: it hands out a random number and always has. */}
-          {!isGuest && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setChooseError(null);
-                setWanted("");
-                setChooseOpen(true);
-              }}
-              disabled={choose.isPending || regen.isPending}
-            >
-              {choose.isPending ? "Changing…" : "Choose my number"}
-            </Button>
-          )}
           <Button
             type="button"
             variant="outline"
             size="sm"
             onClick={() => setConfirmRegen(true)}
-            disabled={regen.isPending || choose.isPending}
+            disabled={regen.isPending}
           >
             {regen.isPending ? "Generating…" : "Random number"}
           </Button>
@@ -1026,67 +993,6 @@ function NumberAndFlag({
       <p className="px-1 text-xs text-muted-foreground">
         Share this 6-digit number for people to call or message you.
       </p>
-      {/* Choose your own 6-digit number (v2.99.75). */}
-      <AlertDialog open={chooseOpen} onOpenChange={(open) => !open && setChooseOpen(false)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Choose your RELAY number</AlertDialogTitle>
-            <AlertDialogDescription>
-              Six digits, not starting 000 or 111. Everyone who saved you is updated
-              automatically, and your messages, calls and contacts all stay exactly as they
-              are — only the number changes. Your old number stops working immediately and
-              is never given to anyone else.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-2">
-            <label htmlFor="relay-wanted-number" className="sr-only">
-              Your desired 6-digit number
-            </label>
-            <input
-              id="relay-wanted-number"
-              // Numeric keypad on a phone, but a text field: `type="number"` brings
-              // spinners, silently accepts "1e5", and drops a leading zero.
-              type="text"
-              inputMode="numeric"
-              autoComplete="off"
-              dir="ltr"
-              maxLength={PIN_INPUT_MAXLENGTH}
-              placeholder="777777"
-              value={wanted}
-              onChange={(e) => {
-                // Capped at six digits as you type (v2.106.63) — it was `maxLength={9}`
-                // writing the raw value.
-                setWanted(capPinInput(e.target.value));
-                setChooseError(null);
-              }}
-              className="w-full rounded-xl border border-border bg-background px-4 py-3 text-center font-mono text-2xl tracking-[0.18em] outline-none focus:border-primary"
-            />
-            {chooseError && <p className="text-xs text-destructive">{chooseError}</p>}
-            {!chooseError && wanted.length > 0 && !wantedOk && (
-              <p className="text-xs text-muted-foreground">
-                Six digits, and it can't start with 000 or 111.
-              </p>
-            )}
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={!wantedOk || choose.isPending}
-              // NOT auto-closing: the number may be taken, and closing the dialog
-              // before the server answers would hide the one message that tells the
-              // person to pick a different one.
-              onClick={(e) => {
-                e.preventDefault();
-                if (!wantedOk) return;
-                choose.mutate({ number: wantedDigits });
-              }}
-            >
-              {choose.isPending ? "Changing…" : "Use this number"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       <AlertDialog open={confirmRegen} onOpenChange={(open) => !open && setConfirmRegen(false)}>
         <AlertDialogContent>
           <AlertDialogHeader>

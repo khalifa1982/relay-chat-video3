@@ -125,10 +125,14 @@ describe("every 6-digit PIN input in the app is capped", () => {
      change than the rule requires. */
   const FILES = [
     "client/src/app/GroupInfoSheet.tsx",
-    "client/src/pages/app/Profile.tsx",
     "client/src/pages/app/Admin.tsx",
     "client/src/pages/app/Contacts.tsx",
     "client/src/pages/app/GroupCallScreen.tsx",
+    // Profile.tsx is ABSENT as of v2.106.80: the owner withdrew "Choose my number"
+    // ("just keep random number option"), which was its only 6-digit field. A
+    // separate assertion below pins that it has NO such box, so this is a removal
+    // rather than an exemption — if a PIN input ever returns to Profile, that
+    // assertion goes red and this list has to be reconsidered.
     // Dialer.tsx is deliberately ABSENT (v2.106.65): it has no numeric text input at all —
     // it is a keypad, and a keypad is capped structurally because there is no field to
     // paste into. Listing it made the entry inert while reading as coverage.
@@ -263,7 +267,6 @@ describe("every 6-digit PIN input in the app is capped", () => {
     // Named explicitly as well as swept: the sweep proves the RULE, these prove the FIX.
     for (const f of [
       "client/src/app/GroupInfoSheet.tsx",
-      "client/src/pages/app/Profile.tsx",
       "client/src/pages/app/Admin.tsx",
     ]) {
       expect(read(f), f).toMatch(/capPinInput\(e\.target\.value\)/);
@@ -286,13 +289,25 @@ describe("every 6-digit PIN input in the app is capped", () => {
     const src = codeOnly(read("client/src/app/GroupInfoSheet.tsx"));
     expect(src).toMatch(/disabled=\{!isCompletePin\(addNumber\)/);
 
-    // The other two derive the same rule from `pinDigits` + an explicit six-digit shape.
-    // Asserted as the SHAPE rather than the exact expression, so a retune is free while a
-    // loosening is not.
-    const profile = codeOnly(read("client/src/pages/app/Profile.tsx"));
-    expect(profile).toMatch(/\/\^\\d\{6\}\$\/\.test\(wantedDigits\)/);
+    /* Profile's gate is GONE with its field (v2.106.80) — the owner withdrew
+       "Choose my number". Pinned as an ABSENCE below rather than dropped silently.
+       Admin derives the same rule from `pinDigits` + an explicit six-digit shape,
+       asserted as the SHAPE rather than the exact expression so a retune is free
+       while a loosening is not. */
     const admin = codeOnly(read("client/src/pages/app/Admin.tsx"));
     expect(admin).toMatch(/pinDigits\(confirmNum\) !== r\.number/);
+  });
+
+  it("Profile has NO 6-digit field at all, so its removal from the sweep is earned", () => {
+    /* The owner withdrew "Choose my number" (v2.106.80: "just keep random number
+       option"). Dropping a file from a coverage list is exactly how a real box
+       later becomes exempt, so the removal is EARNED here: Profile must contain no
+       6-digit input whatsoever. If one returns, this goes red and the FILES list
+       above has to be reconsidered rather than silently under-covering it. */
+    const six = inputsIn(read("client/src/pages/app/Profile.tsx")).filter((el) =>
+      SIX_DIGIT.test(el),
+    );
+    expect(six, "Profile no longer has a 6-digit PIN box").toEqual([]);
   });
 
   it("NO PIN path folds a non-digit away — swept, not enumerated", () => {
@@ -377,7 +392,6 @@ describe("every 6-digit PIN input in the app is capped", () => {
        to disagree about whether `777‑777` (a non-ASCII hyphen) is a valid number. */
     for (const f of [
       "client/src/app/GroupInfoSheet.tsx",
-      "client/src/pages/app/Profile.tsx",
       "client/src/pages/app/Admin.tsx",
     ]) {
       expect(read(f), f).not.toMatch(/replace\(\/\[\\s\\-\.\]\/g/);

@@ -322,29 +322,26 @@ describe("no row is a dead end", () => {
     expect(body).toMatch(/<DndSection \/>/);
   });
 
-  it("Choose my number is withheld from a guest the server would refuse", () => {
-    // `identity.setNumber` throws FORBIDDEN for a guest: a chosen number is
-    // first-come and permanent while a guest identity is session-scoped, so a guest
-    // claim would squat a memorable number and then strand it. Offering the button
-    // meant a guest typing a number and being refused for who they are.
+  it("the number section offers ONLY the random regenerate now", () => {
+    /* This pin used to assert that "Choose my number" was hidden from a GUEST. The
+       owner has since withdrawn the control outright — *"remove choose my number
+       just keep random number option"* — so that assertion froze exactly what was
+       asked to be removed.
+
+       REWRITTEN TO THE SURVIVING PROPERTY, and it is a stronger one: there is now
+       no guest/registered split in this section at all, because the only remaining
+       control is the RANDOM regenerate, which a guest could always use. The old
+       reasoning (a chosen number is first-come and permanent while a guest identity
+       is session-scoped, so a guest claim would squat a memorable number and then
+       strand it) is preserved on the SERVER side below, which still refuses a guest
+       — the endpoint is deliberately left registered even though nothing calls it. */
     const num = PROFILE.slice(PROFILE.indexOf("function NumberAndFlag("));
-    expect(num).toMatch(/isGuest: boolean;/);
-    // Exactly ONE gate, so its extent below is unambiguous.
-    expect([...num.matchAll(/\{!isGuest && \(/g)]).toHaveLength(1);
-    const gateStart = num.indexOf("{!isGuest && (");
-    // The gate's own closing `)}` at its own indentation — the first one after it.
-    const gateEnd = num.indexOf("\n          )}", gateStart);
-    expect(gateEnd).toBeGreaterThan(gateStart);
-    const gate = num.slice(gateStart, gateEnd);
-    expect(gate).toMatch(/Choose my number/);
-    // A REGENERATE stays available to a guest: it hands out a random number and
-    // always has, so hiding it would take away the only number control they have.
-    // Asserting on the gate's CONTENTS rather than on the text around the regenerate
-    // button, because the 900 characters before it include this very gate — a slice
-    // that read backwards was this test's own first bug.
-    expect(gate).not.toMatch(/Random number/);
+    expect(num.length, "found NumberAndFlag").toBeGreaterThan(200);
     expect(num).toMatch(/Random number/);
-    expect(PAGE).toMatch(/isGuest=\{!!me\.isGuest\}/);
+    expect(codeOnly(num)).not.toMatch(/Choose my number/);
+    // No `{!isGuest && (` gate survives in this section — there is nothing to gate.
+    expect([...codeOnly(num).matchAll(/\{!isGuest && \(/g)]).toHaveLength(0);
+    // The SERVER still refuses a guest, so removing the UI weakened no rule.
     const routers = read("server/v2routers.ts");
     const sn = routers.slice(routers.indexOf("setNumber: publicProcedure"));
     expect(sn.slice(0, 900)).toMatch(/if \(me\.isGuest \|\| !ctx\.user\)/);
