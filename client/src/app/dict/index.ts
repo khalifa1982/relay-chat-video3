@@ -18,6 +18,14 @@ import { PROFILE } from "./profile";
 import { CALLS } from "./calls";
 import { STATUS } from "./status";
 import { INVITE } from "./invite";
+import { GROUPS } from "./groups";
+import { ADMIN } from "./admin";
+import { ENGINE } from "./engine";
+import { ALERTS } from "./alerts";
+import { VOICEMAIL } from "./voicemail";
+import { VIDEOREC } from "./videorec";
+import { PEER } from "./peer";
+import { GROUPCALL } from "./groupcall";
 
 export const ALL_DICT = {
   ...CORE,
@@ -31,4 +39,12 @@ export const ALL_DICT = {
   ...CALLS,
   ...STATUS,
   ...INVITE,
+  ...GROUPS,
+  ...ADMIN,
+  ...ENGINE,
+  ...ALERTS,
+  ...VOICEMAIL,
+  ...VIDEOREC,
+  ...PEER,
+  ...GROUPCALL,
 } as const;
