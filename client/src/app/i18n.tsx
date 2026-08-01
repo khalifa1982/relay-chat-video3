@@ -98,6 +98,38 @@ export function translate(
   return interpolate(raw, vars);
 }
 
+/**
+ * Same substitution, but the values may be React nodes — a bolded email address, a
+ * link, a coloured number.
+ *
+ * WHY THIS EXISTS RATHER THAN SPLITTING THE SENTENCE IN THE CALLER: the obvious
+ * shortcut is `{t("...part1")}<b>{email}</b>{t("...part2")}`, and it is wrong in
+ * Arabic specifically. Word order differs, so the emphasised part does not sit
+ * between the same two fragments — a sentence chopped at the English seam CANNOT
+ * be translated, only re-assembled into nonsense. Keeping the placeholder inside
+ * the string lets the translator put it where the language wants it.
+ */
+export function translateNodes(
+  locale: Locale,
+  key: TKey,
+  vars: Record<string, React.ReactNode>
+): React.ReactNode[] {
+  const entry = DICT[key] as Entry | undefined;
+  const raw = entry ? (locale === "ar" ? entry.ar || entry.en : entry.en) : key;
+  const out: React.ReactNode[] = [];
+  // Split on the placeholders themselves so the surrounding text keeps its order.
+  const parts = raw.split(/(\{\w+\})/g);
+  parts.forEach((part, i) => {
+    const m = /^\{(\w+)\}$/.exec(part);
+    if (m && m[1] in vars) {
+      out.push(<React.Fragment key={i}>{vars[m[1]]}</React.Fragment>);
+    } else if (part) {
+      out.push(part);
+    }
+  });
+  return out;
+}
+
 export function isRtl(locale: Locale): boolean {
   return locale === "ar";
 }
@@ -120,6 +152,8 @@ interface LocaleContextValue {
   scale: TextScale;
   setScale: (s: TextScale) => void;
   t: (key: TKey, vars?: Record<string, string | number>) => string;
+  /** As `t`, but the values may be React nodes — see `translateNodes`. */
+  tn: (key: TKey, vars: Record<string, React.ReactNode>) => React.ReactNode[];
 }
 
 const LocaleContext = createContext<LocaleContextValue | undefined>(undefined);
@@ -179,6 +213,7 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
       scale,
       setScale: setScaleState,
       t: (key, vars) => translate(locale, key, vars),
+      tn: (key, vars) => translateNodes(locale, key, vars),
     }),
     [locale, scale]
   );
@@ -204,6 +239,7 @@ export function useLocale(): LocaleContextValue {
     scale: "md",
     setScale: () => {},
     t: (key, vars) => translate("en", key, vars),
+    tn: (key, vars) => translateNodes("en", key, vars),
   };
 }
 

@@ -30,6 +30,7 @@ import {
 import { isPersistedRoom, type PersistedRoom } from "./roomStore";
 import { joinedLine, lineThumbGradient, inviteInitials, fmtInviteNumber } from "../client/src/app/InviteCard";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const RELAY = read("server/relay.ts");
@@ -404,7 +405,7 @@ describe("ONE card, TWO screens", () => {
   });
 
   it("the guest screen keeps its own single field and its reachability block", () => {
-    expect(GATE).toMatch(/Enter your name to connect/);
+    expect(copyOnScreen(GATE, "Enter your name to connect")).toBe(true);
     expect(GATE).toMatch(/const joinBlocked = numberNotFound \|\| calleeUnreachable/);
   });
 

@@ -36,29 +36,8 @@ export const CORE = {
   },
   "appearance.sample": { en: "Sample text", ar: "نص تجريبي" },
 
-  // ── Sign in / register ──
-  "auth.guestName": { en: "What should people call you?", ar: "بماذا يناديك الآخرون؟" },
-  "auth.enterAsGuest": { en: "I am a guest — reserve my number", ar: "أنا ضيف — احجز رقمي" },
-  "auth.email": { en: "Email address", ar: "البريد الإلكتروني" },
-  "auth.continue": { en: "Continue", ar: "متابعة" },
-  "auth.login": { en: "Log in", ar: "تسجيل الدخول" },
-  "auth.register": { en: "Register", ar: "إنشاء حساب" },
-  "auth.back": { en: "Back", ar: "رجوع" },
-  "auth.codeSent": {
-    en: "We sent a 6-digit code to your email.",
-    ar: "أرسلنا رمزًا من ٦ أرقام إلى بريدك الإلكتروني.",
-  },
-  "auth.enterCode": { en: "Enter the code", ar: "أدخل الرمز" },
-  "auth.resend": { en: "Send another code", ar: "إرسال رمز جديد" },
-  "auth.passcode": { en: "Your 4-digit passcode", ar: "رمز الدخول المكوّن من ٤ أرقام" },
-  "auth.useCodeInstead": { en: "Email me a code instead", ar: "أرسل لي رمزًا بالبريد بدلاً من ذلك" },
-  "auth.waitingApproval": {
-    en: "Waiting for approval from your other device",
-    ar: "في انتظار الموافقة من جهازك الآخر",
-  },
-  "auth.declined": { en: "That sign-in was declined.", ar: "تم رفض محاولة تسجيل الدخول." },
-  "auth.fullName": { en: "Your full name", ar: "اسمك الكامل" },
-  "auth.rememberMe": { en: "Keep me signed in", ar: "أبقني مسجّلاً للدخول" },
+  // Sign-in and registration strings live in ./auth.ts — one home per surface, so
+  // the sweep can run several contributors at once without them colliding here.
 
   // ── Common actions ──
   "common.save": { en: "Save", ar: "حفظ" },

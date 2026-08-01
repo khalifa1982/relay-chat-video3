@@ -51,6 +51,7 @@ import { GuestRestore } from "./GuestRestore";
 import { MatrixReveal } from "./MatrixReveal";
 import { RelayBackground } from "./RelayBackground";
 import { useLiveStats } from "./useLiveStats";
+import { useT } from "./i18n";
 import { RELAY_ACCENT, RELAY_BUSINESS_GOLD } from "@/lib/relayBackground";
 
 /* ── tokens (spec §5) ─────────────────────────────────────────────────────── */
@@ -311,17 +312,18 @@ function MethodPicker({
   hasPending: boolean;
   onPick: (m: SignInMethod) => void;
 }) {
+  const t = useT();
   const META: Record<SignInMethod, { icon: React.ReactNode; label: string }> = {
-    code: { icon: <Mail size={14} />, label: "Email code" },
-    pin: { icon: <KeyRound size={14} />, label: "4-digit passcode" },
-    device: { icon: <Smartphone size={14} />, label: "Another device" },
+    code: { icon: <Mail size={14} />, label: t("login.methodCode") },
+    pin: { icon: <KeyRound size={14} />, label: t("login.methodPin") },
+    device: { icon: <Smartphone size={14} />, label: t("login.methodDevice") },
   };
   const opts = signInMethodOptions(hasPin, hasPending).map((k) => ({ k, ...META[k] }));
   // One way in is not a choice; rendering a picker for it is noise.
   if (opts.length < 2) return null;
   return (
     <div className="mt-4">
-      <div style={{ ...mono(10), color: T.faint2, marginBottom: 8 }}>OR SIGN IN WITH</div>
+      <div style={{ ...mono(10), color: T.faint2, marginBottom: 8 }}>{t("login.orSignInWith")}</div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {opts.map((o) => {
           const on = o.k === current;
@@ -426,19 +428,20 @@ function CallPartiesIcon() {
 }
 
 function LiveNetwork({ accent }: { accent: string }) {
+  const t = useT();
   const s = useLiveStats();
   // The spec renders five tiles. With no data yet the numbers show an em-dash
   // rather than a confident 0 — "0 people online" on the entry page is a claim,
   // and a cold cache must not be allowed to make it (the v2.99.72 rule).
   const tiles = [
-    { icon: <User2 size={17} />, value: s?.registeredUsers ?? null, label: "REGISTERED" },
-    { icon: <Users size={17} />, value: s?.guestsServed ?? null, label: "GUESTS SERVED" },
-    { icon: <CallPartiesIcon />, value: s?.totalParties ?? null, label: "CALL PARTIES" },
-    { icon: <MessageSquare size={17} />, value: s?.messagesSent ?? null, label: "MESSAGES" },
+    { icon: <User2 size={17} />, value: s?.registeredUsers ?? null, label: t("login.registered") },
+    { icon: <Users size={17} />, value: s?.guestsServed ?? null, label: t("login.guestsServed") },
+    { icon: <CallPartiesIcon />, value: s?.totalParties ?? null, label: t("login.callParties") },
+    { icon: <MessageSquare size={17} />, value: s?.messagesSent ?? null, label: t("login.messages") },
   ];
   return (
     <div className="mt-9">
-      <Eyebrow>Live network</Eyebrow>
+      <Eyebrow>{t("login.liveNetwork")}</Eyebrow>
       <div
         className="mt-4"
         style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(118px,1fr))", gap: 10 }}
@@ -458,7 +461,7 @@ function LiveNetwork({ accent }: { accent: string }) {
             </span>
           }
           value={s?.onlineNow ?? null}
-          label="ONLINE NOW"
+          label={t("login.onlineNow")}
           delay={0}
           accent={accent}
           big
@@ -471,6 +474,7 @@ function LiveNetwork({ accent }: { accent: string }) {
 /* ── security & identity ──────────────────────────────────────────────────── */
 
 function IdentitySection({ accent }: { accent: string }) {
+  const t = useT();
   const [digits, setDigits] = useState<number[]>(() => [4, 8, 2, 9, 1, 7]);
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -488,14 +492,14 @@ function IdentitySection({ accent }: { accent: string }) {
 
   return (
     <section className="w-full" style={{ maxWidth: 560, margin: "6px 0 30px" }}>
-      <div style={{ ...mono(10.5, ".28em"), color: accent, textAlign: "center" }}>SECURITY &amp; IDENTITY</div>
+      <div style={{ ...mono(10.5, ".28em"), color: accent, textAlign: "center" }}>{t("login.securityEyebrow")}</div>
       <h2
         style={{
           fontSize: 25, fontWeight: 700, color: T.text, margin: "9px 0 16px",
           lineHeight: 1.2, textAlign: "center",
         }}
       >
-        Your identity is six digits.
+        {t("login.identityHeading")}
       </h2>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
         {digits.map((d, i) => (
@@ -526,8 +530,7 @@ function IdentitySection({ accent }: { accent: string }) {
           color: T.muted, fontSize: 14, lineHeight: 1.6, marginTop: 15, textAlign: "center",
         }}
       >
-        Not your email. Not your phone. Not even your name. On RELAY you are a random six-digit ID —
-        enter as a guest and one is reserved for you on the spot; register and it is yours for good.
+        {t("login.identityNote")}
       </p>
       <div
         className="mt-4 flex items-center justify-center gap-2.5"
@@ -543,6 +546,7 @@ function IdentitySection({ accent }: { accent: string }) {
 /* ── the page ─────────────────────────────────────────────────────────────── */
 
 export function LoginScreen() {
+  const t = useT();
   const { startGuest, startGuestPending, startGuestError, refresh } = useIdentity();
   const utils = trpc.useUtils();
 
@@ -607,7 +611,7 @@ export function LoginScreen() {
       if (num) setReveal({ name, number: num });
       else refresh();
     } catch (err) {
-      setError(messageOf(err, "Couldn't start a guest session. Try again."));
+      setError(messageOf(err, t("login.err.guestSession")));
     }
   }
 
@@ -627,11 +631,11 @@ export function LoginScreen() {
       // showing "Log in / Register" in front of it would be friction for nothing.
       if (p.hasPin && !p.locked) { setPin(""); go("pin"); return; }
       if (p.hasPin && p.locked) {
-        setNotice("This account is locked after too many wrong PINs — the email code unlocks it.");
+        setNotice(t("login.notice.locked"));
       }
       go("choose");
     } catch (err) {
-      setError(messageOf(err, "Couldn't check that address. Try again."));
+      setError(messageOf(err, t("login.err.checkAddress")));
     }
   }
 
@@ -651,7 +655,7 @@ export function LoginScreen() {
       setWaitStartedAt(Date.now());
       go("login");
     } catch (err) {
-      setError(messageOf(err, "Couldn't send your code. Try again."));
+      setError(messageOf(err, t("login.err.sendCode")));
     }
   }
 
@@ -685,7 +689,7 @@ export function LoginScreen() {
       go("login");
       setNotice(`We sent a 6-digit code to ${cleanEmail} — enter it to finish creating your account.`);
     } catch (err) {
-      setError(messageOf(err, "Couldn't start registration. Try again."));
+      setError(messageOf(err, t("login.err.startRegistration")));
     }
   }
 
@@ -705,7 +709,7 @@ export function LoginScreen() {
       await utils.identity.whoami.invalidate();
       refresh();
     } catch (err) {
-      setError(messageOf(err, "That code didn't work. Check it and try again."));
+      setError(messageOf(err, t("login.err.badCode")));
     }
   }
 
@@ -718,7 +722,7 @@ export function LoginScreen() {
       await utils.identity.whoami.invalidate();
       refresh();
     } catch (err) {
-      setError(messageOf(err, "That passcode didn't work."));
+      setError(messageOf(err, t("login.err.badPasscode")));
       setPin("");
     }
   }
@@ -812,8 +816,7 @@ export function LoginScreen() {
 
         {/* 4 — guest-session note */}
         <p style={{ color: "#5f716c", fontSize: 12.5, marginTop: 14, textAlign: "center", maxWidth: 560 }}>
-          Guest sessions end when you close your browser — but this browser can restore your number and
-          history next time. Registering keeps them permanently and earns a verified badge.
+          {t("login.guestSessionNote")}
         </p>
 
         {/* Adopt-and-Retire recovery (v2.99.69) — not in the spec, but this is
@@ -831,13 +834,13 @@ export function LoginScreen() {
         {/* 6 — feature chips */}
         <div className="w-full" style={{ maxWidth: 560 }}>
           <p style={{ color: T.muted, fontSize: 14.5, textAlign: "center", marginTop: 34 }}>
-            One encrypted line for everything — talk, see and type with the same people, at once.
+            {t("login.oneLine")}
           </p>
           <div className="mt-3.5 flex flex-wrap justify-center gap-2.5">
             {[
-              { icon: <Phone size={15} />, label: "Voice" },
-              { icon: <Video size={15} />, label: "Video" },
-              { icon: <MessageSquare size={15} />, label: "Chat" },
+              { icon: <Phone size={15} />, label: t("login.voice") },
+              { icon: <Video size={15} />, label: t("login.video") },
+              { icon: <MessageSquare size={15} />, label: t("login.chat") },
             ].map((c) => (
               <span
                 key={c.label}
@@ -852,7 +855,7 @@ export function LoginScreen() {
 
         {/* 8 — footer */}
         <div style={{ ...mono(10), color: T.faint3, marginTop: 46, textAlign: "center" }}>
-          © 2026 RELAY · ENCRYPTED COMMUNICATIONS
+          {t("login.footer")}
         </div>
       </div>
     </div>
@@ -884,6 +887,7 @@ interface CardProps {
 }
 
 function AuthCard(p: CardProps) {
+  const t = useT();
   const { accent, step, go } = p;
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
 
@@ -934,7 +938,7 @@ function AuthCard(p: CardProps) {
           <BackLink
             accent={accent}
             onClick={() => go(step === "guest" || step === "email" ? "idle" : "email")}
-            label={step === "guest" || step === "email" ? "Back" : "Back to email"}
+            label={step === "guest" || step === "email" ? t("login.back") : t("login.backToEmail")}
           />
         )}
       </div>
@@ -949,13 +953,14 @@ function Label({ children }: { children: React.ReactNode }) {
 }
 
 function IdleStep({ accent, go }: CardProps) {
+  const t = useT();
   const opts = [
-    { key: "guest" as const, icon: <User2 size={19} />, title: "Guest", sub: "Just a display name" },
-    { key: "email" as const, icon: <Mail size={19} />, title: "Registered", sub: "Login / register with email" },
+    { key: "guest" as const, icon: <User2 size={19} />, title: t("login.guest"), sub: t("login.guestSub") },
+    { key: "email" as const, icon: <Mail size={19} />, title: t("login.registeredTitle"), sub: t("login.registeredSub") },
   ];
   return (
     <div style={{ animation: "relayFadeUp .35s both" }}>
-      <Label>CHOOSE YOUR ACCESS</Label>
+      <Label>{t("login.chooseAccess")}</Label>
       <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))" }}>
         {opts.map((o) => (
           <button
@@ -995,29 +1000,29 @@ function IdleStep({ accent, go }: CardProps) {
 }
 
 function GuestStep(p: CardProps) {
+  const t = useT();
   return (
     <form onSubmit={p.submitGuest} style={{ animation: "relayFadeUp .35s both" }}>
       {/* #120 — the owner asked for the FULL name here, because the name is what a
           guest is known by everywhere and it cannot be edited later on this path.
           The label says so rather than leaving "display name" to be interpreted. */}
-      <Label>GUEST ACCESS · YOUR FULL NAME</Label>
+      <Label>{t("login.guestLabel")}</Label>
       <Field
         ref={p.inputRef}
         accent={p.accent}
         value={p.guestName}
         onChange={(e) => p.setGuestName(e.target.value)}
-        placeholder="Full name — e.g. Alex Mercer"
-        aria-label="Full name"
+        placeholder={t("login.fullNamePlaceholder")}
+        aria-label={t("login.fullName")}
         autoComplete="name"
         maxLength={40}
       />
       <p style={{ color: T.faint, fontSize: 12.5, margin: "10px 0 0", lineHeight: 1.55 }}>
-        Tap below and a six-digit RELAY number is reserved for you on the spot — we'll show it to you
-        straight away.
+        {t("login.guestNote")}
       </p>
       <div className="mt-3.5">
         <Cta accent={p.accent} disabled={!p.guestName.trim() || p.busy} type="submit">
-          {p.busy ? "Reserving your number…" : "I am a guest — reserve my number"}
+          {p.busy ? t("login.reservingNumber") : t("login.guestCta")}
         </Cta>
       </div>
       {p.startGuestError && <Notice tone="warn">{p.startGuestError}</Notice>}
@@ -1026,9 +1031,10 @@ function GuestStep(p: CardProps) {
 }
 
 function EmailStep(p: CardProps) {
+  const t = useT();
   return (
     <form onSubmit={p.submitEmail} style={{ animation: "relayFadeUp .35s both" }}>
-      <Label>REGISTERED ACCESS · EMAIL</Label>
+      <Label>{t("login.emailLabel")}</Label>
       <Field
         ref={p.inputRef}
         accent={p.accent}
@@ -1038,9 +1044,9 @@ function EmailStep(p: CardProps) {
         value={p.email}
         onChange={(e) => p.setEmail(e.target.value)}
         placeholder="you@example.com"
-        aria-label="Email address"
+        aria-label={t("login.emailAria")}
       />
-      <div style={{ ...mono(11), color: T.faint2, margin: "18px 0 10px" }}>ACCOUNT TYPE</div>
+      <div style={{ ...mono(11), color: T.faint2, margin: "18px 0 10px" }}>{t("login.accountType")}</div>
       <div
         style={{
           padding: 5, background: "rgba(0,0,0,.3)", borderRadius: 13,
@@ -1049,8 +1055,8 @@ function EmailStep(p: CardProps) {
         }}
       >
         {([
-          { k: false, label: "Private" },
-          { k: true, label: "Business" },
+          { k: false, label: t("login.private") },
+          { k: true, label: t("login.business") },
         ] as const).map((seg) => {
           const on = p.business === seg.k;
           return (
@@ -1075,7 +1081,7 @@ function EmailStep(p: CardProps) {
               {seg.label}
               {seg.k && (
                 <span style={{ ...mono(9, ".14em"), color: T.gold, border: `1px solid ${T.gold}66`, borderRadius: 999, padding: "2px 6px" }}>
-                  SOON
+                  {t("login.soon")}
                 </span>
               )}
             </button>
@@ -1086,20 +1092,19 @@ function EmailStep(p: CardProps) {
       {p.business ? (
         <div className="mt-4">
           <Panel accent={T.gold}>
-            <div style={{ ...mono(10.5, ".22em"), color: T.gold, marginBottom: 8 }}>COMING SOON</div>
+            <div style={{ ...mono(10.5, ".22em"), color: T.gold, marginBottom: 8 }}>{t("login.comingSoon")}</div>
             <p style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.6, margin: 0 }}>
-              Business accounts bring team lines, shared numbers and an admin console — same six-digit
-              identity, gold-tier theme.
+              {t("login.businessBlurb")}
             </p>
             <div className="mt-3.5">
-              <Cta accent={T.gold} disabled>Business — coming soon</Cta>
+              <Cta accent={T.gold} disabled>{t("login.businessCta")}</Cta>
             </div>
           </Panel>
         </div>
       ) : (
         <div className="mt-4">
           <Cta accent={p.accent} disabled={!p.emailOk || p.busy} type="submit">
-            {p.busy ? "Checking…" : "Continue"}
+            {p.busy ? t("login.checking") : t("login.continue")}
           </Cta>
         </div>
       )}
@@ -1127,6 +1132,7 @@ function EmailStep(p: CardProps) {
  * account, which is what recognition needs, and is not an address.
  */
 function IdentityHint(p: { accent: string; email: string; numberHint: string | null; onChange?: () => void }) {
+  const t = useT();
   return (
     <div style={{ marginBottom: 14 }}>
       <div className="flex items-center justify-between" style={{ marginBottom: p.numberHint ? 10 : 0 }}>
@@ -1138,7 +1144,7 @@ function IdentityHint(p: { accent: string; email: string; numberHint: string | n
             type="button" onClick={p.onChange}
             style={{ ...mono(10.5, ".18em"), color: T.faint2, background: "none", border: "none", cursor: "pointer" }}
           >
-            CHANGE
+            {t("login.change")}
           </button>
         )}
       </div>
@@ -1150,7 +1156,7 @@ function IdentityHint(p: { accent: string; email: string; numberHint: string | n
             border: `1px solid ${p.accent}3d`, background: `${p.accent}0f`,
           }}
         >
-          <span style={{ ...mono(10), color: T.faint2 }}>YOUR RELAY ID</span>
+          <span style={{ ...mono(10), color: T.faint2 }}>{t("login.yourRelayId")}</span>
           <span
             dir="ltr"
             style={{
@@ -1167,6 +1173,7 @@ function IdentityHint(p: { accent: string; email: string; numberHint: string | n
 }
 
 function ChooseStep(p: CardProps) {
+  const t = useT();
   const unreg = p.probeUnregistered === true;
   return (
     <div style={{ animation: "relayFadeUp .35s both" }}>
@@ -1186,23 +1193,23 @@ function ChooseStep(p: CardProps) {
           that cannot work. Until the probe answers, neither is asserted. */}
       {p.probeUnregistered === null ? (
         <Cta accent={p.accent} disabled onClick={() => {}}>
-          Checking that address…
+          {t("login.checkingAddress")}
         </Cta>
       ) : unreg ? (
         <Cta accent={p.accent} disabled={p.busy} onClick={() => p.go("register")}>
-          Register a new account
+          {t("login.registerNew")}
         </Cta>
       ) : (
         <Cta accent={p.accent} disabled={p.busy} onClick={() => p.sendCode()}>
-          Log in
+          {t("login.logIn")}
         </Cta>
       )}
       <p style={{ color: T.faint, fontSize: 12.5, marginTop: 12, textAlign: "center", lineHeight: 1.55 }}>
         {p.probeUnregistered === null
-          ? "Existing users log in · new users register a permanent six-digit ID"
+          ? t("login.chooseHintPending")
           : unreg
-            ? "No RELAY account for that address yet — register to claim a six-digit ID."
-            : "This email already has a RELAY account, so it can't be registered again — log in instead and we'll email you a code."}
+            ? t("login.chooseHintUnreg")
+            : t("login.chooseHintExisting")}
       </p>
       {/* Switching method is available here too, not only once a wait has begun:
           somebody who knows they have a passcode should not have to send an email
@@ -1246,17 +1253,18 @@ function CodeBoxes({ value, accent }: { value: string; accent: string }) {
 }
 
 function CodeStep(p: CardProps) {
+  const t = useT();
   const left = useCountdown(p.waitStartedAt, OTP_RESEND_SECONDS);
   return (
     <form
       onSubmit={(e) => { e.preventDefault(); if (p.code.length === 6) p.verifyCode(p.code); }}
       style={{ animation: "relayFadeUp .35s both" }}
     >
-      <Label>SIGN-IN CODE</Label>
+      <Label>{t("login.codeLabel")}</Label>
       {/* The row names the address, so the sentence below it does not have to repeat it. */}
       <IdentityHint accent={p.accent} email={p.email} numberHint={p.numberHint} />
       <p style={{ color: T.muted, fontSize: 13.5, marginTop: -4, marginBottom: 14 }}>
-        We sent you a 6-digit code.
+        {t("login.codeSent")}
       </p>
       <div style={{ position: "relative" }}>
         <CodeBoxes value={p.code} accent={p.accent} />
@@ -1270,13 +1278,13 @@ function CodeStep(p: CardProps) {
           }}
           inputMode="numeric"
           autoComplete="one-time-code"
-          aria-label="6-digit sign-in code"
+          aria-label={t("login.codeAria")}
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, border: "none", background: "transparent", color: "transparent", cursor: "pointer" }}
         />
       </div>
       <div className="mt-4">
         <Cta accent={p.accent} disabled={p.code.length !== 6 || p.busy} type="submit">
-          {p.busy ? "Verifying…" : "Verify & sign in"}
+          {p.busy ? t("login.verifying") : t("login.verifySignIn")}
         </Cta>
       </div>
       {/* #122 — the countdown, then a real resend. Before it elapses the resend is
@@ -1286,8 +1294,8 @@ function CodeStep(p: CardProps) {
         accent={p.accent}
         left={left}
         busy={p.busy}
-        waiting="You can ask for another code in"
-        action="Resend the code"
+        waiting={t("login.resendWait")}
+        action={t("login.resendAction")}
         onAction={p.sendCode}
       />
       <MethodPicker
@@ -1340,16 +1348,17 @@ function ResendRow({
 }
 
 function RegisterStep(p: CardProps) {
+  const t = useT();
   return (
     <form onSubmit={p.submitRegister} style={{ animation: "relayFadeUp .35s both" }}>
-      <Label>PERMANENT DISPLAY NAME</Label>
+      <Label>{t("login.permanentName")}</Label>
       <Field
         ref={p.inputRef}
         accent={p.accent}
         value={p.regName}
         onChange={(e) => p.setRegName(e.target.value)}
-        placeholder="Full name — shown to everyone"
-        aria-label="Permanent display name"
+        placeholder={t("login.permanentPlaceholder")}
+        aria-label={t("login.permanentAria")}
         maxLength={60}
       />
       <div
@@ -1357,11 +1366,11 @@ function RegisterStep(p: CardProps) {
         style={{ color: T.warning, border: `1px solid ${T.warning}3d`, background: `${T.warning}0f`, fontSize: 13 }}
       >
         <Lock size={14} style={{ marginTop: 2, flexShrink: 0 }} />
-        This name is permanent — it can never be changed.
+        {t("login.permanentWarning")}
       </div>
       <div className="mt-3.5">
         <Cta accent={p.accent} disabled={!p.regName.trim() || p.busy} type="submit">
-          {p.busy ? "Creating…" : "Create private account"}
+          {p.busy ? t("login.creating") : t("login.createAccount")}
         </Cta>
       </div>
     </form>
@@ -1371,9 +1380,10 @@ function RegisterStep(p: CardProps) {
 /** Not in the spec — preserved. A 4-digit passcode is the fastest real sign-in
  *  and dropping it would strand everyone who set one (see the header note). */
 function PinStep(p: CardProps) {
+  const t = useT();
   return (
     <form onSubmit={p.submitPin} style={{ animation: "relayFadeUp .35s both" }}>
-      <Label>PASSCODE</Label>
+      <Label>{t("login.passcodeLabel")}</Label>
       {/* This is the step the owner's ask was really about: a passcode account skips
           `choose` entirely, so before this the one group of people most likely to be
           returning never saw their own number. */}
@@ -1384,7 +1394,7 @@ function PinStep(p: CardProps) {
         onChange={() => p.go("email")}
       />
       <p style={{ color: T.muted, fontSize: 13.5, marginTop: -4, marginBottom: 14 }}>
-        Enter your 4-digit passcode
+        {t("login.passcodePrompt")}
       </p>
       <Field
         ref={p.inputRef}
@@ -1394,12 +1404,12 @@ function PinStep(p: CardProps) {
         inputMode="numeric"
         autoComplete="current-password"
         placeholder="••••"
-        aria-label="4-digit passcode"
+        aria-label={t("login.passcodeAria")}
         style={{ letterSpacing: ".5em", textAlign: "center", fontFamily: "'IBM Plex Mono', ui-monospace, monospace" }}
       />
       <div className="mt-3.5">
         <Cta accent={p.accent} disabled={p.pin.length !== 4 || p.busy} type="submit">
-          {p.busy ? "Checking…" : "Unlock"}
+          {p.busy ? t("login.checking") : t("login.unlock")}
         </Cta>
       </div>
       {/* The old one-way "email me a code instead" link is now one entry in the
@@ -1425,6 +1435,7 @@ function PinStep(p: CardProps) {
  * never stuck on the one method that is not working.
  */
 function WaitingStep(p: CardProps) {
+  const t = useT();
   const status = trpc.otpAuth.sessionApprovalStatus.useQuery(undefined, { refetchInterval: 2500 });
   const utils = trpc.useUtils();
   const left = useCountdown(p.waitStartedAt, APPROVAL_NUDGE_SECONDS);
@@ -1434,13 +1445,11 @@ function WaitingStep(p: CardProps) {
   const declined = status.data?.status === "denied";
   return (
     <div style={{ animation: "relayFadeUp .35s both" }}>
-      <Label>{declined ? "APPROVAL DECLINED" : "WAITING FOR APPROVAL"}</Label>
+      <Label>{declined ? t("login.approvalDeclined") : t("login.waitingApproval")}</Label>
       <IdentityHint accent={p.accent} email={p.email} numberHint={p.numberHint} />
       <Panel accent={p.accent}>
         <p style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.6, margin: 0 }}>
-          {declined
-            ? "That sign-in was declined on your other device. You can try another way in below."
-            : "This is a new device. Approve it from a device you're already signed in on — then you're in."}
+          {declined ? t("login.declinedBody") : t("login.waitingBody")}
         </p>
       </Panel>
       {!declined && (
@@ -1448,8 +1457,8 @@ function WaitingStep(p: CardProps) {
           accent={p.accent}
           left={left}
           busy={p.busy}
-          waiting="Still waiting — you can ask again in"
-          action="Ask that device again"
+          waiting={t("login.approvalWait")}
+          action={t("login.approvalAction")}
           // Re-sending the code re-creates the pending session, which is what makes
           // the other device prompt a second time; there is no separate "nudge".
           onAction={p.sendCode}
@@ -1464,7 +1473,7 @@ function WaitingStep(p: CardProps) {
       />
       {!p.probeHasPin && (
         <p style={{ color: T.faint, fontSize: 12.5, marginTop: 12, textAlign: "center" }}>
-          A 4-digit passcode never needs approval — you can set one from Profile once you're in.
+          {t("login.passcodeNoApproval")}
         </p>
       )}
     </div>

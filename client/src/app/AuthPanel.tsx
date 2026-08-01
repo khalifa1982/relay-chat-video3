@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
 import { uploadAvatarImage } from "@/lib/uploadAttachment";
 import { AvatarPicker } from "./AvatarPicker";
+import { useLocale, useT } from "./i18n";
 
 /** Format a 6-digit RELAY number as NNN-NNN (LTR island). */
 function fmtNumber(n: string): string {
@@ -71,12 +72,13 @@ function RememberControl({
   value: Remember;
   onChange: (v: Remember) => void;
 }) {
+  const t = useT();
   const on = value !== 0;
   const days: Remember[] = [30, 60, 90];
   return (
     <div className="rauth-tile rounded-[13px] p-3">
       <label className="flex cursor-pointer items-center justify-between gap-3">
-        <span className="text-sm font-medium">Keep me signed in</span>
+        <span className="text-sm font-medium">{t("auth.rememberMe")}</span>
         <button
           type="button"
           role="switch"
@@ -107,13 +109,13 @@ function RememberControl({
                 : "border-border/60 text-muted-foreground hover:text-foreground"
             }`}
           >
-            {d} days
+            {t("auth.rememberDays", { days: d })}
           </button>
         ))}
       </div>
       {!on && (
         <p className="mt-2 text-[0.72rem] leading-relaxed text-muted-foreground">
-          Off: you'll be signed out when this browser closes.
+          {t("auth.rememberOff")}
         </p>
       )}
     </div>
@@ -185,13 +187,14 @@ function LockBadge({ state }: { state: LockState }) {
  * parts reordered inside an RTL paragraph (the standing rule since v2.99.77).
  */
 function NumberRow({ number }: { number: string }) {
+  const t = useT();
   return (
     <div className="rauth-numrow flex items-center gap-2.5 px-3.5 py-2.5">
       <span aria-hidden className="rauth-numtile grid size-[34px] shrink-0 place-items-center rounded-[11px]">
         <Lock className="size-[15px]" />
       </span>
       <div className="min-w-0">
-        <div className="rauth-cap font-mono">Your number</div>
+        <div className="rauth-cap font-mono">{t("auth.yourNumber")}</div>
         <div dir="ltr" className="rauth-num font-mono" style={{ unicodeBidi: "isolate" }}>
           {fmtNumber(number)}
         </div>
@@ -199,7 +202,7 @@ function NumberRow({ number }: { number: string }) {
       {/* `.rchip-accent` is the shared accent-chip recipe (tint + hairline + the
           cycling hue), so this chip cannot drift from every other one. */}
       <span className="rchip-accent rauth-chip ms-auto shrink-0 rounded-[14px] px-2.5 py-1 font-mono">
-        Reserved
+        {t("auth.reserved")}
       </span>
     </div>
   );
@@ -219,10 +222,11 @@ function NumberRow({ number }: { number: string }) {
  * "coming soon" is how a colour stops carrying information.
  */
 function AccountTypeRow() {
+  const t = useT();
   return (
     <div className="space-y-2">
       <div id="rauth-acct-label" className="rauth-eyebrow font-mono">
-        Account type
+        {t("auth.accountType")}
       </div>
       <div
         role="group"
@@ -230,10 +234,10 @@ function AccountTypeRow() {
         className="rauth-seg flex items-stretch gap-1.5 p-1.5"
       >
         <span className="rauth-seg-on flex flex-1 items-center justify-center rounded-[9px] px-2 py-2.5 text-[13px] font-bold">
-          Private
+          {t("auth.private")}
         </span>
         <span className="rauth-seg-off flex flex-1 items-center justify-center gap-1.5 rounded-[9px] px-2 py-2.5 text-[13px] font-semibold">
-          Business <span className="rauth-soon font-mono">Soon</span>
+          {t("auth.business")} <span className="rauth-soon font-mono">{t("auth.soon")}</span>
         </span>
       </div>
     </div>
@@ -258,15 +262,13 @@ function AccountTypeRow() {
  * taken, so the words reveal only what the request they just made returned.
  */
 function ExistingAccountNote() {
+  const t = useT();
   return (
     <div className="rauth-note space-y-1 px-3.5 py-3 text-start">
       <p className="text-[12.5px] font-semibold" style={{ color: "var(--rb, #3FE0C5)" }}>
-        That email already has a RELAY account
+        {t("auth.existingTitle")}
       </p>
-      <p className="rauth-sub">
-        So it can&rsquo;t be registered again — we&rsquo;re signing you in to it instead. You&rsquo;ll
-        use that account&rsquo;s number, not this guest one.
-      </p>
+      <p className="rauth-sub">{t("auth.existingBody")}</p>
     </div>
   );
 }
@@ -294,6 +296,11 @@ export function AuthPanel({
   suggestedEmail?: string;
 }) {
   const utils = trpc.useUtils();
+  /* `tn` as well as `t` because three of this sheet's sentences wrap the email
+     address in bold IN THE MIDDLE — and Arabic does not put it between the same
+     two fragments, so splitting the sentence at the English seam would be
+     untranslatable. See `translateNodes`. */
+  const { t, tn } = useLocale();
   const [stage, setStage] = useState<Stage>("email");
   // `initialEmail` wins when both are set: an address the user typed outranks one
   // proposed for them.
@@ -364,7 +371,7 @@ export function AuthPanel({
       });
     } else if (s === "denied") {
       setStage("email");
-      setError("That sign-in was declined on your other device.");
+      setError(t("auth.err.declined"));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [approvalStatus.data?.status, stage]);
@@ -402,8 +409,8 @@ export function AuthPanel({
   async function onSetupAvatar(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith("image/")) { setError("Your photo must be an image."); return; }
-    if (file.size > 4 * 1024 * 1024) { setError("Your photo must be under 4 MB."); return; }
+    if (!file.type.startsWith("image/")) { setError(t("auth.err.photoNotImage")); return; }
+    if (file.size > 4 * 1024 * 1024) { setError(t("auth.err.photoTooBig")); return; }
     setAvatarUploading(true);
     setError(null);
     try {
@@ -414,7 +421,7 @@ export function AuthPanel({
       setAvatarUrl(json.url);
       await utils.identity.whoami.invalidate();
     } catch (err) {
-      setError(messageOf(err, "Photo upload failed. Try again."));
+      setError(messageOf(err, t("auth.err.photoUpload")));
     } finally {
       setAvatarUploading(false);
       if (avatarFileRef.current) avatarFileRef.current.value = "";
@@ -437,7 +444,7 @@ export function AuthPanel({
     const r = await requestOtp.mutateAsync({ email });
     if (r.unregistered) { setStage("register"); return; }
     if (!r.ok) {
-      setError("We couldn't send your code — email delivery isn't set up yet. Contact the operator.");
+      setError(t("auth.err.mailNotConfigured"));
       return;
     }
     toCodeStage();
@@ -471,7 +478,7 @@ export function AuthPanel({
       return;
     }
     if (p.hasPin && p.locked) {
-      setNotice("This account is locked after too many wrong PINs — the email code below unlocks it.");
+      setNotice(t("auth.notice.locked"));
     }
     await sendEmailCode(email);
   }
@@ -489,7 +496,7 @@ export function AuthPanel({
       try {
         await routeAfterProbe(e);
       } catch (err) {
-        setError(messageOf(err, "Couldn't send a code. Try again."));
+        setError(messageOf(err, t("auth.err.sendCode")));
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -502,7 +509,7 @@ export function AuthPanel({
     try {
       await routeAfterProbe(cleanEmail);
     } catch (err) {
-      setError(messageOf(err, "Couldn't send a code. Try again."));
+      setError(messageOf(err, t("auth.err.sendCode")));
     }
   }
 
@@ -518,7 +525,7 @@ export function AuthPanel({
     } catch (err) {
       setLock("err"); // shake + red
       setPin("");
-      setError(messageOf(err, "That PIN didn't work."));
+      setError(messageOf(err, t("auth.err.badPin")));
       setTimeout(() => setLock("idle"), 480);
     }
   }
@@ -529,7 +536,7 @@ export function AuthPanel({
     try {
       await sendEmailCode(cleanEmail);
     } catch (err) {
-      setError(messageOf(err, "Couldn't send a code. Try again."));
+      setError(messageOf(err, t("auth.err.sendCode")));
     }
   }
 
@@ -537,16 +544,16 @@ export function AuthPanel({
     e.preventDefault();
     setError(null);
     // Both are MANDATORY now (owner directive): a photo AND a 4-digit passcode.
-    if (!shownAvatar) { setError("Add a profile photo to finish."); return; }
-    if (setupPin.length !== 4) { setError("Your passcode is exactly 4 digits."); return; }
-    if (setupPin !== setupPin2) { setError("The passcodes don't match."); return; }
+    if (!shownAvatar) { setError(t("auth.err.needAvatar")); return; }
+    if (setupPin.length !== 4) { setError(t("auth.err.passcodeLength")); return; }
+    if (setupPin !== setupPin2) { setError(t("auth.err.passcodeMismatch")); return; }
     try {
       await setLoginPin.mutateAsync({ pin: setupPin, preferPin: true });
       await utils.identity.whoami.invalidate();
       if (onVerified) onVerified();
       else onClose();
     } catch (err) {
-      setError(messageOf(err, "Couldn't save your passcode. Try again."));
+      setError(messageOf(err, t("auth.err.savePasscode")));
     }
   }
 
@@ -558,13 +565,13 @@ export function AuthPanel({
       // Real email verification (SES live): a code was emailed — go enter it.
       // (The v2.97.2 no-code bypass response is gone.)
       if (!r.ok) {
-        setError("We couldn't send your code — email delivery isn't set up yet. Contact the operator.");
+        setError(t("auth.err.mailNotConfigured"));
         return;
       }
       setWasRegistration(true);
       toCodeStage();
     } catch (err) {
-      setError(messageOf(err, "Couldn't start registration. Try again."));
+      setError(messageOf(err, t("auth.err.startRegistration")));
     }
   }
 
@@ -606,7 +613,7 @@ export function AuthPanel({
       if (onVerified) onVerified();
       else onClose();
     } catch (err) {
-      setError(messageOf(err, "That code didn't work."));
+      setError(messageOf(err, t("auth.err.badCode")));
       // L3: the code input auto-fires verifyCode the instant it reaches 6
       // digits. If we leave the wrong code in place, deleting one digit and
       // retyping re-fires and burns another of the 5 server attempts per
@@ -622,7 +629,7 @@ export function AuthPanel({
     setResendIn(60);
     try {
       await resendOtp.mutateAsync({ email: cleanEmail });
-      setNotice("A new code is on its way.");
+      setNotice(t("auth.newCodeSent"));
     } catch {
       /* uniform — don't surface */
     }
@@ -639,13 +646,13 @@ export function AuthPanel({
   const upsell = me?.isGuest === true && Boolean(me.number);
 
   const title =
-    stage === "code" ? "Enter your code"
-    : stage === "register" ? "Create your account"
-    : stage === "pin" ? "Enter your PIN"
-    : stage === "setup" ? "Finish setting up"
-    : stage === "waiting" ? "Waiting for approval"
-    : upsell ? "Register — keep this number"
-    : "Sign in";
+    stage === "code" ? t("auth.title.code")
+    : stage === "register" ? t("auth.title.register")
+    : stage === "pin" ? t("auth.title.pin")
+    : stage === "setup" ? t("auth.title.setup")
+    : stage === "waiting" ? t("auth.title.waiting")
+    : upsell ? t("auth.title.upsell")
+    : t("auth.title.signIn");
 
   return (
     /* `relay-v2` is carried HERE as well as the local `dark`, and both are needed:
@@ -682,7 +689,7 @@ export function AuthPanel({
               <button
                 type="button"
                 onClick={() => { setStage("email"); setError(null); setNotice(null); setLock("idle"); setExistingAccount(false); }}
-                aria-label="Back"
+                aria-label={t("auth.back")}
                 className="-ms-1.5 grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted"
               >
                 <ArrowLeft className="size-4" />
@@ -693,7 +700,7 @@ export function AuthPanel({
                 sentence twice. */}
             <h2 className="rauth-title min-w-0">{title}</h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="-me-1.5 grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted">
+          <button type="button" onClick={onClose} aria-label={t("auth.close")} className="-me-1.5 grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted">
             <X className="size-5" />
           </button>
         </div>
@@ -718,8 +725,8 @@ export function AuthPanel({
                      browser close no longer strands the number, and v2.99.69 corrected
                      this copy once already. Signing out still forgets it, which is what
                      "only held for this browser" says accurately. */
-                  "Your guest number is only held for this browser. Registering locks it to your account for good — and adds a verified badge."
-                : "Enter your email and we'll send you a one-time code. No password needed."}
+                  t("auth.emailSubUpsell")
+                : t("auth.emailSub")}
             </p>
             {/* Board 2e's YOUR NUMBER row. Withheld when there is no number to keep
                 rather than rendered empty — a row reserving space for a value that is
@@ -727,7 +734,7 @@ export function AuthPanel({
             {upsell && me?.number && <NumberRow number={me.number} />}
             <div className="space-y-2">
               <Label htmlFor="auth-email" className="rauth-eyebrow font-mono">
-                Registered access · Email
+                {t("auth.emailLabel")}
               </Label>
               <Input
                 id="auth-email"
@@ -747,37 +754,35 @@ export function AuthPanel({
             <Button type="submit" className="rcta h-12 w-full rounded-[13px] text-[15px] font-bold" disabled={busy || !cleanEmail}>
               {/* The probe runs BEFORE anything is emailed, so "Sending…" would be a
                   claim about a mail nobody has asked for yet. */}
-              {loginProbe.isPending ? "Checking…" : requestOtp.isPending ? "Sending…" : upsell ? "Send verification code" : "Send code"}
+              {loginProbe.isPending ? t("auth.checking") : requestOtp.isPending ? t("auth.sending") : upsell ? t("auth.sendVerificationCode") : t("auth.sendCode")}
             </Button>
             <p className="rauth-foot flex items-center justify-center gap-1.5">
-              <Lock aria-hidden className="size-[11px] shrink-0" /> No password — a 6-digit code checks your email
+              <Lock aria-hidden className="size-[11px] shrink-0" /> {t("auth.noPasswordFoot")}
             </p>
           </form>
         )}
 
         {stage === "register" && (
           <form onSubmit={submitRegister} className="space-y-3.5">
-            <p className="rauth-sub">
-              Just your name to finish — we already have your email.
-            </p>
+            <p className="rauth-sub">{t("auth.registerSub")}</p>
             {/* The number carries over on THIS branch (the address is unclaimed, so
                 `ensureUserIdentity` claims this browser's guest identity — v2.99.49),
                 which is exactly what the row is promising. */}
             {upsell && me?.number && <NumberRow number={me.number} />}
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-2">
-                <Label htmlFor="auth-first" className="rauth-eyebrow font-mono">First name</Label>
+                <Label htmlFor="auth-first" className="rauth-eyebrow font-mono">{t("auth.firstName")}</Label>
                 <Input id="auth-first" required autoFocus value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="Alex" maxLength={64} className="rauth-field h-12 rounded-[13px]" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="auth-last" className="rauth-eyebrow font-mono">Last name</Label>
+                <Label htmlFor="auth-last" className="rauth-eyebrow font-mono">{t("auth.lastName")}</Label>
                 <Input id="auth-last" required value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Rivera" maxLength={64} className="rauth-field h-12 rounded-[13px]" />
               </div>
             </div>
             {/* Email is already known from the previous step — shown read-only so
                 the user never retypes it (owner directive). "Back" changes it. */}
             <div className="space-y-2">
-              <Label className="rauth-eyebrow font-mono">Registered access · Email</Label>
+              <Label className="rauth-eyebrow font-mono">{t("auth.emailLabel")}</Label>
               <div className="rauth-field flex h-12 items-center gap-2 rounded-[13px] border px-3 text-sm">
                 <Mail className="size-4 shrink-0 text-muted-foreground" />
                 <span className="truncate font-medium">{cleanEmail}</span>
@@ -786,10 +791,10 @@ export function AuthPanel({
             {upsell && <AccountTypeRow />}
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" className="rcta h-12 w-full rounded-[13px] text-[15px] font-bold" disabled={busy || !firstName.trim() || !lastName.trim() || !cleanEmail}>
-              {register.isPending ? "Creating…" : "Send verification code"}
+              {register.isPending ? t("auth.creating") : t("auth.sendVerificationCode")}
             </Button>
             <p className="rauth-foot flex items-center justify-center gap-1.5">
-              <Lock aria-hidden className="size-[11px] shrink-0" /> No password — a 6-digit code checks your email
+              <Lock aria-hidden className="size-[11px] shrink-0" /> {t("auth.noPasswordFoot")}
             </p>
           </form>
         )}
@@ -803,7 +808,9 @@ export function AuthPanel({
             {upsell && existingAccount && <ExistingAccountNote />}
             <LockBadge state={lock} />
             <p className="text-center text-sm">
-              Enter the 4-digit PIN for <span className="font-semibold break-all">{cleanEmail}</span>.
+              {tn("auth.pinPrompt", {
+                email: <span className="font-semibold break-all">{cleanEmail}</span>,
+              })}
             </p>
             <Input
               ref={pinRef}
@@ -820,14 +827,12 @@ export function AuthPanel({
             {error && <p className="text-sm text-destructive text-center">{error}</p>}
             <RememberControl value={remember} onChange={setRemember} />
             <Button type="submit" className="rcta h-12 w-full rounded-[13px] text-[15px] font-bold" disabled={busy || pin.length !== 4}>
-              {lock === "ok" ? "Unlocked ✓" : loginWithPin.isPending ? "Unlocking…" : "Sign in"}
+              {lock === "ok" ? t("auth.unlocked") : loginWithPin.isPending ? t("auth.unlocking") : t("auth.title.signIn")}
             </Button>
             <Button type="button" variant="secondary" className="h-12 w-full rounded-[13px]" onClick={pinToEmailCode} disabled={busy}>
-              Email me a code instead
+              {t("auth.emailCodeInstead")}
             </Button>
-            <p className="rauth-foot text-center">
-              Three wrong tries are forgiven — a fourth locks the account until you sign in by email code.
-            </p>
+            <p className="rauth-foot text-center">{t("auth.pinFoot")}</p>
           </form>
         )}
 
@@ -838,20 +843,20 @@ export function AuthPanel({
             </div>
             <div className="space-y-1.5">
               <p className="text-sm">
-                For your security, approve this sign-in from a device already
-                signed in to <span className="font-semibold break-all">{cleanEmail}</span>.
+                {tn("auth.waitingBody", {
+                  email: <span className="font-semibold break-all">{cleanEmail}</span>,
+                })}
               </p>
               <p className="text-xs text-muted-foreground">
-                Open the notification bell (or Profile → Devices) on your other
-                device and tap <span className="font-semibold">Approve</span>. This screen
-                continues automatically.
+                {tn("auth.waitingHow", {
+                  approve: <span className="font-semibold">{t("auth.approve")}</span>,
+                })}
               </p>
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             {waitStalled && (
               <div className="rauth-tile rounded-[13px] p-3 text-xs text-muted-foreground">
-                No response yet — your other device may be offline or closed. You
-                can sign in with your 4-digit PIN instead (no approval needed).
+                {t("auth.waitStalled")}
               </div>
             )}
             <Button
@@ -861,7 +866,7 @@ export function AuthPanel({
               onClick={() => { setPin(""); setLock("idle"); setError(null); setNotice(null); setStage("pin"); }}
               disabled={busy}
             >
-              Sign in with your PIN instead
+              {t("auth.usePinInstead")}
             </Button>
             <button
               type="button"
@@ -869,26 +874,21 @@ export function AuthPanel({
               onClick={() => { setStage("email"); setError(null); setNotice(null); }}
               disabled={busy}
             >
-              Cancel
+              {t("common.cancel")}
             </button>
           </div>
         )}
 
         {stage === "setup" && (
           <form onSubmit={submitSetup} className="space-y-4">
-            <p className="rauth-sub">
-              You're in ✅ — here's your number. Add a photo and pick a 4-digit
-              passcode to finish. You'll use this passcode to sign in on any device.
-            </p>
+            <p className="rauth-sub">{t("auth.setupSub")}</p>
 
             {/* The freshly-minted 6-digit RELAY number (LTR island). Deliberately
                 NOT the compact `NumberRow`: this is the confirmation the whole flow
                 was for, so it keeps its own full-width plate — and the number is now
                 the caller's for good, so "RESERVED" would be the wrong word. */}
             <div className="rauth-numrow p-4 text-center">
-              <div className="rauth-eyebrow font-mono">
-                Your RELAY number
-              </div>
+              <div className="rauth-eyebrow font-mono">{t("auth.yourRelayNumber")}</div>
               <div
                 dir="ltr"
                 className="mt-1.5 font-mono text-2xl font-bold tracking-[0.15em]"
@@ -904,13 +904,13 @@ export function AuthPanel({
                 type="button"
                 onClick={() => setAvatarPickerOpen(true)}
                 disabled={avatarUploading}
-                aria-label={shownAvatar ? "Change avatar" : "Add an avatar"}
+                aria-label={shownAvatar ? t("auth.changeAvatar") : t("auth.addAvatar")}
                 className="relative grid size-24 place-items-center rounded-full outline-none transition active:scale-95 focus-visible:ring-2 focus-visible:ring-primary/60 disabled:opacity-70"
                 style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)" }}
               >
                 <span className="grid size-[86px] place-items-center overflow-hidden rounded-full bg-background">
                   {shownAvatar ? (
-                    <img src={shownAvatar} alt="Your photo" className="size-full rounded-full object-cover" />
+                    <img src={shownAvatar} alt={t("auth.yourPhoto")} className="size-full rounded-full object-cover" />
                   ) : (
                     <Camera className="size-7 text-muted-foreground" />
                   )}
@@ -924,7 +924,7 @@ export function AuthPanel({
                 </span>
               </button>
               <span className="text-xs text-muted-foreground">
-                {shownAvatar ? "Looking good — tap to change" : "Add a photo or emoji (required)"}
+                {shownAvatar ? t("auth.avatarSet") : t("auth.avatarNeeded")}
               </span>
               <input
                 ref={avatarFileRef}
@@ -937,13 +937,13 @@ export function AuthPanel({
 
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-2">
-                <Label htmlFor="pin-1" className="rauth-eyebrow font-mono">4-digit passcode</Label>
+                <Label htmlFor="pin-1" className="rauth-eyebrow font-mono">{t("auth.passcodeLabel")}</Label>
                 <Input id="pin-1" type="password" inputMode="numeric" maxLength={4} value={setupPin}
                   onChange={(e) => setSetupPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
                   placeholder="••••" className="rauth-field text-center font-mono tracking-[0.4em] h-12 rounded-[13px]" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="pin-2" className="rauth-eyebrow font-mono">Repeat it</Label>
+                <Label htmlFor="pin-2" className="rauth-eyebrow font-mono">{t("auth.passcodeRepeat")}</Label>
                 <Input id="pin-2" type="password" inputMode="numeric" maxLength={4} value={setupPin2}
                   onChange={(e) => setSetupPin2(e.target.value.replace(/\D/g, "").slice(0, 4))}
                   placeholder="••••" className="rauth-field text-center font-mono tracking-[0.4em] h-12 rounded-[13px]" />
@@ -955,7 +955,7 @@ export function AuthPanel({
               className="rcta h-12 w-full rounded-[13px] text-[15px] font-bold"
               disabled={busy || avatarUploading || !shownAvatar || setupPin.length !== 4 || setupPin2.length !== 4}
             >
-              {setLoginPin.isPending ? "Finishing…" : "Finish"}
+              {setLoginPin.isPending ? t("auth.finishing") : t("auth.finish")}
             </Button>
           </form>
         )}
@@ -974,7 +974,9 @@ export function AuthPanel({
               <Mail className="size-7" />
             </div>
             <p className="text-center text-sm">
-              We sent a 6-digit code to <span className="font-semibold break-all">{cleanEmail}</span>.
+              {tn("auth.codeSentTo", {
+                email: <span className="font-semibold break-all">{cleanEmail}</span>,
+              })}
             </p>
             <Input
               ref={codeRef}
@@ -996,14 +998,14 @@ export function AuthPanel({
             {notice && !error && <p className="rauth-sub text-center">{notice}</p>}
             <RememberControl value={remember} onChange={setRemember} />
             <Button type="submit" className="rcta h-12 w-full rounded-[13px] text-[15px] font-bold" disabled={busy || code.length !== 6}>
-              {verifyOtp.isPending ? "Verifying…" : "Verify & continue"}
+              {verifyOtp.isPending ? t("auth.verifying") : t("auth.verifyContinue")}
             </Button>
             {/* ABSENT rather than disabled during the cooldown would lose the one thing
                 a waiting person wants (how long) — so this control keeps its label and
                 counts down in place, which is what the v2.103.3 rule is actually
                 about: never a control whose refusal is unexplained. */}
             <Button type="button" variant="secondary" onClick={resend} disabled={resendIn > 0} className="h-12 w-full rounded-[13px]">
-              {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
+              {resendIn > 0 ? t("auth.resendIn", { seconds: resendIn }) : t("auth.resend")}
             </Button>
           </form>
         )}

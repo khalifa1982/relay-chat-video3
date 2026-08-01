@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -19,7 +20,7 @@ describe("AuthPanel — registration overhaul (email→name, mandatory number/pa
     // The old editable re-entry field is gone…
     expect(src).not.toMatch(/id="auth-email2"/);
     // …replaced by a read-only display of the already-known email.
-    expect(src).toMatch(/Just your name to finish/);
+    expect(copyOnScreen(src, "Just your name to finish"), whyCopyMissing(src, "Just your name to finish")).toBe(true);
     expect(src).toMatch(/<span className="truncate font-medium">\{cleanEmail\}<\/span>/);
     // first + last name are still collected
     expect(src).toMatch(/id="auth-first"/);
@@ -27,7 +28,7 @@ describe("AuthPanel — registration overhaul (email→name, mandatory number/pa
   });
 
   it("setup step shows the generated 6-digit RELAY number", () => {
-    expect(src).toMatch(/Your RELAY number/);
+    expect(copyOnScreen(src, "Your RELAY number"), whyCopyMissing(src, "Your RELAY number")).toBe(true);
     expect(src).toMatch(/whoami\.data\?\.number \? fmtNumber\(whoami\.data\.number\)/);
     expect(src).toMatch(/function fmtNumber\(/);
   });
@@ -35,10 +36,10 @@ describe("AuthPanel — registration overhaul (email→name, mandatory number/pa
   it("setup requires a profile photo AND a 4-digit passcode — the Skip path is gone", () => {
     // mandatory photo: uploaded via the bare-avatar path, gated on shownAvatar
     expect(src).toMatch(/uploadAvatarImage/);
-    expect(src).toMatch(/Add a profile photo to finish/);
+    expect(copyOnScreen(src, "Add a profile photo to finish"), whyCopyMissing(src, "Add a profile photo to finish")).toBe(true);
     expect(src).toMatch(/const shownAvatar =/);
     // mandatory passcode + both gate the Finish button
-    expect(src).toMatch(/Your passcode is exactly 4 digits/);
+    expect(copyOnScreen(src, "Your passcode is exactly 4 digits")).toBe(true);
     expect(src).toMatch(/disabled=\{busy \|\| avatarUploading \|\| !shownAvatar \|\| setupPin\.length !== 4 \|\| setupPin2\.length !== 4\}/);
     // no "skip setup" escape hatch anymore
     expect(src).not.toMatch(/skipSetup/);

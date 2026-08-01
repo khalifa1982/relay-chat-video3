@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { codeOnly } from "../../../server/testing/codeOnly";
 import {
@@ -17,7 +17,7 @@ const SHELL = read("client/src/app/AppShell.tsx");
 const MAIN = read("client/src/main.tsx");
 const PROFILE = read("client/src/pages/app/Profile.tsx");
 
-describe("v2.106.83 — the app speaks Arabic, and it is impossible to add a string that does not", () => {
+describe("v2.106.83/84 — the app speaks Arabic, and it is impossible to add a string that does not", () => {
   it("EVERY entry carries both halves — an untranslated string is a type error, not a review item", () => {
     /* This is the owner's standing instruction ("make sure that whatever changes
        you make impact both languages") expressed in the type system. The runtime
@@ -130,6 +130,88 @@ describe("v2.106.83 — the app speaks Arabic, and it is impossible to add a str
     expect(app).toBeGreaterThan(-1);
     expect(theme, "theme wraps locale").toBeLessThan(locale);
     expect(locale, "locale wraps the app").toBeLessThan(app);
+  });
+
+  it("no two dictionary modules declare the same key — a spread would silently drop one", () => {
+    /* `dict/index.ts` composes the per-surface modules with `...`, so a key
+       declared twice does not error: the LAST spread quietly wins and the other
+       module's translation is unreachable. That is invisible in every other test
+       here, because both halves would be present and both would be Arabic — the
+       wrong string simply renders. One module per surface is what makes several
+       contributors able to work at once, and this is the cost of that decision
+       being paid rather than discovered.
+
+       Read from disk rather than from the imported objects, because by the time
+       they are spread the collision has already happened. */
+    const dir = resolve(process.cwd(), "client/src/app/dict");
+    const modules = readdirSync(dir).filter(
+      (f) => f.endsWith(".ts") && !["index.ts", "types.ts"].includes(f)
+    );
+    expect(modules.length, "the sweep found modules to check").toBeGreaterThan(3);
+    const owner = new Map<string, string>();
+    const clashes: string[] = [];
+    for (const f of modules) {
+      const src = codeOnly(read(`client/src/app/dict/${f}`));
+      // Keys are always quoted at the start of a line inside the object literal.
+      for (const m of src.matchAll(/^\s{2}"([\w.]+)":/gm)) {
+        const key = m[1];
+        const prev = owner.get(key);
+        if (prev) clashes.push(`${key} (${prev} + ${f})`);
+        else owner.set(key, f);
+      }
+    }
+    expect(clashes, `duplicate keys: ${clashes.join(", ")}`).toEqual([]);
+    // …and the parse really found the keys, rather than the regex silently
+    // matching nothing and declaring victory.
+    expect(owner.size, "keys found by the file scan").toBe(Object.keys(DICT).length);
+  });
+
+  it("the screens the owner named — registration and login — go through the translator", () => {
+    /* Owner, verbatim: "During registration and login, ensure everything is in
+       Arabic with a proper, professional translation suitable for apps."
+
+       Pinned as the ABSENCE of the specific English literals rather than as a
+       count of `t(` calls, because a count says nothing about whether the strings
+       a person actually reads were converted — it would stay green with one label
+       translated and forty left behind. Each of these is a sentence a user sees on
+       the way in. */
+    const SURFACES: [string, string[]][] = [
+      [
+        "client/src/app/AuthPanel.tsx",
+        ["Keep me signed in", "Enter your code", "Verify & continue", "Send verification code"],
+      ],
+      [
+        "client/src/app/LoginScreen.tsx",
+        ["Your identity is six digits.", "Create private account", "Verify &amp; sign in", "Register a new account"],
+      ],
+      [
+        "client/src/app/OnboardingGate.tsx",
+        ["Enter as guest", "Your display name", "Continue with email"],
+      ],
+    ];
+    for (const [file, literals] of SURFACES) {
+      const code = codeOnly(read(file));
+      for (const lit of literals) {
+        // The literal may legitimately survive inside a comment explaining the
+        // change, which is why this runs on comment-stripped source.
+        expect(code, `${file} still hardcodes "${lit}"`).not.toContain(`"${lit}"`);
+        expect(code, `${file} still renders "${lit}" as text`).not.toContain(`>${lit}<`);
+      }
+      expect(code, `${file} reaches the translator`).toMatch(/\bt\(["']\w+\./);
+    }
+  });
+
+  it("the language switch is on the ENTRY screen, not only behind the gate", () => {
+    /* The Appearance pane lives in Profile, which is BEHIND the onboarding gate —
+       so without a switch on the gate itself, somebody who lands in a language they
+       cannot read has no way through. This is the one placement in the feature that
+       is a correctness property rather than a preference. */
+    const code = codeOnly(read("client/src/app/OnboardingGate.tsx"));
+    expect(code, "the gate can set the locale").toMatch(/setLocale\(/);
+    // Each language labelled in its OWN language — "Arabic" written in English is
+    // exactly the label that fails the person it is for.
+    expect(code).toMatch(/العربية/);
+    expect(code).toMatch(/"English"/);
   });
 
   it("the appearance pane offers all three controls the owner asked for", () => {

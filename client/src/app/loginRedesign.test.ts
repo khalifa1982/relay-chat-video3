@@ -13,6 +13,7 @@
  *     that is exactly the class of loss worth pinning.
  */
 import { describe, it, expect } from "vitest";
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
 import fs from "node:fs";
 import path from "node:path";
 import { splitDisplayName, fmtId, EMAIL_RE, T } from "./LoginScreen";
@@ -117,8 +118,22 @@ describe("every string the owner signed off is on the page", () => {
     "All calls, video and messages are end-to-end encrypted.",
     "© 2026 RELAY · ENCRYPTED COMMUNICATIONS",
   ];
+  /* v2.106.84 — asked THROUGH the dictionary now, and that is strictly stronger
+     than the literal search it replaces rather than a relaxation of it. These
+     sentences moved into `dict/` when the app learned Arabic; a screen that
+     renders `t("login.createAccount")` no longer contains the English, so a raw
+     `toContain` would have gone red on every one of them.
+
+     The two obvious reactions are both wrong: deleting the pin leaves the
+     owner's signed-off wording unguarded, and matching the KEY freezes an
+     implementation detail while saying nothing about what the words are.
+     `copyOnScreen` asks the property these pins always stood for — this sentence
+     reaches this screen — and reaching it via the dictionary ALSO proves an
+     Arabic half exists, because `Entry` requires both. A screen that stops
+     saying the sentence at all still fails. */
   for (const c of COPY) {
-    it(`has: ${c.slice(0, 52)}`, () => expect(SCREEN).toContain(c));
+    it(`has: ${c.slice(0, 52)}`, () =>
+      expect(copyOnScreen(SCREEN, c), whyCopyMissing(SCREEN, c)).toBe(true));
   }
 
   it("the tagline still names BOTH ways in", () => {
@@ -128,13 +143,14 @@ describe("every string the owner signed off is on the page", () => {
 
   it("the guest step asks for a name and its CTA enters as a guest", () => {
     const guest = SCREEN.slice(SCREEN.indexOf("function GuestStep"), SCREEN.indexOf("function EmailStep"));
-    expect(guest).toMatch(/GUEST ACCESS · YOUR FULL NAME/); // #120: FULL name, per the owner
-    expect(guest).toMatch(/I am a guest/);
+    // #120: the FULL name, per the owner — via the dictionary since v2.106.84.
+    expect(copyOnScreen(guest, "GUEST ACCESS · YOUR FULL NAME")).toBe(true);
+    expect(copyOnScreen(guest, "I am a guest — reserve my number")).toBe(true);
   });
 
   it("labels every LIVE NETWORK tile", () => {
     for (const l of ["REGISTERED", "GUESTS SERVED", "CALL PARTIES", "MESSAGES", "ONLINE NOW"]) {
-      expect(SCREEN).toContain(l);
+      expect(copyOnScreen(SCREEN, l), whyCopyMissing(SCREEN, l)).toBe(true);
     }
   });
 });
@@ -230,7 +246,7 @@ describe("shipped capabilities the spec never mentions are still wired", () => {
     expect(SCREEN).toContain('{step === "waiting" && <WaitingStep');
     expect(SCREEN).toContain("function WaitingStep");
     expect(SCREEN).toContain('go("waiting")');
-    expect(SCREEN).toContain("never needs approval");
+    expect(copyOnScreen(SCREEN, "A 4-digit passcode never needs approval — you can set one from Profile once you're in.")).toBe(true);
   });
 
   it("keeps the guest-recovery card (v2.99.69) on the entry screen", () => {
@@ -273,7 +289,14 @@ describe("LIVE NETWORK reads real data", () => {
     // The slice really is that section. Anchored on the STAT TILES, not on the
     // heading: the eyebrow reads "Live network" in the source and is uppercased by
     // CSS, so matching the rendered casing fails on correct code.
-    expect(live).toMatch(/GUESTS SERVED/);
+    //
+    // v2.106.84: the tile labels moved into the dictionary, so the anchor is the
+    // KEY rather than the words. That is the correct anchor for THIS assertion —
+    // unlike the copy pins above, this one is not about what the label says, it is
+    // proving the slice landed on the right function, and the key reference is
+    // that function's own code. `copyOnScreen` would be wrong here: it searches the
+    // whole file by design, which is exactly what a slice guard must not do.
+    expect(live).toMatch(/login\.guestsServed/);
     expect(live).not.toMatch(/setInterval\(/);
     expect(live).toMatch(/useLiveStats\(\)/);
     // And the id-digit re-roll (spec §4, 2600ms) is still the only timer that

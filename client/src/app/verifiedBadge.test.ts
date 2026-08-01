@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -108,7 +109,7 @@ describe("passwordless auth — no third-party sign-in buttons remain", () => {
   it("OnboardingGate no longer imports or links getLoginUrl (OAuth UI removed)", () => {
     const src = read("client/src/app/OnboardingGate.tsx");
     expect(src).not.toMatch(/getLoginUrl/);
-    expect(src).toMatch(/Continue with email/);
+    expect(copyOnScreen(src, "Continue with email")).toBe(true);
     expect(src).toMatch(/AuthPanel/);
   });
   it("v2.92 R3: ZERO Manus-OAuth call sites anywhere in client/src (owner decision)", () => {

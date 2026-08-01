@@ -18248,6 +18248,88 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.84 — THE SIGN-IN, REGISTRATION AND ENTRY SCREENS SPEAK ARABIC
+(owner: *"During registration and login, ensure everything is in Arabic with a proper,
+professional translation suitable for apps."*)
+
+v2.106.83 shipped the provider, the dictionary, RTL, the text-size control and the
+Appearance pane, and said plainly that the per-screen string sweep was still to come.
+This is the first and most important slice of that sweep — the three surfaces a person
+meets BEFORE they are inside the app.
+
+**WHAT IS TRANSLATED**: `AuthPanel` (all six stages: email, register, code, PIN, setup,
+waiting-for-approval, plus every error and notice), `LoginScreen` (all fourteen
+components — the identity section, LIVE NETWORK, the access chooser, guest, email,
+account type, the choose/code/register/passcode/waiting steps, the method picker and
+the footer), and `OnboardingGate` (guest entry, the email path and the `/i/<pin>`
+call-link join card). ~200 new entries across `dict/auth.ts` and `dict/nav.ts`.
+
+**THE LANGUAGE SWITCH IS ON THE ENTRY SCREEN, AND THAT PLACEMENT IS A CORRECTNESS
+PROPERTY RATHER THAN A CONVENIENCE.** The Appearance pane lives in Profile, which is
+BEHIND the onboarding gate — so somebody who lands there in a language they cannot read
+would have no way through. It is absolute chrome rather than a row in the card, because
+this screen's whole shape is "one field, one action" and a second decision in the card
+is what costs somebody the call on the invite path. **Each language is labelled in ITS
+OWN language** — "English" and "العربية", never "Arabic" written in English — since that
+is exactly the label that fails the person it is for.
+
+**`tn()` EXISTS BECAUSE THE OBVIOUS SHORTCUT IS UNTRANSLATABLE.** Three of this sheet's
+sentences wrap the email address in bold IN THE MIDDLE. The tempting form is
+`{t("part1")}<b>{email}</b>{t("part2")}`, and it is wrong in Arabic specifically: word
+order differs, so the emphasised part does not sit between the same two fragments — a
+sentence chopped at the English seam cannot be translated, only re-assembled into
+nonsense. `translateNodes` keeps the placeholder INSIDE the string so the translator
+puts it where the language wants it.
+
+**WESTERN DIGITS THROUGHOUT, DELIBERATELY, EVEN IN ARABIC PROSE.** Arabic normally takes
+Eastern-Arabic numerals and this dictionary uses none. Every number a user acts on here
+is INTERPOLATED — the resend countdown, the address, and above all the six-digit RELAY
+number, which is Western everywhere in the product because a number somebody reads out
+loud has to be the number they type. "٦ أرقام" beside a substituted "60" puts two
+numeral systems on one line, which reads as a rendering fault rather than as
+localisation.
+
+**A GUARD THE MODULE SPLIT MADE NECESSARY**: `dict/index.ts` composes the per-surface
+modules with `...`, so a key declared twice does not error — the LAST spread quietly
+wins and the other module's translation is unreachable, invisible to every other test
+here because both halves would still be present and both still Arabic. One module per
+surface is what lets several contributors work at once; a duplicate-key sweep is the
+cost of that decision being paid rather than discovered. The `auth.*` keys moved OUT of
+`core.ts` into `auth.ts` in the same commit, so each surface has exactly one home.
+
+**44 PRE-EXISTING PINS ACROSS 11 FILES BROKE, AND EVERY ONE HAD FROZEN AN ENGLISH
+LITERAL.** The two available reactions are both wrong: deleting the pin leaves the
+owner's signed-off wording unguarded, and matching the KEY freezes an implementation
+detail while saying nothing about what the words are. New `server/testing/copyOnScreen.ts`
+asks the property they always stood for — *this sentence reaches this screen* — satisfied
+either by the literal or by the screen referencing a key whose ENGLISH half contains it.
+**That is STRICTLY STRONGER than what it replaces**, because reaching the dictionary also
+proves an Arabic half exists (`Entry` requires both); a screen that stops saying the
+sentence at all still fails. Containment rather than equality, because many of those pins
+quote a distinctive PREFIX of a longer sentence and equality would fail them on correct
+code — a replacement must be no weaker AND no noisier than the thing it replaces.
+
+**THREE PINS ARE DELIBERATELY *NOT* ROUTED THROUGH IT, and the distinction is worth
+recording**: `loginRedesign`'s LiveNetwork slice-guard, `loginBatch`'s Back-label pin and
+its `aria-label` pin are not about what the words SAY — they prove a slice landed on the
+right function, that Back names its two destinations, and that a field is labelled for a
+screen reader. `copyOnScreen` searches the whole file BY DESIGN, which is exactly what a
+slice guard must not do, so those three anchor on the key expression instead.
+
+**BOTH NEW GUARDS VERIFIED BY MUTATION** off byte-exact backups — a duplicate key across
+two modules, and one hardcoded string returning to `AuthPanel` — both bit, sources
+byte-identical afterwards.
+
+**NOT DONE, named rather than implied**: the remaining in-app screens (Dialer, History,
+Messages, Contacts, Profile beyond the Appearance pane, the call surfaces); the RTL pass
+over the 92 physical `pl-/pr-/ml-/mr-` sites; and the light-theme animated background,
+which is its own release. Until a key exists a screen renders ENGLISH rather than a raw
+key — which is the whole point of the fallback. No schema change, no new dependency, no
+new env var. 5314 tests.
+
+**ALSO**: two more renumbers landed on the fleet — **171-072 → 777-774** and
+**392-711 → 666-661** — bringing the confirmed total to 21.
+
 ## v2.106.83
 
 The app learns Arabic, and text size, from one provider (owner: "you need to add an Arabic

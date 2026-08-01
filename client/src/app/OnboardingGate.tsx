@@ -10,6 +10,7 @@ import { GuestRestore } from "./GuestRestore";
 import { LiveStats } from "./LiveStats";
 import { MatrixReveal } from "./MatrixReveal";
 import { LoginScreen } from "./LoginScreen";
+import { useLocale } from "./i18n";
 
 interface OnboardingGateProps {
   children: React.ReactNode;
@@ -51,6 +52,7 @@ export function inviteTargetFromSearch(search: string): string | null {
  */
 export function OnboardingGate({ children }: OnboardingGateProps) {
   const { me, loading, startGuest, startGuestPending, startGuestError, refresh } = useIdentity();
+  const { t, locale, setLocale } = useLocale();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [emailMode, setEmailMode] = useState(false); // guest-first: email is the secondary path
@@ -188,6 +190,35 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
       <div aria-hidden className="login-fx pointer-events-none absolute inset-0" />
       <div aria-hidden className="login-grid pointer-events-none absolute inset-0" />
 
+      {/* THE LANGUAGE SWITCH HAS TO BE ON THIS SCREEN, and that is the one thing
+          about it that is load-bearing rather than convenient: the Appearance pane
+          lives in Profile, which is BEHIND this gate, so somebody who lands here in
+          a language they cannot read would have no way through. It is deliberately
+          `absolute` chrome rather than a row in the card — this screen's whole
+          shape is "one field, one action", and a second decision in the card is
+          what costs somebody the call on the `/i/<pin>` path.
+
+          Each language is labelled in ITS OWN language, never translated: "العربية"
+          is exactly what a stranded Arabic reader is looking for, and "Arabic"
+          written in English is the label that fails them. */}
+      <div className="absolute end-4 top-4 z-10 flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] p-1 backdrop-blur-md">
+        {(["en", "ar"] as const).map((l) => (
+          <button
+            key={l}
+            type="button"
+            onClick={() => setLocale(l)}
+            aria-pressed={locale === l}
+            className={`min-h-8 rounded-full px-3 text-xs font-semibold transition-colors ${
+              locale === l
+                ? "bg-white/15 text-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {l === "en" ? "English" : "العربية"}
+          </button>
+        ))}
+      </div>
+
       <div className="login-card relative w-full max-w-[400px]">
         {showJoin ? (
           <>
@@ -208,14 +239,14 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                   htmlFor="relay-join-name"
                   className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
                 >
-                  Enter your name to connect
+                  {t("gate.joinNameLabel")}
                 </label>
                 <Input
                   id="relay-join-name"
                   autoFocus
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Your name"
+                  placeholder={t("gate.yourName")}
                   maxLength={64}
                   className="h-12 rounded-xl text-base"
                 />
@@ -228,18 +259,18 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                   className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
                 >
                   {startGuestPending ? (
-                    "Connecting…"
+                    t("gate.connecting")
                   ) : numberNotFound ? (
-                    "Number not found"
+                    t("gate.numberNotFound")
                   ) : calleeUnreachable ? (
                     <>
                       <PhoneCall className="size-4" />
-                      Can't be reached
+                      {t("gate.cannotReach")}
                     </>
                   ) : (
                     <>
                       {isPartyLine ? <Users className="size-4" /> : <PhoneCall className="size-4" />}
-                      {isPartyLine ? "Join the line" : "Join call"}
+                      {isPartyLine ? t("gate.joinLine") : t("gate.joinCall")}
                     </>
                   )}
                 </Button>
@@ -250,8 +281,7 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                     back online" would be a promise nothing can keep. */}
                 {calleeUnreachable && (
                   <p className="mt-2.5 text-center text-xs text-muted-foreground">
-                    There's no device we can ring for {inviteeName || "them"} yet. Once they
-                    open RELAY on a phone, calls will reach them.
+                    {t("gate.noDeviceToRing", { name: inviteeName || t("gate.them") })}
                   </p>
                 )}
               </form>
@@ -261,12 +291,11 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                 onClick={() => setEmailMode(true)}
                 className="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground"
               >
-                Have a RELAY account? Sign in first
+                {t("gate.haveAccount")}
               </button>
             </InviteCard>
             <p className="mx-auto mt-4 max-w-[19rem] text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
-              No account needed — your name is just for this call. Registering later
-              keeps your number and history.
+              {t("gate.joinFoot")}
             </p>
           </>
         ) : (
@@ -292,9 +321,7 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                 <span className="text-[1.6rem] font-bold tracking-tight">RELAY</span>
               </div>
               <p className="mx-auto mt-2.5 max-w-[19rem] text-sm leading-relaxed text-muted-foreground">
-                {emailMode
-                  ? "Login or register with your email — no password, we send you a one-time code."
-                  : "Pick a name and jump straight in — no account needed."}
+                {emailMode ? t("gate.taglineEmail") : t("gate.tagline")}
               </p>
             </div>
 
@@ -308,14 +335,14 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                       htmlFor="relay-name"
                       className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
                     >
-                      Your display name
+                      {t("gate.displayName")}
                     </label>
                     <Input
                       id="relay-name"
                       autoFocus
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      placeholder="e.g. Alex"
+                      placeholder={t("gate.namePlaceholder")}
                       maxLength={64}
                       className="h-12 rounded-xl text-base"
                     />
@@ -327,12 +354,12 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                       disabled={!name.trim() || startGuestPending}
                       className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
                     >
-                      {startGuestPending ? "Setting up…" : (<><User2 className="size-4" /> Enter as guest</>)}
+                      {startGuestPending ? t("gate.settingUp") : (<><User2 className="size-4" /> {t("gate.enterAsGuest")}</>)}
                     </Button>
                   </form>
 
                   <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground/70">
-                    <span className="h-px flex-1 bg-border/60" /> or{" "}
+                    <span className="h-px flex-1 bg-border/60" /> {t("gate.or")}{" "}
                     <span className="h-px flex-1 bg-border/60" />
                   </div>
 
@@ -343,12 +370,10 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                     onClick={() => setEmailMode(true)}
                     className="h-12 w-full gap-2 rounded-xl border-border/60 text-base"
                   >
-                    Login / Register with email <ArrowRight className="size-4" />
+                    {t("gate.loginRegister")} <ArrowRight className="size-4" />
                   </Button>
                   <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
-                    Guest sessions end when you close your browser — but this browser can
-                    restore your number and history next time. Registering keeps them
-                    permanently and earns a verified badge.
+                    {t("gate.guestFoot")}
                   </p>
                 </>
               ) : (
@@ -359,7 +384,7 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                       htmlFor="relay-email"
                       className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
                     >
-                      Your email
+                      {t("gate.yourEmail")}
                     </label>
                     <Input
                       id="relay-email"
@@ -377,19 +402,18 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
                       disabled={!EMAIL_RE.test(email.trim().toLowerCase())}
                       className="mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold text-primary-foreground bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))] shadow-[0_10px_28px_-10px_color-mix(in_oklab,var(--relay-online,#06d6a0)_70%,transparent)] active:scale-[0.99] transition-transform"
                     >
-                      Continue with email <ArrowRight className="size-4" />
+                      {t("gate.continueWithEmail")} <ArrowRight className="size-4" />
                     </Button>
                   </form>
                   <p className="mt-3 text-center text-[0.72rem] leading-relaxed text-muted-foreground/80">
-                    Login and registration are the same step — the code we email you does both.
-                    No password, so there's nothing to forget.
+                    {t("gate.emailFoot")}
                   </p>
                   <button
                     type="button"
                     onClick={() => setEmailMode(false)}
                     className="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground"
                   >
-                    {callTarget ? "← Back to joining the call" : "← Continue as guest instead"}
+                    {callTarget ? t("gate.backToCall") : t("gate.backToGuest")}
                   </button>
                 </>
               )}
@@ -404,15 +428,15 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
             {/* Feature chips */}
             <div className="mt-5 flex items-center justify-center gap-2">
               {[
-                { icon: Phone, label: "Voice" },
-                { icon: Video, label: "Video" },
-                { icon: MessageSquare, label: "Chat" },
-              ].map(({ icon: Icon, label }) => (
+                { icon: Phone, key: "gate.voice" as const },
+                { icon: Video, key: "gate.video" as const },
+                { icon: MessageSquare, key: "gate.chat" as const },
+              ].map(({ icon: Icon, key }) => (
                 <span
-                  key={label}
+                  key={key}
                   className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-card/50 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur-md"
                 >
-                  <Icon className="size-3.5" /> {label}
+                  <Icon className="size-3.5" /> {t(key)}
                 </span>
               ))}
             </div>

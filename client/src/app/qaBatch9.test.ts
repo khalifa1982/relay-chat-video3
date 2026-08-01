@@ -48,7 +48,11 @@ describe("v2.99.31 QA L2/L3 — auth code + approval edges", () => {
   });
   it("L3: verifyCode clears the code on a wrong-code error", () => {
     const fn = AUTH.slice(AUTH.indexOf("async function verifyCode"), AUTH.indexOf("async function verifyCode") + 2400);
-    const catchIdx = fn.indexOf('setError(messageOf(err, "That code didn\'t work."))');
+    /* v2.106.84 — the message moved into the dictionary, so the anchor is the
+       expression rather than the words. The PROPERTY is unchanged and is asserted
+       below: the wrong-code catch also clears the field, so a correction is one
+       fresh 6-digit entry rather than one server attempt burned per keystroke. */
+    const catchIdx = fn.indexOf('setError(messageOf(err, t("auth.err.badCode")))');
     expect(catchIdx).toBeGreaterThan(0);
     expect(fn.slice(catchIdx, catchIdx + 600)).toMatch(/setCode\(""\)/);
   });

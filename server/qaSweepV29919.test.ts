@@ -8,6 +8,7 @@ import {
   type RelayRegistry,
   type RelaySocket,
 } from "./relay";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 
 /**
  * v2.99.19 — QA-sweep fixes. The heavy multi-agent QA pass surfaced a cluster of
@@ -150,10 +151,10 @@ describe("v2.99.19 QA — #50 new-device approval waiting screen has a de-strand
   const src = read("../client/src/app/AuthPanel.tsx");
   it("a stall timer surfaces an honest 'other device may be offline' note", () => {
     expect(src).toMatch(/setWaitStalled\(true\)/);
-    expect(src).toMatch(/may be offline or closed/i);
+    expect(copyOnScreen(src, "may be offline or closed")).toBe(true);
   });
   it("offers a PIN sign-in (which bypasses approval) as the escape", () => {
-    expect(src).toMatch(/Sign in with your PIN/i);
+    expect(copyOnScreen(src, "Sign in with your PIN")).toBe(true);
   });
 });
 

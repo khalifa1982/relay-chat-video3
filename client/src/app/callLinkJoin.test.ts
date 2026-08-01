@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { inviteTargetFromSearch } from "./OnboardingGate";
@@ -44,8 +45,8 @@ describe("OnboardingGate — focused call-link join UI", () => {
     expect(src).toMatch(/inviteTargetFromSearch/);
     expect(src).toMatch(/const showJoin\b/);
     // The join CTA — distinct from the generic "Enter as guest".
-    expect(src).toMatch(/Join call/);
-    expect(src).toMatch(/Enter your name to connect/);
+    expect(copyOnScreen(src, "Join call")).toBe(true);
+    expect(copyOnScreen(src, "Enter your name to connect")).toBe(true);
   });
 
   it("resolves who's being called via the public directory.lookup", () => {
@@ -55,8 +56,8 @@ describe("OnboardingGate — focused call-link join UI", () => {
   });
 
   it("keeps a sign-in escape and a party-line variant", () => {
-    expect(src).toMatch(/Have a RELAY account/);
-    expect(src).toMatch(/Join the line/);
+    expect(copyOnScreen(src, "Have a RELAY account")).toBe(true);
+    expect(copyOnScreen(src, "Join the line")).toBe(true);
   });
 });
 
@@ -107,8 +108,8 @@ describe("v2.99.15 — a guest can't call an OFFLINE user from a call link", () 
        so that sentence was a promise nothing can keep. It now names the real
        condition, and the word "offline" is gone from this branch entirely, because
        an offline-but-installed phone IS callable now. */
-    expect(GATE).toMatch(/Can't be reached/);
-    expect(GATE).toMatch(/no device we can ring/);
+    expect(copyOnScreen(GATE, "Can't be reached")).toBe(true);
+    expect(copyOnScreen(GATE, "no device we can ring")).toBe(true);
     expect(GATE).not.toMatch(/They're offline — can't call/);
     expect(GATE).not.toMatch(/once they're back online/i);
   });

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -19,7 +20,7 @@ describe("AuthPanel — remember-me + secure-lock", () => {
 
   it("offers the 30/60/90-day picker and a session-only (off) state", () => {
     expect(src).toMatch(/const days: Remember\[\] = \[30, 60, 90\]/);
-    expect(src).toMatch(/signed out when this browser closes/);
+    expect(copyOnScreen(src, "signed out when this browser closes")).toBe(true);
   });
 
   it("engages the secure-lock animation around the PIN verify", () => {

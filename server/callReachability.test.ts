@@ -27,6 +27,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 
 const V2DB = readFileSync("server/v2db.ts", "utf8");
 const ROUTERS = readFileSync("server/v2routers.ts", "utf8");
@@ -230,7 +231,7 @@ describe("both client gates key on reachability, and neither on presence", () =>
       // comment explaining the change legitimately contains the old phrase.
       const code = codeOnly(s.src);
       expect(code).not.toMatch(/back online/i);
-      expect(code).toMatch(/no device we can ring/);
+      expect(copyOnScreen(code, "no device we can ring")).toBe(true);
     });
   }
 });

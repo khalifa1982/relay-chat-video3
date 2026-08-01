@@ -13,6 +13,7 @@ import {
 import { detectDeviceType } from "@/lib/deviceType";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
+import { useT, type TKey } from "@/app/i18n";
 import { useIdentity } from "./useIdentity";
 import { useSignOut } from "./useSignOut";
 import { AuthPanel } from "./AuthPanel";
@@ -86,12 +87,12 @@ function GroupsDots({ className, strokeWidth = 2 }: { className?: string; stroke
  * can't see class names assembled at runtime.
  */
 const TABS = [
-  { key: "dialer", path: "/app/dialer", label: "Calls", icon: Phone, color: "#22c55e", shade: "#15803d" },
-  { key: "history", path: "/app/history", label: "History", icon: History, color: "#38bdf8", shade: "#0369a1" },
-  { key: "messages", path: "/app/messages", label: "Messages", icon: MessageCircle, color: "#fb923c", shade: "#c2410c" },
-  { key: "groups", path: "/app/groups", label: "Groups", icon: GroupsDots, color: "#22d3ee", shade: "#0e7490" },
-  { key: "contacts", path: "/app/contacts", label: "Contacts", icon: UsersRound, color: "#a78bfa", shade: "#7c3aed" },
-] as const;
+  { key: "dialer", path: "/app/dialer", labelKey: "nav.calls", icon: Phone, color: "#22c55e", shade: "#15803d" },
+  { key: "history", path: "/app/history", labelKey: "nav.history", icon: History, color: "#38bdf8", shade: "#0369a1" },
+  { key: "messages", path: "/app/messages", labelKey: "nav.messages", icon: MessageCircle, color: "#fb923c", shade: "#c2410c" },
+  { key: "groups", path: "/app/groups", labelKey: "nav.groups", icon: GroupsDots, color: "#22d3ee", shade: "#0e7490" },
+  { key: "contacts", path: "/app/contacts", labelKey: "nav.contacts", icon: UsersRound, color: "#a78bfa", shade: "#7c3aed" },
+] as const satisfies readonly { key: string; path: string; labelKey: TKey; icon: unknown; color: string; shade: string }[];
 
 /** Small "Mobile"/"Desktop" chip shown next to the country flag, detected
  *  dynamically from this device. */
@@ -347,6 +348,10 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
     refetchOnWindowFocus: false,
   });
   const { theme, setTheme } = useTheme();
+  /* One translator for BOTH nav surfaces (the desktop sidebar and the mobile tab bar
+     both render from TABS inside this component) — two reads would be two chances for
+     the two navs to disagree about what a tab is called. */
+  const t = useT();
   /* The live canvas runs in DARK ONLY — see the mount below for why. Derived here so the
      shell's own background and the mount cannot disagree: two separate reads of the
      theme is how you get an opaque shell over a running canvas, i.e. all of the cost and
@@ -730,7 +735,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
                 }
               >
                 <Icon className="size-5 shrink-0" strokeWidth={active ? 2.3 : 2} />
-                <span className="flex-1">{tab.label}</span>
+                <span className="flex-1">{t(tab.labelKey)}</span>
                 {tab.key === "messages" && hasUnseenStatus && (
                   <span
                     className="size-2 rounded-full bg-gradient-to-tr from-[#06d6a0] to-[#0ea5e9]"
@@ -1187,7 +1192,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
                           : { color: theme === "light" ? tab.shade : tab.color }
                     }
                   >
-                    {tab.label}
+                    {t(tab.labelKey)}
                   </span>
                 </Link>
               );

@@ -18,6 +18,7 @@ import { resolve } from "node:path";
 import { maskNumber } from "./v2routers";
 import { signInMethodOptions, OTP_RESEND_SECONDS, APPROVAL_NUDGE_SECONDS } from "../client/src/app/LoginScreen";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const LOGIN = read("client/src/app/LoginScreen.tsx");
@@ -133,12 +134,12 @@ describe("#121 — an existing address cannot be registered again", () => {
   });
 
   it("says out loud that the email already has an account", () => {
-    expect(choose).toMatch(/already has a RELAY account/);
-    expect(choose).toMatch(/can't be registered again/);
+    expect(copyOnScreen(choose, "already has a RELAY account")).toBe(true);
+    expect(copyOnScreen(choose, "can't be registered again")).toBe(true);
   });
 
   it("asserts nothing while the probe is still in flight", () => {
-    expect(choose).toMatch(/Checking that address…/);
+    expect(copyOnScreen(choose, "Checking that address…")).toBe(true);
   });
 
   it("shows the masked number, and only for an address that HAS an account", () => {
@@ -282,7 +283,7 @@ describe("#122 — every way in, from anywhere", () => {
   it("a DECLINED approval says so and still offers a way in", () => {
     const w = LOGIN.slice(LOGIN.indexOf("function WaitingStep"));
     expect(w).toMatch(/status\.data\?\.status === "denied"/);
-    expect(w).toMatch(/APPROVAL DECLINED/);
+    expect(copyOnScreen(w, "APPROVAL DECLINED")).toBe(true);
     expect(w).toMatch(/<MethodPicker/);
   });
 });
@@ -290,14 +291,16 @@ describe("#122 — every way in, from anywhere", () => {
 describe("#120 — guest entry", () => {
   const guest = LOGIN.slice(LOGIN.indexOf("function GuestStep"), LOGIN.indexOf("function EmailStep"));
   it("asks for the FULL name", () => {
-    expect(guest).toMatch(/YOUR FULL NAME/);
-    expect(guest).toMatch(/aria-label="Full name"/);
+    expect(copyOnScreen(guest, "YOUR FULL NAME")).toBe(true);
+    // The field is LABELLED for a screen reader — via the dictionary since
+    // v2.106.84, so the attribute now carries an expression rather than a literal.
+    expect(guest).toMatch(/aria-label=\{t\("login\.fullName"\)\}/);
     expect(guest).toMatch(/autoComplete="name"/);
   });
 
   it("says a number is reserved, and the CTA is the owner's own words", () => {
-    expect(guest).toMatch(/reserved for you on the spot/);
-    expect(guest).toMatch(/I am a guest — reserve my number/);
+    expect(copyOnScreen(guest, "reserved for you on the spot")).toBe(true);
+    expect(copyOnScreen(guest, "I am a guest — reserve my number")).toBe(true);
   });
 
   it("the reserved number is revealed matrix-style", () => {
@@ -359,6 +362,8 @@ describe("#120 — Back is findable", () => {
   });
 
   it("names where it goes", () => {
-    expect(codeOnly(LOGIN)).toMatch(/label=\{step === "guest" \|\| step === "email" \? "Back" : "Back to email"\}/);
+    // The two destinations, now via the dictionary (v2.106.84) — the property is
+    // that Back NAMES where it goes, not the literal words it was frozen with.
+    expect(codeOnly(LOGIN)).toMatch(/label=\{step === "guest" \|\| step === "email" \? t\("login\.back"\) : t\("login\.backToEmail"\)\}/);
   });
 });
