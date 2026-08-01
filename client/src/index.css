@@ -878,11 +878,16 @@ body.relay-app-lock {
 /* Below ~660px of viewport the Dialer card genuinely cannot hold a MY NUMBER row, a
    readout, a FOUR-ROW ROUND keypad and a three-button action row at a tappable key size —
    measured: a 320x568 phone is 76px over even with the letters gone. So the CONVENIENCE
-   yields, not the function: the card disappears (your number is still in the top bar and on
-   Profile, and the QR/share lives there too) while the keypad keeps its size.
+   yields, not the function: the card disappears while the keypad keeps its size.
    NOT chosen: shrinking the keys, which measured at 38px — below the 44px anyone can
    reliably hit — or letting the card scroll, which it did not do before this release and
-   must not start doing because of it. */
+   must not start doing because of it.
+
+   CORRECTED v2.106.77. This used to read "your number is still in the top bar and on
+   Profile" — and the top-bar half is no longer true: the owner asked for the number OUT
+   of the top bar, so on a viewport this short the only remaining copies are the dial
+   readout and Profile. That is worth knowing before anything else is removed from this
+   screen, which is exactly why a stale justification is worse than none. */
 @media (max-height: 660px) {
   .relay-v2 .rmynum-dialer {
     display: none;

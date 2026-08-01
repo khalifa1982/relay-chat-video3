@@ -18248,6 +18248,63 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.77 — the top bar stops repeating your number (2026-08-01)
+
+Owner, circling the top bar in a screenshot of their own Dialer: *"there is the flag which
+is the country you're logging from and the name and the badge, and below it small, it's the
+[six-digit] number, so remove the pin and make this one, make it little size, big size."*
+
+**THE NUMBER WAS ON SCREEN THREE TIMES ON THAT ONE SCREENSHOT** — the top bar's second
+line, the MY NUMBER card directly beneath it, and the dial readout below that. The bar
+carried the least useful of the three: it is the only one you cannot act on (no copy, no
+QR, no share) and it is the one that cost the NAME its width, because a seven-character
+monospace run is ATOMIC — it cannot ellipsize without lying about somebody's number — so
+v2.99.86 gave it its own line and the name has been sharing a 56px bar with it ever since.
+
+**SO THE STRIP IS ONE LINE AGAIN**: flag · first name · tier badge. The name goes
+**13px → 16px** and the badge 14 → 15, which is the "big size" half of the same sentence.
+`IdentityStrip` no longer takes a `number` prop at all — not merely unrendered, because a
+prop still threaded in is how it comes back by accident, and that is asserted.
+
+**MEASURED, NOT REASONED — 70/70 CLEAN.** This bar has broken twice (v2.103.1, v2.99.94),
+so it is driven in headless Chromium against the REAL built stylesheet across 5 widths ×
+7 name shapes (short, the screenshot's own `khalifa`, long Latin, a 21-character name,
+Arabic, single-glyph CJK, blank) × with and without the back arrow: header 56px at every
+combination, badge and name inside the header, no overlap with the bell or the brand mark,
+no horizontal page scroll. The harness carries all three gates this repo added after
+measuring the wrong thing twice — it emits a `<meta viewport>` and ABORTS unless
+`innerWidth` really took, unless the header computes to `display:flex` (v2.99.94 measured a
+page with `Docs-*.css` in force and no Tailwind at all), and unless the name renders at the
+16px its class declares.
+
+**THE TRADE IS STATED WITH NUMBERS RATHER THAN GLOSSED.** At 375 and 390 there is no
+regression at all — the name's cell is 88px for `Mohamed` and 121px for `Abdulrahman`
+before and after, because at those widths the name never filled its cell. At **320px** the
+budget is 69px and a 7–8 character name now clips where 8 characters fitted, since the
+single line must also hold the flag, the badge and the gaps the two-line layout spread
+across two rows. That is the shape of the owner's own request and it is recorded so nobody
+"fixes" it later without knowing what it buys.
+
+**AND IT MAKES AN EXISTING COMMENT UNTRUE, WHICH IS CORRECTED IN THE SAME COMMIT.**
+`index.css`'s `@media (max-height: 660px)` rule hides the MY NUMBER card on a short phone,
+and its justification read *"your number is still in the top bar and on Profile"*. The
+top-bar half is now false: below 660px the only remaining copies are the dial readout and
+Profile. A stale justification is worse than none — it is the sentence the next person
+removing something from this screen will read.
+
+**FIVE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, every one having frozen exactly what
+the owner asked to change: the element-order test listed a `pin` term, the token test froze
+`--relay-green-text` on a strip that no longer paints a number (it now pins the CSS values
+plus an `fs` walk proving a consumer still exists), the shrinker test froze the two-line
+arrangement, and `appShellVersionLabel.test.ts` asserted the bar "carries all three" —
+which was the de-duplication argument the v2.105.19 avatar-menu removal rests on. That
+argument now covers two of the three, so the test says so **and** asserts the third stayed
+reachable: Profile is one tap from the same menu and still renders `formatPin`. A NEW pin
+requires the strip to carry no `formatPin` and no `number` at all, with `formatPin` still
+exported so the removal is a decision rather than a deletion.
+
+No schema change, no new dependency, no new env var, no server change. 5244 tests.
+
 ## v2.106.76 — the route buttons stop trying and start asking (2026-08-01)
 
 The owner re-uploaded `relaypushbackendconfig.md` a fourth time. The diff against the

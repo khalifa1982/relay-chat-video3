@@ -161,24 +161,43 @@ export function BrandMark() {
 }
 
 /**
- * flag · FIRST NAME · badge  /  PIN
+ * flag · FIRST NAME · badge
  *
  * INERT as of v2.99.94 — it displays who you are and navigates nowhere. It was a
  * shortcut to Profile in v2.99.86; the owner has since asked for the opposite ("no
  * need to take him to the profile only … there is two places to be clicked"), so the
  * whole middle of the bar is now a label. Profile remains one tap away inside the
  * avatar's menu.
+ *
+ * ── ONE LINE, AND THE NUMBER IS GONE (v2.106.77) ────────────────────────────
+ * v2.99.86 made this TWO lines and the reason was sound at the time: seven
+ * monospace digits are ATOMIC — they cannot ellipsize without lying about
+ * somebody's number — so the PIN could not share a line with a name that
+ * truncates. That constraint dies with the PIN itself.
+ *
+ * The owner asked for the number to come out ("remove the pin"), chosen against
+ * the alternatives with the trade stated: on the Dialer their number was on
+ * screen THREE times (here, the MY NUMBER card, and the dial readout), and this
+ * is the copy that carries no affordance — the card below it has copy, QR and
+ * share attached to the same digits.
+ *
+ * SAID PLAINLY, because it is the cost: the Dialer is the only tab with that
+ * card, so on Messages / History / Contacts / Groups the viewer's own number is
+ * now reachable only from Profile rather than from the chrome. That is the
+ * decluttering they asked for, not an oversight.
+ *
+ * The name grows into the freed space. It stays the ONLY shrinkable element, so
+ * the row still cannot overflow — a longer name truncates, which is the
+ * behaviour a name has and a number does not.
  */
 export function IdentityStrip({
   displayName,
-  number,
   role,
   verified,
   countryCode,
   countryName,
 }: {
   displayName: string;
-  number: string;
   role?: string | null;
   verified?: boolean | null;
   countryCode?: string | null;
@@ -188,34 +207,22 @@ export function IdentityStrip({
   return (
     <div
       title={displayName}
-      className="flex-1 min-w-0 flex flex-col items-center justify-center gap-0 px-1"
+      className="flex-1 min-w-0 flex items-center justify-center gap-1.5 px-1"
     >
-      <span className="flex items-center gap-1.5 max-w-full">
-        {/* The flag box is RESERVED whether or not geo resolved. `geoSelf` returns a
-            null country for a LAN, VPN or GeoIP miss, and CountryFlag renders
-            nothing for a non-2-letter code — so without a reserved box the whole
-            identity block shifted sideways the moment geo landed, moving where the
-            name truncates mid-session. "Little small size, not the normal size." */}
-        <span className="shrink-0 grid place-items-center w-[15px]" aria-hidden={!countryCode}>
-          <CountryFlag code={countryCode} title={countryName ?? countryCode ?? ""} className="text-[11px] leading-none" />
-        </span>
-        {/* The name is the ONLY shrinker in the row — everything else is atomic. */}
-        <span className="min-w-0 truncate text-[13px] font-semibold leading-tight text-foreground">
-          {first}
-        </span>
-        <span className="shrink-0 leading-none">
-          <RoleBadge role={roleFromFlags(role, verified)} size={14} />
-        </span>
+      {/* The flag box is RESERVED whether or not geo resolved. `geoSelf` returns a
+          null country for a LAN, VPN or GeoIP miss, and CountryFlag renders
+          nothing for a non-2-letter code — so without a reserved box the whole
+          identity block shifted sideways the moment geo landed, moving where the
+          name truncates mid-session. "Little small size, not the normal size." */}
+      <span className="shrink-0 grid place-items-center w-[15px]" aria-hidden={!countryCode}>
+        <CountryFlag code={countryCode} title={countryName ?? countryCode ?? ""} className="text-[11px] leading-none" />
       </span>
-      {/* The PIN, alone on line 2 so it can never be squeezed. `dir="ltr"` plus bidi
-          ISOLATION (the v2.99.77 lesson) so an Arabic first name above cannot
-          reorder the digits or the dash. The green is a token measured to pass AA in
-          BOTH themes — the presence-LED green fails it for text at this size. */}
-      <span
-        dir="ltr"
-        className="font-mono text-[11.5px] font-semibold leading-tight tabular-nums [unicode-bidi:isolate] text-[color:var(--relay-green-text)]"
-      >
-        {formatPin(number)}
+      {/* The name is the ONLY shrinker in the row — everything else is atomic. */}
+      <span className="min-w-0 truncate text-[16px] font-semibold leading-tight text-foreground">
+        {first}
+      </span>
+      <span className="shrink-0 leading-none">
+        <RoleBadge role={roleFromFlags(role, verified)} size={15} />
       </span>
     </div>
   );

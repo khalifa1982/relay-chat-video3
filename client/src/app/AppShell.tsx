@@ -858,10 +858,11 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
               would mean two subscriptions to the connection store and the same
               breakpoint restated in two places. */}
           <BrandMark />
-          {/* MIDDLE — flag · first name · badge over the PIN. Inert (v2.99.94). */}
+          {/* MIDDLE — flag · first name · badge, on one line. Inert (v2.99.94).
+              The PIN left this strip in v2.106.77 at the owner's request; the
+              number lives on the Dialer's MY NUMBER card and in Profile. */}
           <IdentityStrip
             displayName={me.displayName}
-            number={me.number}
             role={me.role}
             verified={me.verified}
             countryCode={geo.data?.country}

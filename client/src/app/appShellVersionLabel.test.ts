@@ -95,27 +95,47 @@ describe("v2.105.19 — the account menu header shows the build", () => {
     expect(code).not.toMatch(/formatNumber\(me\.number\)/);
   });
 
-  it("the top bar behind the menu still carries all three — that is what makes the removal safe", () => {
-    /* The removal is a de-duplication argument and it is only true while the bar
-       holds the originals. If a later release strips the strip, this goes red and
-       the menu has to be reconsidered, rather than quietly leaving somebody with
-       nowhere to read their own number.
+  it("the top bar behind the menu still carries the NAME and the BADGE — what is left of the removal argument", () => {
+    /* The v2.105.19 menu-header removal is a de-duplication argument, and it is
+       only true while the bar holds the originals. If a later release strips the
+       strip, this goes red and the menu has to be reconsidered.
+
+       REWRITTEN v2.106.77, and the honest version is weaker than the original.
+       This used to require all THREE — name, badge and PIN. The owner has since
+       asked for the number to leave the top bar ("remove the pin"), so the
+       de-duplication argument now covers two of the three and the third is
+       DELIBERATELY not in the chrome at all: the number lives on the Dialer's MY
+       NUMBER card and in Profile.
+
+       Said plainly rather than papered over: on Messages / History / Contacts /
+       Groups the viewer's own number is no longer one glance away, it is one tap
+       (avatar → Profile). That was the owner's call, made against a screenshot
+       where the number was on screen three times. The test records it so a future
+       reader does not "restore" it as a bug.
 
        FOUND BY MUTATION: this first read `toMatch(/<IdentityStrip/)`, which
        `{false && <IdentityStrip …}` satisfies untouched — the pin froze the
        element's PRESENCE while saying nothing about whether it renders. So it now
-       requires the element to open a line of its own, which a gate cannot do.
-       Pin-the-location-not-the-property, for the second release running. */
+       requires the element to open a line of its own, which a gate cannot do. */
     const mount = SHELL.split("\n").filter((l) => l.includes("<IdentityStrip"));
     expect(mount, "exactly one mount").toHaveLength(1);
     expect(mount[0]).toMatch(/^\s*<IdentityStrip$/);
     const strip = SHELL.slice(SHELL.indexOf("<IdentityStrip"));
     expect(strip.slice(0, 400)).toMatch(/displayName=\{me\.displayName\}/);
-    expect(strip.slice(0, 400)).toMatch(/number=\{me\.number\}/);
     // …and the component really renders each of them.
     expect(TOPBAR).toMatch(/firstNameOf\(displayName\)/);
     expect(TOPBAR).toMatch(/<RoleBadge role=\{roleFromFlags\(role, verified\)\}/);
-    expect(TOPBAR).toMatch(/\{formatPin\(number\)\}/);
+    // The number is passed NOWHERE — not merely unrendered. A prop that is still
+    // threaded in is how it comes back by accident.
+    expect(strip.slice(0, 400), "the strip is not handed a number").not.toMatch(/number=/);
+
+    // AND THE NUMBER REMAINS REACHABLE, which is the half that keeps the removal
+    // honest rather than a loss. Profile is one tap from this very menu, and it
+    // renders the number itself.
+    expect(SHELL, "Profile is reachable from the account menu").toContain("requestProfilePane");
+    // `read` resolves against this directory (client/src/app), so Profile is ../pages/app.
+    const PROFILE = read("../pages/app/Profile.tsx");
+    expect(PROFILE, "Profile still shows the number").toMatch(/formatPin\(/);
   });
 
   it("the menu keeps every ACTION it had — only the header changed", () => {

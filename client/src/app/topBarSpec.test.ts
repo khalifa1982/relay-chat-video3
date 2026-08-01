@@ -169,22 +169,43 @@ describe("LEFT — the glossy RELAY mark", () => {
   });
 });
 
-describe("MIDDLE — flag · first name · badge over the PIN", () => {
+describe("MIDDLE — flag · first name · badge, on one line", () => {
   it("renders them in the owner's order", () => {
     // Anchored from `return (` with UNAMBIGUOUS needles. `{formatPin(number)}` alone
     // also matches inside the aria-label's `${formatPin(number)}`, which put the PIN
     // at position 440 and made this test read the order backwards — my bug, not the
     // component's.
+    //
+    // REWRITTEN v2.106.77: the fourth term was the PIN, which the owner asked to
+    // remove from this bar. The surviving property is the order of the three that
+    // remain.
     const decl = TOPBAR.slice(TOPBAR.indexOf("export function IdentityStrip"));
     const strip = decl.slice(decl.indexOf("  return ("));
     const flag = strip.indexOf("<CountryFlag");
     const name = strip.indexOf("{first}");
     const badge = strip.indexOf("<RoleBadge");
-    const pin = strip.indexOf(">\n        {formatPin(number)}");
     expect(flag).toBeGreaterThan(0);
     expect(flag).toBeLessThan(name);
     expect(name).toBeLessThan(badge);
-    expect(badge).toBeLessThan(pin);
+  });
+
+  it("carries NO number — that is the owner's ask, pinned so it cannot creep back", () => {
+    // v2.106.77. Their words: "remove the pin". On the Dialer the viewer's own
+    // number was on screen THREE times — here, the MY NUMBER card, and the dial
+    // readout — and this was the copy with no affordance attached to it.
+    //
+    // Pinned as an ABSENCE rather than trusted, because the natural instinct of a
+    // later reader looking at a bar with a name in it is to put the number back
+    // under it, which is exactly what was removed.
+    const decl = TOPBAR.slice(TOPBAR.indexOf("export function IdentityStrip"));
+    const strip = codeOnly(decl.slice(decl.indexOf("  return (")));
+    expect(strip.length).toBeGreaterThan(100);
+    expect(strip, "no formatted PIN in the strip").not.toMatch(/formatPin/);
+    expect(strip, "no raw number either").not.toMatch(/\bnumber\b/);
+    // formatPin itself is UNTOUCHED and still exported — Profile, Admin, the group
+    // picker and pinInput all import it from here. Removing the strip's use of it
+    // must not remove the helper.
+    expect(TOPBAR).toMatch(/export function formatPin/);
   });
 
   it("the flag is SMALLER than the app's normal size, and its box is RESERVED", () => {
@@ -196,27 +217,50 @@ describe("MIDDLE — flag · first name · badge over the PIN", () => {
     expect(TOPBAR).toMatch(/grid place-items-center w-\[15px\]/);
   });
 
-  it("the PIN is green, from a token rather than a literal", () => {
-    expect(TOPBAR).toMatch(/text-\[color:var\(--relay-green-text\)\]/);
+  it("the measured green-text token survives the PIN leaving this bar", () => {
+    // REWRITTEN v2.106.77. This used to ALSO assert the top bar's own PIN carried
+    // the token — an element that no longer exists. What it stood for is a
+    // property of the STYLESHEET, and that is untouched and still load-bearing:
+    // the token backs a 6-digit number wherever one is rendered as text (the
+    // Contacts row, v2.106.43), so its measured values must not drift.
+    //
     // MEASURED: the presence-LED green is 4.46:1 on the light card — it FAILS AA
     // for text this size — so green text has its own token, darker in light theme.
     expect(CSS).toMatch(/--relay-green-text: oklch\(0\.48 0\.18 145\)/);
     expect(CSS).toMatch(/--relay-green-text: oklch\(0\.76 0\.16 145\)/);
     // The LED green is deliberately untouched: a 12px dot is not text.
     expect(CSS).toMatch(/--relay-online: oklch\(0\.55 0\.18 145\)/);
-  });
-
-  it("the digits are bidi-isolated so an Arabic name cannot reorder them", () => {
-    expect(TOPBAR).toMatch(/dir="ltr"/);
-    expect(TOPBAR).toMatch(/\[unicode-bidi:isolate\]/);
+    // And the token still has a real consumer somewhere in the client, or it has
+    // rotted into a value nothing reads. Scanned rather than named, so the
+    // consumer is free to move.
+    const walk = (dir: string): string[] =>
+      fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) return walk(p);
+        return /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [p] : [];
+      });
+    const consumers = walk(path.join(ROOT, "client/src")).filter(p =>
+      fs.readFileSync(p, "utf8").includes("--relay-green-text"),
+    );
+    expect(consumers.length, "--relay-green-text still has a consumer").toBeGreaterThan(0);
   });
 
   it("the NAME is the only shrinker — everything else is atomic", () => {
+    // The name grew (13px → 16px) into the space the PIN vacated. Bounded rather
+    // than frozen: the property is that it is the ONE element allowed to shrink,
+    // which is what stops the row overflowing at 320px now that it is a single
+    // line. A retune stays free; making the flag or badge shrinkable does not.
     const strip = TOPBAR.slice(TOPBAR.indexOf("export function IdentityStrip"));
-    expect(strip).toMatch(/min-w-0 truncate text-\[13px\]/);
+    const nameClass = /min-w-0 truncate text-\[(\d+)px\]/.exec(strip);
+    expect(nameClass, "the name is min-w-0 + truncate with an explicit size").not.toBeNull();
+    expect(Number(nameClass![1])).toBeGreaterThanOrEqual(13);
+    expect(Number(nameClass![1])).toBeLessThanOrEqual(18);
     // The flag and the badge must not shrink, or they distort/clip instead.
     expect(strip).toMatch(/shrink-0 grid place-items-center/);
     expect(strip).toMatch(/<span className="shrink-0 leading-none">\s*<RoleBadge/);
+    // ONE line now, so nothing may reintroduce a second row inside the strip.
+    const ret = codeOnly(strip.slice(strip.indexOf("  return (")));
+    expect(ret, "the strip is a single row").not.toMatch(/flex-col/);
   });
 
   it("is INERT — it navigates nowhere, and the old right-hand identity is gone", () => {
