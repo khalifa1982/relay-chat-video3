@@ -18248,6 +18248,72 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.71 — the staged APNs config is reachable, and a 400 no longer deregisters (2026-08-01)
+
+The owner re-uploaded `relaypushbackendconfig.md` and asked *"Have you done this?"*.
+The file is **byte-identical** to the one v2.106.69 answered (`diff` is empty), so the
+answer is yes — but checking it CLAUSE BY CLAUSE against the source, rather than against
+my own notes, found **two more gaps**. Both are the same shape as the FCM defect that
+release fixed.
+
+**1. A FLEET CONFIGURED LITERALLY TO THE DOC'S OWN TABLE COULD NOT RING AN iPHONE.**
+The table's "Env" row lists exactly two variables — `APNS_KEY_ID` and `APNS_TEAM_ID` —
+and names **no topic variable and no bundle id**, while stating the topic as a fixed
+value (`apns-topic: com.app.relaymobile.voip`) in its own send section. `apnsVoipConfig()`
+returns null without a topic, so such a fleet had APNs unconfigured, no iPhone rang, and
+the admin Push Doctor honestly reported "not configured" over a credential the doc
+records as **staged and proven on a physical handset**. The table likewise names no
+variable for the key file it locates at `/home/relay/apns-key.p8`.
+
+Both now fall back to the owner's staged values — **as a LAST resort, never an
+override**. Every variable is read first, so any deployment that configures itself is
+byte-identical; the fallback only rescues the case that would otherwise be silent, and
+an unreadable path falls THROUGH rather than failing shut (the reasoning v2.106.69
+recorded for `GOOGLE_APPLICATION_CREDENTIALS`). The topic value is independently
+corroborated: the certificate the owner sent carries `UID=com.app.relaymobile.voip`.
+
+**2. A 400 WAS SELF-DEREGISTERING — THE v2.106.69 FCM DEFECT, STILL LIVE ON APNs.**
+The gate was `status === 410 || /BadDeviceToken|Unregistered/`. Apple documents
+`BadDeviceToken` as *"verify that the request contains a valid token **and that the
+token matches the environment**"* — so a perfectly live token answers 400 whenever
+`APNS_ENV` disagrees with the build that registered it, and the old rule **deleted it**.
+One environment mismatch would have wiped every iPhone registration in the fleet,
+permanently, on the first push after a deploy, with those handsets never ringing again
+and nothing saying why. `DeviceTokenNotForTopic` is the same shape for a topic mismatch
+— which the new topic fallback can itself produce, so the two fixes had to land together.
+
+**The owner's own doc says only "prune on APNs 410 / FCM UNREGISTERED"**, so the code
+was more aggressive than the spec it implements. Now 410 (and the `Unregistered` reason
+it carries) prunes; every other failure is KEPT and logged loudly, naming the likely
+cause. The asymmetry decides it, as it did for FCM: a stale token costs one wasted
+request per call, a wrongly-pruned live token costs that user every call.
+
+**7 of 7 tripwires verified by MUTATION** off a confirmed-GREEN baseline from a
+byte-exact backup, the mutator aborting unless its target occurs exactly once, source
+byte-identical afterwards — including the topic fallback removed, the fallback made to
+OVERRIDE the environment in both directions, the staged path repointed, the original
+`BadDeviceToken` prune reinstated verbatim, and the warning silenced.
+
+**ONE SURVIVED THE FIRST RUN AND IT WAS A REAL GAP IN MY OWN TEST**: the `.p8` case sets
+`APNS_P8_KEY` explicitly and therefore never reaches the fallback, so deleting it changed
+nothing. Said plainly, that property **cannot be told apart behaviourally here** — the
+staged path does not exist in this sandbox and a test has no business creating it — so it
+is a source pin, and the honest reason is recorded in the test.
+
+**AND THE PROSE TRAP FIRED FOR THE SEVENTEENTH TIME**, in the assertion written to catch
+this very regression: the comment explaining the fix contains the word `BadDeviceToken`
+that the sweep forbids, so it failed on correct source until it ran on `codeOnly`.
+
+**ONE PRE-EXISTING PIN REWRITTEN TO THE PROPERTY**: it asserted that key + keyId + teamId
+with no topic env reads as UNCONFIGURED — i.e. it froze exactly the defect — while the
+rule it stands for (each credential half is required) is separately pinned one test below
+and still green.
+
+**SAID PLAINLY: still not verified on a handset.** There is no iPhone here and APNs is
+unreachable from this sandbox. What is proven is that a fleet holding the doc's staged
+credentials can now see them, and that a misconfiguration can no longer destroy a live
+registration. No schema change, no new dependency, no new env var. 5183 tests.
+
 ## v2.106.70 — search by name **or** number, in every box (2026-08-01)
 
 The owner, twice: *"any type of box you can search either by name … or by pin number …
