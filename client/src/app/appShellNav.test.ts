@@ -132,7 +132,11 @@ describe("AppShell — per-tab active accent colors + premium icons", () => {
   });
 
   it("unread/missed badges survived the redesign", () => {
-    expect(SHELL).toMatch(/tab\.key === "messages" && unreadTotal > 0/);
+    // v2.106.64 — the unread badge is per-tab now (Messages counts DMs, Groups counts
+    // groups), because the two lists became disjoint. The property here is only that
+    // BOTH kinds of badge still exist; which tab counts what is pinned in
+    // fiveTabShell.test.ts, where the split itself lives.
+    expect(SHELL).toMatch(/unreadDirect : unreadGroups/);
     expect(SHELL).toMatch(/tab\.key === "history" && missedCount > 0/);
   });
 });

@@ -290,12 +290,23 @@ describe("no capability was lost", () => {
     expect(R).toMatch(/Invite copied/);
   });
 
-  it("the section is still collapsed by default and costs nothing while closed", () => {
-    // Opening by default would add a party-lines query plus a 15s poll to every
-    // open of a modal most people open to pick contacts.
-    expect(R).toMatch(/useState\(false\)/);
+  it("a CLOSED mount costs nothing, and the dial picker still mounts it closed", () => {
+    /* v2.106.64 — this froze `useState(false)`, i.e. the section could never be opened by
+       default anywhere. The owner asked for group calls to live in the Groups tab, where
+       this list IS the section rather than a fold-out inside a contact picker, so it
+       mounts open there.
+
+       The rule the old pin stood for is unchanged and is what is asserted now: an open
+       state is the CALLER's choice, and while closed the query and its 15s poll do not
+       run — so the picker, which most people open to pick contacts, still pays nothing. */
+    expect(R).toMatch(/useState\(defaultOpen\)/);
+    expect(R).toMatch(/defaultOpen = false/); // the DEFAULT is still closed
     expect(R).toMatch(/enabled: open/);
     expect(R).toMatch(/refetchInterval: open \? 15_000 : false/);
+    // The dial picker mounts it with no override, so it is closed there exactly as
+    // before. Asserted against the whole FILE rather than `R`, which is this component's
+    // own body and cannot contain its caller.
+    expect(SRC).toMatch(/<PartyLinesSection onJoined=\{onClose\} \/>/);
   });
 
   it("each row is a DIV containing buttons, never a nested button", () => {

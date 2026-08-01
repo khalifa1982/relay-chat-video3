@@ -305,10 +305,16 @@ describe("what the group's own identity looks like on screen", () => {
   it("the Groups section already existed and still does", () => {
     // Confirmed rather than rebuilt: the owner asked for a groups section and
     // Messages has had one. This pins it so the rename/rework did not lose it.
-    expect(MESSAGES).toMatch(/key: "groups",\s*\n\s*label: "Groups",/);
-    // v2.103.0 widened this: archived threads leave their section and gather in an
-    // Archived one, so the Groups filter now also excludes them. The PROPERTY is
-    // that a "Groups" section exists and holds group threads.
+    //
+    // v2.106.64 — the LABEL moved from "Groups" to "Group chats" and the section is now
+    // built only in the groups scope, because the tab itself says Groups and the section
+    // beside it says Group calls; the old pin froze the label AND its position in a
+    // both-scopes array, so it forbade that while saying nothing about the property.
+    // The property is that a section exists whose rows are the non-archived groups.
+    expect(MESSAGES).toMatch(/key: "groups",/);
     expect(MESSAGES).toMatch(/rows: list\.filter\(\(t\) => t\.kind === "group" && !t\.archived\)/);
+    // …and that it is the GROUPS tab that renders it, so "the group section" is a real
+    // place rather than a heading that could appear anywhere.
+    expect(MESSAGES).toMatch(/only === "groups"\s*\n?\s*\?\s*\[/);
   });
 });

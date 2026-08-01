@@ -12,6 +12,7 @@ import {
   Mic,
   Image as ImageIcon,
   Phone,
+  PhoneCall,
   Video,
   Search,
   MessageSquare,
@@ -87,6 +88,7 @@ import { describeProfileStatus } from "@shared/profileStatus";
 import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
 import { formatLastSeen } from "@shared/profileFields";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
+import { GroupCallScreen, PartyLinesSection } from "./GroupCallScreen";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { videoRecorderSupported } from "@/lib/videoNote";
 import { VideoRecordSheet } from "@/app/VideoRecordSheet";
@@ -325,6 +327,8 @@ export default function MessagesPage({
   // GROUPS / NOTES sections. Derived purely from the existing threads query
   // (no new request, no data-flow change); collapse state is UI-only.
   const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
+  /** v2.106.64 — the ad-hoc group-call picker, opened from the Groups tab's call section. */
+  const [showGroupCall, setShowGroupCall] = useState(false);
   // Thread-list search (v2.95): filter conversations by peer name/number. Pure
   // client filter over the already-loaded list — instant, no new request.
   const [threadSearch, setThreadSearch] = useState("");
@@ -338,9 +342,17 @@ export default function MessagesPage({
   // SCOPED list: `threads.data.length` counts DMs, so on the Groups tab of an account
   // with DMs and no groups it reads non-zero and the page falls through to the
   // no-search-matches branch, rendering `No conversations match “”`.
+  //
+  // v2.106.64 — the split is now BOTH ways. Owner: *"from the messages section, remove
+  // the group message and just keep it in the group section"*. Messages is DMs and Notes;
+  // Groups is groups. The complement is taken on the same INPUT for the same reason the
+  // narrowing was: `archived` is kind-agnostic, so filtering by picking categories would
+  // leave an archived GROUP sitting in a tab that no longer holds groups.
   const scopedThreads = useMemo(() => {
     const all = threads.data ?? [];
-    return only === "groups" ? all.filter((t) => t.kind === "group") : all;
+    return only === "groups"
+      ? all.filter((t) => t.kind === "group")
+      : all.filter((t) => t.kind !== "group");
   }, [threads.data, only]);
   const threadCategories = useMemo(() => {
     const scoped = scopedThreads;
@@ -365,30 +377,40 @@ export default function MessagesPage({
       icon: ReactNode;
       rows: typeof list;
     }[] = [
-      {
-        key: "direct",
-        label: "Direct",
-        rgb: "251,146,60",
-        hex: "#fb923c",
-        icon: <MessageSquare className="size-3.5" />,
-        rows: list.filter((t) => t.kind !== "group" && !isNotes(t) && !t.archived),
-      },
-      {
-        key: "groups",
-        label: "Groups",
-        rgb: "167,139,250",
-        hex: "#a78bfa",
-        icon: <Users className="size-3.5" />,
-        rows: list.filter((t) => t.kind === "group" && !t.archived),
-      },
-      {
-        key: "notes",
-        label: "Notes",
-        rgb: "251,191,36",
-        hex: "#fbbf24",
-        icon: <StickyNote className="size-3.5" />,
-        rows: list.filter((t) => isNotes(t) && !t.archived),
-      },
+      // v2.106.64 — the sections are built PER SCOPE rather than defined for both and
+      // left to filter to nothing. A "Groups" heading declared on the Messages tab is
+      // dead code that reads as live: it would silently come back the moment anything
+      // upstream stopped excluding groups, which is exactly the regression this split
+      // has to survive.
+      ...(only === "groups"
+        ? [
+            {
+              key: "groups",
+              label: "Group chats",
+              rgb: "167,139,250",
+              hex: "#a78bfa",
+              icon: <Users className="size-3.5" />,
+              rows: list.filter((t) => t.kind === "group" && !t.archived),
+            },
+          ]
+        : [
+            {
+              key: "direct",
+              label: "Direct",
+              rgb: "251,146,60",
+              hex: "#fb923c",
+              icon: <MessageSquare className="size-3.5" />,
+              rows: list.filter((t) => t.kind !== "group" && !isNotes(t) && !t.archived),
+            },
+            {
+              key: "notes",
+              label: "Notes",
+              rgb: "251,191,36",
+              hex: "#fbbf24",
+              icon: <StickyNote className="size-3.5" />,
+              rows: list.filter((t) => isNotes(t) && !t.archived),
+            },
+          ]),
       {
         // v2.103.0 — archived threads leave the other sections and gather here, LAST,
         // which is the whole point of archiving: out of the way but not gone. The
@@ -406,7 +428,10 @@ export default function MessagesPage({
     // was missing here — so typing in the search box re-rendered yet returned the
     // cached unfiltered list (threads.data is stable via structural sharing), and
     // search silently did nothing.
-  }, [scopedThreads, me, threadSearch]);
+    // `only` is an explicit dep even though `scopedThreads` already moves with it: the
+    // section LIST is now derived from it too, and depending on that coupling is how a
+    // memo comes to serve a stale section set (the v2.99.22 H3 shape).
+  }, [scopedThreads, me, threadSearch, only]);
 
   /**
    * The swipe actions (v2.103.0). Every one is a TOGGLE reading the row's own state, so
@@ -537,6 +562,18 @@ export default function MessagesPage({
         <div className="flex-1 overflow-y-auto">
           {/* Rich user status (story-style) — rings for me + contacts, above the threads. */}
           <StatusStrip />
+          {/* v2.106.64 — GROUP CALLS live in the group section, per the owner: *"in the
+              group section, add group calls … so in the group section you will have a
+              group call and group message"*. A party line is the durable thing a group
+              call leaves behind (a titled room with its own 6-digit number you can
+              return to), which is why it is what this section lists; an ad-hoc
+              conference ends, and its record is History's job rather than a second copy
+              here. `PartyLinesSection` is the SAME component the dial picker mounts —
+              two lists of the same lines is how the two come to disagree about which
+              exist. It sits ABOVE the chats because it is the half that was missing. */}
+          {only === "groups" && (
+            <GroupCallsSection onOpenPicker={() => setShowGroupCall(true)} />
+          )}
           {threads.isError ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
               <p>Couldn't load your conversations.</p>
@@ -1034,6 +1071,60 @@ export default function MessagesPage({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* The ad-hoc picker, mounted at the ROOT rather than inside the scrolling list:
+          it is a full-screen surface, and a modal nested in a scroll container that
+          unmounts under it is how a picker ends up half on screen. */}
+      {showGroupCall && <GroupCallScreen onClose={() => setShowGroupCall(false)} />}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────── */
+
+/**
+ * GROUP CALLS, in the group section (v2.106.64).
+ *
+ * Owner: *"in the group section, add group calls where whenever you create any group
+ * calls or conference call, it will be there so in the group section you will have a
+ * group call and group message."*
+ *
+ * WHAT A "GROUP CALL THAT IS THERE" ACTUALLY IS. An ad-hoc conference is over when the
+ * last person leaves — nothing persists but the History row, which is History's job. A
+ * PARTY LINE is the durable one: a titled room with its own 6-digit number that stays
+ * dialable and shows how many are on it right now, which is the thing you can come back
+ * to and therefore the thing a list can hold. So this section lists the lines and offers
+ * the picker for a call you want to place immediately.
+ *
+ * `PartyLinesSection` is the SAME component the Dialer's picker mounts, imported rather
+ * than reimplemented — two lists of the same lines is how the two come to disagree about
+ * which exist, which is the class this repo keeps removing.
+ */
+function GroupCallsSection({ onOpenPicker }: { onOpenPicker: () => void }) {
+  return (
+    <div className="border-b border-border/60">
+      <div className="flex items-center gap-2 px-4 md:px-5 pt-3 pb-1.5 text-muted-foreground">
+        <span className="grid place-items-center" style={{ color: "#22d3ee" }}>
+          <PhoneCall className="size-3.5" />
+        </span>
+        <span className="flex-1 text-left text-[11px] font-bold uppercase tracking-[0.12em]">
+          Group calls
+        </span>
+      </div>
+      <div className="px-4 md:px-5 pb-2">
+        <button
+          type="button"
+          onClick={onOpenPicker}
+          className="rchip-accent flex min-h-11 w-full items-center justify-center gap-2 rounded-[11px] px-4 text-[12px] font-bold transition"
+        >
+          <Users className="size-4" />
+          Start a group call
+        </button>
+      </div>
+      {/* `onJoined` is a no-op rather than a close: this is a LIST on a tab, not a modal
+          over the call, so there is nothing to dismiss — the engine's own call UI takes
+          the screen from here. */}
+      <PartyLinesSection onJoined={() => {}} defaultOpen />
     </div>
   );
 }

@@ -11278,6 +11278,98 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.64 — Messages and Groups now partition the list, and Groups holds the calls (2026-08-01)
+
+Owner, three items from one message:
+
+  *"Also from the messages section, remove the group message and just keep it in the group
+  section"*
+
+  *"in the group section, add group calls where whenever you create any group calls or
+  conference call, it will be there so in the group section you will have a group call and
+  group message"*
+
+  *"it will list all groups messages and if there is any new message inside the group, it
+  will appear the first unless if you put it as a pin"*
+
+**THE THIRD WAS ALREADY TRUE AND IS PINNED RATHER THAN REBUILT.** `listThreads` has sorted
+pinned-first-then-newest since v2.103.0, and the Groups tab is that same list narrowed — so
+a group that receives a message already rose to the top, and a pinned one already stayed
+above it. Saying so plainly is better than shipping a second sort; a client-side re-sort is
+how the two come to disagree, so the test forbids one.
+
+**THE SPLIT RUNS BOTH WAYS NOW, AND THE SCOPE IS TAKEN ON THE INPUT.** Groups has been
+`MessagesPage` narrowed to `kind === "group"` since v2.106.2; Messages was still everything.
+The else-arm is now the COMPLEMENT — and it is written `!== "group"` rather than as an
+allow-list of the other kinds, because those are not the same rule: an allow-list that
+misses a kind puts that conversation in NEITHER tab, which is not a wrong list but a
+DISAPPEARED conversation, with nothing anywhere saying so. Complement means exhaustive by
+construction. It stays on the INPUT for the reason the memo exists at all: `archived` is
+kind-agnostic, so narrowing by picking categories leaves an archived GROUP sitting in a tab
+that holds no groups — measured, and it is one of the twelve checks below.
+
+**THE SECTION LIST IS BUILT PER SCOPE rather than defined for both and left to filter to
+nothing.** A "Groups" heading declared on the Messages tab renders nothing today only
+because its rows filter to zero — dead code that reads as live, and that would come back
+silently the moment anything upstream stopped excluding groups, which is exactly the
+regression this has to survive.
+
+**THE BADGE IS THE HALF THAT BREAKS SILENTLY, and it is where most of the care went.**
+`unreadTotal` counted every thread and rendered only on the Messages tab. With the lists
+disjoint, a group message would have lit the MESSAGES badge for a thread that tab no longer
+contains — you tap it and find nothing, the silent-no-op class. The count is now split by
+ONE pass that puts each thread in exactly one bucket (two independent reduces is how the
+two come to drift), each tab renders its own, and `unreadTotal` SURVIVES as their sum
+because the "while you were away" card is about the ACCOUNT rather than about one tab. That
+card also names one conversation, so it now routes to the tab that actually holds it.
+
+**GROUP CALLS: WHAT A "CALL THAT IS THERE" ACTUALLY IS.** An ad-hoc conference is over when
+the last person leaves — nothing persists but the History row, which is History's job, and
+a second copy in Groups would be duplication rather than a feature. A PARTY LINE is the
+durable one: a titled room with its own 6-digit number that stays dialable and reports how
+many are on it right now. That is the thing a list can hold and the thing you can return
+to, so the section lists the lines and offers the picker for a call to place immediately.
+
+**ONE COMPONENT, TWO MOUNTS.** `PartyLinesSection` is exported and IMPORTED by Messages
+rather than reimplemented — two lists of the same lines is how the two come to disagree
+about which exist, the class this repo keeps removing. It gained a `defaultOpen` prop
+because in the Groups tab it IS the section rather than a fold-out inside a contact picker;
+the DEFAULT is still closed, and `enabled: open` means the dial picker still pays nothing,
+which is the rule the old pin stood for. The ad-hoc picker is mounted at the ROOT of the
+page, not inside the scroll container, because a full-screen modal nested in a list that
+unmounts under it is how a picker ends up half on screen.
+
+**VERIFIED BY DRIVING THE REAL BUNDLE, 12/12** at 390px in dark against a fixture holding a
+DM, a group and an ARCHIVED group: Messages shows the DM and neither group (including the
+archived one — the leak case) and has no call section; Groups shows the group, the archived
+group under Archived, and not the DM; Groups offers "Start a group call" and lists the
+party line open by default with its live count; the Messages badge reads 3 and the Groups
+badge reads 5; zero page errors.
+
+**TWO HARNESS BUGS OF MY OWN PRODUCED FIVE FAILS ON CORRECT CODE and are reported rather
+than counted**: `innerText` is layout-dependent and read empty for a list the screenshot
+shows plainly, and `querySelector("aside")` returns the FIRST aside — the DESKTOP SIDEBAR,
+hidden at 390px, whose text is nothing but nav labels. Reporting either as a product
+failure would have been a false finding of the v2.106.0 class. The harness now reads
+`textContent` page-wide and ABORTS unless a substantial list rendered.
+
+**15 of 15 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once, all four sources
+byte-identical afterwards — including Messages keeping groups, the allow-list arm that
+loses a kind, the scope moved off the input, the section list defined for both scopes,
+`only` dropped from the deps, the call section removed, the picker mounted inside the
+scroller, the badge reverted to one total, the two buckets split into drifting reduces, the
+away card routed to Messages regardless, and the pinned-first sort deleted.
+
+**FIVE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY, and every one had frozen exactly what
+the owner asked to change** — two froze `tab.key === "messages" && unreadTotal > 0`, one of
+them with the recorded reason *"the Messages list still contains every group thread, so its
+count is the complete one"*, which is the sentence this release makes false; one froze the
+one-way narrowing; one froze the section's `label: "Groups"` and its position in a
+both-scopes array; and one froze `useState(false)` on the party-line section, i.e. it
+forbade the section ever being opened by default anywhere. Each now asserts the rule rather
+than the arrangement. No schema change, no new dependency, no new env var. 5094 tests.
+
 ## v2.106.63 — a RELAY number could be typed past six digits, in four boxes (2026-07-31)
 
 Owner, stated twice in one message: *"anywhere in the system for the pin number don't exceed
