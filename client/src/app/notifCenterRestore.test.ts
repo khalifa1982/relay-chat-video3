@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { codeOnly } from "../../../server/testing/codeOnly";
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
 
 const CLIENT = join(process.cwd(), "client", "src");
 const code = (p: string) => codeOnly(readFileSync(join(CLIENT, p), "utf8"));
@@ -68,8 +69,17 @@ describe("board 2d — the notification center", () => {
   it("the empty state names what lands here", () => {
     // 5h. An empty panel that does not say what it is for reads as broken the first
     // time somebody opens it.
-    expect(src).toMatch(/All caught up/);
-    expect(src).toMatch(/Missed calls, messages and sign-ins land here/);
+    //
+    // REPOINTED THROUGH `copyOnScreen` (#159): this froze the two English LITERALS,
+    // which the Arabic sweep moved into `dict/alerts.ts` — so as written it forbade
+    // localising the panel while saying nothing about the property it stands for,
+    // which is that the empty state still SAYS these two things. `copyOnScreen` is
+    // satisfied by the literal OR by a key whose English half carries it, and is
+    // strictly stronger than what it replaces: reaching the dictionary also proves
+    // an Arabic half exists, because `Entry` requires both.
+    for (const line of ["All caught up", "Missed calls, messages and sign-ins land here"]) {
+      expect(copyOnScreen(src, line), whyCopyMissing(src, line)).toBe(true);
+    }
   });
 
   it("the panel carries the sheet material and the board's mono header", () => {
