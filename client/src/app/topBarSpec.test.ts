@@ -416,7 +416,10 @@ describe("the avatar tap: one tap, a real choice, no double-tap", () => {
 describe("the dialer erase key", () => {
   it("is large, red and glossy", () => {
     expect(DIALER).toMatch(/background: "linear-gradient\(160deg,#f87171,#dc2626 55%,#991b1b\)"/);
-    expect(DIALER).toMatch(/aria-label="Erase last digit"/);
+    // v2.106.84: the label moved into the dictionary, so the attribute carries an
+    // expression. The property — the control is LABELLED for a screen reader — is
+    // unchanged.
+    expect(DIALER).toMatch(/aria-label=\{t\("dialer\.eraseLast"\)\}/);
     // The glyph scales with the key rather than sitting at a fixed 18px.
     expect(DIALER).toMatch(/width: "clamp\(22px,6\.5vw,28px\)"/);
   });
@@ -435,7 +438,11 @@ describe("the dialer erase key", () => {
        two `not.toMatch`es above already half-express. */
     expect(DIALER).toMatch(/relay-key relative rounded-\S+ aspect-square overflow-hidden/);
     // …and it is a real grid cell, not a floater laid over one.
-    const at = DIALER.indexOf("aria-label=\"Erase last digit\"");
+    // v2.106.85: the label moved into the dictionary, so the anchor is the key
+    // expression. It is still the erase key's OWN attribute — what the slice is
+    // about — and `toBeGreaterThan(0)` still refuses a stale needle (-1 would
+    // otherwise slice from the end of the file and read something unrelated).
+    const at = DIALER.indexOf('aria-label={t("dialer.eraseLast")}');
     expect(at).toBeGreaterThan(0);
     expect(DIALER.slice(at - 1200, at)).not.toMatch(/position: "absolute"/);
     // `#` gave up its cell — on a 6-digit numeric pad it was pure decoration, the

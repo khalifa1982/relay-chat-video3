@@ -28,6 +28,7 @@ import {
   alreadyReported,
 } from "./useDeliveryReceipts";
 import { codeOnly } from "../../../server/testing/codeOnly";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
 const here = path.resolve(__dirname);
 const root = path.resolve(here, "..", "..", "..");
@@ -380,24 +381,24 @@ describe("the ⋮ menu and the info panel", () => {
        broke the moment the picker gained a search box while saying nothing about the
        rule it stands for: the thread you are already in is never offered. */
     expect(MSG).toMatch(/t\.conversationId !== conversationId/);
-    expect(MSG).toMatch(/\{forwardTargets\.map\(\(t\) => \(/);
+    expect(MSG).toMatch(/\{forwardTargets\.map\(\(th\) => \(/);
     /* And the empty state must tell the two cases apart — "no other conversations yet"
        is a false claim about somebody's own inbox while a search is narrowing it. */
-    expect(MSG).toMatch(/No other conversations yet\./);
+    expect(copyOnScreen(MSG, "No other conversations yet.")).toBe(true);
     expect(MSG).toMatch(/forwardSearch\.trim\(\)\s*\?/);
   });
 
   it("Info lists sent, delivered and read — the three the owner named", () => {
-    const panel = MSG.slice(MSG.indexOf("<AlertDialogTitle>Message info"), MSG.indexOf("Forward to…"));
-    expect(panel).toMatch(/\{ label: "Sent", at: m\.createdAt \}/);
-    expect(panel).toMatch(/\{ label: "Delivered", at: m\.deliveredAt \?\? null \}/);
-    expect(panel).toMatch(/\{ label: "Read", at: m\.readAt \?\? null \}/);
+    const panel = MSG.slice(MSG.indexOf('{t("msg.infoTitle")}'), MSG.indexOf('t("msg.forwardTitle")'));
+    expect(panel).toMatch(/\{ key: "msg\.sent", label: t\("msg\.sent"\), at: m\.createdAt \}/);
+    expect(panel).toMatch(/\{ key: "msg\.delivered", label: t\("msg\.delivered"\), at: m\.deliveredAt \?\? null \}/);
+    expect(panel).toMatch(/\{ key: "msg\.read", label: t\("msg\.read"\), at: m\.readAt \?\? null \}/);
   });
 
   it("Info shows an honest dash for a time nobody recorded", () => {
     // Every message predating this release has no stored delivered/read time.
     // Inventing one would make the panel lie about the one thing it exists to report.
-    const panel = MSG.slice(MSG.indexOf("<AlertDialogTitle>Message info"), MSG.indexOf("Forward to…"));
+    const panel = MSG.slice(MSG.indexOf('{t("msg.infoTitle")}'), MSG.indexOf('t("msg.forwardTitle")'));
     expect(panel).toMatch(/\{r\.at \? \(\s*\n?\s*formatExact\(r\.at\)\s*\n?\s*\) : \(/);
     expect(panel).toMatch(/—/);
   });

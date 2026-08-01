@@ -335,7 +335,7 @@ describe("green means ONLINE, and only online", () => {
   });
 
   it("the voice-note play button is not the presence green (board 2f)", () => {
-    const at = UI.indexOf('aria-label={playing ? "Pause" : "Play voice note"}');
+    const at = UI.indexOf('aria-label={playing ? t("msg.pause") : t("msg.playVoiceNote")}');
     expect(at).toBeGreaterThan(0);
     const btn = UI.slice(at, at + 900);
     /* REWRITTEN TWICE, and the second rewrite is the more interesting one.

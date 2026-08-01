@@ -201,6 +201,63 @@ describe("v2.106.83/84 — the app speaks Arabic, and it is impossible to add a 
     }
   });
 
+  it("the four in-app tabs go through the translator too", () => {
+    /* v2.106.85. Same shape as the sign-in sweep above and for the same reason: a
+       COUNT of `t(` calls would stay green with one label converted and forty left
+       behind, so each entry is a sentence somebody actually reads on that screen.
+
+       The alias matters. `Messages.tsx`'s swipe-action builder binds the THREAD to
+       `t`, so its translator is `tr` — a sweep that only knew `t` would report a
+       correctly-swept file as untranslated, which is a guard crying wolf. */
+    const TABS: [string, string[]][] = [
+      [
+        "client/src/pages/app/Dialer.tsx",
+        ["MY NUMBER", "Erase last digit", "No RELAY user with this number"],
+      ],
+      [
+        "client/src/pages/app/Contacts.tsx",
+        ["Search by name or number", "Everyone else", "Remove contact?", "No contacts yet"],
+      ],
+      [
+        "client/src/pages/app/History.tsx",
+        ["Search calls by name or number", "Clear your entire call history?", "No answer"],
+      ],
+      [
+        "client/src/pages/app/Messages.tsx",
+        ["Type a message", "Unsend this message?", "Delete this chat for you?", "Forward to…"],
+      ],
+    ];
+    for (const [file, literals] of TABS) {
+      const code = codeOnly(read(file));
+      for (const lit of literals) {
+        expect(code, `${file} still hardcodes "${lit}"`).not.toContain(`"${lit}"`);
+        expect(code, `${file} still renders "${lit}" as text`).not.toContain(`>${lit}<`);
+      }
+      expect(code, `${file} reaches the translator`).toMatch(/\b(?:t|tr)\(["']\w+\./);
+    }
+  });
+
+  it("a label held in a module-level constant is a KEY, never a finished string", () => {
+    /* Contacts' tag meta, History's filter tabs and the Messages sections are all
+       built OUTSIDE the render, and a module-level constant cannot call a hook. The
+       tempting fix is a `text → key` map at each render site, which is exactly what
+       this dictionary's own rule forbids: a copy edit would silently drop the
+       translation, and two entries sharing an English word would be forced to share
+       an Arabic one. So the constant carries the key and the render site translates. */
+    for (const [file, marker] of [
+      ["client/src/pages/app/Contacts.tsx", "labelKey: TKey"],
+      ["client/src/pages/app/History.tsx", "labelKey: TKey"],
+      ["client/src/pages/app/Messages.tsx", "labelKey: TKey"],
+    ] as const) {
+      const code = codeOnly(read(file));
+      expect(code, `${file} lost its keyed label`).toContain(marker);
+      // …and the old shape is really gone, so this cannot pass beside a survivor.
+      expect(code, `${file} still carries a finished label string`).not.toMatch(
+        /\blabel: "[A-Z]/,
+      );
+    }
+  });
+
   it("the language switch is on the ENTRY screen, not only behind the gate", () => {
     /* The Appearance pane lives in Profile, which is BEHIND the onboarding gate —
        so without a switch on the gate itself, somebody who lands in a language they

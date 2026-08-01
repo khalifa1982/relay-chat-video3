@@ -248,7 +248,7 @@ describe("contacts can be read", () => {
     /* This bucket is `!favourite && no tags`, so "All contacts" was a false claim about
        somebody's own directory — a VIP, a favourite and anybody labelled are excluded. */
     expect(CONTACTS).not.toMatch(/label: "All contacts"/);
-    expect(CONTACTS).toMatch(/key: "other", label: "Everyone else"/);
+    expect(CONTACTS).toMatch(/key: "other", labelKey: "contacts\.everyoneElse"/);
   });
 
   it("the empty state names BOTH narrowings when both are active", () => {

@@ -443,8 +443,8 @@ describe("#113 — the client, and the missing precondition it fills", () => {
     // The header's two existing buttons are gated on `!isGroup && peerNumber`, so
     // before this a group thread had none — the reason the ask had no precondition.
     expect(MSG).toMatch(/\{isGroup && thread && \(/);
-    expect(MSG).toMatch(/title="Call the group"/);
-    expect(MSG).toMatch(/title="Video call the group"/);
+    expect(MSG).toMatch(/title=\{t\("msg\.callGroup"\)\}/);
+    expect(MSG).toMatch(/title=\{t\("msg\.videoCallGroup"\)\}/);
   });
 
   it("the client asks the SERVER who to ring, rather than dialling from its cache", () => {

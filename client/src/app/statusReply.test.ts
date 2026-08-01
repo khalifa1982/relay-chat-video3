@@ -14,6 +14,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 import {
   EMOJI_GROUPS,
   REACTION_QUICK,
@@ -346,8 +347,8 @@ describe("the recipient sees WHAT the reply was about", () => {
 
   it("renders the chip from the marker's own snapshot, never a live lookup", () => {
     // v2.101.0 renamed the ephemeral post to STORY in every user-facing string.
-    expect(MESSAGES).toMatch(/Replied to your story/);
-    expect(MESSAGES).toMatch(/Replied to their story/);
+    expect(copyOnScreen(MESSAGES, "Replied to your story")).toBe(true);
+    expect(copyOnScreen(MESSAGES, "Replied to their story")).toBe(true);
     /* REWRITTEN in #115 to the PROPERTY. This froze the exact expression
        `STATUS_KIND_LABEL[sr.kind]`, so it forbade moving the labels into `shared/`
        while saying nothing about what it is actually for — that the chip's label comes
@@ -390,12 +391,12 @@ describe("the recipient sees WHAT the reply was about", () => {
 
        Now anchored on text that EXISTS, bounded by the chip's own end, and asserting
        the window is real before asserting anything about it. */
-    const at = MESSAGES.indexOf("Replied to your story");
+    const at = MESSAGES.indexOf('t("msg.repliedToYourStory")');
     expect(at, "the chip's label must exist — a stale needle makes this vacuous").toBeGreaterThan(0);
     const end = MESSAGES.indexOf("{m.replyToId != null &&", at);
     expect(end).toBeGreaterThan(at);
     const chip = MESSAGES.slice(at - 600, end);
-    expect(chip).toContain("Replied to your story");
+    expect(copyOnScreen(chip, "Replied to your story")).toBe(true);
     /* PINNED ON THE LABEL'S OWN SPAN, not on the region containing one. The chip has
        TWO isolated spans (the label and the story-kind), so a region-wide match
        survived removing the isolation from either — proven by mutation. The property

@@ -1,4 +1,104 @@
-/** Strings owned by the contacts surface. See ./core.ts for why each area has its own file. */
+/**
+ * Strings owned by the Contacts screen.
+ *
+ * ── THE TAG LABELS ARE HERE, AND THAT IS WHAT MAKES THIS MODULE MORE THAN A LIST ──
+ * `TAG_META` is a module-level constant carrying each tag's label beside its icon
+ * and tint. A constant cannot call a hook, so the label becomes a KEY the render
+ * site translates — which is also the honest shape: "Family" the section heading
+ * and "Family" the row chip are the SAME fact and must never be able to disagree
+ * about their Arabic.
+ *
+ * ── "Everyone else", NOT "All contacts" ──
+ * v2.106.38 renamed that bucket in English because it is `!favourite && no tags`,
+ * so "All contacts" was a false claim about somebody's own directory. The Arabic
+ * carries the same narrowing ("البقية") rather than the literal "الكل", or the
+ * translation would reintroduce the bug the rename fixed.
+ *
+ * See ./auth.ts for the Western-digits and imperative-verb rules, which hold here.
+ */
 import type { Entry } from "./types";
 
-export const CONTACTS = {} as const satisfies Record<string, Entry>;
+export const CONTACTS = {
+  // ── Tags: one label, two renderers (section heading + row chip) ──
+  "contacts.tag.vip": { en: "VIP", ar: "شخصية مهمة" },
+  "contacts.tag.family": { en: "Family", ar: "العائلة" },
+  "contacts.tag.friend": { en: "Friends", ar: "الأصدقاء" },
+  "contacts.tag.team": { en: "Team", ar: "الفريق" },
+
+  // ── Section headings ──
+  "contacts.online": { en: "Online", ar: "متصل" },
+  "contacts.favorites": { en: "Favorites", ar: "المفضلة" },
+  "contacts.everyoneElse": { en: "Everyone else", ar: "البقية" },
+  /* The count beside a heading. Western digits: the number is interpolated, so an
+     Eastern-Arabic numeral here would sit beside a substituted Western one. */
+  "contacts.nOnline": { en: "{count} online", ar: "{count} متصل" },
+
+  // ── Chrome ──
+  "contacts.search": { en: "Search by name or number", ar: "ابحث بالاسم أو الرقم" },
+  "contacts.addByPin": { en: "Add by PIN", ar: "أضف برقم PIN" },
+  "contacts.addContact": { en: "Add a contact", ar: "أضف جهة اتصال" },
+  "contacts.addToContacts": { en: "Add to contacts", ar: "أضف إلى جهات الاتصال" },
+
+  // ── Empty + error states (four distinct answers, never one) ──
+  "contacts.loadFailed": { en: "Couldn't load your contacts", ar: "تعذّر تحميل جهات اتصالك" },
+  "contacts.noMatches": { en: "No matches", ar: "لا نتائج" },
+  "contacts.noneInLabel": { en: "Nothing in this label", ar: "لا شيء في هذا التصنيف" },
+  "contacts.none": { en: "No contacts yet", ar: "لا جهات اتصال بعد" },
+  "contacts.noneHint": {
+    en: "Save someone's number to call or message them in one tap.",
+    ar: "احفظ رقم أحدهم لتتصل به أو تراسله بلمسة واحدة.",
+  },
+
+  // ── Row actions ──
+  "contacts.message": { en: "Message", ar: "رسالة" },
+  "contacts.voiceCall": { en: "Voice call", ar: "مكالمة صوتية" },
+  "contacts.videoCall": { en: "Video call", ar: "مكالمة فيديو" },
+  "contacts.moreOptions": { en: "More options", ar: "خيارات أخرى" },
+  "contacts.onACall": { en: "On a call right now", ar: "في مكالمة الآن" },
+  "contacts.block": { en: "Block", ar: "حظر" },
+  "contacts.unblock": { en: "Unblock", ar: "إلغاء الحظر" },
+
+  // ── Remove confirmation ──
+  "contacts.removeTitle": { en: "Remove contact?", ar: "إزالة جهة الاتصال؟" },
+  /* The NAMED variant. Two sentences rather than one interpolated blob, because
+     Arabic puts the subject before the verb here and English does not — a split
+     version could not express both orders. */
+  "contacts.removeNamed": {
+    en: "{name} will be removed from your contacts. This can't be undone.",
+    ar: "ستتم إزالة {name} من جهات اتصالك. لا يمكن التراجع عن ذلك.",
+  },
+  "contacts.removeAction": { en: "Remove", ar: "إزالة" },
+  "contacts.removeBody": {
+    en: "This contact will be removed. This can't be undone.",
+    ar: "ستتم إزالة جهة الاتصال هذه. لا يمكن التراجع عن ذلك.",
+  },
+  /* The blocked-contact warning. v2.99.28: the block LIVES on the contact row, so
+     removing it silently unblocks them — the whole point of this sentence is that
+     the consequence is stated BEFORE the tap, so the Arabic must state it too. */
+  "contacts.removeBlockedBody": {
+    en: "Heads up: this contact is blocked. Because the block lives on the contact, removing them also unblocks them — they'll be able to call and message you again. Keep them blocked instead if you just want them out of sight.",
+    ar: "تنبيه: جهة الاتصال هذه محظورة. لأن الحظر مخزّن على جهة الاتصال، فإن إزالتهم تلغي حظرهم أيضًا — سيتمكنون من الاتصال بك ومراسلتك مجددًا. أبقهم محظورين بدلًا من ذلك إن كنت تريد إخفاءهم فقط.",
+  },
+
+  // ── The edit / add sheet ──
+  "contacts.editTitle": { en: "Edit contact", ar: "تعديل جهة الاتصال" },
+  "contacts.editBody": { en: "Edit this contact's details.", ar: "عدّل تفاصيل جهة الاتصال هذه." },
+  "contacts.addBody": {
+    en: "Add a contact by their 6-digit RELAY number.",
+    ar: "أضف جهة اتصال برقم RELAY المكوّن من 6 خانات.",
+  },
+  "contacts.name": { en: "Friend's name", ar: "اسم الصديق" },
+  "contacts.company": { en: "Company", ar: "الشركة" },
+  "contacts.jobTitle": { en: "Title", ar: "المسمّى الوظيفي" },
+
+  // ── Toasts ──
+  "contacts.saveFailed": { en: "Couldn't save that change.", ar: "تعذّر حفظ هذا التغيير." },
+  "contacts.removeFailed": {
+    en: "Couldn't remove that contact — try again.",
+    ar: "تعذّرت إزالة جهة الاتصال — أعد المحاولة.",
+  },
+  "contacts.openFailed": {
+    en: "Couldn't open that conversation.",
+    ar: "تعذّر فتح هذه المحادثة.",
+  },
+} as const satisfies Record<string, Entry>;

@@ -15,6 +15,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { expandCopy } from "../../../server/testing/copyOnScreen";
 import { codeOnly } from "../../../server/testing/codeOnly";
 
 const CLIENT = join(process.cwd(), "client", "src");
@@ -205,7 +206,11 @@ function dialogs(): { file: string; body: string }[] {
   const out: { file: string; body: string }[] = [];
   for (const p of tsxFiles(CLIENT)) {
     if (p.includes("components/ui/")) continue; // the primitive itself
-    const src = codeOnly(readFileSync(p, "utf8"));
+    /* v2.106.85: EXPAND the dictionary before applying the copy rules. Without it
+       this sweep goes VACUOUS the moment a screen is translated — `IRREVERSIBLE`
+       matches nothing, every dialog passes, and a guard that covers zero dialogs
+       reports safety, which is strictly worse than going red. */
+    const src = expandCopy(codeOnly(readFileSync(p, "utf8")));
     let i = src.indexOf("<AlertDialogContent");
     while (i !== -1) {
       const end = src.indexOf("</AlertDialogContent>", i);
@@ -231,7 +236,7 @@ describe("every irreversible confirmation confirms in red", () => {
     const missing = all
       .filter((d) => IRREVERSIBLE.test(d.body) && d.body.includes("<AlertDialogAction"))
       .filter((d) => !/<AlertDialogAction[^>]*\n?\s*destructive/.test(d.body))
-      .map((d) => `${d.file}: ${(d.body.match(/<AlertDialogTitle>([^<]*)/) ?? [])[1] ?? "?"}`);
+      .map((d) => `${d.file}: ${(d.body.match(/<AlertDialogTitle>([^<]*)/) ?? [])[1]?.replace(/[{}]/g, "") ?? "?"}`);
     expect(missing).toEqual([]);
   });
 
@@ -240,7 +245,7 @@ describe("every irreversible confirmation confirms in red", () => {
     // looking at real dialogs rather than at an empty set of matches.
     const red = all
       .filter((d) => /<AlertDialogAction[^>]*\n?\s*destructive/.test(d.body))
-      .map((d) => (d.body.match(/<AlertDialogTitle>\s*([^<{]*)/) ?? [])[1]?.trim() ?? "");
+      .map((d) => (d.body.match(/<AlertDialogTitle>\s*([^<]*)/) ?? [])[1]?.replace(/[{}]/g, "").trim() ?? "");
     for (const t of [
       "Remove contact?",
       "Clear your entire call history?",
@@ -256,7 +261,7 @@ describe("every irreversible confirmation confirms in red", () => {
     // v2.103.0 built "delete this chat for you" so the thread returns by itself the
     // moment anybody messages again, and the copy says so. Painting it red would make
     // the warning colour mean "a dialog" instead of "you cannot undo this".
-    const chat = dialogs().find((d) => d.body.includes("Delete this chat for you?"));
+    const chat = dialogs().find((d) => expandCopy(d.body).includes("Delete this chat for you?"));
     expect(chat).toBeDefined();
     expect(chat!.body).not.toMatch(/<AlertDialogAction[^>]*\n?\s*destructive/);
     expect(chat!.body).toMatch(/it comes back here if they/);
@@ -265,7 +270,7 @@ describe("every irreversible confirmation confirms in red", () => {
   it("a guest sign-out is red and a registered one is not", () => {
     // Two different acts behind one dialog: a guest's number does not come back, an
     // account sign-out is undone by signing back in.
-    const d = dialogs().find((x) => x.body.includes("Sign out and forget this number?"));
+    const d = dialogs().find((x) => expandCopy(x.body).includes("Sign out and forget this number?"));
     expect(d).toBeDefined();
     expect(d!.body).toMatch(/destructive=\{isGuest\}/);
   });

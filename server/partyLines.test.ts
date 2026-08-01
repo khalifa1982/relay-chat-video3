@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { MAX_PARTY_LINES_PER_OWNER } from "./v2db";
+import { copyOnScreen } from "./testing/copyOnScreen";
 
 /**
  * v2.89 — party lines: number-space + wiring contracts.
@@ -92,8 +93,13 @@ describe("dial + directory wiring", () => {
 
 describe("client surfaces", () => {
   it("Dialer preview shows 'Party line · N on the line' and the call button reads Join", () => {
-    expect(DIALER).toMatch(/Party line · \{previewIdentity\.memberCount\} on the line/);
-    expect(DIALER).toMatch(/previewIsLine \? "Join" : "Voice Call"/);
+    // v2.106.84 — via the dictionary; the sentence and its live count both survive.
+    expect(DIALER).toMatch(/t\("dialer\.partyLine", \{ count: previewIdentity\.memberCount \}\)/);
+    expect(copyOnScreen(DIALER, "Party line ·")).toBe(true);
+    expect(DIALER).toMatch(/previewIsLine \? t\("dialer\.join"\) : t\("dialer\.voiceCall"\)/);
+    // …and both words really are the words, not just two keys that exist.
+    expect(copyOnScreen(DIALER, "Join")).toBe(true);
+    expect(copyOnScreen(DIALER, "Voice Call")).toBe(true);
   });
   it("GroupCallScreen manages lines: create with a title, list with live counts, share via /i/<pin>, delete", () => {
     // v2.106.22 (board 5a): this froze the empty PARAMETER LIST, which was never

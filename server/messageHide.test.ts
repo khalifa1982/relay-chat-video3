@@ -25,6 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { IDENTITY_REFERENCING_COLUMNS } from "./purgeIdentity";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen } from "../server/testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -70,10 +71,10 @@ describe("it is NOT unsend, and the two stay distinct", () => {
   it("the two have SEPARATE confirmations, and the copy names who is affected", () => {
     // One dialog for both would have to describe two different blast radii, which is
     // how somebody unsends a message for everyone believing they hid it for themselves.
-    expect(MESSAGES).toMatch(/Unsend this message\?/);
-    expect(MESSAGES).toMatch(/Delete this message for you\?/);
-    expect(MESSAGES).toMatch(/removed for everyone in this conversation/);
-    expect(MESSAGES).toMatch(/Everyone else keeps\s*\n?\s*it/);
+    expect(copyOnScreen(MESSAGES, "Unsend this message?")).toBe(true);
+    expect(copyOnScreen(MESSAGES, "Delete this message for you?")).toBe(true);
+    expect(copyOnScreen(MESSAGES, "removed for everyone in this conversation")).toBe(true);
+    expect(copyOnScreen(MESSAGES, "Everyone else keeps")).toBe(true);
   });
 });
 

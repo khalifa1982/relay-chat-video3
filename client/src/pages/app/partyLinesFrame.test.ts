@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "../../../../server/testing/codeOnly";
+import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
 
 /**
  * BOARD 5a — PARTY LINES (v2.106.22).
@@ -190,7 +191,7 @@ describe("Join: a real dial, absent rather than dead when it cannot work", () =>
     expect(R).toMatch(/\{canJoin && \(/);
     // Never a disabled control (rule 5) and never a handler that returns early.
     const btn = R.slice(R.indexOf("{canJoin && ("), R.indexOf("{canJoin && (") + 700);
-    expect(btn).toMatch(/Join/);
+    expect(copyOnScreen(btn, "Join")).toBe(true);
     expect(btn).not.toMatch(/disabled=\{!canJoin\}/);
   });
 });

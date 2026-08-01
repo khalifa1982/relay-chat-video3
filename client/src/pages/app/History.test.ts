@@ -14,6 +14,7 @@ import path from "node:path";
 const ROOT = path.resolve(__dirname, "../../../..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
 import { filterItems } from "./History";
+import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
 
 const PAGE = read("client/src/pages/app/History.tsx");
 const ROUTERS = read("server/v2routers.ts");
@@ -24,20 +25,20 @@ describe("History page — filter tabs + Clear History", () => {
   it("exposes exactly four filters — All / Dialed / Received / Missed — each with an icon", () => {
     // v2.99.98 added Received at the owner's request; the count is asserted so a fifth
     // tab has to be a deliberate act rather than something that drifts in.
-    expect(PAGE).toMatch(/\{ key: "all", label: "All", icon: Phone \}/);
-    expect(PAGE).toMatch(/\{ key: "dialed", label: "Dialed", icon: PhoneOutgoing \}/);
-    expect(PAGE).toMatch(/\{ key: "received", label: "Received", icon: PhoneIncoming \}/);
-    expect(PAGE).toMatch(/\{ key: "missed", label: "Missed", icon: PhoneMissed \}/);
+    expect(PAGE).toMatch(/\{ key: "all", labelKey: "history\.all", icon: Phone \}/);
+    expect(PAGE).toMatch(/\{ key: "dialed", labelKey: "history\.dialed", icon: PhoneOutgoing \}/);
+    expect(PAGE).toMatch(/\{ key: "received", labelKey: "history\.received", icon: PhoneIncoming \}/);
+    expect(PAGE).toMatch(/\{ key: "missed", labelKey: "history\.missed", icon: PhoneMissed \}/);
     const decl = PAGE.slice(PAGE.indexOf("const FILTERS"), PAGE.indexOf("];", PAGE.indexOf("const FILTERS")));
     expect(decl.match(/\{ key: "/g)?.length).toBe(4);
     expect(PAGE).toMatch(/role="tablist"/);
   });
 
   it("has a Clear History trash button on the right of the filter bar, guarded by a confirm", () => {
-    expect(PAGE).toMatch(/aria-label="Clear history"/);
+    expect(PAGE).toMatch(/aria-label=\{t\("history\.clear"\)\}/);
     expect(PAGE).toMatch(/Trash2/);
     // v2.88: the guard is the shared AlertDialog pattern, not window.confirm().
-    expect(PAGE).toMatch(/Clear your entire call history\?/);
+    expect(copyOnScreen(PAGE, "Clear your entire call history?")).toBe(true);
     expect(PAGE).toMatch(/AlertDialog open=\{confirmClear\}/);
     expect(PAGE).not.toMatch(/window\.confirm\(/);
     expect(PAGE).toMatch(/trpc\.calls\.clearHistory\.useMutation/);
@@ -115,7 +116,7 @@ describe("History rows — color coding + full metadata", () => {
 
   it("unanswered OUTGOING dials are listed too (not just incoming missed)", () => {
     expect(PAGE).toMatch(/\["missed", "declined", "initiated", "ringing", "failed"\]\.includes\(c\.status\)/);
-    expect(PAGE).toMatch(/"No answer"/);
+    expect(copyOnScreen(PAGE, "No answer")).toBe(true);
   });
 
   it("page fills the shell with flex-1 (docked nav stays visible; the LIST scrolls, not the page)", () => {

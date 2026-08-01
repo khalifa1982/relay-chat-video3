@@ -22,6 +22,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { copyOnScreen } from "../server/testing/copyOnScreen";
 
 const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
 
@@ -131,7 +132,7 @@ describe("quick-add contacts (v2.96)", () => {
   });
   it("the profile popup has add-to-contacts (disabled once saved)", () => {
     expect(PEER_OVERLAYS).toMatch(/disabled=\{saved \|\| upsert\.isPending\}/);
-    expect(PEER_OVERLAYS).toMatch(/Add to contacts/);
+    expect(copyOnScreen(PEER_OVERLAYS, "Add to contacts")).toBe(true);
   });
   it("in-call add-to-contacts lives in exactly ONE place: the per-tile pill", () => {
     // REWRITTEN in v2.99.82. This pinned the top-left `InCallSaveContacts` chip as
@@ -253,7 +254,7 @@ describe("self-destructing messages (v2.96)", () => {
     // endpoint, which returns it once and burns it (no client consumeExpiring).
     expect(MESSAGES).toMatch(/await revealExpiringMutation\.mutateAsync\(\{ messageId: m\.id \}\)/);
     expect(MESSAGES).toMatch(/Tap to view/);
-    expect(MESSAGES).toMatch(/This message has disappeared/);
+    expect(copyOnScreen(MESSAGES, "This message has disappeared")).toBe(true);
   });
   it("voice notes honor the composer's disappearing setting", () => {
     const blob = MESSAGES.slice(MESSAGES.indexOf("async function uploadBlob"));

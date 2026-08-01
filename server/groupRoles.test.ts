@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { IDENTITY_REFERENCING_COLUMNS } from "./purgeIdentity";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen } from "../server/testing/copyOnScreen";
 
 const R = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const V2DB = R("server/v2db.ts");
@@ -408,13 +409,13 @@ describe("v2.104.0 — the UI offers only what the server would allow", () => {
   it("the message menu offers the override only to an admin, never on my own message", () => {
     expect(MSG).toMatch(/onAdminDelete=\{iAmGroupAdmin \? \(\) => setAdminDeleting\(m\) : undefined\}/);
     expect(MSG).toMatch(/\{!mine && onAdminDelete && \(/);
-    expect(MSG).toMatch(/Remove for everyone/);
+    expect(copyOnScreen(MSG, "Remove for everyone")).toBe(true);
     expect(MSG).toMatch(/const iAmGroupAdmin = !!\(isGroup && infoQuery\.data\?\.members\.find\(\(mem\) => mem\.isMe\)\?\.isAdmin\)/);
   });
 
   it("it is behind a confirmation whose copy names the blast radius", () => {
-    expect(MSG).toMatch(/Remove this message for everyone\?/);
-    expect(MSG).toMatch(/They aren't told, and it can't be undone/);
+    expect(copyOnScreen(MSG, "Remove this message for everyone?")).toBe(true);
+    expect(copyOnScreen(MSG, "They aren't told, and it can't be undone")).toBe(true);
   });
 
   it("the admin delete is not optimistic", () => {

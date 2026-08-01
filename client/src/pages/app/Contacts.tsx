@@ -62,6 +62,7 @@ import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
 import { matchQuery } from "@/app/searchMatch";
+import { useT, type TKey } from "@/app/i18n";
 
 /** The four tag recipes in index.css. A STATIC map, never a composed string: the class
  *  names have to exist literally somewhere the CSS can be found by, and this is that place. */
@@ -100,11 +101,15 @@ function initialsFrom(name: string): string {
 type Category = "vip" | "family" | "friend" | "team";
 /** Ordered category sections. `favourite` (star) is its own leading section,
  *  then the explicit groups, then everyone else. */
-const CATEGORY_META: Record<Category, { label: string; icon: typeof Crown; tint: string }> = {
-  vip: { label: "VIP", icon: Crown, tint: "text-amber-400" },
-  family: { label: "Family", icon: Home, tint: "text-rose-400" },
-  friend: { label: "Friends", icon: Heart, tint: "text-sky-400" },
-  team: { label: "Team", icon: UsersIcon, tint: "text-violet-400" },
+/* v2.106.85: the label is a dictionary KEY rather than a finished string, because a
+   module-level constant cannot call a hook. That is also the honest shape — "Family"
+   the section heading and "Family" the row chip are the SAME fact and must never be
+   able to disagree about their Arabic. */
+const CATEGORY_META: Record<Category, { labelKey: TKey; icon: typeof Crown; tint: string }> = {
+  vip: { labelKey: "contacts.tag.vip", icon: Crown, tint: "text-amber-400" },
+  family: { labelKey: "contacts.tag.family", icon: Home, tint: "text-rose-400" },
+  friend: { labelKey: "contacts.tag.friend", icon: Heart, tint: "text-sky-400" },
+  team: { labelKey: "contacts.tag.team", icon: UsersIcon, tint: "text-violet-400" },
 };
 const CATEGORY_ORDER: Category[] = ["vip", "family", "friend", "team"];
 
@@ -156,6 +161,7 @@ export function relativeTime(d: Date | string | number | null | undefined): stri
 }
 
 export default function ContactsPage() {
+  const t = useT();
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   const contacts = trpc.contacts.list.useQuery(undefined, {
@@ -166,15 +172,15 @@ export default function ContactsPage() {
   // into the void. (The edit dialog surfaces upsert errors inline itself.)
   const upsert = trpc.contacts.upsert.useMutation({
     onSuccess: () => utils.contacts.list.invalidate(),
-    onError: (err) => toast.error(err.message || "Couldn't save that change."),
+    onError: (err) => toast.error(err.message || t("contacts.saveFailed")),
   });
   const remove = trpc.contacts.remove.useMutation({
     onSuccess: () => utils.contacts.list.invalidate(),
-    onError: () => toast.error("Couldn't remove that contact — try again."),
+    onError: () => toast.error(t("contacts.removeFailed")),
   });
   const openThread = trpc.messages.openThread.useMutation({
     onSuccess: (res) => setLocation(`/app/messages?c=${res.conversationId}`),
-    onError: (err) => toast.error(err.message || "Couldn't open that conversation."),
+    onError: (err) => toast.error(err.message || t("contacts.openFailed")),
   });
 
   const [search, setSearch] = useState("");
@@ -269,7 +275,7 @@ export default function ContactsPage() {
   const sections = useMemo(() => {
     const out: Array<{
       key: string;
-      label: string;
+      labelKey: TKey;
       icon: typeof Crown;
       tint: string;
       rows: Row[];
@@ -284,9 +290,9 @@ export default function ContactsPage() {
     // CATEGORY_ORDER and nothing can be "moved into" it.
     const online = filtered.filter(isActiveContact);
     if (online.length)
-      out.push({ key: "online", label: "Online", icon: Radio, tint: "text-[color:var(--relay-online,#06d6a0)]", rows: online, allActive: true });
+      out.push({ key: "online", labelKey: "contacts.online", icon: Radio, tint: "text-[color:var(--relay-online,#06d6a0)]", rows: online, allActive: true });
     const favorites = filtered.filter((c) => c.favourite);
-    if (favorites.length) out.push({ key: "fav", label: "Favorites", icon: Star, tint: "text-amber-400", rows: favorites });
+    if (favorites.length) out.push({ key: "fav", labelKey: "contacts.favorites", icon: Star, tint: "text-amber-400", rows: favorites });
     /* DATA-CONTRACTS §1 (board 3b), and it changes TWO real behaviours rather
        than restyling anything.
        (1) VIP IS A CHIP, NOT A SECTION. It used to have its own heading; the
@@ -319,7 +325,7 @@ export default function ContactsPage() {
            a VIP, a favourite and anybody with a label are all EXCLUDED from it, which is
            precisely the shape of "many things are not showing there". The key and the
            shared module already call it "other"; only the label lied. */
-        out.push({ key: "other", label: "Everyone else", icon: UsersIcon, tint: "text-muted-foreground", rows: real });
+        out.push({ key: "other", labelKey: "contacts.everyoneElse", icon: UsersIcon, tint: "text-muted-foreground", rows: real });
       } else {
         out.push({ key, ...CATEGORY_META[key as Category], rows: real });
       }
@@ -334,7 +340,7 @@ export default function ContactsPage() {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
           <Input
-            placeholder="Search by name or number"
+            placeholder={t("contacts.search")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="h-11 pl-10 rounded-xl bg-secondary/60"
@@ -342,8 +348,8 @@ export default function ContactsPage() {
         </div>
         <button
           type="button"
-          aria-label="Add by PIN"
-          title="Add by PIN"
+          aria-label={t("contacts.addByPin")}
+          title={t("contacts.addByPin")}
           onClick={() =>
             setEditing({ id: undefined, number: "", displayName: "", notes: "" })
           }
@@ -431,7 +437,7 @@ export default function ContactsPage() {
               <EmptyMedia variant="icon">
                 <AlertCircle />
               </EmptyMedia>
-              <EmptyTitle>Couldn't load your contacts</EmptyTitle>
+              <EmptyTitle>{t("contacts.loadFailed")}</EmptyTitle>
               <EmptyDescription>
                 Your saved contacts are still there — this device just couldn't reach them.
               </EmptyDescription>
@@ -471,7 +477,7 @@ export default function ContactsPage() {
                   is recoverable in one tap (All, or the lit chip again), so what is
                   needed is honest copy rather than a new control. */}
               <EmptyTitle>
-                {search ? "No matches" : tagFilter ? "Nothing in this label" : "No contacts yet"}
+                {search ? t("contacts.noMatches") : tagFilter ? t("contacts.noneInLabel") : t("contacts.none")}
               </EmptyTitle>
               <EmptyDescription>
                 {/* BOTH narrowings can be active at once, and the three-way version blamed
@@ -484,7 +490,7 @@ export default function ContactsPage() {
                     ? `Nobody matches "${search}".`
                     : tagFilter
                       ? `None of your contacts are labelled ${TAG_LABEL[tagFilter]}. Tap All to see everyone.`
-                      : "Save someone's number to call or message them in one tap."}
+                      : t("contacts.noneHint")}
               </EmptyDescription>
             </EmptyHeader>
             {!search && !tagFilter && (
@@ -495,7 +501,7 @@ export default function ContactsPage() {
                   }
                   size="sm"
                 >
-                  <UserPlus className="size-4 mr-1.5" /> Add a contact
+                  <UserPlus className="size-4 mr-1.5" /> {t("contacts.addContact")}
                 </Button>
               </EmptyContent>
             )}
@@ -552,7 +558,7 @@ export default function ContactsPage() {
                       className="flex-1 text-left font-mono text-[11px] font-semibold uppercase text-primary"
                       style={{ letterSpacing: ".26em" }}
                     >
-                      {section.label}
+                      {t(section.labelKey)}
                     </span>
                     {/* The counts. The Online section's total IS its online count,
                         so it shows one green number rather than "5 · 5". Everywhere
@@ -658,22 +664,22 @@ export default function ContactsPage() {
       <AlertDialog open={deleteId !== null} onOpenChange={(open) => !open && setDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove contact?</AlertDialogTitle>
+            <AlertDialogTitle>{t("contacts.removeTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
               {deletingContact
-                ? `${deletingContact.displayName || deletingContact.number} will be removed from your contacts. This can't be undone.`
-                : "This contact will be removed. This can't be undone."}
+                ? t("contacts.removeNamed", {
+                    name: deletingContact.displayName || deletingContact.number,
+                  })
+                : t("contacts.removeBody")}
               {deletingContact?.blocked && (
                 <span className="mt-2 block font-medium text-[#ff8d84]">
-                  Heads up: this contact is blocked. Because the block lives on the contact,
-                  removing them also unblocks them — they'll be able to call and message you
-                  again. Keep them blocked instead if you just want them out of sight.
+                  {t("contacts.removeBlockedBody")}
                 </span>
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               destructive
               onClick={() => {
@@ -681,7 +687,7 @@ export default function ContactsPage() {
                 setDeleteId(null);
               }}
             >
-              Remove
+              {t("contacts.removeAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -743,6 +749,7 @@ function ContactRow({
   onToggleBlock: () => void;
   onSetCategory: (cat: Category) => void;
 }) {
+  const t = useT();
   return (
     /* BOARD 1e — TWO LINES, AND THE REASON IS A MEASUREMENT RATHER THAN THE FRAME.
        At 390px the single-line row spent its width like this: 32px of list padding, 42px
@@ -786,7 +793,7 @@ function ContactRow({
           return (
             <span
               aria-label={dot.label}
-              title={c.inCall ? "On a call right now" : dot.label}
+              title={c.inCall ? t("contacts.onACall") : dot.label}
               className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full border-2 border-card"
               style={{ background: dot.color, boxShadow: dot.glow || undefined }}
             />
@@ -898,8 +905,8 @@ function ContactRow({
         <div className="ms-auto flex items-center gap-1.5 shrink-0">
         <button
           type="button"
-          aria-label="Message"
-          title="Message"
+          aria-label={t("contacts.message")}
+          title={t("contacts.message")}
           onClick={onMessage}
           className="grid place-items-center size-[34px] rounded-full shrink-0 transition hover:brightness-110"
           style={{
@@ -912,8 +919,8 @@ function ContactRow({
         </button>
         <button
           type="button"
-          aria-label="Video call"
-          title="Video call"
+          aria-label={t("contacts.videoCall")}
+          title={t("contacts.videoCall")}
           onClick={onVideo}
           disabled={c.blocked}
           /* NO LONGER `hidden xs:grid`. `--breakpoint-xs` is 480px, so board 1e's third
@@ -931,8 +938,8 @@ function ContactRow({
         </button>
         <button
           type="button"
-          aria-label="Voice call"
-          title="Voice call"
+          aria-label={t("contacts.voiceCall")}
+          title={t("contacts.voiceCall")}
           onClick={onVoice}
           disabled={c.blocked}
           /* Board 1e: of the three quick actions, "call = accent chip" — so the row's
@@ -946,7 +953,7 @@ function ContactRow({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              aria-label="More options"
+              aria-label={t("contacts.moreOptions")}
               className="grid place-items-center size-[34px] rounded-full shrink-0 text-muted-foreground bg-secondary/60 hover:bg-secondary transition-colors"
             >
               <MoreVertical className="size-4" />
@@ -975,7 +982,7 @@ function ContactRow({
               return (
                 <DropdownMenuItem key={cat} onClick={() => onSetCategory(cat)}>
                   <CIcon className={"size-4 " + CATEGORY_META[cat].tint} />
-                  {CATEGORY_META[cat].label}
+                  {t(CATEGORY_META[cat].labelKey)}
                   {active && <CheckCircle2 className="size-3.5 ml-auto text-primary" />}
                 </DropdownMenuItem>
               );
@@ -986,7 +993,7 @@ function ContactRow({
             </DropdownMenuItem>
             <DropdownMenuItem onClick={onToggleBlock}>
               <Ban className={"size-4 " + (c.blocked ? "" : "text-red-500")} />
-              {c.blocked ? "Unblock" : "Block"}
+              {c.blocked ? t("contacts.unblock") : t("contacts.block")}
             </DropdownMenuItem>
             <DropdownMenuItem variant="destructive" onClick={onDelete}>
               <Trash2 className="size-4" /> Delete
@@ -1046,6 +1053,7 @@ function AddContactDialog({
   saving: boolean;
   error: string | null;
 }) {
+  const t = useT();
   const [number, setNumber] = useState(editing.number);
   const [displayName, setDisplayName] = useState(editing.displayName);
   const [notes, setNotes] = useState(editing.notes);
@@ -1102,10 +1110,10 @@ function AddContactDialog({
       >
         <div className="flex items-center justify-between p-5 pb-3 shrink-0 border-b border-border/60">
           <DialogTitle className="font-semibold text-base">
-            {editing.id ? "Edit contact" : "Add by PIN"}
+            {editing.id ? t("contacts.editTitle") : t("contacts.addByPin")}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            {editing.id ? "Edit this contact's details." : "Add a contact by their 6-digit RELAY number."}
+            {editing.id ? t("contacts.editBody") : t("contacts.addBody")}
           </DialogDescription>
           <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close">
             <X className="size-4" />
@@ -1239,7 +1247,7 @@ function AddContactDialog({
                 setTouchedName(true);
                 setDisplayName(e.target.value);
               }}
-              placeholder="Friend's name"
+              placeholder={t("contacts.name")}
               maxLength={64}
             />
           </div>
@@ -1275,7 +1283,7 @@ function AddContactDialog({
               <Input
                 value={company}
                 onChange={(e) => setCompany(e.target.value)}
-                placeholder="Company"
+                placeholder={t("contacts.company")}
                 maxLength={128}
               />
             </div>
@@ -1286,7 +1294,7 @@ function AddContactDialog({
               <Input
                 value={jobTitle}
                 onChange={(e) => setJobTitle(e.target.value)}
-                placeholder="Title"
+                placeholder={t("contacts.jobTitle")}
                 maxLength={128}
               />
             </div>
@@ -1346,7 +1354,7 @@ function AddContactDialog({
                     }
                   >
                     <CIcon className={"size-3.5 " + CATEGORY_META[cat].tint} />
-                    {CATEGORY_META[cat].label}
+                    {t(CATEGORY_META[cat].labelKey)}
                   </button>
                 );
               })}
@@ -1376,7 +1384,7 @@ function AddContactDialog({
             }
             disabled={number.length !== 6 || saving}
           >
-            {editing.id ? "Save" : "Add to contacts"}
+            {editing.id ? t("common.save") : t("contacts.addToContacts")}
           </Button>
         </div>
       </DialogContent>

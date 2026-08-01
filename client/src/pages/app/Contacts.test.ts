@@ -25,9 +25,9 @@ describe("Contacts — rich rows + inline actions", () => {
     // v2.96: the main tap opens the profile popup (avatar + status + actions).
     expect(PAGE).toMatch(/aria-label=\{`View \$\{c\.displayName \|\| c\.number\}'s profile`\}/);
     expect(PAGE).toMatch(/onClick=\{\(\) => openPeerProfile\(c\.number\)\}/);
-    expect(PAGE).toMatch(/aria-label="Voice call"/);
-    expect(PAGE).toMatch(/aria-label="Video call"/);
-    expect(PAGE).toMatch(/aria-label="Message"/);
+    expect(PAGE).toMatch(/aria-label=\{t\("contacts\.voiceCall"\)\}/);
+    expect(PAGE).toMatch(/aria-label=\{t\("contacts\.videoCall"\)\}/);
+    expect(PAGE).toMatch(/aria-label=\{t\("contacts\.message"\)\}/);
     // Voice deep-link carries the voice intent; video its own.
     expect(PAGE).toMatch(/dialer\?to=\$\{encodeURIComponent\(c\.number\)\}&voice=1/);
     expect(PAGE).toMatch(/dialer\?to=\$\{encodeURIComponent\(c\.number\)\}&video=1/);
@@ -37,7 +37,7 @@ describe("Contacts — rich rows + inline actions", () => {
     expect(PAGE).toMatch(/onToggleFavorite/);
     expect(PAGE).toMatch(/onToggleBlock/);
     expect(PAGE).toMatch(/onSetCategory/);
-    expect(PAGE).toMatch(/\{c\.blocked \? "Unblock" : "Block"\}/);
+    expect(PAGE).toMatch(/\{c\.blocked \? t\("contacts\.unblock"\) : t\("contacts\.block"\)\}/);
   });
 
   it("shows the PIN (formatted), presence LED, and verified badge", () => {
@@ -61,10 +61,10 @@ describe("Contacts — rich rows + inline actions", () => {
 describe("Contacts — category grouping", () => {
   it("defines VIP / Family / Friends / Team and renders grouped sections", () => {
     expect(PAGE).toMatch(/const CATEGORY_ORDER: Category\[\] = \["vip", "family", "friend", "team"\]/);
-    expect(PAGE).toMatch(/vip: \{ label: "VIP"/);
+    expect(PAGE).toMatch(/vip: \{ labelKey: "contacts\.tag\.vip"/);
     expect(PAGE).toMatch(/const sections = useMemo/);
     // Favorites is its own leading section.
-    expect(PAGE).toMatch(/label: "Favorites"/);
+    expect(PAGE).toMatch(/labelKey: "contacts\.favorites"/);
   });
 
   it("the dialog's label picker is wired into the save payload — and sends the WHOLE set", () => {

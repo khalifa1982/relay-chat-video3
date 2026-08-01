@@ -42,7 +42,7 @@ const SCHEMA = read("drizzle", "schema.ts");
  * which is how a pin comes to report a finding about code it was never looking at.
  */
 function endOfComposerRow(): number {
-  const i = MESSAGES.indexOf('aria-label="Send"');
+  const i = MESSAGES.indexOf('aria-label={t("msg.send")}');
   if (i < 0) throw new Error("composer row end anchor not found: aria-label=\"Send\"");
   return i;
 }

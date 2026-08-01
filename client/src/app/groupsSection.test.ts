@@ -187,7 +187,7 @@ describe("v2.106.66 — the strip is chrome, and the tray does not reuse the bad
        Out of the scroller matters more than the order: a story lives 24h and the ring is
        the only signal it exists, so scrolling two threads down hid every one of them. */
     const strip = MESSAGES.indexOf("<StatusStrip />");
-    const search = MESSAGES.indexOf('aria-label="Search conversations"');
+    const search = MESSAGES.indexOf('aria-label={tr("msg.search")}');
     const scroller = MESSAGES.indexOf('<div className="flex-1 overflow-y-auto">');
     expect(strip, "the strip is gone").toBeGreaterThan(-1);
     expect(search, "the search is gone").toBeGreaterThan(-1);

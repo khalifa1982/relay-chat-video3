@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { codeOnly } from "../../../../server/testing/codeOnly";
+import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
 
 const CONTACTS = readFileSync(new URL("./Contacts.tsx", import.meta.url), "utf8");
 
@@ -151,7 +152,7 @@ describe("what already worked and must keep working", () => {
   it("a contact can be DELETED from the list, behind a confirmation", () => {
     // Owner asked for this; it already existed. Pinned so it cannot quietly go.
     expect(CONTACTS).toMatch(/onDelete=\{\(\) => setDeleteId\(c\.id\)\}/);
-    expect(CONTACTS).toMatch(/<AlertDialogTitle>Remove contact\?<\/AlertDialogTitle>/);
+    expect(copyOnScreen(CONTACTS, "Remove contact?")).toBe(true);
     expect(CONTACTS).toMatch(/remove\.mutate/);
   });
 

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeEmail } from "./emailInbound";
+import { copyOnScreen } from "./testing/copyOnScreen";
 
 /**
  * v2.99.57 — fixes from the 20-expert sweep (46 findings confirmed by a 3-lens
@@ -483,7 +484,7 @@ describe("R-REVEAL-ORDER (15, 20) — over-cap view-once media is not destroyed"
   it("the client says the message is still there rather than showing a blank card", () => {
     const msgs = fs.readFileSync(path.join(ROOT, "client/src/pages/app/Messages.tsx"), "utf8");
     expect(msgs).toMatch(/"tooLarge" in res && res\.tooLarge/);
-    expect(msgs).toMatch(/hasn't been used up/);
+    expect(copyOnScreen(msgs, "hasn't been used up")).toBe(true);
   });
 });
 

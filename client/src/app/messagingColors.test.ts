@@ -445,7 +445,7 @@ describe("the message ⋮ reads as a button", () => {
 
   it("has a real chip affordance — fill, border and shadow", () => {
     const btn = MESSAGES.slice(
-      MESSAGES.indexOf('aria-label="Message options"')
+      MESSAGES.indexOf('aria-label={t("msg.options")}')
     );
     const cls = btn.slice(0, btn.indexOf("MoreVertical"));
     expect(cls).toMatch(/border border-border/);

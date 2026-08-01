@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { codeOnly } from "../../../../server/testing/codeOnly";
+import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
 
 const H = readFileSync(resolve(process.cwd(), "client/src/pages/app/History.tsx"), "utf8");
 
@@ -42,7 +43,7 @@ describe("v2.103.1 — the History filter bar fits a phone", () => {
   it("each tab STACKS its icon and count over its label", () => {
     // Side by side, the label had ~39px of an 87px tab and "Received" needs ~58.
     expect(H).toMatch(/flex min-w-0 flex-1 flex-col items-center justify-center gap-0\.5/);
-    expect(H).toMatch(/<span className="max-w-full truncate">\{f\.label\}<\/span>/);
+    expect(H).toMatch(/<span className="max-w-full truncate">\{t\(f\.labelKey\)\}<\/span>/);
   });
 
   it("the tabs can actually shrink, and the icon and count cannot be squeezed away", () => {
@@ -62,10 +63,20 @@ describe("v2.103.1 — the History filter bar fits a phone", () => {
 
   it("all four filters and both row-2 controls are still present", () => {
     // The cheap fix would have been to delete a label or a control. Nothing was dropped.
-    for (const label of ["All", "Dialed", "Missed", "Received"]) {
-      expect(H, label).toMatch(new RegExp(`label: "${label}"`));
+    /* v2.106.85: the labels moved into the dictionary, so the tab strip carries a
+       KEY. The property — all four filters survive the layout change — is unchanged,
+       and `copyOnScreen` still proves each WORD reaches the screen rather than merely
+       that four keys exist. */
+    for (const [key, label] of [
+      ["history.all", "All"],
+      ["history.dialed", "Dialed"],
+      ["history.missed", "Missed"],
+      ["history.received", "Received"],
+    ] as const) {
+      expect(H, label).toMatch(new RegExp(`labelKey: "${key.replace(".", "\\.")}"`));
+      expect(copyOnScreen(H, label), label).toBe(true);
     }
-    expect(H).toMatch(/aria-label="Clear history"/);
+    expect(H).toMatch(/aria-label=\{t\("history\.clear"\)\}/);
     expect(H).toMatch(/Group\s*\n\s*<\/button>/);
   });
 });

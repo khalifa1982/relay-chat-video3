@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
 /**
  * v2.61 persistent missed-call notification system — static guards pinning the
@@ -54,7 +55,7 @@ describe("missed-call notification system", () => {
 
   it("the dialer shows a Missed Call alert when arrived from the popup", () => {
     expect(DIALER).toMatch(/get\("missed"\) === "1"/);
-    expect(DIALER).toMatch(/Missed Call/);
+    expect(copyOnScreen(DIALER, "Missed Call")).toBe(true);
   });
 });
 

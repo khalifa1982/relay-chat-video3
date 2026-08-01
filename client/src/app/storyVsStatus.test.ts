@@ -24,6 +24,7 @@ import path from "node:path";
 // #115 — the story vocabulary now lives in one shared place, so assert it there.
 import { STORY_KIND_LABEL } from "@shared/statusReply";
 import { previewOfStoryReply } from "@/app/messagePreview";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "../../..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -109,7 +110,9 @@ describe("the ephemeral post is called a STORY", () => {
   it("a story reply in a chat bubble says story", () => {
     // v2.99.80 put a "replied to your status" chip on the message. It is a reply to
     // a STORY, and the chip is the only thing telling the recipient what it was about.
-    expect(MESSAGES).toMatch(/"Replied to their story" : "Replied to your story"/);
+    expect(MESSAGES).toMatch(
+      /t\("msg\.repliedToTheirStory"\) : t\("msg\.repliedToYourStory"\)/,
+    );
     /* #115 — the four kind labels MOVED to `shared/statusReply.ts` (the server's thread
        projection needs the same vocabulary), so they are asserted at their new home.
        Strictly stronger than before: this now walks EVERY label and requires the word,
@@ -189,7 +192,7 @@ describe("the avatar menu, to the owner's own list", () => {
     expect(m).toMatch(/Add a story/);
     expect(m).toMatch(/Set my status/);
     expect(m).toMatch(/Profile/);
-    expect(m).toMatch(/Sign out/);
+    expect(copyOnScreen(m, "Sign out")).toBe(true);
   });
 
   it("ADD-a-story is offered even when one already exists", () => {

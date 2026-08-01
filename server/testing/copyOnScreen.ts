@@ -40,6 +40,17 @@ function normalize(s: string): string {
 }
 
 /**
+ * How a translator call is spelled at a render site.
+ *
+ * `t` is the ordinary name. `tr` is the ALIAS a file uses when `t` would be shadowed
+ * — `Messages.tsx`'s swipe-action builder binds the THREAD to `t`, so an unaliased
+ * translator there would silently be a ThreadSummary rather than a function. A helper
+ * that only knew `t` would report those screens as having lost their copy, which is a
+ * guard crying wolf on correct code.
+ */
+const TCALL = "\\b(?:t|tr)\\(\\s*";
+
+/**
  * Every dictionary key whose English half CONTAINS this text.
  *
  * Containment rather than equality, because the pins being preserved are
@@ -66,9 +77,34 @@ export function copyOnScreen(src: string, english: string): boolean {
   if (normalize(src).includes(normalize(english))) return true;
   const keys = keysForEnglish(english);
   if (keys.length === 0) return false;
-  // A key is REFERENCED, not merely mentioned: `t("key")` / `t('key')`. A bare
+  // A key is REFERENCED, not merely mentioned: `t("key")` / `tr("key")`. A bare
   // occurrence of the string would match this file's own imports and comments.
-  return keys.some((k) => new RegExp(`t\\(\\s*["'\`]${k.replace(/\./g, "\\.")}["'\`]`).test(src));
+  return keys.some((k) => new RegExp(`${TCALL}["'\`]${k.replace(/\./g, "\\.")}["'\`]`).test(src));
+}
+
+/**
+ * Rewrite every `t("some.key")` in `src` to the key's ENGLISH half, so a rule that
+ * reads a component's COPY keeps working after that copy moved into the dictionary.
+ *
+ * WHY THIS IS NEEDED AND WHY IT IS NOT OPTIONAL (v2.106.85)
+ * --------------------------------------------------------
+ * `copyOnScreen` answers "is this exact sentence here". Some guards are the other
+ * shape: they SWEEP a file, extract every dialog, and apply a rule to whatever copy
+ * they find — `systemAlerts.test.ts` requires that any confirmation whose own words
+ * say the action is final also passes `destructive`. Move the words into the
+ * dictionary and that sweep silently matches NOTHING: it goes green while covering
+ * zero dialogs, which is strictly worse than going red, because it reports safety.
+ *
+ * Expanding first restores the rule over BOTH swept and unswept files — a screen that
+ * still carries its literals reads unchanged, and a swept one reads as its English.
+ * An unknown key expands to nothing rather than to itself, so a stale key cannot
+ * satisfy a copy rule by accident.
+ */
+export function expandCopy(src: string): string {
+  return src.replace(/\b(?:t|tr)\(\s*["'`]([\w.]+)["'`]\s*(?:,[^)]*)?\)/g, (whole, key: string) => {
+    const e = DICT[key as keyof typeof DICT] as { en: string } | undefined;
+    return e ? e.en : whole;
+  });
 }
 
 /** `expect`-friendly wrapper that names the failure usefully: whether the sentence

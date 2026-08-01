@@ -19,7 +19,7 @@ describe("Messages thread-list search", () => {
   const src = read("client/src/pages/app/Messages.tsx");
   it("filters locally through the shared matcher", () => {
     expect(src).toMatch(/const \[threadSearch, setThreadSearch\]/);
-    expect(src).toMatch(/placeholder="Search conversations"/);
+    expect(src).toMatch(/placeholder=\{tr\("msg\.search"\)\}/);
     expect(src).toMatch(/import \{ matchQuery \} from "@\/app\/searchMatch"/);
     expect(src).toMatch(/matchQuery\(threadSearch, \[/);
   });
@@ -51,7 +51,7 @@ describe("History search", () => {
   const src = read("client/src/pages/app/History.tsx");
   it("filters locally through the shared matcher", () => {
     expect(src).toMatch(/const \[historySearch, setHistorySearch\]/);
-    expect(src).toMatch(/placeholder="Search calls by name or number"/);
+    expect(src).toMatch(/placeholder=\{t\("history\.search"\)\}/);
     expect(src).toMatch(/import \{ matchQuery \} from "@\/app\/searchMatch"/);
     expect(src).toMatch(/matchQuery\(historySearch, searchFieldsOf\(it, savedNameOf\)\)/);
   });

@@ -40,6 +40,7 @@ import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
+import { useT, type TKey } from "@/app/i18n";
 import { matchQuery } from "@/app/searchMatch";
 // #117 — the paging primitives, kept pure so the ordering and de-duplication can be
 // tested without a database or a browser.
@@ -169,14 +170,16 @@ const TONE = {
   },
 } as const;
 
-const FILTERS: Array<{ key: Filter; label: string; icon: typeof Phone }> = [
-  { key: "all", label: "All", icon: Phone },
-  { key: "dialed", label: "Dialed", icon: PhoneOutgoing },
+/* v2.106.85: the tab label is a dictionary KEY — a module-level constant cannot
+   call a hook, and the tab strip is the only thing that renders it. */
+const FILTERS: Array<{ key: Filter; labelKey: TKey; icon: typeof Phone }> = [
+  { key: "all", labelKey: "history.all", icon: Phone },
+  { key: "dialed", labelKey: "history.dialed", icon: PhoneOutgoing },
   // v2.99.98 (owner): "there is a tabs, all the dial and received. You should add
   // received". RECEIVED means a call that came in AND WAS ANSWERED — see
   // isReceivedItem for why that has exactly one possible definition here.
-  { key: "received", label: "Received", icon: PhoneIncoming },
-  { key: "missed", label: "Missed", icon: PhoneMissed },
+  { key: "received", labelKey: "history.received", icon: PhoneIncoming },
+  { key: "missed", labelKey: "history.missed", icon: PhoneMissed },
 ];
 
 /**
@@ -361,6 +364,7 @@ function dayBucket(ts: number, now: number): { key: string; label: string } {
 }
 
 export default function HistoryPage() {
+  const t = useT();
   const { me } = useIdentity();
   const engine = useRelayEngine();
   const [, setLocation] = useLocation();
@@ -463,7 +467,7 @@ export default function HistoryPage() {
       if (!calls.length && !confs.length) toast.info("That's the whole call log.");
     } catch {
       // A silently-failed tap is the worst case (v2.88) — say why nothing loaded.
-      toast.error("Couldn't load older calls — try again.");
+      toast.error(t("history.loadOlderFailed"));
     } finally {
       setLoadingOlder(false);
     }
@@ -483,7 +487,7 @@ export default function HistoryPage() {
       utils.calls.conferenceHistory.invalidate();
       utils.calls.missedSummary.invalidate();
     },
-    onError: () => toast.error("Couldn't clear your history — try again."),
+    onError: () => toast.error(t("history.clearFailed")),
   });
   // AlertDialog confirm (v2.88 — native confirm() is gone app-wide).
   const [confirmClear, setConfirmClear] = useState(false);
@@ -624,7 +628,7 @@ export default function HistoryPage() {
   const addContact = trpc.contacts.upsert.useMutation({
     onSuccess: () => {
       utils.contacts.list.invalidate();
-      toast.success("Added to your contacts.");
+      toast.success(t("history.added"));
     },
     onError: (err) => toast.error(err.message || "Couldn't add the contact."),
   });
@@ -723,8 +727,8 @@ export default function HistoryPage() {
           <input
             value={historySearch}
             onChange={(e) => setHistorySearch(e.target.value)}
-            placeholder="Search calls by name or number"
-            aria-label="Search calls"
+            placeholder={t("history.search")}
+            aria-label={t("history.searchLabel")}
             className="h-9 w-full rounded-lg border border-border/60 bg-muted/40 pl-9 pr-3 text-sm outline-none focus:border-primary/50"
           />
         </div>
@@ -735,7 +739,7 @@ export default function HistoryPage() {
       <div className="mb-3 flex flex-col gap-2">
         <div
           role="tablist"
-          aria-label="Filter calls"
+          aria-label={t("history.filter")}
           className="flex gap-1 rounded-xl bg-muted/50 p-1"
         >
           {FILTERS.map((f) => {
@@ -791,7 +795,7 @@ export default function HistoryPage() {
                   </span>
                 )}
                 </span>
-                <span className="max-w-full truncate">{f.label}</span>
+                <span className="max-w-full truncate">{t(f.labelKey)}</span>
               </button>
             );
           })}
@@ -822,8 +826,8 @@ export default function HistoryPage() {
             onClick={() => setGrouped((g) => !g)}
             title={
               grouped
-                ? "Showing one row per person — tap to list every call separately"
-                : "Group repeated calls from the same person into one row"
+                ? t("history.groupOn")
+                : t("history.groupOff")
             }
             className={
               "flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors " +
@@ -840,8 +844,8 @@ export default function HistoryPage() {
           <Button
             size="icon"
             variant="ghost"
-            aria-label="Clear history"
-            title="Clear your call history"
+            aria-label={t("history.clear")}
+            title={t("history.clearHint")}
             disabled={clearHistory.isPending || items.length === 0}
             onClick={() => setConfirmClear(true)}
             className="size-9 shrink-0 rounded-lg text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
@@ -854,14 +858,13 @@ export default function HistoryPage() {
       <AlertDialog open={confirmClear} onOpenChange={(open) => !open && setConfirmClear(false)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Clear your entire call history?</AlertDialogTitle>
+            <AlertDialogTitle>{t("history.clearTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Every call disappears from YOUR log (the people you called keep theirs).
-              This can't be undone.
+              {t("history.clearBody")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               destructive
               onClick={() => {
@@ -879,7 +882,7 @@ export default function HistoryPage() {
         <div className="min-h-0 flex-1 overflow-y-auto">
           {errored ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
-              <p>Couldn't load your call history.</p>
+              <p>{t("history.loadFailed")}</p>
               <button
                 type="button"
                 onClick={() => { void conferences.refetch(); void oneToOne.refetch(); }}
@@ -895,11 +898,11 @@ export default function HistoryPage() {
               {historySearch.trim()
                 ? `No calls match “${historySearch.trim()}”.`
                 : filter === "missed"
-                  ? "No missed calls. 🎉"
+                  ? t("history.noneMissed")
                   : filter === "dialed"
-                    ? "No dialed calls yet — call someone from the keypad."
+                    ? t("history.noneDialed")
                     : filter === "received"
-                      ? "No answered incoming calls yet."
+                      ? t("history.noneReceived")
                       : "No calls yet. Your conference and call history will appear here — who you dialed, how many people joined, their names and numbers, and how long the call lasted."}
             </div>
           ) : grouped ? (
@@ -1072,7 +1075,7 @@ export default function HistoryPage() {
                 disabled={loadingOlder}
                 className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted/50 disabled:opacity-60"
               >
-                {loadingOlder ? "Loading older calls…" : "Load older calls"}
+                {loadingOlder ? t("history.loadingOlder") : t("history.loadOlder")}
               </button>
               {/* Say what the reach currently IS, so the counts above are read for what
                   they are — a figure over what is loaded, not a lifetime total. */}
@@ -1148,6 +1151,7 @@ function RoundAction({
  * the prop is the whole snapshot rather than a boolean that has to default somehow.
  */
 function PresenceLed({ p }: { p: PresenceSnapshot | undefined }) {
+  const t = useT();
   if (!p) return null;
   const dot = presenceDot(p);
   return (
@@ -1155,12 +1159,12 @@ function PresenceLed({ p }: { p: PresenceSnapshot | undefined }) {
       aria-label={dot.label}
       title={
         dot.label === "On a call"
-          ? "On a call right now — you'd ring as call waiting"
+          ? t("history.presence.onCall")
           : dot.label === "Online"
-            ? "Online now"
+            ? t("history.presence.online")
             : dot.label === "Away"
-              ? "Signed in but not looking — the app is in the background"
-              : "Offline — calling will page their phone"
+              ? t("history.presence.away")
+              : t("history.presence.offline")
       }
       className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-background"
       style={{ background: dot.color, boxShadow: dot.glow || undefined }}
@@ -1205,6 +1209,7 @@ function ConferenceItem({
   saved?: boolean;
   presenceOf: PresenceLookup;
 }) {
+  const t = useT();
   const others = conf.participants.filter((p) => !p.isSelf);
   // The peer key, the call-back target and the group verdict all come from ONE
   // pure rule (see conferenceRowKeys) so this row cannot disagree with itself.
@@ -1317,8 +1322,8 @@ function ConferenceItem({
             <RoundAction
               rgb="167,139,250"
               accent="#a78bfa"
-              label="Add to contacts"
-              title="Add to contacts"
+              label={t("history.addToContacts")}
+              title={t("history.addToContacts")}
               onClick={() => onAddContact(peer.number, peer.name ?? "")}
             >
               <UserPlus className="size-4" />
@@ -1327,8 +1332,8 @@ function ConferenceItem({
           <RoundAction
             rgb="251,146,60"
             accent="#fb923c"
-            label="Message"
-            title="Message"
+            label={t("history.message")}
+            title={t("history.message")}
             disabled={!callBack}
             onClick={() => onMessage(callBack)}
           >
@@ -1338,8 +1343,8 @@ function ConferenceItem({
             <RoundAction
               rgb="56,189,248"
               accent="#38bdf8"
-              label="Video call"
-              title="Video call"
+              label={t("history.videoCall")}
+              title={t("history.videoCall")}
               disabled={!callBack}
               onClick={() => onVideo(callBack)}
             >
@@ -1350,8 +1355,8 @@ function ConferenceItem({
             rgb="34,197,94"
             accent="#22c55e"
             strong
-            label={isGroup ? "Call the group back" : "Call back"}
-            title={isGroup ? "Call everyone back (group)" : "Call back"}
+            label={isGroup ? t("history.callGroupBack") : t("history.callBack")}
+            title={isGroup ? t("history.callEveryoneBack") : t("history.callBack")}
             disabled={!canCall}
             onClick={callBackAll}
           >
@@ -1415,6 +1420,7 @@ function SoloItem({
   saved?: boolean;
   presenceOf: PresenceLookup;
 }) {
+  const t = useT();
   const missedIn = call.direction === "in";
   const tone = missedIn ? TONE.missed : TONE.out;
   const peerNum = call.other?.number ?? "";
@@ -1422,14 +1428,14 @@ function SoloItem({
   // there is no ambiguity here — but it goes through the same lookup as every
   // other row so the rule for "which number is this row about" lives in one place.
   const rowPresence = presenceOf?.(peerNum);
-  const peerName = call.other?.displayName ?? peerNum ?? "Unknown";
+  const peerName = call.other?.displayName ?? peerNum ?? t("history.unknown");
   const label = missedIn
-    ? call.status === "declined" ? "Declined" : "Missed call"
+    ? call.status === "declined" ? t("history.declined") : t("history.missedCall")
     : call.status === "declined"
-      ? "Declined by them"
+      ? t("history.declinedByThem")
       : call.status === "failed"
-        ? "Failed"
-        : "No answer";
+        ? t("history.failed")
+        : t("history.noAnswer");
 
   return (
     <li
@@ -1484,8 +1490,8 @@ function SoloItem({
             <RoundAction
               rgb="167,139,250"
               accent="#a78bfa"
-              label="Add to contacts"
-              title="Add to contacts"
+              label={t("history.addToContacts")}
+              title={t("history.addToContacts")}
               onClick={() => onAddContact(peerNum, call.other?.displayName ?? "")}
             >
               <UserPlus className="size-4" />
@@ -1496,8 +1502,8 @@ function SoloItem({
             <RoundAction
               rgb="82,227,208"
               accent="#52e3d0"
-              label="Alert me when they're back online"
-              title="Alert me when they're back online"
+              label={t("history.alertWhenBack")}
+              title={t("history.alertWhenBack")}
               onClick={() => onWatch(peerNum)}
             >
               <Bell className="size-4" />
@@ -1506,8 +1512,8 @@ function SoloItem({
           <RoundAction
             rgb="251,146,60"
             accent="#fb923c"
-            label="Message"
-            title="Message"
+            label={t("history.message")}
+            title={t("history.message")}
             disabled={!peerNum}
             onClick={() => onMessage(peerNum)}
           >
@@ -1516,8 +1522,8 @@ function SoloItem({
           <RoundAction
             rgb="56,189,248"
             accent="#38bdf8"
-            label="Video call"
-            title="Video call"
+            label={t("history.videoCall")}
+            title={t("history.videoCall")}
             disabled={!peerNum}
             onClick={() => onVideo(peerNum)}
           >
@@ -1527,8 +1533,8 @@ function SoloItem({
             rgb="34,197,94"
             accent="#22c55e"
             strong
-            label="Call back"
-            title="Call back"
+            label={t("history.callBack")}
+            title={t("history.callBack")}
             disabled={!peerNum}
             onClick={() => onRedial(peerNum)}
           >

@@ -155,9 +155,9 @@ describe("2 — recording shows you are talking, and is not a one-way trip to Se
 
   it("offers discard, pause/resume and send — three exits, not one", () => {
     const bar = MSG.slice(MSG.indexOf("function RecordingBar("), MSG.indexOf("/** Styled generic-attachment card"));
-    expect(bar).toMatch(/aria-label="Discard recording"/);
-    expect(bar).toMatch(/aria-label=\{paused \? "Resume recording" : "Pause recording"\}/);
-    expect(bar).toMatch(/aria-label="Send voice note"/);
+    expect(bar).toMatch(/aria-label=\{t\("msg\.discardRecording"\)\}/);
+    expect(bar).toMatch(/aria-label=\{paused \? t\("msg\.resumeRecording"\) : t\("msg\.pauseRecording"\)\}/);
+    expect(bar).toMatch(/aria-label=\{t\("msg\.sendVoiceNote"\)\}/);
     expect(MSG).toMatch(/onCancel=\{discardRecording\}/);
     expect(MSG).toMatch(/onSend=\{stopRecording\}/);
   });

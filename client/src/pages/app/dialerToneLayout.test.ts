@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const DIALER = read("client/src/pages/app/Dialer.tsx");
@@ -165,7 +166,7 @@ describe("v2.99.36 (3) — the Save-to-contacts pill is never clipped", () => {
     const fn = DIALER.slice(DIALER.indexOf("function QuickAddContact"));
     expect(fn.length, "found QuickAddContact").toBeGreaterThan(200);
     const body = fn.slice(0, fn.indexOf("\n}\n") + 1);
-    expect(body, "the label renders").toMatch(/Add to contacts/);
+    expect(copyOnScreen(body, "Add to contacts"), "the label renders").toBe(true);
     expect(body, "it hangs BELOW the icon rather than sharing a column").toMatch(
       /absolute top-full/,
     );

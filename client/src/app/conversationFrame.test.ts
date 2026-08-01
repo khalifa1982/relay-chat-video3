@@ -66,7 +66,7 @@ describe("the voice note is the board's waveform, and its control can be seen", 
     /* NOT `.rchip-accent`: measured 1.16:1 at worst on a saturated bubble, failing on 30 of
        36 surfaces. The white disc reads as a control on every hue by construction and the
        glyph is 4.92:1 at worst against it. */
-    const at = MSG.indexOf('aria-label={playing ? "Pause" : "Play voice note"}');
+    const at = MSG.indexOf('aria-label={playing ? t("msg.pause") : t("msg.playVoiceNote")}');
     expect(at).toBeGreaterThan(-1);
     const btn = MSG.slice(at, at + 700);
     expect(btn).toMatch(/bg-white/);
@@ -164,8 +164,8 @@ describe("board 1d's smaller type and spacing rules", () => {
 
 describe("the header says each thing once, and no colour means two things", () => {
   it("video comes before call, and the call chip is the accent", () => {
-    const vid = MSG.indexOf('title="Video call"');
-    const call = MSG.indexOf('title="Voice call"');
+    const vid = MSG.indexOf('title={t("msg.videoCall")}');
+    const call = MSG.indexOf('title={t("msg.voiceCall")}');
     expect(vid).toBeGreaterThan(-1);
     expect(call).toBeGreaterThan(-1);
     expect(vid < call, "board 1d orders video then call").toBe(true);

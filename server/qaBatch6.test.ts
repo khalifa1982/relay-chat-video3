@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { copyOnScreen } from "./testing/copyOnScreen";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const routers = read("server/v2routers.ts");
@@ -61,11 +62,11 @@ describe("v2.99.28 QA M14 — contacts.list gives an unresolved number no badge"
 
 describe("v2.99.28 QA M13 — removing a blocked contact warns it also unblocks", () => {
   const dlg = contacts.slice(
-    contacts.indexOf("<AlertDialogTitle>Remove contact?"),
-    contacts.indexOf("<AlertDialogTitle>Remove contact?") + 900
+    contacts.indexOf('{t("contacts.removeTitle")}'),
+    contacts.indexOf('{t("contacts.removeTitle")}') + 900
   );
   it("the delete confirmation shows a block warning when the contact is blocked", () => {
     expect(dlg).toMatch(/deletingContact\?\.blocked/);
-    expect(dlg).toMatch(/also unblocks them/);
+    expect(copyOnScreen(dlg, "also unblocks them")).toBe(true);
   });
 });

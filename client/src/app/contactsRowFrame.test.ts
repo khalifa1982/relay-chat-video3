@@ -59,7 +59,7 @@ describe("the row is two lines, so the name gets the width", () => {
     const pin = SRC.indexOf('{c.number.length === 6 ? c.number.slice(0, 3)');
     const l2 = SRC.indexOf('<div className="flex items-center gap-2 ps-[54px]">');
     const seen = SRC.indexOf("last seen {relativeTime(c.lastSeenAt)}");
-    const acts = SRC.indexOf('aria-label="Voice call"');
+    const acts = SRC.indexOf('aria-label={t("contacts.voiceCall")}');
     for (const [n, i] of Object.entries({ l1, name, badge, pin, l2, seen, acts }))
       expect(i, n).toBeGreaterThan(-1);
     expect(l1 < name, "the name is on line 1").toBe(true);
@@ -149,7 +149,7 @@ describe("the row is two lines, so the name gets the width", () => {
 
 describe("the video quick action is on screen on every phone", () => {
   it("it is no longer hidden below the xs breakpoint", () => {
-    const at = SRC.indexOf('aria-label="Video call"');
+    const at = SRC.indexOf('aria-label={t("contacts.videoCall")}');
     expect(at).toBeGreaterThan(-1);
     const btn = SRC.slice(at, at + 700);
     expect(btn, "`--breakpoint-xs` is 480px, i.e. wider than every iPhone").not.toMatch(
@@ -173,8 +173,20 @@ describe("the video quick action is on screen on every phone", () => {
   });
 
   it("all four controls are still there — nothing was traded away for the room", () => {
-    for (const label of ["Message", "Video call", "Voice call", "More options"]) {
-      expect((SRC.match(new RegExp(`aria-label="${label}"`, "g")) ?? []).length, label).toBe(1);
+    /* v2.106.85: the labels moved into the dictionary, so the four controls are
+       counted by their KEY. The property — none of the four was traded away for
+       the room the two-line row bought — is unchanged. */
+    for (const label of [
+      "contacts.message",
+      "contacts.videoCall",
+      "contacts.voiceCall",
+      "contacts.moreOptions",
+    ]) {
+      expect(
+        (SRC.match(new RegExp("aria-label=\\{t\\(\"" + label.split(".").join("\\.") + "\"\\)\\}", "g")) ?? [])
+          .length,
+        label,
+      ).toBe(1);
     }
   });
 });

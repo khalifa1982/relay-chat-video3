@@ -23,6 +23,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen } from "../server/testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -252,14 +253,14 @@ describe("pin, unread and archive change what the list DOES", () => {
     // There is no number, and "1 new" would be a claim about a message that may not
     // exist. Withheld when a real count is already shown.
     expect(MESSAGES).toMatch(/\{!unread && t\.manualUnread && \(/);
-    expect(MESSAGES).toMatch(/aria-label="Marked unread"/);
+    expect(MESSAGES).toMatch(/aria-label=\{tr\("msg\.markedUnread"\)\}/);
   });
 
   it("every action is a TOGGLE that reads the row's own state", () => {
     // An action that cannot be undone by the same gesture that did it is a trap.
-    expect(MESSAGES).toMatch(/label: t\.pinned \? "Unpin" : "Pin"/);
-    expect(MESSAGES).toMatch(/label: t\.archived \? "Unarchive" : "Archive"/);
-    expect(MESSAGES).toMatch(/label: t\.manualUnread \? "Read" : "Unread"/);
+    expect(MESSAGES).toMatch(/label: t\.pinned \? tr\("msg\.unpin"\) : tr\("msg\.pin"\)/);
+    expect(MESSAGES).toMatch(/label: t\.archived \? tr\("msg\.unarchive"\) : tr\("msg\.archive"\)/);
+    expect(MESSAGES).toMatch(/label: t\.manualUnread \? tr\("msg\.markRead"\) : tr\("msg\.markUnread"\)/);
     expect(MESSAGES).toMatch(/pinned: !t\.pinned/);
     expect(MESSAGES).toMatch(/archived: !t\.archived/);
     expect(MESSAGES).toMatch(/unread: !t\.manualUnread/);
@@ -332,9 +333,9 @@ describe("deleting a thread is recoverable, and says so", () => {
   });
 
   it("it is the ONLY action behind a confirmation, and the copy names what survives", () => {
-    expect(MESSAGES).toMatch(/Delete this chat for you\?/);
-    expect(MESSAGES).toMatch(/Everyone else keeps the conversation/);
-    expect(MESSAGES).toMatch(/comes back here if they\s*\n?\s*message you again/);
+    expect(copyOnScreen(MESSAGES, "Delete this chat for you?")).toBe(true);
+    expect(copyOnScreen(MESSAGES, "Everyone else keeps")).toBe(true);
+    expect(copyOnScreen(MESSAGES, "comes back here if they message you again")).toBe(true);
     // The other four are undone by the same gesture, so a dialog on them would be noise.
     expect(MESSAGES).toMatch(/onSelect: \(\) =>\s*\n\s*setClearingThread\(/);
     /* …and deleting the OPEN thread navigates away, rather than leaving an empty

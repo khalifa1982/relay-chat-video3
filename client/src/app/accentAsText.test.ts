@@ -170,7 +170,7 @@ describe("the two halves of the rule are applied to the right surfaces", () => {
        The rule is that the composer's primary is the accent CTA — measured 10.08:1 light,
        9.85:1 dark — and it is now Send, permanently. */
     expect(MSG).toMatch(/className="rcta h-11 w-11 rounded-full border-0 disabled:opacity-50"/);
-    expect(MSG).toMatch(/aria-label="Send"/);
+    expect(MSG).toMatch(/aria-label=\{t\("msg\.send"\)\}/);
   });
 
   it("a DESTRUCTIVE control never also carries the accent", () => {

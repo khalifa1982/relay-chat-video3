@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { filterItems, groupByPeer, groupTitleOf, historyPeerKey } from "./History";
 import { codeOnly } from "../../../../server/testing/codeOnly";
+import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
 
 const HISTORY = readFileSync(new URL("./History.tsx", import.meta.url), "utf8");
 const ROUTERS = readFileSync(new URL("../../../../server/v2routers.ts", import.meta.url), "utf8");
@@ -204,10 +205,10 @@ describe("the Received tab", () => {
   });
 
   it("is a real tab with its own count and its own empty state", () => {
-    expect(HISTORY).toMatch(/\{ key: "received", label: "Received", icon: PhoneIncoming \}/);
+    expect(HISTORY).toMatch(/\{ key: "received", labelKey: "history\.received", icon: PhoneIncoming \}/);
     expect(HISTORY).toMatch(/received: items\.filter\(isReceivedItem\)\.length/);
     expect(HISTORY).toMatch(/filter === "received"/);
-    expect(HISTORY).toMatch(/No answered incoming calls yet\./);
+    expect(copyOnScreen(HISTORY, "No answered incoming calls yet.")).toBe(true);
   });
 
   it("is deep-linkable like the others", () => {

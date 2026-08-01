@@ -23,6 +23,7 @@ import { openPeerProfile } from "@/app/PeerOverlays";
 import { playDtmf, disposeDtmf } from "@/lib/dtmf";
 import { useIdentity } from "@/app/useIdentity";
 import { MyNumberCard } from "@/app/ShareNumber";
+import { useT, translate, type TKey } from "@/app/i18n";
 import { DialerMarquee } from "@/app/DialerMarquee";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useRelayEngine } from "@/app/RelayEngine";
@@ -47,16 +48,33 @@ export function peerStatus(p: {
   statusOverride?: string | null;
   /** Busy line (v2.88): the peer is in a live call right now. */
   inCall?: boolean;
-}): { text: string; online: boolean; busy?: boolean } {
+}): { text: string; key: TKey | null; online: boolean; busy?: boolean } {
+  /* `key` rides ALONGSIDE `text` rather than replacing it (v2.106.84). This
+     function is shared by the Dialer, the profile popup, Contacts and History, and
+     the surfaces the Arabic sweep has not reached yet still render `text` — so the
+     key is additive and nothing breaks in step.
+
+     The alternative — a `text → key` lookup at each render site — is what this
+     dictionary's own rule forbids: a copy edit to the English would silently drop
+     the translation, and two states sharing a word would be forced to share an
+     Arabic one.
+
+     `key` is NULL only for the last-seen fallback, which is a FORMATTED relative
+     time ("last seen 3h ago") rather than a fixed phrase. Translating that means
+     translating `formatLastSeen` itself, which is its own piece of work; null is
+     the honest answer until then, and a null key renders the English. */
   // Busy wins over everything: knowing they'll bounce you matters MORE than
   // knowing they're online.
-  if (p.inCall) return { text: "on a call", online: true, busy: true };
+  if (p.inCall) return { text: "on a call", key: "presence.onCall", online: true, busy: true };
   const eff = effectiveStatus(!!p.isOnline, (p.statusOverride ?? "") as StatusOverride, !!p.idle);
-  if (eff === "online") return { text: "online now", online: true };
-  if (eff === "away") return { text: "away", online: true };
-  if (eff === "travel") return { text: "travelling ✈️", online: false };
+  if (eff === "online") return { text: "online now", key: "presence.online", online: true };
+  if (eff === "away") return { text: "away", key: "presence.away", online: true };
+  if (eff === "travel") return { text: "travelling ✈️", key: "presence.travelling", online: false };
   const ts = p.lastSeenAt ? new Date(p.lastSeenAt).getTime() : 0;
-  return { text: formatLastSeen(ts, Date.now()) || "offline", online: false };
+  const seen = formatLastSeen(ts, Date.now());
+  return seen
+    ? { text: seen, key: null, online: false }
+    : { text: "offline", key: "presence.offline", online: false };
 }
 
 /**
@@ -87,19 +105,32 @@ export function peerPresenceLines(
     inCall?: boolean;
   },
   nowMs: number
-): { presence: string; online: boolean; busy: boolean; elapsed: string; chosen: string } {
+): {
+  presence: string;
+  /** The dictionary key for `presence` — see `peerStatus` for why it rides
+   *  alongside the text rather than replacing it. Never null here: this line is
+   *  always one of four fixed phrases. */
+  presenceKey: TKey;
+  online: boolean;
+  busy: boolean;
+  elapsed: string;
+  chosen: string;
+} {
   const busy = !!p.inCall;
   const eff = effectiveStatus(!!p.isOnline, (p.statusOverride ?? "") as StatusOverride, !!p.idle);
   const liveNow = busy || eff === "online" || eff === "away";
-  const presence = busy
-    ? "on a call"
+  const presenceKey: TKey = busy
+    ? "presence.onCall"
     : eff === "online"
-      ? "online now"
+      ? "presence.online"
       : // "away" covers both a deliberate Away and an automatic idle (v2.99.92);
         // either way the honest word for the presence line is the same.
         eff === "away"
-        ? "away"
-        : "offline";
+        ? "presence.away"
+        : "presence.offline";
+  // The English is DERIVED from the key rather than written twice, so the two can
+  // never come to disagree about what a state is called.
+  const presence = translate("en", presenceKey);
   const ts = p.lastSeenAt ? new Date(p.lastSeenAt).getTime() : 0;
   const elapsed = busy || eff === "online" ? "" : formatElapsedSince(ts, nowMs);
   /* Their CHOSEN status — the Away / Travelling selector in Profile → Status —
@@ -112,7 +143,7 @@ export function peerPresenceLines(
   // their mouth — the presence line above already says "away" for that case.
   const override = (p.statusOverride ?? "") as StatusOverride;
   const chosen = override === "travel" ? "Travelling ✈️" : override === "away" ? "Away" : "";
-  return { presence, online: liveNow, busy, elapsed, chosen };
+  return { presence, presenceKey, online: liveNow, busy, elapsed, chosen };
 }
 
 /** Sentinel for the bottom-left cell, which holds nothing at all. */
@@ -214,6 +245,7 @@ function timeAgo(iso: string | Date): string {
 }
 
 export default function DialerPage() {
+  const t = useT();
   const { me } = useIdentity();
   // The call engine is hosted app-wide by RelayEngineProvider so a user can be
   // rung from any tab; the Dialer just drives it (dial / read phase + the
@@ -387,8 +419,8 @@ export default function DialerPage() {
       // Clipboard fallback: header line + link line.
       navigator.clipboard
         ?.writeText(`${title}\n${url}`)
-        .then(() => toast.success("Invite link copied"))
-        .catch(() => toast.error("Couldn't copy the link"));
+        .then(() => toast.success(t("dialer.inviteCopied")))
+        .catch(() => toast.error(t("dialer.copyFailed")));
     }
   }
 
@@ -454,7 +486,7 @@ export default function DialerPage() {
               </span>
               <span className="flex-1 min-w-0 block">
                 <span className="block text-sm font-semibold text-foreground">
-                  {missedCount === 1 ? "Missed Call" : `${missedCount} Missed Calls`}
+                  {missedCount === 1 ? t("dialer.missedCall") : t("dialer.missedCalls", { count: missedCount })}
                 </span>
                 <span className="block text-xs text-muted-foreground truncate">
                   from <span className="font-medium text-foreground/90">{missedLatest.name}</span>
@@ -470,13 +502,13 @@ export default function DialerPage() {
                 className="shrink-0 text-destructive hover:text-destructive"
                 onClick={() => { engine.dial(missedLatest.number, { voice: true }); setShowMissed(false); }}
               >
-                <Phone className="size-4 mr-1" /> Call back
+                <Phone className="size-4 mr-1" /> {t("dialer.callBack")}
               </Button>
             )}
             <button
               type="button"
               onClick={() => setShowMissed(false)}
-              aria-label="Dismiss"
+              aria-label={t("dialer.dismiss")}
               className="shrink-0 grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground"
             >
               <X className="size-4" />
@@ -497,14 +529,14 @@ export default function DialerPage() {
         {/* Recent calls — desktop only */}
         <section className="hidden md:flex md:flex-col rounded-2xl bg-card/60 backdrop-blur-xl backdrop-saturate-150 border border-border/60 min-h-0 shadow-xl shadow-black/10">
           <div className="px-5 py-4 border-b border-border/60">
-            <h2 className="font-semibold tracking-tight">Recent</h2>
+            <h2 className="font-semibold tracking-tight">{t("dialer.recent")}</h2>
           </div>
           <div className="flex-1 overflow-y-auto">
             {history.isLoading ? (
-              <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+              <div className="p-6 text-sm text-muted-foreground">{t("dialer.loading")}</div>
             ) : recent.length === 0 ? (
               <div className="p-10 text-center text-sm text-muted-foreground">
-                No calls yet. Dial a number to start your first call.
+                {t("dialer.noCalls")}
               </div>
             ) : (
               <ul>
@@ -535,8 +567,8 @@ export default function DialerPage() {
                         size="sm"
                         variant="ghost"
                         disabled={!peerNum}
-                        aria-label="Call back (voice)"
-                        title="Call back (voice)"
+                        aria-label={t("dialer.callBackVoice")}
+                        title={t("dialer.callBackVoice")}
                         // Dial immediately as VOICE (v2.88) — matching History's
                         // call-back buttons; it used to only pre-fill the keypad.
                         onClick={() => peerNum && engine.dial(peerNum, { voice: true })}
@@ -653,11 +685,11 @@ export default function DialerPage() {
                     onClick={shareInvite}
                     className="inline-flex items-center gap-1.5 font-medium tracking-wide text-muted-foreground hover:text-foreground transition-colors active:scale-95"
                   >
-                    <Share2 className="size-3.5" /> Share invite link
+                    <Share2 className="size-3.5" /> {t("dialer.shareInvite")}
                   </button>
                 ) : ghost.mode === "typed" && dialed.length === 6 ? (
                   previewQuery.isLoading ? (
-                    "Looking up…"
+                    t("dialer.lookingUp")
                   ) : previewIdentity?.partyLine ? (
                     // Party line (v2.89): a dialable room — show its title and
                     // the live head-count instead of a person's presence.
@@ -667,7 +699,7 @@ export default function DialerPage() {
                       </span>
                       {" · "}
                       <span className="text-violet-400 font-medium">
-                        Party line · {previewIdentity.memberCount} on the line
+                        {t("dialer.partyLine", { count: previewIdentity.memberCount })}
                       </span>
                     </span>
                   ) : previewIdentity ? (
@@ -730,7 +762,7 @@ export default function DialerPage() {
                                     : "text-muted-foreground font-medium"
                               }
                             >
-                              {st.presence}
+                              {t(st.presenceKey)}
                             </span>
                             {st.elapsed && (
                               <>
@@ -743,7 +775,7 @@ export default function DialerPage() {
                                   dir="ltr"
                                   className="font-mono tabular-nums [unicode-bidi:isolate] text-muted-foreground"
                                 >
-                                  {st.elapsed} ago
+                                  {t("dialer.ago", { elapsed: st.elapsed })}
                                 </span>
                               </>
                             )}
@@ -760,7 +792,7 @@ export default function DialerPage() {
                       );
                     })()
                   ) : (
-                    "No RELAY user with this number"
+                    t("dialer.noSuchUser")
                   )
                 ) : ghost.mode === "typed" ? (
                   `${6 - dialed.length} more digits`
@@ -874,8 +906,8 @@ export default function DialerPage() {
                   border: "1px solid rgba(255,255,255,.22)",
                   boxShadow: "inset 0 1px 0 rgba(255,255,255,.22), 0 6px 16px rgba(153,27,27,.45)",
                 }}
-                aria-label="Erase last digit"
-                title="Erase"
+                aria-label={t("dialer.eraseLast")}
+                title={t("dialer.erase")}
               >
                 {/* The halo: a STATIC box-shadow on a stacked overlay, only its
                     OPACITY animated. Animating the key's own box-shadow would
@@ -957,14 +989,14 @@ export default function DialerPage() {
                       height: "clamp(58px, 15vw, 66px)",
                       transitionTimingFunction: "var(--ease-out)",
                     }}
-                    aria-label={previewIsLine ? "Join the party line" : "Voice call"}
-                    title={previewIsLine ? "Join the party line (camera off)" : "Voice call (camera off)"}
+                    aria-label={previewIsLine ? t("dialer.joinPartyLine") : t("dialer.voiceCall")}
+                    title={previewIsLine ? t("dialer.joinPartyLineHint") : t("dialer.voiceCallHint")}
                   >
                     <PhoneCall className="size-6" strokeWidth={2.2} />
                   </button>
                   </span>
                   <span className="text-xs font-medium text-muted-foreground">
-                    {previewIsLine ? "Join" : "Voice Call"}
+                    {previewIsLine ? t("dialer.join") : t("dialer.voiceCall")}
                   </span>
                 </div>
                 {/* Video call (green). */}
@@ -988,13 +1020,13 @@ export default function DialerPage() {
                       color: "#7dd3fc",
                       transitionTimingFunction: "var(--ease-out)",
                     }}
-                    aria-label="Video call"
-                    title="Video call"
+                    aria-label={t("dialer.videoCall")}
+                    title={t("dialer.videoCall")}
                   >
                     <Video className="size-5" strokeWidth={2.2} />
                   </button>
                   </span>
-                  <span className="text-xs font-medium text-muted-foreground">Video Call</span>
+                  <span className="text-xs font-medium text-muted-foreground">{t("dialer.videoCall")}</span>
                 </div>
                 {/* Group call (purple) — opens the participant picker. */}
                 <div className="flex flex-col items-center gap-1.5">
@@ -1015,13 +1047,13 @@ export default function DialerPage() {
                       color: "#c4b5fd",
                       transitionTimingFunction: "var(--ease-out)",
                     }}
-                    aria-label="Group call"
+                    aria-label={t("dialer.groupCall")}
                     title={nonexistent ? "That number isn't on RELAY" : "Group call — ring up to 10 people into one room"}
                   >
                     <Users className="size-5" strokeWidth={2.2} />
                   </button>
                   </span>
-                  <span className="text-xs font-medium text-muted-foreground">Group Call</span>
+                  <span className="text-xs font-medium text-muted-foreground">{t("dialer.groupCall")}</span>
                 </div>
               </div>
             </div>
@@ -1059,11 +1091,12 @@ export default function DialerPage() {
 }
 
 function QuickAddContact({ number, displayName }: { number: string; displayName: string }) {
+  const t = useT();
   const utils = trpc.useUtils();
   const upsert = trpc.contacts.upsert.useMutation({
     onSuccess: () => {
       utils.contacts.list.invalidate();
-      toast.success("Saved to your contacts.");
+      toast.success(t("dialer.savedToContacts"));
     },
     onError: (e) => toast.error((e as { message?: string })?.message ?? "Couldn't save the contact."),
   });
@@ -1104,7 +1137,7 @@ function QuickAddContact({ number, displayName }: { number: string; displayName:
       onClick={() => upsert.mutate({ number, displayName: displayName === number ? undefined : displayName })}
       disabled={upsert.isPending}
       aria-label={`Add ${number} to your contacts`}
-      title="Add to contacts"
+      title={t("dialer.addToContacts")}
       className="
         relative grid place-items-center rounded-full overflow-hidden text-white
         size-12 shrink-0

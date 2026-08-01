@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "../../../server/testing/codeOnly";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
 /**
  * v2.63 voice/video/UI-UX improvement batch — static guards pinning the
@@ -101,7 +102,9 @@ describe("UI/UX improvements", () => {
   it("the Contacts search field has a leading search icon", () => {
     // Tolerate trailing utility classes (the redesign added pointer-events-none
     // so the icon never intercepts a tap on the field).
-    expect(CONTACTS).toMatch(/<Search className="absolute left-3 top-1\/2 -translate-y-1\/2 size-4 text-muted-foreground[^"]*" \/>\s*\n\s*<Input\s*\n\s*placeholder="Search by name or number"/);
+    expect(CONTACTS).toMatch(
+      /<Search className="absolute left-3 top-1\/2 -translate-y-1\/2 size-4 text-muted-foreground[^"]*" \/>\s*\n\s*<Input\s*\n\s*placeholder=\{t\("contacts\.search"\)\}/,
+    );
   });
 
   it("the empty Contacts state uses the shared Empty component with a CTA", () => {
@@ -122,7 +125,7 @@ describe("UI/UX improvements", () => {
     );
     expect(title).toBeTruthy();
     expect(title![0]).toMatch(/search \?/);
-    expect(title![0]).toMatch(/No contacts yet/);
-    expect(code).toMatch(/<EmptyContent>[\s\S]{0,400}?Add a contact/);
+    expect(copyOnScreen(title![0], "No contacts yet")).toBe(true);
+    expect(code).toMatch(/<EmptyContent>[\s\S]{0,400}?contacts\.addContact/);
   });
 });

@@ -70,6 +70,9 @@ import {
 } from "@shared/reactions";
 import { previewOf, previewOfStoryReply } from "@/app/messagePreview";
 import { statusReplyOf, storyKindLabel } from "@shared/statusReply";
+/* `tr`, not `t`, in MessagesPage: the swipe-action builder binds the THREAD to
+   `t`, so an unaliased translator would be shadowed into a ThreadSummary. */
+import { useT, type TKey } from "@/app/i18n";
 import { isGroupHidden, useGroupLocks } from "@/app/groupLock";
 import { GroupLockGate } from "@/app/GroupLockGate";
 import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
@@ -326,6 +329,7 @@ export default function MessagesPage({
    */
   only,
 }: { only?: "groups" } = {}) {
+  const tr = useT();
   const { me } = useIdentity();
   const [location, setLocation] = useLocation();
   const basePath = useTabBasePath();
@@ -411,7 +415,9 @@ export default function MessagesPage({
       meId != null && t.kind !== "group" && t.peerIdentityId === meId;
     const cats: {
       key: string;
-      label: string;
+      /* v2.106.85: a KEY, not a finished string — this memo is built outside the
+         render and the heading is the only thing that renders it. */
+      labelKey: TKey;
       rgb: string;
       hex: string;
       icon: ReactNode;
@@ -426,7 +432,7 @@ export default function MessagesPage({
         ? [
             {
               key: "groups",
-              label: "Group chats",
+              labelKey: "msg.section.groups" as TKey,
               rgb: "167,139,250",
               hex: "#a78bfa",
               icon: <Users className="size-3.5" />,
@@ -436,7 +442,7 @@ export default function MessagesPage({
         : [
             {
               key: "direct",
-              label: "Direct",
+              labelKey: "msg.section.direct" as TKey,
               rgb: "251,146,60",
               hex: "#fb923c",
               icon: <MessageSquare className="size-3.5" />,
@@ -444,7 +450,7 @@ export default function MessagesPage({
             },
             {
               key: "notes",
-              label: "Notes",
+              labelKey: "msg.section.notes" as TKey,
               rgb: "251,191,36",
               hex: "#fbbf24",
               icon: <StickyNote className="size-3.5" />,
@@ -456,7 +462,7 @@ export default function MessagesPage({
         // which is the whole point of archiving: out of the way but not gone. The
         // section renders only when something is in it (the existing rule below).
         key: "archived",
-        label: "Archived",
+        labelKey: "msg.section.archived" as TKey,
         rgb: "107,114,128",
         hex: "#6b7280",
         icon: <Archive className="size-3.5" />,
@@ -505,7 +511,7 @@ export default function MessagesPage({
   const swipeLeftActions = (t: ThreadRow): SwipeAction[] => [
     {
       key: "unread",
-      label: t.manualUnread ? "Read" : "Unread",
+      label: t.manualUnread ? tr("msg.markRead") : tr("msg.markUnread"),
       icon: <MailOpen className="size-5" />,
       color: "#6b7280",
       onSelect: () =>
@@ -513,7 +519,7 @@ export default function MessagesPage({
     },
     {
       key: "pin",
-      label: t.pinned ? "Unpin" : "Pin",
+      label: t.pinned ? tr("msg.unpin") : tr("msg.pin"),
       /* v2.106.66 — SKY, NOT `#22c55e`. That hex is `VerifiedBadge`'s `registered` tier
          VERBATIM, and these rows render that badge (line ~883) — so swiping a row put a
          green Pin chip beside a green tier seal, two meanings on one hue a few pixels
@@ -538,14 +544,14 @@ export default function MessagesPage({
   const swipeRightActions = (t: ThreadRow): SwipeAction[] => [
     {
       key: "mute",
-      label: isThreadMuted(t.conversationId) ? "Unmute" : "Mute",
+      label: isThreadMuted(t.conversationId) ? tr("msg.unmute") : tr("msg.mute"),
       icon: isThreadMuted(t.conversationId) ? <Bell className="size-5" /> : <BellOff className="size-5" />,
       color: "#e0912f",
       onSelect: () => setThreadMuted(t.conversationId, !isThreadMuted(t.conversationId)),
     },
     {
       key: "delete",
-      label: "Delete",
+      label: tr("msg.delete"),
       icon: <Trash2 className="size-5" />,
       color: "#dc2626",
       // Behind a confirmation, unlike the other four: it takes the conversation out of
@@ -554,12 +560,12 @@ export default function MessagesPage({
       onSelect: () =>
         setClearingThread({
           conversationId: t.conversationId,
-          label: t.title || t.peerDisplayName || t.peerNumber || "this chat",
+          label: t.title || t.peerDisplayName || t.peerNumber || tr("msg.thisChat"),
         }),
     },
     {
       key: "archive",
-      label: t.archived ? "Unarchive" : "Archive",
+      label: t.archived ? tr("msg.unarchive") : tr("msg.archive"),
       icon: t.archived ? <ArchiveRestore className="size-5" /> : <Archive className="size-5" />,
       color: "#6b7280",
       onSelect: () =>
@@ -622,8 +628,8 @@ export default function MessagesPage({
               <input
                 value={threadSearch}
                 onChange={(e) => setThreadSearch(e.target.value)}
-                placeholder="Search conversations"
-                aria-label="Search conversations"
+                placeholder={tr("msg.search")}
+                aria-label={tr("msg.search")}
                 className="h-9 w-full rounded-lg border border-border/60 bg-muted/40 pl-9 pr-3 text-sm outline-none focus:border-primary/50"
               />
             </div>
@@ -644,7 +650,7 @@ export default function MessagesPage({
           )}
           {threads.isError ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
-              <p>Couldn't load your conversations.</p>
+              <p>{tr("msg.loadFailed")}</p>
               <button
                 type="button"
                 onClick={() => threads.refetch()}
@@ -702,7 +708,7 @@ export default function MessagesPage({
                         {cat.icon}
                       </span>
                       <span className="flex-1 text-left text-[11px] font-bold uppercase tracking-[0.12em]">
-                        {cat.label}
+                        {tr(cat.labelKey)}
                       </span>
                       <span className="text-[11px] text-muted-foreground">{cat.rows.length}</span>
                       {catUnread && (
@@ -852,7 +858,7 @@ export default function MessagesPage({
                                     <div
                                       className="grid size-full place-items-center rounded-full"
                                       style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
-                                      aria-label="Group conversation"
+                                      aria-label={tr("msg.groupConversation")}
                                     >
                                       <Users className="size-7" />
                                     </div>
@@ -881,7 +887,7 @@ export default function MessagesPage({
                                 <div
                                   className="grid size-[60px] place-items-center rounded-full"
                                   style={{ background: "rgba(251,191,36,.16)", color: "#fbbf24" }}
-                                  aria-label="Notes to yourself"
+                                  aria-label={tr("msg.notesToSelf")}
                                 >
                                   <StickyNote className="size-7" />
                                 </div>
@@ -958,7 +964,7 @@ export default function MessagesPage({
                                      at the top — so this only has to say why, which is a
                                      quiet job. Measured: 6.00:1 light, 6.55:1 dark. */
                                   <Pin
-                                    aria-label="Pinned"
+                                    aria-label={tr("msg.pinned")}
                                     className="ms-auto size-3.5 shrink-0 -rotate-45 text-muted-foreground"
                                   />
                                 )}
@@ -1058,19 +1064,19 @@ export default function MessagesPage({
                                         ✓ would say it had. */}
                                     {t.lastMessageStatus === "read" ? (
                                       <CheckCheck
-                                        aria-label="Read"
+                                        aria-label={tr("msg.read")}
                                         className="size-3.5 shrink-0 text-primary"
                                         strokeWidth={2.6}
                                       />
                                     ) : t.lastMessageStatus === "delivered" ? (
                                       <CheckCheck
-                                        aria-label="Delivered"
+                                        aria-label={tr("msg.delivered")}
                                         className="size-3.5 shrink-0 text-muted-foreground"
                                         strokeWidth={2.6}
                                       />
                                     ) : t.lastMessageStatus === "sent" ? (
                                       <Check
-                                        aria-label="Sent"
+                                        aria-label={tr("msg.sent")}
                                         className="size-3.5 shrink-0 text-muted-foreground"
                                         strokeWidth={2.6}
                                       />
@@ -1148,7 +1154,7 @@ export default function MessagesPage({
                                      text: at 2.26:1 the orange dot missed the 3:1 that
                                      non-text UI needs on the light card too. */
                                   <span
-                                    aria-label="Marked unread"
+                                    aria-label={tr("msg.markedUnread")}
                                     className="size-2.5 shrink-0 rounded-full bg-primary"
                                   />
                                 )}
@@ -1199,15 +1205,13 @@ export default function MessagesPage({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this chat for you?</AlertDialogTitle>
+            <AlertDialogTitle>{tr("msg.clearTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {clearingThread?.label} leaves your list and its messages are hidden on all your
-              devices. Everyone else keeps the conversation, and it comes back here if they
-              message you again.
+              {tr("msg.clearBody", { label: clearingThread?.label ?? "" })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tr("common.cancel")}</AlertDialogCancel>
             {/* DELIBERATELY NOT `destructive`, and this is the one worth arguing.
                 Every other confirmation in this file destroys something for good; this
                 one does not — the thread comes back by itself the moment anybody
@@ -1226,7 +1230,7 @@ export default function MessagesPage({
                 setClearingThread(null);
               }}
             >
-              Delete for me
+              {tr("msg.hideAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1292,6 +1296,7 @@ function GroupCallsSection({ onOpenPicker }: { onOpenPicker: () => void }) {
 /* ────────────────────────────────────────────────────────────── */
 
 function ConversationView({ conversationId }: { conversationId: number }) {
+  const t = useT();
   const { me } = useIdentity();
   const [, setLocation] = useLocation();
   const basePath = useTabBasePath();
@@ -1423,14 +1428,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         conversationId: thread.conversationId,
       });
       if (res.targets.length === 0) {
-        toast.error("Nobody else in this group has a number to call.");
+        toast.error(t("msg.noNumberToCall"));
         return;
       }
       const ok = engine.dialGroup(
         res.targets.map((t) => t.number),
         { voice, seed: res.hostSeed },
       );
-      if (!ok) toast.error("Couldn't start the call.");
+      if (!ok) toast.error(t("msg.callFailed"));
       else setLocation("/app/call");
     } catch (e) {
       toast.error((e as Error)?.message || "Couldn't start the call.");
@@ -1601,7 +1606,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       if (!res.ok && "tooLarge" in res && res.tooLarge) {
         // v2.99.57: NOTHING was burned — the message is intact. Say so, instead of
         // falling through to the generic path that would leave a blank card.
-        toast.error("This attachment is too large to open here. It hasn't been used up.");
+        toast.error(t("msg.tooLargeToOpen"));
         setRevealing(null);
         return;
       }
@@ -1662,7 +1667,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     },
     onError: (_err, _vars, context) => {
       if (context?.prev) utils.messages.list.setData(context.input, context.prev);
-      toast.error("Couldn't unsend that message — restored it.");
+      toast.error(t("msg.unsendFailed"));
     },
     onSettled: () => {
       utils.messages.list.invalidate({ conversationId });
@@ -1688,7 +1693,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     onSuccess: async () => {
       await utils.messages.list.invalidate({ conversationId, limit: 100 });
       await utils.messages.threads.invalidate();
-      toast.success("Removed for everyone");
+      toast.success(t("msg.removedForEveryone"));
     },
     onError: (e) => toast.error(e.message || "Couldn't remove that — it's still here."),
   });
@@ -1705,7 +1710,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     },
     onError: (_err, _vars, context) => {
       if (context?.prev) utils.messages.list.setData(context.input, context.prev);
-      toast.error("Couldn't delete that for you — it's still here.");
+      toast.error(t("msg.hideFailed"));
     },
     onSettled: () => {
       utils.messages.list.invalidate({ conversationId });
@@ -1745,7 +1750,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
        still needs saying, because the chip has already been drawn optimistically by
        the refetch that the event triggers, and a silent one leaves a reaction that
        looks recorded and is not. */
-    onError: () => toast.error("Couldn't save that reaction — try again."),
+    onError: () => toast.error(t("msg.reactionFailed")),
   });
   /**
    * One tap, from EITHER entry point — the quick row or an existing chip.
@@ -1818,10 +1823,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         body: m.body ?? undefined,
         attachmentId: m.attachment ? (m.attachment as { id: number }).id : undefined,
       });
-      toast.success("Forwarded");
+      toast.success(t("msg.forwarded"));
       setForwarding(null);
     } catch {
-      toast.error("Couldn't forward that message");
+      toast.error(t("msg.forwardFailed"));
     } finally {
       setForwardBusy(false);
     }
@@ -1914,11 +1919,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     const sr = statusReplyOf(msg.meta);
     if (sr) return `↩ ${storyKindLabel(sr.kind)}${msg.body ? ` · ${msg.body.slice(0, 60)}` : ""}`;
     if (msg.body) return msg.body.length > 80 ? msg.body.slice(0, 80) + "…" : msg.body;
-    return msg.kind === "image" ? "📷 Photo"
-      : msg.kind === "video" ? "🎬 Video"
-      : msg.kind === "audio" ? "🎤 Voice message"
-      : msg.kind === "file" ? "📎 Attachment"
-      : "Message";
+    return msg.kind === "image" ? t("msg.photo")
+      : msg.kind === "video" ? t("msg.video")
+      : msg.kind === "audio" ? t("msg.voiceMessage")
+      : msg.kind === "file" ? t("msg.attachment")
+      : t("msg.message");
   }
   const fileRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLInputElement>(null);
@@ -2037,7 +2042,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
 
   async function uploadFile(file: File) {
     if (file.size > 40 * 1024 * 1024) {
-      toast.error("File exceeds the 40 MB limit.");
+      toast.error(t("msg.tooLarge"));
       return;
     }
     setUploading(true);
@@ -2325,7 +2330,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           try {
             await uploadBlob(result.blob, `voice-note.${result.ext}`, result.durationMs);
           } catch {
-            toast.error("Failed to save voice note");
+            toast.error(t("msg.voiceNoteFailed"));
           }
         })
         .finally(() => {
@@ -2390,7 +2395,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         <header className="flex items-center gap-2 border-b border-border/70 bg-card/90 px-2 py-2 md:rounded-t-2xl md:px-4">
           <button
             type="button"
-            aria-label="Back"
+            aria-label={t("msg.back")}
             className="grid size-8 shrink-0 place-items-center md:hidden hover:brightness-110"
             style={{ color: "#52e3d0" }}
             onClick={() => setLocation(basePath)}
@@ -2419,7 +2424,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       <header className="shrink-0 flex items-center gap-2 px-2 md:px-4 py-2 border-b border-border/70 bg-card/90 supports-[backdrop-filter]:bg-card/70 supports-[backdrop-filter]:backdrop-blur-md md:rounded-t-2xl">
         <button
           type="button"
-          aria-label="Back"
+          aria-label={t("msg.back")}
           className="md:hidden grid place-items-center size-8 shrink-0 hover:brightness-110"
           style={{ color: "#52e3d0" }}
           onClick={() => setLocation(basePath)}
@@ -2576,8 +2581,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             size="icon"
             variant="ghost"
             onClick={closeSearch}
-            aria-label="Close search"
-            title="Close search"
+            aria-label={t("msg.closeSearch")}
+            title={t("msg.closeSearch")}
             className="size-8 shrink-0 text-primary"
           >
             <X className="size-5" />
@@ -2595,7 +2600,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             <AccentCircle
               rgb="255,255,255"
               hex="#ffffff"
-              title="Video call"
+              title={t("msg.videoCall")}
               size={34}
               onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}&video=1`)}
             >
@@ -2603,8 +2608,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             </AccentCircle>
             <button
               type="button"
-              title="Voice call"
-              aria-label="Voice call"
+              title={t("msg.voiceCall")}
+              aria-label={t("msg.voiceCall")}
               onClick={() => setLocation(`/app/dialer?to=${encodeURIComponent(thread.peerNumber)}&voice=1`)}
               className="rchip-accent grid size-[34px] shrink-0 place-items-center rounded-[12px] transition active:scale-95 motion-reduce:transition-none"
             >
@@ -2623,7 +2628,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             <AccentCircle
               rgb="34,197,94"
               hex="#22c55e"
-              title="Call the group"
+              title={t("msg.callGroup")}
               size={34}
               onClick={() => void startGroupCall(true)}
             >
@@ -2632,7 +2637,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             <AccentCircle
               rgb="56,189,248"
               hex="#38bdf8"
-              title="Video call the group"
+              title={t("msg.videoCallGroup")}
               size={34}
               onClick={() => void startGroupCall(false)}
             >
@@ -2661,7 +2666,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 autoFocus
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="Search in this conversation…"
+                placeholder={t("msg.searchInChat")}
                 className="pl-10"
               />
             </div>
@@ -2888,8 +2893,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     onReply={() => setReplyingTo(m)}
                     onCopy={m.body ? () => {
                       navigator.clipboard?.writeText(m.body!)
-                        .then(() => toast.success("Copied"))
-                        .catch(() => toast.error("Failed to copy"));
+                        .then(() => toast.success(t("msg.copied")))
+                        .catch(() => toast.error(t("msg.copyFailed")));
                     } : undefined}
                     onReact={() => setReactingTo(m.id)}
                     onForward={isExpiringMsg(m.meta) ? undefined : () => setForwarding(m)}
@@ -2975,7 +2980,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       {/* The label and the kind glyph are bidi-isolated so an
                           Arabic excerpt beside them cannot reorder the phrase. */}
                       <span className="font-semibold [unicode-bidi:isolate]" dir="ltr">
-                        ↩ {mine ? "Replied to their story" : "Replied to your story"}
+                        ↩ {mine ? t("msg.repliedToTheirStory") : t("msg.repliedToYourStory")}
                       </span>
                       <span className="opacity-80 [unicode-bidi:isolate]" dir="ltr">
                         {" · "}
@@ -3138,7 +3143,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       return (
                         <>
                           {content(copy.body, copy.attachment)}
-                          {chip(left != null ? `Disappears in ${left}s` : "View once — gone when you leave")}
+                          {chip(left != null ? t("msg.disappearsIn", { n: left }) : t("msg.viewOnce"))}
                         </>
                       );
                     }
@@ -3151,7 +3156,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                           }
                         >
                           <Timer className="size-3.5 shrink-0" />
-                          {mine ? "Viewed — this message has disappeared" : "This message has disappeared"}
+                          {mine ? t("msg.disappearedMine") : t("msg.disappeared")}
                         </div>
                       );
                     }
@@ -3222,8 +3227,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     onReply={() => setReplyingTo(m)}
                     onCopy={m.body ? () => {
                       navigator.clipboard?.writeText(m.body!)
-                        .then(() => toast.success("Copied"))
-                        .catch(() => toast.error("Failed to copy"));
+                        .then(() => toast.success(t("msg.copied")))
+                        .catch(() => toast.error(t("msg.copyFailed")));
                     } : undefined}
                     onReact={() => setReactingTo(m.id)}
                     onForward={isExpiring ? undefined : () => setForwarding(m)}
@@ -3272,8 +3277,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         <button
           type="button"
           onClick={scrollToBottom}
-          aria-label="Scroll to latest messages"
-          title="Scroll to latest"
+          aria-label={t("msg.scrollToLatest")}
+          title={t("msg.scrollToLatestShort")}
           className="absolute bottom-4 right-4 z-10 grid place-items-center size-10 rounded-full bg-card border border-border shadow-lg text-foreground hover:bg-muted/60 transition-opacity motion-reduce:transition-none"
         >
           <ChevronDown className="size-5" />
@@ -3308,7 +3313,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               type="button"
               onClick={() => setReplyingTo(null)}
               className="text-muted-foreground hover:text-foreground"
-              aria-label="Cancel reply"
+              aria-label={t("msg.cancelReply")}
             >
               <X className="size-4" />
             </button>
@@ -3322,7 +3327,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               type="button"
               onClick={() => setPendingUpload(null)}
               className="text-muted-foreground hover:text-foreground"
-              aria-label="Remove attachment"
+              aria-label={t("msg.removeAttachment")}
             >
               <X className="size-4" />
             </button>
@@ -3437,7 +3442,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               type="button"
               onClick={() => setExpire(null)}
               className="text-muted-foreground hover:text-foreground"
-              aria-label="Turn off disappearing"
+              aria-label={t("msg.turnOffDisappearing")}
             >
               <X className="size-4" />
             </button>
@@ -3462,7 +3467,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             variant="ghost"
             size="icon"
             onClick={() => setEmojiOpen((v) => !v)}
-            aria-label="Emoji"
+            aria-label={t("msg.emoji")}
           >
             <Smile className="size-5" />
           </Button>
@@ -3548,7 +3553,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               }
             }}
             onPaste={handlePaste}
-            placeholder={uploading ? "Uploading…" : "Type a message"}
+            placeholder={uploading ? t("msg.uploading") : t("msg.type")}
             disabled={uploading || recording}
             className="h-11 w-full rounded-full ps-4 pe-11"
           />
@@ -3557,8 +3562,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               variant="ghost"
               size="icon"
               onClick={() => setAttachMenuOpen((v) => !v)}
-              aria-label={attachMenuOpen ? "Close attach menu" : "Attach media or a file"}
-              title="Attach media or a file"
+              aria-label={attachMenuOpen ? t("msg.closeAttach") : t("msg.attach")}
+              title={t("msg.attach")}
               aria-expanded={attachMenuOpen}
               className={
                 "absolute end-1 top-1/2 size-9 -translate-y-1/2 rounded-full " +
@@ -3597,8 +3602,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                on-accent `#04211a`, which stays legible across all twelve palette hues
                where white fails on the yellow and lime entries. */
             className="rcta h-11 w-11 rounded-full border-0 disabled:opacity-50"
-            aria-label="Send"
-            title="Send"
+            aria-label={t("msg.send")}
+            title={t("msg.send")}
           >
             <Send className="size-4" />
           </Button>
@@ -3639,22 +3644,22 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       <AlertDialog open={infoOf !== null} onOpenChange={(open) => !open && setInfoOf(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Message info</AlertDialogTitle>
+            <AlertDialogTitle>{t("msg.infoTitle")}</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 pt-1 text-left">
                 {(() => {
                   const m = infoOf;
                   if (!m) return null;
                   const iSent = m.senderIdentityId === me?.id;
-                  const rows: Array<{ label: string; at: string | Date | null }> = [
-                    { label: "Sent", at: m.createdAt },
-                    { label: "Delivered", at: m.deliveredAt ?? null },
-                    { label: "Read", at: m.readAt ?? null },
+                  const rows: Array<{ key: TKey; label: string; at: string | Date | null }> = [
+                    { key: "msg.sent", label: t("msg.sent"), at: m.createdAt },
+                    { key: "msg.delivered", label: t("msg.delivered"), at: m.deliveredAt ?? null },
+                    { key: "msg.read", label: t("msg.read"), at: m.readAt ?? null },
                   ];
                   return (
                     <>
                       {rows.map((r) => (
-                        <div key={r.label} className="flex items-baseline justify-between gap-4">
+                        <div key={r.key} className="flex items-baseline justify-between gap-4">
                           <span className="text-xs uppercase tracking-wider text-muted-foreground">
                             {r.label}
                           </span>
@@ -3673,8 +3678,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       ))}
                       {!iSent && (
                         <p className="pt-1 text-[0.72rem] leading-relaxed text-muted-foreground/80">
-                          These are the times recorded on your side for a message you
-                          received.
+                          {t("msg.infoReceivedNote")}
                         </p>
                       )}
                     </>
@@ -3684,7 +3688,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Close</AlertDialogCancel>
+            <AlertDialogCancel>{t("common.done")}</AlertDialogCancel>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -3701,7 +3705,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Forward to…</AlertDialogTitle>
+            <AlertDialogTitle>{t("msg.forwardTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
               {forwarding && (forwarding.meta as { expire?: unknown } | null)?.expire != null
                 ? "This is a disappearing message — forwarding it would break the promise it was sent under, so it can't be forwarded."
@@ -3713,21 +3717,21 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               <Input
                 value={forwardSearch}
                 onChange={(e) => setForwardSearch(e.target.value)}
-                placeholder="Search by name or number"
-                aria-label="Search conversations to forward to"
+                placeholder={t("msg.forwardSearch")}
+                aria-label={t("msg.forwardSearchLabel")}
                 className="mb-2"
               />
               <div className="max-h-64 space-y-1 overflow-y-auto">
-              {forwardTargets.map((t) => (
+              {forwardTargets.map((th) => (
                 <button
-                  key={t.conversationId}
+                  key={th.conversationId}
                   type="button"
                   disabled={forwardBusy}
-                  onClick={() => void forwardTo({ id: t.conversationId }, forwarding)}
+                  onClick={() => void forwardTo({ id: th.conversationId }, forwarding)}
                   className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted disabled:opacity-50"
                 >
                   <span className="truncate" dir="auto">
-                    {t.title || t.peerDisplayName || t.peerNumber || "Conversation"}
+                    {th.title || th.peerDisplayName || th.peerNumber || t("msg.conversation")}
                   </span>
                 </button>
               ))}
@@ -3738,15 +3742,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                    defect, which is what an empty state that ignores its filter is. */
                 <p className="px-1 py-2 text-sm text-muted-foreground">
                   {forwardSearch.trim()
-                    ? `No conversations match \u201C${forwardSearch.trim()}\u201D.`
-                    : "No other conversations yet."}
+                    ? t("msg.forwardNoMatch", { query: forwardSearch.trim() })
+                    : t("msg.forwardNone")}
                 </p>
               )}
               </div>
             </>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -3757,14 +3761,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       <AlertDialog open={hidingId !== null} onOpenChange={(open) => !open && setHidingId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this message for you?</AlertDialogTitle>
+            <AlertDialogTitle>{t("msg.hideTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              It disappears from this conversation on all your devices. Everyone else keeps
-              it, and they aren't told. You can't get it back.
+              {t("msg.hideBody")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               destructive
               onClick={() => {
@@ -3772,7 +3775,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 setHidingId(null);
               }}
             >
-              Delete for me
+              {t("msg.hideAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -3786,15 +3789,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       <AlertDialog open={adminDeleting !== null} onOpenChange={(open) => !open && setAdminDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove this message for everyone?</AlertDialogTitle>
+            <AlertDialogTitle>{t("msg.adminRemoveTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
               {adminDeleting
-                ? `${nameById.get(adminDeleting.senderIdentityId) || "This member"}'s message disappears for every member of the group. They aren't told, and it can't be undone.`
+                ? t("msg.adminRemoveBody", {
+                    name: nameById.get(adminDeleting.senderIdentityId) || t("msg.thisMember"),
+                  })
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               destructive
               onClick={() => {
@@ -3804,7 +3809,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 setAdminDeleting(null);
               }}
             >
-              Remove for everyone
+              {t("msg.adminRemoveAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -3814,13 +3819,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       <AlertDialog open={unsendId !== null} onOpenChange={(open) => !open && setUnsendId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Unsend this message?</AlertDialogTitle>
+            <AlertDialogTitle>{t("msg.unsendTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              It will be removed for everyone in this conversation. This can't be undone.
+              {t("msg.unsendBody")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               destructive
               onClick={() => {
@@ -3999,11 +4004,12 @@ function QuickReact({
   onMore: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   return (
     <div
       className={"flex " + (mine ? "justify-end" : "justify-start") + " mb-1"}
       role="group"
-      aria-label="React to this message"
+      aria-label={t("msg.react")}
     >
       <div className="rsheet flex items-center gap-0.5 rounded-full border border-border/60 px-1 py-1 shadow-lg">
         {QUICK_REACTIONS.map((e) => {
@@ -4027,7 +4033,7 @@ function QuickReact({
         })}
         <button
           type="button"
-          aria-label="More reactions"
+          aria-label={t("msg.moreReactions")}
           onClick={onMore}
           className="grid size-8 place-items-center rounded-full text-muted-foreground transition hover:bg-foreground/10 active:scale-90 motion-reduce:transition-none"
         >
@@ -4035,7 +4041,7 @@ function QuickReact({
         </button>
         <button
           type="button"
-          aria-label="Close reactions"
+          aria-label={t("msg.closeReactions")}
           onClick={onClose}
           className="grid size-8 place-items-center rounded-full text-muted-foreground transition hover:bg-foreground/10 active:scale-90 motion-reduce:transition-none"
         >
@@ -4149,12 +4155,13 @@ function MessageMenu({
    */
   onAdminDelete?: () => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   return (
     <div className="relative shrink-0 mb-1">
       <button
         type="button"
-        aria-label="Message options"
+        aria-label={t("msg.options")}
         onClick={() => setOpen((v) => !v)}
         // v2.99.85 (owner: "the three dots is not clear. it's very light color. you
         // need to make it highlighted. it means that a three dots. you can click on
@@ -4301,6 +4308,7 @@ function AttachmentView({
   glyph?: string;
   onOpen?: (m: { url: string; type: "image" | "video"; name?: string }) => void;
 }) {
+  const t = useT();
   // A thumb/image that 404s/403s used to render as a broken white rectangle —
   // fall back to the tappable file card instead (v2.96).
   const [imgBroken, setImgBroken] = useState(false);
@@ -4314,7 +4322,7 @@ function AttachmentView({
         type="button"
         onClick={() => onOpen?.({ url, type: "image", name: filename })}
         className="block mb-1"
-        aria-label="Open image"
+        aria-label={t("msg.openImage")}
       >
         <img
           src={thumbUrl || url}
@@ -4335,7 +4343,7 @@ function AttachmentView({
         type="button"
         onClick={() => onOpen?.({ url, type: "video", name: filename })}
         className="relative block mb-1 group/vid"
-        aria-label="Play video"
+        aria-label={t("msg.playVideo")}
       >
         <video src={url} className="rounded-xl max-h-64 w-auto bg-black/40" muted preload="metadata" />
         <span className="absolute inset-0 grid place-items-center">
@@ -4419,6 +4427,7 @@ function VoiceNotePlayer({
   /** The bubble's own dark gradient stop, for a glyph on the white play disc. */
   glyph?: string;
 }) {
+  const t = useT();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const seeded = typeof durationMs === "number" && durationMs > 0 ? durationMs / 1000 : 0;
@@ -4570,7 +4579,7 @@ function VoiceNotePlayer({
       <button
         type="button"
         onClick={toggle}
-        aria-label={playing ? "Pause" : "Play voice note"}
+        aria-label={playing ? t("msg.pause") : t("msg.playVoiceNote")}
         className="grid size-9 shrink-0 place-items-center rounded-full bg-white ring-1 ring-black/10 active:scale-95 transition-transform"
         /* A SOLID WHITE DISC WITH THE BUBBLE'S OWN DARK STOP AS THE GLYPH, and this is a
            correction to my own v2.106.18: `.rchip-accent` is a CARD recipe, measured on
@@ -4602,7 +4611,7 @@ function VoiceNotePlayer({
             `role="slider"` and aria values, and the same `frac` rAF driver. */}
         <div
           role="slider"
-          aria-label="Seek"
+          aria-label={t("msg.seek")}
           aria-valuemin={0}
           aria-valuemax={Math.round(dur) || 0}
           aria-valuenow={Math.round(cur)}
@@ -4630,7 +4639,7 @@ function VoiceNotePlayer({
         download={true}
         target="_blank"
         rel="noreferrer"
-        aria-label="Download audio"
+        aria-label={t("msg.downloadAudio")}
         className={
           "grid size-7 shrink-0 place-items-center rounded-full transition hover:brightness-110 " +
           "bg-white/15"
@@ -4683,6 +4692,7 @@ function RecordingBar({
   onSend: () => void;
   busy: boolean;
 }) {
+  const t = useT();
   const BARS = 30;
   const barsRef = useRef<Array<HTMLSpanElement | null>>([]);
   const clockRef = useRef<HTMLSpanElement | null>(null);
@@ -4723,8 +4733,8 @@ function RecordingBar({
         type="button"
         onClick={onCancel}
         disabled={busy}
-        aria-label="Discard recording"
-        title="Discard this recording"
+        aria-label={t("msg.discardRecording")}
+        title={t("msg.discardRecordingHint")}
         className="grid size-9 shrink-0 place-items-center rounded-full bg-destructive/15 text-destructive transition active:scale-95 disabled:opacity-50"
       >
         <Trash2 className="size-4" />
@@ -4784,7 +4794,7 @@ function RecordingBar({
         type="button"
         onClick={onTogglePause}
         disabled={busy}
-        aria-label={paused ? "Resume recording" : "Pause recording"}
+        aria-label={paused ? t("msg.resumeRecording") : t("msg.pauseRecording")}
         title={paused ? "Resume" : "Pause"}
         className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground/10 text-foreground transition active:scale-95 disabled:opacity-50"
       >
@@ -4794,7 +4804,7 @@ function RecordingBar({
         type="button"
         onClick={onSend}
         disabled={busy}
-        aria-label="Send voice note"
+        aria-label={t("msg.sendVoiceNote")}
         title="Send"
         className="rcta grid size-9 shrink-0 place-items-center rounded-full transition active:scale-95 disabled:opacity-50"
       >
@@ -4967,6 +4977,7 @@ function MediaLightbox({
  * watching. Optimistic, with rollback, so the switch never lies about its state.
  */
 function AutoReplyToggle() {
+  const t = useT();
   const utils = trpc.useUtils();
   const me = trpc.identity.whoami.useQuery();
   const on = me.data?.autoReplyEnabled === true;
@@ -4982,7 +4993,7 @@ function AutoReplyToggle() {
       toast.error("Couldn't change auto-reply. Try again.");
     },
     onSuccess: ({ enabled }) => {
-      toast.success(enabled ? "Auto-reply is on while you're away" : "Auto-reply is off");
+      toast.success(enabled ? t("msg.autoReplyOn") : t("msg.autoReplyOff"));
     },
   });
 
@@ -5002,7 +5013,7 @@ function AutoReplyToggle() {
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent className="max-w-sm rounded-3xl">
           <AlertDialogHeader>
-            <AlertDialogTitle>Message options</AlertDialogTitle>
+            <AlertDialogTitle>{t("msg.options")}</AlertDialogTitle>
             <AlertDialogDescription className="sr-only">
               Turn the away auto-reply on or off.
             </AlertDialogDescription>
@@ -5045,6 +5056,7 @@ function AutoReplyToggle() {
 }
 
 function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group" } = {}) {
+  const t = useT();
   const [, setLocation] = useLocation();
   const basePath = useTabBasePath();
   const utils = trpc.useUtils();
@@ -5297,7 +5309,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                   <button
                     type="button"
                     onClick={() => setGroupAvatarOpen(true)}
-                    aria-label={groupAvatar ? "Change the group photo" : "Choose a group photo"}
+                    aria-label={groupAvatar ? t("msg.changeGroupPhoto") : t("msg.chooseGroupPhoto")}
                     className="relative grid size-[52px] shrink-0 place-items-center overflow-hidden rounded-[14px] border border-border bg-muted/40 transition hover:border-primary/50"
                   >
                     {groupAvatar ? (
@@ -5310,7 +5322,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     </span>
                   </button>
                   <p className="text-xs text-muted-foreground">
-                    {groupAvatar ? "Group photo set." : "Add a group photo (optional)."}
+                    {groupAvatar ? t("msg.groupPhotoSet") : t("msg.addGroupPhoto")}
                   </p>
                 </div>
                 <label className="mb-2 block font-mono text-[10px] uppercase tracking-[.2em] text-muted-foreground">
@@ -5412,7 +5424,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     ? "Creating…"
                     : groupNumbers.length
                       ? `Create group · ${groupNumbers.length + 1} members`
-                      : "Create group"}
+                      : t("msg.createGroup")}
                 </Button>
               </>
             )}

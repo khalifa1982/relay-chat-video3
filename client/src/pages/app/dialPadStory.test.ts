@@ -112,7 +112,10 @@ describe("both dial pads: blank · 0 · erase", () => {
     expect([...APP_KEYS.matchAll(/\{ d: /g)]).toHaveLength(11);
     expect([...LP_KEYS.matchAll(/\[/g)]).toHaveLength(12);
     expect(LP_KEYS).toMatch(/\[BS_KEY, ""\]/);
-    expect(DIALER).toMatch(/aria-label="Erase last digit"/);
+    // v2.106.84: the label moved into the dictionary, so the attribute carries an
+    // expression. The property — the control is LABELLED for a screen reader — is
+    // unchanged.
+    expect(DIALER).toMatch(/aria-label=\{t\("dialer\.eraseLast"\)\}/);
     expect(HOME).toMatch(/data-lp="backBtn"/);
   });
 
@@ -140,7 +143,7 @@ describe("add to contacts is one glossy icon, or nothing", () => {
     expect(QA).toMatch(/<UserPlus className="relative size-5"/);
     // Still reachable without sight: the label lives on the button.
     expect(QA).toMatch(/aria-label=\{`Add \$\{number\} to your contacts`\}/);
-    expect(QA).toMatch(/title="Add to contacts"/);
+    expect(QA).toMatch(/title=\{t\("dialer\.addToContacts"\)\}/);
   });
 
   it("wears a colour nothing else on the screen uses", () => {
@@ -280,10 +283,10 @@ describe("the dialer preview, in the owner's order", () => {
   it("renders badge, presence, elapsed and the chosen status — in that order", () => {
     const at = DIALER.indexOf("const st = peerPresenceLines(");
     expect(at).toBeGreaterThan(-1);
-    const block = DIALER.slice(at, DIALER.indexOf('"No RELAY user with this number"', at));
+    const block = DIALER.slice(at, DIALER.indexOf('t("dialer.noSuchUser")', at));
     const iBadge = block.indexOf("<RoleBadge");
-    const iPresence = block.indexOf("{st.presence}");
-    const iElapsed = block.indexOf("{st.elapsed} ago");
+    const iPresence = block.indexOf("{t(st.presenceKey)}");
+    const iElapsed = block.indexOf('t("dialer.ago"');
     const iChosen = block.indexOf("{st.chosen}");
     for (const [n, i] of [["badge", iBadge], ["presence", iPresence], ["elapsed", iElapsed], ["chosen", iChosen]] as const) {
       expect(i, `${n} is rendered`).toBeGreaterThan(-1);
@@ -294,7 +297,7 @@ describe("the dialer preview, in the owner's order", () => {
   });
 
   it("the elapsed figure is bidi-isolated so RTL cannot reorder '2d 4h'", () => {
-    const el = DIALER.slice(DIALER.indexOf("{st.elapsed} ago") - 400, DIALER.indexOf("{st.elapsed} ago"));
+    const el = DIALER.slice(DIALER.indexOf('t("dialer.ago"') - 400, DIALER.indexOf('t("dialer.ago"'));
     expect(el).toMatch(/dir="ltr"/);
     expect(el).toMatch(/\[unicode-bidi:isolate\]/);
   });

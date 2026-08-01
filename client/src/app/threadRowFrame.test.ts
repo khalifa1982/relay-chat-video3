@@ -60,7 +60,7 @@ describe("unread is the accent, in a form that survives the light theme", () => 
     /* The row's manual-unread dot and the section header's pip. Two colours for one state is
        how a header comes to disagree with the rows under it. A fill needs 3:1 rather than
        4.5, and the orange missed that on the light card too. */
-    expect(MSG).toMatch(/aria-label="Marked unread"\s*\n\s*className="size-2\.5 shrink-0 rounded-full bg-primary"/);
+    expect(MSG).toMatch(/aria-label=\{tr\("msg\.markedUnread"\)\}\s*\n\s*className="size-2\.5 shrink-0 rounded-full bg-primary"/);
     expect(MSG).toMatch(/<span className="size-2 rounded-full bg-primary" \/>/);
   });
 

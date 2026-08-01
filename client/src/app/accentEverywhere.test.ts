@@ -296,7 +296,7 @@ describe("1e Contacts", () => {
        `text-primary` IS the accent: v2.106.4 repointed `--primary` at `--rb` inside
        `.dark.relay-v2`, so the dark look is unchanged and only light becomes legible
        (4.59:1). The board asks for the accent and the .26em mono tracking; both hold. */
-    const label = elementWith(CONTACTS_CODE, "{section.label}");
+    const label = elementWith(CONTACTS_CODE, "{t(section.labelKey)}");
     expect(label).toMatch(/text-primary/);
     expect(label, "the raw variable in a colour position is what failed AA").not.toMatch(
       /color:\s*"?var\(--rb\)/,
@@ -309,8 +309,8 @@ describe("1e Contacts", () => {
     // The screen's one primary action reads as the app's accent rather than as a fourth
     // colour beside three coloured row actions.
     const btn = CONTACTS_CODE.slice(
-      CONTACTS_CODE.indexOf('aria-label="Add by PIN"'),
-      CONTACTS_CODE.indexOf("</button>", CONTACTS_CODE.indexOf('aria-label="Add by PIN"'))
+      CONTACTS_CODE.indexOf('aria-label={t("contacts.addByPin")}'),
+      CONTACTS_CODE.indexOf("</button>", CONTACTS_CODE.indexOf('aria-label={t("contacts.addByPin")}'))
     );
     expect(btn).toMatch(/rchip-accent/);
     expect(btn).not.toMatch(/#7c3aed/);
@@ -320,14 +320,14 @@ describe("1e Contacts", () => {
     /* Board 1e: "call = accent chip". The same primary/secondary split the Dialer's
        action row uses — nothing is removed, the ranking is what changes. */
     const voice = CONTACTS_CODE.slice(
-      CONTACTS_CODE.indexOf('aria-label="Voice call"'),
-      CONTACTS_CODE.indexOf("</button>", CONTACTS_CODE.indexOf('aria-label="Voice call"'))
+      CONTACTS_CODE.indexOf('aria-label={t("contacts.voiceCall")}'),
+      CONTACTS_CODE.indexOf("</button>", CONTACTS_CODE.indexOf('aria-label={t("contacts.voiceCall")}'))
     );
     expect(voice).toMatch(/rchip-accent/);
     expect(voice).not.toMatch(/34,197,94/);
     const video = CONTACTS_CODE.slice(
-      CONTACTS_CODE.indexOf('aria-label="Video call"'),
-      CONTACTS_CODE.indexOf("</button>", CONTACTS_CODE.indexOf('aria-label="Video call"'))
+      CONTACTS_CODE.indexOf('aria-label={t("contacts.videoCall")}'),
+      CONTACTS_CODE.indexOf("</button>", CONTACTS_CODE.indexOf('aria-label={t("contacts.videoCall")}'))
     );
     expect(video).toMatch(/#38bdf8/);
     expect(video).not.toMatch(/rchip-accent/);

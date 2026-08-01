@@ -18248,6 +18248,26 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.85 — Arabic reaches the four in-app tabs
+
+- **Dialer / Contacts / History / Messages go through the dictionary** — ~150 strings
+  across `dict/dialer.ts`, `dict/contacts.ts`, `dict/history.ts`, `dict/messages.ts`,
+  each with its Arabic half.
+- **Presence is keyed on the pure functions** (`peerStatus` / `peerPresenceLines`
+  return a `TKey` beside the text), not mapped from English at each render site.
+- **Module-level label constants carry `labelKey: TKey`** — a constant cannot call a
+  hook, and one keyed label means the section heading and the row chip cannot
+  disagree about their Arabic.
+- **`expandCopy()`** in `server/testing/copyOnScreen.ts` — without it the
+  `systemAlerts` sweep goes VACUOUS after a screen is translated (green while
+  covering zero dialogs).
+- 49 pre-existing pins repointed: copy → `copyOnScreen`, controls → the key
+  expression, slice anchors → re-anchored with their `-1` guards kept.
+
+**Still open on #156:** Groups, the call surfaces, `formatLastSeen`'s relative-time
+strings, the RTL pass over the physical `pl-/pr-/ml-/mr-` sites, and #158 (the
+light-theme animated background).
+
 ## v2.106.84 — THE SIGN-IN, REGISTRATION AND ENTRY SCREENS SPEAK ARABIC
 (owner: *"During registration and login, ensure everything is in Arabic with a proper,
 professional translation suitable for apps."*)

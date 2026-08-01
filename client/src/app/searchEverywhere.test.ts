@@ -35,6 +35,7 @@ import { codeOnly } from "../../../server/testing/codeOnly";
 import { digitsOf, isNumberQuery, pinFromQuery } from "../../../shared/searchNumber";
 import { matchQuery } from "./searchMatch";
 import { isNumberQuery as suggestIsNumberQuery } from "./contactSuggest";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
 const read = (p: string) => codeOnly(readFileSync(resolve(process.cwd(), p), "utf8"));
 const MSG = read("client/src/pages/app/Messages.tsx");
@@ -137,11 +138,11 @@ describe("the Messages thread search sees the name YOU saved", () => {
 
 describe("the Forward picker is a picker rather than a list", () => {
   it("it has a search box that names both methods", () => {
-    const at = MSG.indexOf('aria-label="Search conversations to forward to"');
+    const at = MSG.indexOf('aria-label={t("msg.forwardSearchLabel")}');
     expect(at, "the forward search box is gone").toBeGreaterThan(-1);
     const box = MSG.slice(Math.max(0, at - 400), at + 200);
     expect(box).toMatch(/value=\{forwardSearch\}/);
-    expect(box).toMatch(/placeholder="Search by name or number"/);
+    expect(box).toMatch(/placeholder=\{t\("msg\.forwardSearch"\)\}/);
   });
 
   it("it filters through the SHARED matcher, over the same fields as the thread list", () => {
@@ -173,11 +174,11 @@ describe("the Forward picker is a picker rather than a list", () => {
   it("a narrowed-to-nothing search does not claim the inbox is empty", () => {
     /* "No other conversations yet" is a false statement about somebody's own data the
        moment a filter is doing the emptying — the v2.106.25 defect. */
-    const at = MSG.indexOf("No other conversations yet.");
+    const at = MSG.indexOf('t("msg.forwardNone")');
     expect(at).toBeGreaterThan(-1);
     const region = MSG.slice(Math.max(0, at - 400), at + 100);
     expect(region).toMatch(/forwardSearch\.trim\(\)\s*\?/);
-    expect(region).toMatch(/No conversations match/);
+    expect(copyOnScreen(region, "No conversations match")).toBe(true);
   });
 });
 

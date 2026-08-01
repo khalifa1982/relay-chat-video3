@@ -190,9 +190,12 @@ describe("the action row is the board's hierarchy", () => {
 
   it("NOTHING was removed — all three actions survive", () => {
     // A redesign that quietly drops a control is a feature regression wearing a restyle.
-    expect(DIALER_CODE).toMatch(/aria-label=\{previewIsLine \? "Join the party line" : "Voice call"\}/);
-    expect(DIALER_CODE).toMatch(/aria-label="Video call"/);
-    expect(DIALER_CODE).toMatch(/aria-label="Group call"/);
+    // v2.106.85: the two remaining labels moved into the dictionary too, so the
+    // attributes carry expressions. The property — each of the three actions is
+    // present and LABELLED for a screen reader — is unchanged.
+    expect(DIALER_CODE).toMatch(/aria-label=\{previewIsLine \? t\("dialer\.joinPartyLine"\) : t\("dialer\.voiceCall"\)\}/);
+    expect(DIALER_CODE).toMatch(/aria-label=\{t\("dialer\.videoCall"\)\}/);
+    expect(DIALER_CODE).toMatch(/aria-label=\{t\("dialer\.groupCall"\)\}/);
   });
 
   it("the app's own hue language survives on the secondary GLYPHS", () => {
