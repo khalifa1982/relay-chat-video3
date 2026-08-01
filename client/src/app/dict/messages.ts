@@ -111,6 +111,14 @@ export const MESSAGES = {
   "msg.pause": { en: "Pause", ar: "إيقاف مؤقت" },
   "msg.seek": { en: "Seek", ar: "تحديد الموضع" },
   "msg.downloadAudio": { en: "Download audio", ar: "تنزيل الصوت" },
+  /* v2.106.89 — an honest state for a note THIS engine cannot decode (an Android
+     WebM/Opus note opened on an iPhone). Says whose limitation it is, because the file
+     itself is fine and the download works. */
+  "msg.voiceUnsupported": { en: "Can't play this here", ar: "لا يمكن تشغيله هنا" },
+  "msg.voiceUnsupportedHint": {
+    en: "This device can't open this recording — download it instead.",
+    ar: "لا يستطيع هذا الجهاز فتح هذا التسجيل — نزّله بدلاً من ذلك.",
+  },
   "msg.discardRecording": { en: "Discard recording", ar: "تجاهل التسجيل" },
   "msg.discardRecordingHint": { en: "Discard this recording", ar: "تجاهل هذا التسجيل" },
   "msg.resumeRecording": { en: "Resume recording", ar: "استئناف التسجيل" },

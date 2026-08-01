@@ -279,8 +279,11 @@ describe("the way in", () => {
   it("the header disc shows the group's own photo", () => {
     // It drew the generic glyph even for a group WITH a picture, so the thread row and
     // the conversation's own header disagreed about the same group.
+    /* REWRITTEN (v2.106.89): this froze the raw `<img>` ternary, which was itself the
+       shape that made a CHANGED photo invisible and left a hole on failure. The property
+       is only that the header renders the group's OWN photo rather than a generic glyph. */
     const hdr = MESSAGES.slice(MESSAGES.indexOf('<div className="relative shrink-0">'));
-    expect(hdr.slice(0, 1400)).toMatch(/thread\?\.groupAvatarUrl \? \(/);
+    expect(hdr.slice(0, 1400)).toMatch(/<GroupAvatar\s+url=\{thread\?\.groupAvatarUrl\}/);
   });
 
   it("the sheet only mounts for a group", () => {

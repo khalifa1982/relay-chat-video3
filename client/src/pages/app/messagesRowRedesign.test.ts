@@ -178,7 +178,10 @@ describe("v2.99.37 — robustness the earlier rows got wrong", () => {
     expect(rowBtnAt).toBeGreaterThan(avatarAt); // avatar is rendered first, as a sibling
   });
   it("group / notes-to-self / muted variants are all still handled", () => {
-    expect(ROW).toMatch(/<Users className="size-7"/);
+    /* REWRITTEN (v2.106.89): the group disc's glyph moved into the shared `GroupAvatar`,
+       which draws it UNDERNEATH the photo so a failed load degrades to it rather than to
+       a hole. The property is that a group row still renders a group disc at all. */
+    expect(ROW).toMatch(/<GroupAvatar/);
     expect(ROW).toMatch(/<StickyNote className="size-7"/);
     expect(ROW).toMatch(/\{muted && <BellOff/);
   });

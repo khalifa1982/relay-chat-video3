@@ -16,13 +16,52 @@ export interface AudioMimePick {
   ext: string;
 }
 
-/** Probe MediaRecorder for a supported audio container. Null ⇒ no recorder. */
+/**
+ * Spellings that ask for AAC-in-MP4 EXPLICITLY — the one pairing every current engine
+ * can decode, and therefore the only container that makes a note recorded on Android
+ * playable on an iPhone.
+ *
+ * `audio/mp4` BARE IS DELIBERATELY NOT IN THIS LIST, and that omission is the point.
+ * MEASURED in this repo's Chromium 141: `isTypeSupported("audio/mp4")` answers **true**,
+ * and the recorder then reveals `audio/mp4;codecs=opus` — Opus inside a real MP4
+ * container (`ftypisom` in the bytes). Safari cannot decode Opus-in-MP4 either, so
+ * preferring that spelling would produce a file that LOOKS right (right container, right
+ * extension, right type) and still fails on iPhone — strictly harder to diagnose than
+ * today's honest WebM failure. This is v2.98.0's video-mislabel trap on the audio side,
+ * which is why the check below is on the REVEALED type rather than on `isTypeSupported`.
+ */
+const AAC_MP4 = ["audio/mp4;codecs=mp4a.40.2", "audio/mp4;codecs=aac"];
+
+/** Is a recorder's REVEALED mime type genuinely AAC-in-MP4? */
+export function isAacMp4(mimeType: string): boolean {
+  const m = (mimeType || "").toLowerCase();
+  if (!m.startsWith("audio/mp4")) return false;
+  // No codecs parameter at all is UNPROVEN, not proven — refuse it, because that is
+  // exactly the shape bare `audio/mp4` reports before it admits to Opus.
+  if (!m.includes("codecs=")) return false;
+  return m.includes("mp4a") || m.includes("aac");
+}
+
+/**
+ * Probe MediaRecorder for a supported audio container. Null ⇒ no recorder.
+ *
+ * THE ORDER IS A COMPATIBILITY DECISION (v2.106.89, owner: the voice bar is broken on
+ * iPhone). WebM/Opus used to be first, so an ANDROID phone recorded WebM — and iOS Safari
+ * has no WebM demuxer at all, so those notes are undecodable on every iPhone: the element
+ * errors, `duration` stays NaN, the bar sits at zero and the play button does nothing.
+ * Safari itself records `audio/mp4`, which Android CAN decode, which is exactly why the
+ * breakage only ever ran one way round.
+ *
+ * So an explicit AAC-in-MP4 is preferred where an engine really offers it, and WebM
+ * remains the fallback for engines that do not — which is no worse than today for them.
+ */
 export function pickAudioMime(): AudioMimePick | null {
   if (typeof window === "undefined" || !window.MediaRecorder) return null;
   const candidates: AudioMimePick[] = [
+    ...AAC_MP4.map((mimeType) => ({ mimeType, ext: "m4a" })),
     { mimeType: "audio/webm;codecs=opus", ext: "webm" },
     { mimeType: "audio/webm", ext: "webm" },
-    { mimeType: "audio/mp4", ext: "m4a" }, // Safari
+    { mimeType: "audio/mp4", ext: "m4a" }, // Safari — genuinely AAC there
     { mimeType: "audio/aac", ext: "m4a" }, // some Safari builds
     { mimeType: "audio/ogg;codecs=opus", ext: "ogg" },
   ];
@@ -121,6 +160,27 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
       (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (Ctor) {
       ac = new Ctor();
+      /* THE LEVEL METER WAS DEAD ON iPHONE, AND THE CAUSE IS THE AWAIT ABOVE (v2.106.89).
+       *
+       * `getUserMedia` is awaited before we get here, so the synchronous user gesture is
+       * long gone by the time this context is constructed — and WebKit starts a context
+       * created outside a gesture SUSPENDED. A suspended context does not run its graph,
+       * so `getByteTimeDomainData` keeps handing back the all-128 midpoint fill and
+       * `level()` returns exactly 0 for the whole recording. The 30 bars the composer
+       * draws are driven by nothing else, so they sit flat at their floor: the owner's
+       * *"no wave when you talk"* on iPhone, and the second half of *"this voice bar …
+       * the iPhone showing"*.
+       *
+       * This repo already knows this — `relayClient.ts` resumes for the IDENTICAL
+       * mic → analyser → level pattern, and `dtmf.ts` and `Home.tsx` both name it in
+       * prose as "the classic iOS Web Audio race". The recorder was simply never given
+       * the same line.
+       *
+       * Fire-and-forget: a resume that never settles must not delay the recording, and
+       * every failure path here already leaves `level()` returning 0. */
+      void ac.resume?.().catch(() => {
+        /* a meter is never a reason for recording to fail */
+      });
       const src = ac.createMediaStreamSource(stream);
       analyser = ac.createAnalyser();
       analyser.fftSize = 512;

@@ -734,13 +734,17 @@ export function GroupInfoSheet({
                 >
                   {groupInitials(title) || <Users className="size-10" />}
                   {avatarUrl ? (
+                    /* KEYED ON THE URL (v2.106.89). The glyph was already underneath here
+                       — that half was right — but the failure was hidden by writing
+                       `display:none` on the node, and React REUSES that node across a
+                       `src` change, so one transient failure made every LATER photo
+                       invisible too. A key makes a new url a new element by construction. */
                     <img
+                      key={avatarUrl}
                       src={avatarUrl}
                       alt=""
                       className="absolute inset-0 size-full object-cover"
                       onError={(e) => {
-                        // A broken photo degrades to the glyph, never the browser's
-                        // broken-image icon — the rule PeerAvatar already follows.
                         (e.currentTarget as HTMLImageElement).style.display = "none";
                       }}
                     />

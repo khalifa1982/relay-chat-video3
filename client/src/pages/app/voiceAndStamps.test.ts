@@ -62,9 +62,15 @@ describe("1 — the play control actually moves", () => {
     /* RE-ANCHORED (v2.106.40): this froze the player's WHOLE prop list, so board 1d adding a
        `glyph` prop broke it while saying nothing about the property — that the stored duration
        reaches the player, and that it comes from the attachment row rather than a probe. */
-    const mount = MSG.match(/<VoiceNotePlayer [^>]*\/>/);
-    expect(mount).toBeTruthy();
-    expect((mount as RegExpMatchArray)[0]).toMatch(/durationMs=\{durationMs\}/);
+    /* RE-ANCHORED AGAIN (v2.106.89): `[^>]*` cannot span a MULTI-LINE mount, and the
+       mount grew a second line once it also carried the note's identity for the run
+       hand-over — so this failed on CORRECT source. Bounded by the element's own close,
+       with the slice proven real, so it cannot go stale on the next prop either. */
+    const at = MSG.indexOf("<VoiceNotePlayer");
+    expect(at, "the player must be mounted").toBeGreaterThan(-1);
+    const mount = MSG.slice(at, MSG.indexOf("/>", at) + 2);
+    expect(mount.length, "the slice must be real").toBeGreaterThan(30);
+    expect(mount).toMatch(/durationMs=\{durationMs\}/);
     expect(MSG).toMatch(/durationMs=\{m\.attachment\.durationMs \?\? null\}/);
   });
 

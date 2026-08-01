@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { useLocale, TEXT_SCALE_FACTOR, type TKey } from "@/app/i18n";
 import { useIdentity } from "./useIdentity";
+import { installExclusivePlayback } from "./mediaExclusive";
 import { useSignOut } from "./useSignOut";
 import { AuthPanel } from "./AuthPanel";
 import { RoleBadge, roleFromFlags } from "./VerifiedBadge";
@@ -154,6 +155,15 @@ export function AppShell({
   // user can flip from Profile.
   useEffect(() => {
     document.documentElement.classList.add("relay-v2");
+  }, []);
+
+  /* ONE THING PLAYS AT A TIME, APP-WIDE (v2.106.89, owner: *"if you play one anywhere in
+     this system in the app cannot play another until that one's finished"*).
+     Installed HERE rather than from whichever surface happens to mount first, so the rule
+     is live for the media lightbox and the story viewer even in a session where no voice
+     note was ever rendered. Idempotent. */
+  useEffect(() => {
+    installExclusivePlayback();
   }, []);
 
   // One-time gesture unlock for the notification-sound AudioContext: iOS won't

@@ -358,9 +358,20 @@ describe("what the group's own identity looks like on screen", () => {
   });
 
   it("a group photo that fails to load degrades to the glyph", () => {
-    // Never the browser's broken-image icon — the same rule PeerAvatar follows.
-    expect(MESSAGES).toMatch(/t\.groupAvatarUrl \? \(/);
-    expect(MESSAGES).toMatch(/onError=\{\(e\) => \{[\s\S]{0,120}display = "none"/);
+    /* REWRITTEN TO THE PROPERTY (v2.106.89), and the literal it froze WAS THE DEFECT: it
+       required the failure to be hidden by writing `display = "none"` on the node, and
+       React reuses that node across a `src` change — so the style written for the OLD url
+       survived onto the new one and a CHANGED group photo was invisible (owner report).
+       The property is only that a broken photo shows the glyph rather than the browser's
+       broken-image icon, which `GroupAvatar` now delivers for every surface at once. */
+    const GA = fs.readFileSync(
+      path.resolve(__dirname, "..", "client", "src", "app", "GroupAvatar.tsx"),
+      "utf8",
+    );
+    expect(MESSAGES).toMatch(/<GroupAvatar/);
+    expect(GA).toMatch(/onError=\{\(\) => setFailedFor\(url\)\}/);
+    expect(GA).toMatch(/const broken = !!url && failedFor === url/);
+    expect(GA).toMatch(/<Users /);
   });
 
   it("the header shows the group's id and its status, and NO tier badge", () => {

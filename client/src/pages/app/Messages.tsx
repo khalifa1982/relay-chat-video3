@@ -93,6 +93,7 @@ import { formatLastSeen } from "@shared/profileFields";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { GroupCallScreen, PartyLinesSection } from "./GroupCallScreen";
 import { AvatarPicker } from "@/app/AvatarPicker";
+import { GroupAvatar } from "@/app/GroupAvatar";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { videoRecorderSupported } from "@/lib/videoNote";
 import { VideoRecordSheet } from "@/app/VideoRecordSheet";
@@ -103,6 +104,13 @@ import { mentionQueryAt, rankMentionMatches, applyMention } from "@shared/mentio
 import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useThreadMuted, isThreadMuted, setThreadMuted, onMutedChange } from "@/app/mutedThreads";
+import {
+  installExclusivePlayback,
+  pauseOthers,
+  registerDetachedMedia,
+  registerVoiceNote,
+  advanceVoiceRun,
+} from "@/app/mediaExclusive";
 import { useTypers, useTypingConversations } from "@/app/typingStore";
 import { bubbleStyleFor, bubbleGlyphColor, nameColorFor, senderAvatarStyle } from "@/app/peerColors";
 import { TypingLine } from "@/app/TypingLine";
@@ -842,26 +850,20 @@ export default function MessagesPage({
                                       ? "rstoryring" // v2.106.66 — the ONE recipe, not a copy
                                       : "bg-border"
                                     : "";
-                                  const disc = t.groupAvatarUrl ? (
-                                    // The group's own photo (v2.102.0). A broken URL must
-                                    // degrade to the glyph below, never to the browser's
-                                    // broken-image icon — the same rule PeerAvatar follows.
-                                    <img
-                                      src={t.groupAvatarUrl}
-                                      alt={displayName}
-                                      className="size-full rounded-full border border-border/60 bg-muted/40 object-cover"
-                                      onError={(e) => {
-                                        (e.currentTarget as HTMLImageElement).style.display = "none";
-                                      }}
+                                  /* v2.106.89 — ONE component, with the glyph UNDERNEATH.
+                                     This site used to hide a failed photo by writing
+                                     `display:none` on the node, and React reuses that node
+                                     across a `src` change — so a CHANGED group photo stayed
+                                     invisible (the owner's report). It also left a 60px hole
+                                     rather than the glyph, because the glyph was the
+                                     else-branch of the very element being hidden. */
+                                  const disc = (
+                                    <GroupAvatar
+                                      url={t.groupAvatarUrl}
+                                      name={displayName}
+                                      size={60}
+                                      className="border border-border/60 bg-muted/40"
                                     />
-                                  ) : (
-                                    <div
-                                      className="grid size-full place-items-center rounded-full"
-                                      style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
-                                      aria-label={tr("msg.groupConversation")}
-                                    >
-                                      <Users className="size-7" />
-                                    </div>
                                   );
                                   if (!st?.hasAny) {
                                     return <div className="size-[60px]">{disc}</div>;
@@ -2437,23 +2439,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                the generic glyph even for a group with a picture, so the thread row and
                its own header disagreed about the same group. A broken URL falls back to
                the glyph, never the browser's broken-image icon. */
-            thread?.groupAvatarUrl ? (
-              <img
-                src={thread.groupAvatarUrl}
-                alt=""
-                className="size-9 rounded-full border border-border/60 bg-muted/40 object-cover"
-                onError={(e) => {
-                  (e.currentTarget as HTMLImageElement).style.display = "none";
-                }}
-              />
-            ) : (
-              <div
-                className="size-9 rounded-full grid place-items-center"
-                style={{ background: "rgba(167,139,250,.16)", color: "#a78bfa" }}
-              >
-                <Users className="size-4.5" />
-              </div>
-            )
+            <GroupAvatar
+              url={thread?.groupAvatarUrl}
+              size={36}
+              className="border border-border/60 bg-muted/40"
+            />
           ) : (
             /* Real profile photo + status ring (v2.96); tap = status/profile. */
             <PeerAvatar
@@ -2836,6 +2826,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               dayKey(next.createdAt) === dayKey(m.createdAt) &&
               new Date(next.createdAt).getTime() - new Date(m.createdAt).getTime() < GROUP_MS;
             const lastOfGroup = !sameAsNext;
+            /* THE VOICE-NOTE RUN (v2.106.89). The owner's rule is positional and their
+               own words draw the line: *"if they are below each other it will run the
+               first will end will go to the second … if they were separate message, no
+               it will only run one message."*
+               So the chain is exactly one step, to the message DIRECTLY BELOW, and only
+               when that message is itself a voice note — nothing between them, no sender
+               or time window involved. A run of three chains 1→2→3 by each note owning
+               its own single step; anything that is not a voice note ends the run by
+               yielding null. */
+            const nextVoiceId =
+              next && next.attachment?.mimeType?.startsWith("audio/") ? next.id : null;
             /* THE TAIL CORNER IS THE BOARD'S 5px, not Tailwind's `rounded-*-sm` (v2.106.62).
                Frames 1d and 3c both spell it out: `16px 16px 16px 5px` for a received bubble
                and `16px 16px 5px 16px` for mine — a small notch on the side the speaker is
@@ -3116,6 +3117,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                                path did not, and the fill is computed as cur/dur, so an
                                unknown duration pins the bar at 0 however well playback
                                is going. */
+                            messageId={m.id}
+                            nextVoiceId={nextVoiceId}
                             durationMs={
                               (att as { durationMs?: number | null }).durationMs ?? null
                             }
@@ -4287,6 +4290,8 @@ function AttachmentView({
   mine = false,
   glyph,
   onOpen,
+  messageId,
+  nextVoiceId,
 }: {
   mimeType: string;
   url: string;
@@ -4307,6 +4312,9 @@ function AttachmentView({
    *  sent the message — and the sender is what picks the hue. */
   glyph?: string;
   onOpen?: (m: { url: string; type: "image" | "video"; name?: string }) => void;
+  /** v2.106.89 — identity + the next note of the run, for auto-advance. */
+  messageId?: number;
+  nextVoiceId?: number | null;
 }) {
   const t = useT();
   // A thumb/image that 404s/403s used to render as a broken white rectangle —
@@ -4355,7 +4363,16 @@ function AttachmentView({
     );
   }
   if (mimeType.startsWith("audio/")) {
-    return <VoiceNotePlayer url={url} mine={mine} durationMs={durationMs} glyph={glyph} />;
+    return (
+      <VoiceNotePlayer
+        url={url}
+        mine={mine}
+        durationMs={durationMs}
+        glyph={glyph}
+        messageId={messageId}
+        nextVoiceId={nextVoiceId}
+      />
+    );
   }
   return <FileCard url={url} filename={filename} mine={mine} />;
 }
@@ -4419,6 +4436,8 @@ function VoiceNotePlayer({
   mine,
   durationMs,
   glyph,
+  messageId,
+  nextVoiceId,
 }: {
   url: string;
   mine: boolean;
@@ -4426,10 +4445,35 @@ function VoiceNotePlayer({
   durationMs?: number | null;
   /** The bubble's own dark gradient stop, for a glyph on the white play disc. */
   glyph?: string;
+  /** This note's message id — the key the run's hand-over is addressed by. */
+  messageId?: number;
+  /**
+   * The note DIRECTLY BELOW this one, when the very next message is also a voice note.
+   * Null breaks the chain, which is the owner's own rule: *"if they were separate
+   * message, no it will only run one message."*
+   */
+  nextVoiceId?: number | null;
 }) {
   const t = useT();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
+  /**
+   * This browser cannot decode this note (v2.106.89, owner: the voice bar is broken on
+   * iPhone for notes recorded elsewhere).
+   *
+   * ROOT CAUSE, measured rather than guessed: `pickAudioMime` preferred
+   * `audio/webm;codecs=opus`, so an ANDROID phone records WebM/Opus — and iOS Safari has
+   * no WebM demuxer at all. The element fires `error`, `duration` stays NaN, the fill is
+   * `cur / dur` so the bar sits at zero, the total reads "· · ·", and the play button
+   * does nothing. Every symptom the owner described, and it is direction-specific:
+   * Safari records `audio/mp4`, which Android CAN decode, which is why it only broke one
+   * way round.
+   *
+   * The recorder now prefers a cross-platform container (see `pickAudioMime`), but that
+   * cannot help a note ALREADY SENT — so the player says so and points at the download
+   * instead of rendering a dead control.
+   */
+  const [undecodable, setUndecodable] = useState(false);
   const seeded = typeof durationMs === "number" && durationMs > 0 ? durationMs / 1000 : 0;
   const [dur, setDur] = useState(seeded);
   const [cur, setCur] = useState(0);
@@ -4437,15 +4481,44 @@ function VoiceNotePlayer({
   // clock so the probe's own position never reaches the UI.
   const probingRef = useRef(false);
   const rafRef = useRef<number | null>(null);
+  /** Read by the `ended` listener, which outlives any one render's props. */
+  const nextVoiceIdRef = useRef<number | null | undefined>(nextVoiceId);
+  nextVoiceIdRef.current = nextVoiceId;
+  /** Drops this element out of the exclusivity registry when the bubble goes. */
+  const unregisterRef = useRef<(() => void) | null>(null);
 
   // Stop playback when the bubble unmounts (thread switch / unsend).
   useEffect(
     () => () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       audioRef.current?.pause();
+      unregisterRef.current?.();
+      unregisterRef.current = null;
     },
     []
   );
+
+  /**
+   * Join the app-wide one-at-a-time rule, and publish how to start this note so the one
+   * ABOVE it can hand over when it finishes (v2.106.89).
+   *
+   * The listener install is idempotent and lives here rather than in the shell because
+   * this is the surface that needs it first; any surface calling it gets the same one.
+   */
+  useEffect(() => {
+    installExclusivePlayback();
+  }, []);
+  useEffect(() => {
+    if (messageId == null) return;
+    return registerVoiceNote(messageId, () => {
+      const a = ensure();
+      pauseOthers(a);
+      void a.play().catch(() => {
+        /* iOS can refuse a play the user did not initiate; the chain stops there. */
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messageId, url]);
 
   /** Read a MediaRecorder blob's real length. Only ever called while PAUSED. */
   const probeDuration = (a: HTMLAudioElement) => {
@@ -4479,6 +4552,17 @@ function VoiceNotePlayer({
     if (audioRef.current) return audioRef.current;
     const a = new Audio(url);
     a.preload = "metadata";
+    // A detached element's `play` never reaches `document`, so it is registered by hand
+    // to take part in the app-wide one-at-a-time rule (v2.106.89).
+    unregisterRef.current = registerDetachedMedia(a);
+    a.addEventListener("error", () => {
+      // MEDIA_ERR_SRC_NOT_SUPPORTED (4) and MEDIA_ERR_DECODE (3) both mean this engine
+      // cannot render these bytes — the honest answer is to say so. A NETWORK error is
+      // deliberately NOT latched: it is transient, and permanently marking a note
+      // unplayable because one fetch failed would be worse than the frozen bar.
+      const code = a.error?.code;
+      if (code === 3 || code === 4) setUndecodable(true);
+    });
     a.addEventListener("loadedmetadata", () => {
       const d = a.duration;
       if (Number.isFinite(d) && d > 0) {
@@ -4496,6 +4580,11 @@ function VoiceNotePlayer({
     a.addEventListener("ended", () => {
       setCur(0);
       if (!Number.isFinite(a.duration) && !seeded) probeDuration(a);
+      // HAND OVER TO THE NEXT NOTE OF THE RUN (v2.106.89). `nextVoiceIdRef`, not the
+      // captured prop: this listener is installed once for the element's whole life,
+      // while the run can change under it (a message arrives between two notes, or one
+      // is unsent), and a stale closure would advance to a note that is no longer next.
+      advanceVoiceRun(nextVoiceIdRef.current);
     });
     a.addEventListener("pause", () => setPlaying(false));
     a.addEventListener("play", () => setPlaying(true));
@@ -4556,8 +4645,13 @@ function VoiceNotePlayer({
 
   const toggle = () => {
     const a = ensure();
-    if (a.paused) void a.play().catch(() => {});
-    else a.pause();
+    if (a.paused) {
+      // Claim playback BEFORE starting rather than leaning on the capture listener: this
+      // element is detached, so `document` never sees its `play`, and doing it here also
+      // means the others are already silent by the time this one makes a sound.
+      pauseOthers(a);
+      void a.play().catch(() => {});
+    } else a.pause();
   };
 
   const seek = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -4573,6 +4667,33 @@ function VoiceNotePlayer({
   const sub = "text-white/70";
   const track = "bg-white/25";
   const fill = "bg-white";
+
+  if (undecodable) {
+    /* SAY SO RATHER THAN RENDER A DEAD CONTROL. A play button that never plays and a bar
+       that never moves is what the owner reported; the download still works, because the
+       bytes are fine — it is this ENGINE that cannot read them. */
+    return (
+      <div className="my-1 flex w-60 max-w-full items-center gap-2.5 text-white">
+        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-white/15">
+          <Mic className="size-4" />
+        </span>
+        <div className="min-w-0 flex-1 text-[11px] leading-snug">
+          <div className="font-semibold">{t("msg.voiceUnsupported")}</div>
+          <div className={sub}>{t("msg.voiceUnsupportedHint")}</div>
+        </div>
+        <a
+          href={url}
+          download={true}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={t("msg.downloadAudio")}
+          className="grid size-7 shrink-0 place-items-center rounded-full bg-white/15 transition hover:brightness-110"
+        >
+          <Download className="size-3.5" />
+        </a>
+      </div>
+    );
+  }
 
   return (
     <div className={"my-1 flex w-60 max-w-full items-center gap-2.5 " + "text-white"}>

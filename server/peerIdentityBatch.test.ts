@@ -164,7 +164,11 @@ describe("media previews (v2.96)", () => {
   it("voice notes use the custom player — the native <audio controls> is gone", () => {
     // v2.99.72 threads the stored duration in, so the props grew. Pin the COMPONENT,
     // not the exact prop list — the invariant is that no native <audio> came back.
-    expect(MESSAGES).toMatch(/<VoiceNotePlayer url=\{url\} mine=\{mine\}/);
+    /* MATCHED ON THE ELEMENT, not on its first two props in that order (v2.106.89): the
+       mount is multi-line now that it also carries the note's identity for the run
+       hand-over, and a one-line pattern froze formatting rather than the property. */
+    expect(MESSAGES).toMatch(/<VoiceNotePlayer\b/);
+    expect(MESSAGES).toMatch(/url=\{url\}/);
     // No JSX <audio> element anywhere (the doc comment naming the old one is fine).
     expect(MESSAGES).not.toMatch(/<audio\s+src=/);
   });

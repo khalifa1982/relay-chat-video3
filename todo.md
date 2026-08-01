@@ -18248,6 +18248,120 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.89 — three owner-reported media bugs: iPhone voice notes, one-at-a-time playback, the changed group photo
+
+**Owner, three separate reports.** Each was diagnosed against source and then MEASURED before
+anything was changed, and the first one's obvious fix turned out to be worse than the bug.
+
+### (1) An Android voice note cannot be played on an iPhone
+
+`pickAudioMime` ranked `audio/webm;codecs=opus` FIRST, so an Android phone records WebM — and
+iOS Safari has **no WebM demuxer at all**. The element errors, `duration` stays NaN, the fill is
+`cur / dur` so the bar sits at zero, the total reads "· · ·", and the play button does nothing:
+every symptom reported. Direction-specific by construction, which is why it only broke one way
+round — Safari records `audio/mp4`, which Android can decode.
+
+**The obvious fix is a trap, and recording a real blob is what caught it.** In this repo's
+Chromium 141, `isTypeSupported("audio/mp4")` answers **true** and the recorder then reveals
+`audio/mp4;codecs=opus` — Opus inside a genuine MP4 container (`ftypisom` in the first bytes).
+Safari cannot decode that either, so preferring bare `audio/mp4` would ship a file with the
+right container, extension and type that STILL fails on iPhone — strictly harder to diagnose
+than the honest WebM failure. This is v2.98.0's video-mislabel trap on the audio side.
+
+So the preference asks for AAC **by name** (`audio/mp4;codecs=mp4a.40.2`), bare `audio/mp4` is
+ranked BELOW WebM rather than above it, and `isAacMp4` treats a type with no codecs parameter as
+UNPROVEN rather than proven. Said plainly: this Linux Chromium can record no AAC at all, so
+there WebM remains the answer and nothing regresses.
+
+**The player is now honest, which is the half that helps today** — no recording change reaches a
+note already sent. A `MEDIA_ERR_DECODE`/`SRC_NOT_SUPPORTED` renders "this device can't open this
+recording — download it instead", with the download working. A NETWORK error deliberately does
+not latch: permanently marking a note unplayable over one failed fetch is worse than the frozen
+bar it replaces.
+
+### (1b) A second, independent iOS defect — the RECORDING bar
+
+Found by a parallel investigation and then verified against source line by line rather than
+taken on trust. `startVoiceRecording` awaits `getUserMedia` BEFORE constructing its level-meter
+`AudioContext`, so the synchronous user gesture is gone — and WebKit starts a context created
+outside a gesture **suspended**. A suspended context does not run its graph, so
+`getByteTimeDomainData` returns the all-128 midpoint fill and `level()` returns exactly 0 for the
+whole take. The composer's 30 bars are driven by nothing else, so they sit flat at their floor:
+the owner's "no wave when you talk", and arguably the more literal reading of "this voice bar …
+the iPhone showing" — the RECORDING bar rather than the playback one.
+
+**This repo already knew it.** `relayClient.ts:5390` calls `void meshAudioCtx.resume()` for the
+identical mic → analyser → level pattern, and `dtmf.ts` and `Home.tsx` both name it in prose as
+"the classic iOS Web Audio race". The recorder was never given the line. Resumed before the graph
+is wired and fire-and-forget: a resume that never settles must not delay a recording, and every
+failure path there already leaves `level()` returning 0.
+
+### (2) One thing plays at a time, and a run of notes plays itself through
+
+New `client/src/app/mediaExclusive.ts`. `play` does not bubble but it DOES capture, so ONE
+listener on `document` in the capture phase sees every `<audio>`/`<video>` including ones
+mounted later — which is what makes "anywhere in this system" a property of the app rather than
+of five hand-wired surfaces.
+
+**The one exclusion is the whole safety argument.** A live call's remote audio is `<audio>` too
+(v2.106.51 appends one per mesh peer to its tile, so it really is in the document), and pausing
+one would present as "the other person went quiet" — the hardest class of failure to trace, and
+far worse than the bug being fixed. Anything inside `.relay-root` is skipped, pinned by test,
+with the class asserted to really exist. It fails TOWARD pausing: an unclassifiable element is
+treated as ordinary media, which is the recoverable direction. A muted element is decoration
+(the conversation's video thumbnail is a muted `<video preload="metadata">`) and is left alone.
+A detached `new Audio()` never reaches `document`, so the voice player registers its element by
+hand and claims playback BEFORE it starts rather than relying on the listener.
+
+**The run chains one step, to the message directly below, and only if it is a note** — the
+owner's own sentence draws that line ("if they were separate message, no it will only run one
+message"), so no sender window and no time window; a run of three chains 1→2→3 by each note
+owning its own step. The registry holds a play CALLBACK rather than an element, because a note
+nobody has played has no element yet (the player builds it lazily), so an element registry would
+miss every unplayed note. The hand-over reads a REF, since the `ended` listener outlives any one
+render's props. A refused hand-over fails quietly: iOS can refuse a play the user did not
+initiate, and the chain stopping is fine while an error nobody asked for is not.
+
+### (3) A changed group photo was invisible
+
+All three surfaces hid a failed image by writing `style.display = "none"` **imperatively on the
+DOM node** — and React reuses that node across a `src` change (same type, same position, no
+key), so the style written for the OLD url survived onto the NEW one: the changed photo loaded
+perfectly and was invisible for the life of that mount. The failure is now React state keyed on
+the URL, so a new url is a fresh attempt by construction.
+
+**Two of the three also left a hole.** v2.106.66 made exactly this fix in `GroupInfoSheet` and
+recorded the reason ("hiding a broken `<img>` used to leave a 76px hole") — and applied it to
+that one sheet, so the thread row and the conversation header kept the else-branch shape. One
+shared `GroupAvatar` now, glyph underneath.
+
+### Verification
+
+- **Driven in a real browser, 10/10** — esbuild-transpiled `mediaExclusive.ts`, real media
+  elements, real `play()` calls: exclusivity both ways between in-DOM and detached elements, and
+  the live call's audio surviving all three.
+- **Recording measured empirically**: real blobs recorded and their headers read, which is how
+  the `audio/mp4` → Opus mislabel was found.
+- **22 of 22 tripwires verified by mutation** from byte-exact backups off a confirmed-GREEN
+  baseline; all six sources byte-identical afterwards.
+- **One survivor was a real gap in my own test** (the pin-the-declaration class): the ordering
+  assertion compared `indexOf("audio/mp4;codecs=mp4a.40.2")` against the WebM entry, and that
+  string also occurs in the `AAC_MP4` const above the list — unconditionally earlier — so
+  reinstating the original defect passed untouched. Read inside the candidate list now.
+- **One survivor was a bad mutation of mine**, reported rather than counted: it inserted an inert
+  expression and moved nothing. Re-run as a genuine relocation, it bit.
+- **Seven pre-existing pins rewritten to the property**, one of which FROZE THE DEFECT
+  (`groupIdentity.test.ts` required the imperative hide); two more used a fixed `+6000` slice and
+  failed on correct source once the function grew.
+- **The prose trap for the nineteenth time**: `GroupAvatar.tsx` explains the hide it replaces, so
+  the sweep forbidding that hide matched its own explanation. Runs on `codeOnly` now.
+
+**Not verified on a device, said plainly**: there is no iPhone here. What is proven is that the
+recorder prefers a container Safari can read where one is offered, that an undecodable note says
+so, and that the exclusivity holds in a real browser.
+
+No schema change, no new dependency, no new env var, no server change. 5372 tests.
+
 ## v2.106.88 — mute survives a microphone reacquisition (call-quality doc, fix 1 of 4)
 
 The owner uploaded `relaycallqualityfixes.md` with four client-side call fixes. Each was

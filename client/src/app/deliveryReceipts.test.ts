@@ -30,6 +30,19 @@ import {
 import { codeOnly } from "../../../server/testing/codeOnly";
 import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
+/* BOUNDED BY THE FUNCTION'S OWN END, not a fixed character count (v2.106.89). Both slices
+   below took `+6000` characters from the declaration, so v2.106.89's additions pushed
+   their targets outside the window and they failed on CORRECT source — the fixed-slice
+   fragility this repo keeps re-learning. */
+function voiceNotePlayerBody(src: string): string {
+  const at = src.indexOf("function VoiceNotePlayer(");
+  if (at < 0) throw new Error("VoiceNotePlayer not found");
+  const end = src.indexOf("\nfunction ", at + 1);
+  const body = src.slice(at, end > at ? end : src.length);
+  if (body.length < 500) throw new Error("VoiceNotePlayer slice collapsed");
+  return body;
+}
+
 const here = path.resolve(__dirname);
 const root = path.resolve(here, "..", "..", "..");
 const MSG = fs.readFileSync(path.join(root, "client/src/pages/app/Messages.tsx"), "utf8");
@@ -432,7 +445,7 @@ describe("the voice bar moves for an expiring note too", () => {
   });
 
   it("learns the length before the first play when nothing told us", () => {
-    const player = MSG.slice(MSG.indexOf("function VoiceNotePlayer("), MSG.indexOf("function fmtClock(") > 0 ? MSG.indexOf("function VoiceNotePlayer(") + 6000 : MSG.length);
+    const player = voiceNotePlayerBody(MSG);
     // Deferring the probe until paused made it SAFE (v2.99.73) but meant it never ran
     // during a first play — so the bar still sat still for that whole play.
     expect(player).toMatch(/if \(seeded > 0\) return;/);
@@ -441,7 +454,7 @@ describe("the voice bar moves for an expiring note too", () => {
   });
 
   it("picks the duration up mid-playback if it settles late", () => {
-    const player = MSG.slice(MSG.indexOf("function VoiceNotePlayer("), MSG.indexOf("function VoiceNotePlayer(") + 6000);
+    const player = voiceNotePlayerBody(MSG);
     // …without ever overwriting a length we already trust.
     expect(player).toMatch(/setDur\(\(prev\) => \(prev > 0 \? prev : d\)\);/);
   });
