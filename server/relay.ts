@@ -23,6 +23,7 @@ import crypto from "crypto";
 import type { Request, Response, Express } from "express";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
 import { createContext } from "./_core/context";
+import { planDialTransport } from "./voipPool";
 
 /**
  * M40: per-CALLER-pin budget for dials to a number with no live connection —
@@ -333,6 +334,16 @@ export interface RelayRegistry {
   pendingRings: Map<string, PendingRing>;
   /** Set by attachRelay — fired from reapRoom when a real call ends. */
   onConferenceEnd?: ConferenceEndHook;
+  /**
+   * Set by attachRelay — fired from `cancelPendingRings` for a callee whose ring
+   * was delivered by PUSH, so their handset stops ringing when the caller gives up.
+   *
+   * ON THE REGISTRY RATHER THAN A PARAMETER, and that is the whole point: three
+   * call sites cancel rings today and each would have to remember to pass it, which
+   * is precisely how the fourth comes to be written without it. `onConferenceEnd`
+   * sits here for the same reason.
+   */
+  onCancelRingPush?: CancelPushHook;
 }
 
 export interface PendingRing {
@@ -340,6 +351,21 @@ export interface PendingRing {
   roomId: string;    // the caller's dial room the accept must target
   video: boolean;    // mutual-consent flow: was this dialed as a video call?
   at: number;        // unix ms when the invite was dispatched
+  /**
+   * Was this ring delivered by a PUSH rather than over a live socket?
+   *
+   * It decides whether a hang-up owes this callee a `call_cancel` push. A callee
+   * rung over their own open socket gets the websocket `ring-cancel` and needs
+   * nothing more; a callee whose phone was woken has, by definition, no socket to
+   * receive that on, so without a pushed cancel their handset rings out its full
+   * 45s expiry after the caller has already given up.
+   *
+   * OPTIONAL, and absent means false, which is the safe direction in both senses:
+   * a record written by a not-yet-updated instance mid-deploy — or hydrated from
+   * a previous leader — degrades to exactly today's behaviour, and the failure it
+   * cannot cause is pushing a cancel at somebody we never pushed a ring to.
+   */
+  pushed?: boolean;
 }
 
 /** How long a pending ring stays redeliverable. Slightly longer than the
@@ -722,6 +748,21 @@ function deviceRemove(reg: RelayRegistry, pin: string, cid: string) {
 // client reconnect (same cid) and keep its number, room, and active call.
 export const RELAY_DISCONNECT_GRACE_MS = 30_000;
 
+/**
+ * A COUNT off the wire, or null. Never NaN, never negative, never fractional.
+ *
+ * JSON gives no guarantees about what arrives, and this value feeds a comparison
+ * (`>= GROUP_MIN_PARTIES`) where NaN silently answers false and a fractional or
+ * negative number is nonsense. Returning null rather than a default keeps "the caller
+ * said nothing" and "the caller said something unusable" the same case, which is what
+ * `isGroupParty` already treats as 1:1.
+ */
+function wireCount(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  const n = Math.floor(v);
+  return n > 0 ? n : null;
+}
+
 function safeSend(socket: RelaySocket, obj: unknown) {
   try {
     socket.send(obj);
@@ -996,6 +1037,19 @@ export function cancelPendingRings(reg: RelayRegistry, callerPin: string): strin
   if (!c || c.ringing.size === 0) return [];
   const pins = Array.from(c.ringing);
   pins.forEach(calleePin => {
+    /* A PUSHED callee has no socket for the frame below to reach, so the cancel has
+       to travel the way the ring did. Read BEFORE `clearPendingRing` destroys the
+       record, and dispatched through the hook parameter rather than at the three
+       call sites — a per-call-site duty is the one a fourth site forgets, which is
+       the class this file already records for `sendPushToIdentity` and the presence
+       rule. Fire-and-forget and individually caught: this runs on the hang-up path,
+       where nothing may be allowed to throw. */
+    const pending = reg.pendingRings.get(calleePin);
+    if (reg.onCancelRingPush && pending?.pushed && pending.from === callerPin) {
+      try {
+        void reg.onCancelRingPush({ calleePin, roomId: pending.roomId });
+      } catch { /* a notification must never break a hang-up */ }
+    }
     const cancelMsg = { type: "ring-cancel", from: callerPin };
     // Multi-device: the invite rang EVERY one of the callee's devices (see the
     // devs.forEach fan-out in the invite handler), so the cancel must reach all
@@ -1754,6 +1808,23 @@ export type PageCalleeHook = (info: {
 }) => Promise<{ exists: boolean; name?: string; pushed?: number } | null>;
 
 /**
+ * Fired when a ring that was delivered by PUSH is cancelled — the caller hung up
+ * before the callee answered.
+ *
+ * ── WHY THIS EXISTS AT ALL ───────────────────────────────────────────────────
+ * The websocket `ring-cancel` beside it can only reach a callee with a live
+ * socket, and a pushed callee has none by definition — that is the whole reason
+ * they were pushed. Without this the handset goes on ringing for the full 45s
+ * APNs/FCM expiry after the caller has given up, and on iOS that is a CallKit
+ * screen the person answers into a call that ended.
+ *
+ * Fire-and-forget: the caller's hang-up has already happened and must not wait on
+ * a DB read or two HTTP round trips, and a failure here costs a stale ring rather
+ * than a broken hang-up.
+ */
+export type CancelPushHook = (info: { calleePin: string; roomId: string }) => void;
+
+/**
  * Protocol logic. Kept as a pure function over (registry, socket-state,
  * message) so it's straightforward to unit-test without spinning up an
  * HTTP server. The optional `onInvite` callback is fired exactly once
@@ -2016,6 +2087,36 @@ export function handleMessage(
       const callerPin = conn.pin;
       const callerSocket = conn.socket;
       const wantVideo = !!msg.video;
+      /* SERVICE BUSY FOR A GROUP, BEFORE ANYTHING IS SPENT (v2.106.59).
+       *
+       * The owner's node-scaling doc: "Mesh fallback is for 1:1 calls. If group rooms exist
+       * and the pool is saturated, reject with a clear 'service busy' error and fire the
+       * saturation alarm loudly — a large group over mesh is worse than an honest error."
+       * It is right, and for a measured reason: on the mesh each phone runs N−1 encoders and
+       * N−1 decoders (v2.99.84), so a large group there is a hot phone rather than a
+       * lower-quality call.
+       *
+       * FIRST, so a refused call resolves no identity, mints no room, rings nobody and
+       * records no miss — the refusal is the whole outcome.
+       *
+       * `msg.parties` is present ONLY on the invite that CREATES a group dial's room, which
+       * is exactly the moment a transport is chosen. An add-person invite flushed into an
+       * EXISTING call carries none, reads as 1:1 and is therefore never refused — correct,
+       * because that room already has its transport and refusing would break the expansion
+       * of a live call rather than prevent a bad one.
+       *
+       * IT CANNOT FIRE TODAY: `planDialTransport` reads the cached node snapshot, which is
+       * empty without `REDIS_URL` and a registered agent, so `reason` is `no-nodes` and
+       * `refused` is null. The rule goes live with the fleet, not with this deploy. */
+      const dialPlan = planDialTransport({ partySize: wireCount((msg as { parties?: unknown }).parties) });
+      if (dialPlan.refused === "pool-saturated") {
+        safeSend(conn.socket, {
+          type: "error",
+          code: "saturated",
+          message: "Group calling is busy right now — try again in a moment, or call one person.",
+        });
+        break;
+      }
       // Stamp the dial context NOW, synchronously, before any await. The
       // deferred resolver continuation below re-checks these stamps — same
       // state-before-await / re-check-after discipline as onPageCallee.
@@ -2202,7 +2303,17 @@ export function handleMessage(
                   // and the moment the callee's app registers, `deliverPendingRing`
                   // hands it over and upgrades this ack to a real "Ringing…".
                   callerNow.ringing.add(to);
-                  reg.pendingRings.set(to, { from: callerPin, roomId: pagingRoom, video: wantVideo, at: Date.now() });
+                  reg.pendingRings.set(to, {
+                    from: callerPin,
+                    roomId: pagingRoom,
+                    video: wantVideo,
+                    at: Date.now(),
+                    // Rung by PUSH, so a hang-up owes this callee a pushed cancel.
+                    // The LIVE-ring path below deliberately leaves this unset: that
+                    // callee has a socket, gets the websocket `ring-cancel`, and must
+                    // not have their phone woken a second time to be told nothing.
+                    pushed: true,
+                  });
                   safeSend(callerSocket, {
                     type: "ringing",
                     pin: to,
@@ -3518,10 +3629,12 @@ export function attachRelay(
   onMissedCall?: MissedCallHook,
   onConferenceEnd?: ConferenceEndHook,
   onPageCallee?: PageCalleeHook,
-  onResolveDial?: ResolveDialHook
+  onResolveDial?: ResolveDialHook,
+  onCancelRingPush?: CancelPushHook
 ): RelayRegistry {
   const reg = createRegistry();
   reg.onConferenceEnd = onConferenceEnd;
+  reg.onCancelRingPush = onCancelRingPush;
   activeRegistry = reg; // busy-line reads (pinsInCall) target the live registry
   // Redis mirror of busy-line/party-line state (v2.91) — inert without
   // REDIS_URL. The provider closes over THIS registry, matching

@@ -140,6 +140,34 @@ export function acceptTokenMessage(
 }
 
 /**
+ * The SECOND envelope: a `relay:native` CustomEvent (2026-08-01).
+ *
+ * The owner's push spec asks the shell to reach the page with
+ * `window.dispatchEvent(new CustomEvent('relay:native', {detail: {...}}))` carrying
+ * `{type:'pushToken', kind:'apns-voip'|'fcm', token}`. That is a different contract
+ * from the `postMessage`/`SET_PUSH_TOKEN` one above, and BOTH are accepted — the
+ * shell already on the owner's iPhone posts the old shape and is the only handset
+ * whose ring has ever been proven end to end, so replacing the contract would
+ * silence the one device that works.
+ *
+ * ── WHY THIS ONE NEEDS NO ORIGIN GATE, SAID EXPLICITLY ──────────────────────
+ * A CustomEvent has no origin and no source, because it cannot cross a document
+ * boundary: only script already executing IN this document can dispatch it. The
+ * three gates above exist because `postMessage` is reachable from an embedding
+ * iframe, an opener or an ad — a CustomEvent is not. Anyone who can dispatch this
+ * already has script execution here, at which point a push token is the least of
+ * what they have. The SHAPE check is still applied, and the server re-derives the
+ * kind from the token independently, so this remains one layer of three.
+ */
+export function acceptNativeEventDetail(detail: unknown): { token: string; voip: boolean } | null {
+  if (typeof detail !== "object" || detail === null) return null;
+  const d = detail as { type?: unknown; token?: unknown; kind?: unknown };
+  if (d.type !== "pushToken") return null;
+  if (!looksLikePushToken(d.token)) return null;
+  return { token: (d.token as string).trim(), voip: d.kind === "apns-voip" };
+}
+
+/**
  * Mount the listener. Returns a teardown.
  *
  * `register` is called at most once per distinct token: the shell may post on
@@ -155,8 +183,10 @@ export function mountNativeTokenBridge(
   // they may alternate on every foreground. A one-slot `last` would see each as
   // "changed" and re-register both on every app switch, forever.
   const seen = new Set<string>();
-  const onMessage = (ev: MessageEvent) => {
-    const accepted = acceptTokenMessage(ev, window.location.origin, window);
+  // ONE admit path for both envelopes, so the dedupe, the kind resolution and the
+  // shape rule cannot come to differ between them — which is exactly how one
+  // transport ends up registering a token the other would have refused.
+  const admit = (accepted: { token: string; voip: boolean } | null) => {
     if (!accepted) return;
     const { token, voip } = accepted;
     // Keyed on kind too, so a shell that corrects a mislabelled token — posting
@@ -168,7 +198,14 @@ export function mountNativeTokenBridge(
     seen.add(key);
     register(token, kind);
   };
+  const onMessage = (ev: MessageEvent) => {
+    admit(acceptTokenMessage(ev, window.location.origin, window));
+  };
+  const onNative = (ev: Event) => {
+    admit(acceptNativeEventDetail((ev as CustomEvent).detail));
+  };
   window.addEventListener("message", onMessage);
+  window.addEventListener("relay:native", onNative);
   // Let the shell ask us to re-send rather than having to time its post against
   // our mount: some shells post before the bundle has finished evaluating.
   try {
@@ -176,5 +213,8 @@ export function mountNativeTokenBridge(
   } catch {
     /* a stricter engine may refuse; the shell's own retry covers it */
   }
-  return () => window.removeEventListener("message", onMessage);
+  return () => {
+    window.removeEventListener("message", onMessage);
+    window.removeEventListener("relay:native", onNative);
+  };
 }

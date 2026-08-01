@@ -575,7 +575,7 @@ describe("no workflow can deploy to or write to a mediasoup media node", () => {
     expect(OPS).toMatch(/MEDIA_NODE_GUARD:.*\[ -d \/opt\/relay-voip \]/);
     // And the agent really does live there, or the guard is checking nothing.
     expect(
-      fs.readFileSync(path.resolve(__dirname, "..", "voip-node", "relay-voip.service"), "utf8"),
+      fs.readFileSync(path.resolve(__dirname, "..", "voip-node", "relay-voip-agent.service"), "utf8"),
     ).toMatch(/\/opt\/relay-voip/);
   });
 });

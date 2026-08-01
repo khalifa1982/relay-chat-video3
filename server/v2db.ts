@@ -66,6 +66,7 @@ import { hashRecoveryKey, newRecoveryKey } from "./guestRecovery";
 // #115 — ONE parser for the story-reply marker, shared with the client's bubble chip so
 // a thread row and the conversation it opens cannot disagree about the same message.
 import { isStatusReply } from "@shared/statusReply";
+import { pinFromQuery } from "../shared/searchNumber";
 import {
   normalizeProfileStatus,
   normalizeStatusNote,
@@ -646,8 +647,15 @@ export async function adminFindIdentities(
     // typed by the operator would otherwise widen their own search silently rather
     // than matching the literal character they typed.
     const esc = q.replace(/[%_\\]/g, (c) => `\\${c}`);
-    const rows = /^\d{6}$/.test(q)
-      ? await base.where(eq(identities.number, q)).limit(cap)
+    /* THE NUMBER BRANCH USED TO TEST THE RAW QUERY (`/^\d{6}$/.test(q)`), so
+       `777-777` — the grouping this app itself RENDERS, and therefore the form an
+       admin reads off the screen and types back — matched nothing and fell through
+       to a LIKE over email and display name, which cannot match a number either.
+       Refusing the app's own format back is rude; `pinFromQuery` is the SAME rule
+       every other search box in the app uses, imported rather than restated. */
+    const pin = pinFromQuery(q);
+    const rows = pin
+      ? await base.where(eq(identities.number, pin)).limit(cap)
       : q.length > 0
         ? await base
             .where(or(like(users.email, `%${esc}%`), like(identities.displayName, `%${esc}%`)))
@@ -3559,6 +3567,18 @@ export async function createGroupConversation(input: {
   creatorId: number;
   memberIds: number[];
   title: string;
+  /**
+   * v2.106.66 — a group can be born with its photo. It could not before: this function took
+   * no avatar and the INSERT never wrote the column, so EVERY group started with a NULL
+   * `avatarUrl` and the purple glyph, whatever the creator picked. Optional, so every
+   * pre-existing caller is byte-identical. The column itself has existed since v2.102.0,
+   * so there is no migration.
+   *
+   * The laundering gate lives at the ROUTER (`assertOwnedAvatarUrl`), which is where the
+   * caller's identity is known — this function is trusted-caller by construction, exactly
+   * as `setGroupProfile` is.
+   */
+  avatarUrl?: string | null;
 }) {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
@@ -3586,6 +3606,7 @@ export async function createGroupConversation(input: {
         kind: "group",
         title: input.title.slice(0, 128),
         number,
+        avatarUrl: input.avatarUrl ?? null,
         ownerIdentityId: input.creatorId,
       });
       // mysql2 returns the new row id as insertId on the result header.
@@ -4400,6 +4421,29 @@ export interface ThreadSummary {
    * answerable, and correct because a story reply is always a DM to the story's author.
    */
   lastMessageMine: boolean;
+  /**
+   * v2.106.67 — board 1c draws a ✓✓ before the preview whenever the thread's newest
+   * message is MINE. `null` for everything else, so a row can never claim a receipt for
+   * somebody else's message.
+   *
+   * FREE, on the same reasoning #115 recorded and then had to correct: the groupwise-max
+   * aggregate (`MAX(id) GROUP BY conversationId`) selects two integer columns and is a
+   * separate query, untouched. The row this reads comes from a bare `.select()` over at
+   * most a few dozen PRIMARY KEYS, so `status` is already loaded beside the `meta` and
+   * `senderIdentityId` the lines above it read.
+   */
+  lastMessageStatus: string | null;
+  /**
+   * v2.106.67 — board 1c prefixes a GROUP row's preview with who sent it
+   * (`preview: 'Amira: The final board is up'`), because in a group the row's title is
+   * the group and the words alone say nothing about who said them.
+   *
+   * FIRST NAME only — the row has one line and a full name would eat the words it
+   * introduces. `null` for a DM (the row's title already IS the other person), for my own
+   * message (the client says "You:", which needs no lookup) and for a sender whose
+   * identity did not resolve — never a placeholder, since a wrong name is worse than none.
+   */
+  lastMessageSender: string | null;
 }
 
 /**
@@ -4452,6 +4496,10 @@ export function composeThreadSummaries(input: {
       /** #115 — derived by the caller from the `meta` it already holds. */
       statusReply?: boolean;
       mine?: boolean;
+      /** v2.106.67 — the row's own `status` column, for board 1c's ✓✓ on the preview line. */
+      status?: string | null;
+      /** v2.106.67 — who sent it, so a GROUP row can prefix its preview with their name. */
+      senderId?: number | null;
     } | null
   >;
 }): ThreadSummary[] {
@@ -4497,6 +4545,13 @@ export function composeThreadSummaries(input: {
       // with no preview can never claim to be a story reply.
       lastMessageStatusReply: latest?.statusReply === true,
       lastMessageMine: latest?.mine === true,
+      // NULL unless the newest message is MINE — a receipt is a statement about my own
+      // message, and rendering one for a peer's would invert what ✓✓ means.
+      lastMessageStatus: latest?.mine === true ? (latest?.status ?? null) : null,
+      // Null by default and set only in the GROUP branch below, for the same reason the
+      // group id is: a DM's row title already IS the other person, so prefixing their
+      // own words with their own name says nothing.
+      lastMessageSender: null as string | null,
       // Null by default and set only in the group branch, so a DM can never carry a
       // group's id by accident.
       groupNumber: null as string | null,
@@ -4510,8 +4565,23 @@ export function composeThreadSummaries(input: {
 
     if (kind === "group") {
       const fallbackTitle = members.map((m) => m.displayName).slice(0, 3).join(", ");
+      /* v2.106.67 — board 1c prefixes a group row's preview with who sent it
+         (`preview: 'Amira: The final board is up'`). FIRST NAME only: the row has one
+         line and a full name would eat the words it introduces.
+
+         NULL rather than a placeholder when the identity did not resolve — a wrong name
+         on somebody else's message is worse than no name — and null for my own, because
+         the client says "You:" without needing a lookup. Resolved from `otherById`, the
+         SAME map the row's title and avatars come from, so a row can never name a
+         member this projection does not otherwise know about. */
+      const senderId = latest?.senderId ?? null;
+      const senderName =
+        latest?.mine === true || senderId == null
+          ? null
+          : (otherById.get(senderId)?.displayName?.trim().split(/\s+/)[0] ?? null);
       result.push({
         ...base,
+        lastMessageSender: senderName || null,
         kind: "group",
         title: convo.title ?? null,
         otherIdentityId: 0,
@@ -4787,6 +4857,8 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
                  `m.meta` is already loaded — the line directly above reads it. */
               statusReply: isStatusReply(m.meta),
               mine: m.senderIdentityId === identityId,
+              status: m.status ?? null,
+              senderId: m.senderIdentityId,
             }
           : null,
       ])

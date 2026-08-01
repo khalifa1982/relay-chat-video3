@@ -19,6 +19,7 @@ import { buildAudioOutputList } from "./audioOutputs";
 import { detectDeviceType } from "./deviceType";
 import { probeBrowserMedia, buildCapabilityReport } from "@shared/mediaCapabilities";
 import { readSnapshot, writeSnapshot, clearSnapshot, type RejoinSnapshot } from "./rejoinSnapshot";
+import { capPinInput, pinDigits } from "@/app/pinInput";
 import { isDndOn } from "@/app/dnd";
 import { notify } from "@/app/notifications";
 import { RINGTONE_NOTES, RINGTONE_LOOP_MS, RINGTONE_PEAK_GAIN, RINGTONE_WAVE } from "@shared/ringtone";
@@ -26,6 +27,12 @@ import { isNativeAndroid, nativeSetSpeaker, nativeSetInCall } from "./nativeBrid
 import { DEVICE_ID_HEADER, getDeviceId } from "./deviceId";
 import { describePeerPresence, formatElapsedSince } from "@shared/profileFields";
 import { describeProfileStatus } from "@shared/profileStatus";
+import {
+  NATIVE_ANSWER_TTL_MS,
+  nativeAnswerMatches,
+  notifyNativeCallEnded,
+  type NativeAnswerArm,
+} from "./nativeCallBridge";
 
 interface IceConfig {
   iceServers: Array<{ urls: string; username?: string; credential?: string }>;
@@ -224,6 +231,17 @@ export interface RelayHandle {
   /** Live-call rejoin (v2.99.9): ask to rejoin the live call `number` is in
    *  (History "Join"). The server verifies we were previously in that room and
    *  asks the host to approve. */
+  /**
+   * The native shell reports that the OS call screen was ANSWERED for `callId`
+   * (which is the signaling room — see server/callPushPayload.ts).
+   *
+   * Accepts immediately when that ring is already on screen, and otherwise ARMS a
+   * single-use, 70s-bounded intent so a cold start completes the call the moment
+   * the server redelivers the ring. Returns whether it accepted straight away.
+   */
+  answerNativeCall: (callId: string, opts?: { voice?: boolean }) => boolean;
+  /** The native shell reports Decline / the OS call ended. Never throws. */
+  endNativeCall: (callId: string) => void;
   knock: (number: string) => void;
   /** Host-side: approve / deny a pending knock for our call. */
   approveKnock: (roomId: string, pin: string) => void;
@@ -914,6 +932,34 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // treatment as Do-Not-Disturb, but per-number.
   let blockedPins = new Set<string>();
   let pendingRing: PendingRing | null = null;
+/**
+ * NATIVE ANSWER, ARMED (2026-08-01).
+ *
+ * A VoIP push rang the phone and the person tapped Answer on the OS call screen.
+ * On a COLD START the WebView opens fresh, so the in-page ring has not arrived
+ * yet — the server redelivers it on register (`deliverPendingRing`), which is
+ * some hundreds of milliseconds later. So the intent is ARMED and the ring is
+ * accepted when it lands.
+ *
+ * ── THE TTL IS THE SAFETY PROPERTY, NOT A TIDY-UP ────────────────────────────
+ * An arm that never expired would silently answer the NEXT call to arrive —
+ * possibly minutes later, possibly from somebody else — opening the microphone
+ * with no gesture. Bounded to the ring's own life (the server's
+ * PENDING_RING_TTL_MS is 70s), and matched on the ROOM, so it can only ever
+ * complete the call the OS actually reported.
+ */
+let nativeAnswerRoom: NativeAnswerArm | null = null;
+function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
+  // The DECISION is `nativeAnswerMatches` in nativeCallBridge.ts — pure, so the
+  // TTL and the room match can be driven in a test. Only the single-use clearing
+  // lives here, because that needs the state.
+  const hit = nativeAnswerMatches(nativeAnswerRoom, roomId, Date.now());
+  if (hit) nativeAnswerRoom = null;
+  else if (nativeAnswerRoom && Date.now() - nativeAnswerRoom.at > NATIVE_ANSWER_TTL_MS) {
+    nativeAnswerRoom = null; // expired for a different room too — do not keep it
+  }
+  return hit;
+}
   // Call waiting: a second incoming call while already in a call.
   let waitingRing: PendingRing | null = null;
   let waitingTimeoutT: ReturnType<typeof setTimeout> | null = null;
@@ -939,6 +985,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
   const show = (s: string) => {
     root.querySelectorAll(".relay-screen").forEach(x => x.classList.remove("active"));
     $(s)?.classList.add("active");
+    /* PUBLISH "the call surface is on screen" for the app shell's background
+     * canvas, which pauses its rAF while this is set (relayBackground.ts).
+     * SET AND CLEARED IN THE ONE SWITCHER on purpose: paired to enterCallUI and a
+     * teardown instead, the two could drift and either leak the flag — freezing
+     * the background for the rest of the session — or miss a path and keep the
+     * canvas painting through a call. Here the flag cannot mean anything other
+     * than which screen is active. It covers the PRE-CONNECT dial card too, which
+     * is also full-screen and also wants the CPU. */
+    try {
+      const el = document.documentElement;
+      if (s === "call") el.dataset.relayInCall = "1";
+      else delete el.dataset.relayInCall;
+    } catch { /* non-DOM host — the canvas simply keeps its old behaviour */ }
   };
   const initials = (n: string | null) => (n || "?").trim().slice(0, 2).toUpperCase() || "?";
   const escapeHtml = (s: string) =>
@@ -1201,7 +1260,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
         const reachErr =
           m.code === "offline" || m.code === "nonexistent" || m.code === "gone" ||
           m.code === "unavailable";
-        const joinErr = m.code === "self" || m.code === "full" || m.code === "forbidden";
+        /* `saturated` (v2.106.59) is the media fleet being FULL for a GROUP call:
+           the owner's node-scaling doc reserves the mesh fallback for 1:1 because a
+           large group over the mesh runs N−1 encoders on every phone, so an honest
+           refusal beats a call nobody can hear. Classified as a JOIN error rather
+           than a reach error, because the failure is ours and not the invitee's —
+           reachErr would raise the leave-a-voice-message card, which is the wrong
+           offer for somebody who is perfectly reachable. CLASSIFYING IT AT ALL is
+           the load-bearing part: an unclassified code reaches neither the fatal
+           branch nor the group-dial promotion, so the caller would sit on
+           "Ringing…" until the 65s backstop and be told nothing. */
+        const joinErr = m.code === "self" || m.code === "full" || m.code === "forbidden" ||
+                        m.code === "saturated";
         // v2.99.36: `nohold` answers an `end-active` whose held room was already
         // gone — there is nothing to resume, so complete the hang-up NOW (that
         // branch skipped hangUp and would otherwise sit here with the camera and
@@ -2583,7 +2653,25 @@ export function startRelay(root: HTMLElement): RelayHandle {
     const deduped = Array.from(
       new Set(
         targets
-          .map(t => String(t).replace(/\D/g, "").slice(0, 6))
+          /* v2.106.65 — grouping is stripped, a non-digit is NOT folded away. The old
+             `replace(/\D/g, "").slice(0, 6)` made `7a7b7c7d7e7f` into `777777`, which the
+             `/^\d{6}$/` filter below then happily accepted — so a malformed target became
+             a real stranger's number and got rung, rather than being dropped. Accepting
+             the grouping the app itself renders (`777-777`) is deliberate and is what
+             `capPinInput` does at every typing site. */
+          /* v2.106.65 — REFUSE a malformed target rather than repair it.
+             `replace(/\D/g, "")` made `7a7b7c7d7e7f` into `777777`, which the `/^\d{6}$/`
+             filter below then happily accepted, so a malformed target silently became a
+             real stranger's number and got rung.
+             NOTE, because a first draft of this comment said the opposite: `capPinInput`
+             would NOT have helped — it also yields `777777`, keeping the digits and
+             dropping the letters. What makes it safe at a TYPING site is that the field is
+             rewritten as you type, so you always see what will be sent. There is no field
+             here, so that protection does not exist, and the only honest rule is to accept
+             a target that is ALREADY a number (grouping allowed, since the app renders
+             `777-777`) and drop anything else. */
+          .filter(t => /^[\d\s.-]+$/.test(String(t).trim()))
+          .map(t => pinDigits(String(t)))
           .filter(t => /^\d{6}$/.test(t) && t !== me.pin)
       )
     );
@@ -2620,7 +2708,19 @@ export function startRelay(root: HTMLElement): RelayHandle {
          the room is created once, so the later invites have nothing to seed. It is
          a capability the fleet signed for our own pin, not an assertion, so a
          client that omits or forges it simply gets a call with no co-hosts. */
-      sendWS({ type: "invite", to: first, video: camOn, ...(opts?.seed ? { seed: opts.seed } : {}) });
+      /* THE PARTY SIZE RIDES THE INVITE THAT CREATES THE ROOM, and only that one.
+         The server cannot derive it: a group dial sends its first invite ALONE and
+         flushes the rest off the `room` ack, so at room-creation time the server
+         sees ONE invitee and a room of size 1 whatever the party will become — and
+         it is the room-creation moment that picks the transport. `clean.length` is
+         the invitees; +1 for us, which is what makes "3" mean three people on the
+         call rather than three people invited.
+         A HINT, NOT AN ASSERTION: understating it gets the mesh (today's
+         behaviour), overstating it refuses only our own call. See isGroupParty. */
+      sendWS({
+        type: "invite", to: first, video: camOn, parties: clean.length + 1,
+        ...(opts?.seed ? { seed: opts.seed } : {}),
+      });
     }
     toast("Starting group call (" + clean.length + ")…");
     return true;
@@ -3231,6 +3331,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
       return;
     }
     pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, video: !!m.video, at: Date.now() };
+    // The OS call screen already reported an answer for THIS room (native shell,
+    // cold start or in-page). Complete it rather than presenting a ring the user
+    // has visibly already accepted — the consent gesture happened on a screen the
+    // OS drew, before this document existed.
+    const armed = nativeAnswerArmed(m.roomId!);
+    if (armed) { void acceptInvite({ voice: armed.voice }); return; }
     // Mutual-consent protocol: a VOICE call is answered as voice — the Video
     // answer button only appears when the CALLER dialed this as a video call
     // (answering with it is the callee's consent). v2.97: the buttons carry
@@ -3909,6 +4015,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let statsShown = false;
   try { statsShown = localStorage.getItem("relay_call_stats") === "1"; } catch { /* private mode */ }
   let qualPrev: import("./callStats").ByteSample | null = null;
+  /** Last thermal signature written to the diag log, so a 2s poller logs a CHANGE
+   *  rather than a line every tick. */
+  let qualLastSig = "";
 
   /**
    * Write the readout. `tone` picks the board-5c hue and defaults to neutral, so
@@ -3937,7 +4046,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
    *  directly comparable to these, or "is this one worse?" has no answer. */
   async function collectCallQuality() {
     if (!statsShown || !inCall) return;
-    const { entriesOf, summarizeStats, formatCallStats, callStatsVerdict, callQualityTone } =
+    const { entriesOf, summarizeStats, formatCallStats, formatCallDetail, callStatsVerdict, callQualityTone } =
       await import("./callStats");
     const reports: import("./callStats").StatEntry[][] = [];
     for (const pin in peers) {
@@ -3948,10 +4057,27 @@ export function startRelay(root: HTMLElement): RelayHandle {
       const { stats, sample } = summarizeStats(reports, { prev: qualPrev, nowMs: Date.now() });
       qualPrev = sample;
       const v = callStatsVerdict(stats);
+      /* TWO LINES, joined with a newline and rendered by `white-space: pre-line`:
+         line 1 is how the call is GOING, line 2 what it is MADE OF. The detail line
+         is omitted entirely when it has nothing to say, so an ordinary reading stays
+         a one-line pill. `textContent`, never innerHTML — `encoderImplementation`
+         and the codec name are browser-supplied strings and there is no reason to
+         hand any of them to a parser. */
+      const detail = formatCallDetail(stats);
       renderCallQuality(
-        (v === "relay" ? "⚠ " : v === "poor" ? "▲ " : "") + formatCallStats(stats),
+        (v === "relay" ? "⚠ " : v === "poor" ? "▲ " : "") + formatCallStats(stats) +
+          (detail ? "\n" + detail : ""),
         callQualityTone(stats),
       );
+      /* THE DOC ASKS FOR THE THERMAL FIELDS IN THE DEBUG LOG AS WELL AS ON SCREEN
+         ("add these three fields to the call debug logging"), and the log is what
+         survives being copied out of a session. Logged only when it CHANGES, or a
+         2s poller would bury every other line in the diag buffer. */
+      const sig = `${stats.encoder ?? "-"}|${stats.limitedBy ?? "-"}|${stats.up?.fps ?? "-"}`;
+      if (sig !== qualLastSig) {
+        qualLastSig = sig;
+        diag(`enc=${stats.encoder ?? "none"} limited=${stats.limitedBy ?? "none"} fps=${stats.up?.fps ?? "-"}`);
+      }
     } catch { /* the readout is decoration — never let it disturb a call */ }
   }
 
@@ -3995,6 +4121,64 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // largest CPU lever left on this path, and it also fixes the audio half of the
   // same report: a thermally throttled phone starves its AUDIO encoder too, which
   // is heard as choppy, unclear sound. Capping video is what protects voice.
+  /* ASK FOR H.264 BEFORE VP8 ON EVERY VIDEO m-LINE — the biggest remaining
+   * thermal lever, and a different one from applyMeshVideoCaps below (that caps
+   * how MUCH we encode; this decides WHERE it is encoded).
+   *
+   * An iPhone has NO VP8 hardware encoder, so a VP8 call encodes on the CPU for
+   * its whole duration, while H.264 goes to the dedicated VideoToolbox encoder
+   * and is nearly free. Nothing in this codebase pinned a codec, so the stack
+   * default applied — and MEASURED, Chromium offers VP8 FIRST. Since an answerer
+   * normally adopts the OFFERER's order, a Chrome desktop dialling an iPhone
+   * handed the phone software VP8. That asymmetry is why the heat was situational.
+   *
+   * IT REORDERS AND MUST NEVER RESTRICT. Passing a list that omits VP8 would make
+   * us fail to negotiate video at all with a peer that has no H.264 — a dead tile
+   * instead of a warm phone, which is worse. So every other codec is kept, just
+   * after H.264. Empty/absent H.264 (this repo's own headless Chromium ships
+   * none — measured `h264Variants: 0`) is a NO-OP rather than a throw: an empty
+   * array resets preferences and a list missing required entries raises
+   * InvalidModificationError.
+   *
+   * BASELINE, packetization-mode=1 FIRST among the H.264 variants (`42e01f` /
+   * `42001f`), because that is the profile iPhone hardware actually encodes; a
+   * high-profile entry first could land us back in software on the very device
+   * this exists for. */
+  function preferHardwareVideoCodec(pc: RTCPeerConnection) {
+    try {
+      const caps = (window.RTCRtpSender as unknown as {
+        getCapabilities?: (k: string) => { codecs: RTCRtpCodec[] } | null;
+      }).getCapabilities?.("video");
+      const all = caps?.codecs;
+      if (!all || !all.length) return;
+      const isH264 = (c: RTCRtpCodec) => (c.mimeType || "").toLowerCase() === "video/h264";
+      const h264 = all.filter(isH264);
+      if (!h264.length) return;   // no hardware path to prefer — leave the default alone
+      const baselineFirst = h264.slice().sort((a, b) => rankH264(a) - rankH264(b));
+      const ordered = baselineFirst.concat(all.filter(c => !isH264(c)));
+      pc.getTransceivers().forEach(tr => {
+        const kind = tr.sender?.track?.kind || tr.receiver?.track?.kind;
+        if (kind && kind !== "video") return;
+        try {
+          (tr as unknown as { setCodecPreferences?: (c: RTCRtpCodec[]) => void })
+            .setCodecPreferences?.(ordered);
+        }
+        catch { /* older UA, or a codec set it will not accept — keep the default */ }
+      });
+      diag("codec pref: h264-first (" + h264.length + " variant" + (h264.length === 1 ? "" : "s") + ")");
+    } catch { /* never let a preference tweak cost us the call */ }
+  }
+  /** Lower is better: baseline + packetization-mode=1 is what iPhone encodes in HW. */
+  function rankH264(c: RTCRtpCodec): number {
+    const f = (c.sdpFmtpLine || "").toLowerCase();
+    const pm1 = f.includes("packetization-mode=1");
+    const baseline = f.includes("profile-level-id=42e01f") || f.includes("profile-level-id=42001f");
+    if (baseline && pm1) return 0;
+    if (baseline) return 1;
+    if (pm1) return 2;
+    return 3;
+  }
+
   function applyMeshVideoCaps() {
     const n = Object.keys(peers).length;
     const maxBitrate = n <= 1 ? 1_200_000 : n <= 3 ? 700_000 : 350_000;
@@ -4099,6 +4283,8 @@ export function startRelay(root: HTMLElement): RelayHandle {
       // in onSignal before the answer is created.
       else if (initiator) pc.addTransceiver("video", { direction: "sendrecv" });
     }
+    // THE THERMAL FIX: ask for H.264 before VP8 on every video m-line.
+    preferHardwareVideoCodec(pc);
     // Party-size-scaled encoder caps (see applyMeshVideoCaps). Deferred a tick
     // so the freshly-added senders are queryable.
     setTimeout(applyMeshVideoCaps, 0);
@@ -4179,11 +4365,70 @@ export function startRelay(root: HTMLElement): RelayHandle {
     addTile(pin, peer.name);
     return peer;
   }
+  /* THE VOICE-MODE AUDIO PROFILE, applied to our own SDP before it goes on the wire.
+   * Owner spec: Opus, 24-32 kbps, DTX on, FEC on, ptime 20 - and IDENTICAL in voice and
+   * video mode, so this runs on every description rather than only on voice calls.
+   *
+   * MEASURED, BOTH WAYS, BECAUSE THE OBVIOUS MECHANISM SILENTLY DOES NOTHING:
+   * `RTCRtpSender.setParameters` with `encodings[0].dtx` is ACCEPTED without throwing
+   * and then DROPPED - the key is absent when read straight back, so an API-level
+   * version of this would have read as done and changed nothing. SDP is the only
+   * mechanism that works here.
+   *
+   * TWO OF THE FIVE WERE ALREADY TRUE and are left alone: a real call already reports
+   * `useinbandfec=1` (FEC) and `targetBitrate: 32000`, both Chromium defaults. What is
+   * genuinely added is `usedtx=1` and `a=ptime:20`, plus an explicit
+   * `maxaveragebitrate` so the 32 kbps ceiling is OURS rather than a default that could
+   * move.
+   *
+   * DTX IS A RECEIVER PREFERENCE, which is why BOTH sides must ask: `usedtx=1` in our
+   * SDP tells the PEER to use DTX when sending to us. Since our code runs on both ends,
+   * tuning the offer AND the answer is what turns it on in both directions - verified,
+   * both peers' outbound codec reading
+   * `maxaveragebitrate=32000;minptime=10;usedtx=1;useinbandfec=1`.
+   *
+   * IT FAILS TOWARD THE UNTOUCHED ORIGINAL, and that is the whole safety argument: this
+   * sits on the offer/answer path of EVERY call, so a regex that misfires would break
+   * calling outright. No recognisable Opus fmtp line => the SDP is returned BYTE-
+   * IDENTICAL; anything thrown => the original. Verified against garbage SDP, empty
+   * SDP, and already-tuned SDP (idempotent, which matters because a renegotiation
+   * re-runs this). */
+  /* 32 kbps is the TOP of the owner's 24-32 band, and a CEILING rather than a target:
+   * Opus is variable-rate, so this caps the peak while DTX and silence take the average
+   * well below it. 20ms ptime is the spec's value and Opus's own default frame size. */
+  const OPUS_MAX_BITRATE = 32_000;
+  const OPUS_PTIME_MS = 20;
+  const OPUS_FMTP_RE = /^(a=fmtp:(\d+) ([^\r\n]*\buseinbandfec=1\b[^\r\n]*))$/m;
+  function tuneOpusSdp(sdp: string | null | undefined): string {
+    const src = typeof sdp === "string" ? sdp : "";
+    try {
+      if (!src) return src;
+      const m = src.match(OPUS_FMTP_RE);
+      if (!m) return src;                       // not recognisable - do not touch it
+      let line = m[1];
+      if (!/\busedtx=/.test(line)) line += ";usedtx=1";
+      if (!/\bmaxaveragebitrate=/.test(line)) line += ";maxaveragebitrate=" + OPUS_MAX_BITRATE;
+      let next = src.replace(OPUS_FMTP_RE, line);
+      if (!/^a=ptime:/m.test(next)) {
+        next = next.replace(
+          new RegExp("^(a=rtpmap:" + m[2] + " opus/48000/2)$", "m"),
+          "$1\r\na=ptime:" + OPUS_PTIME_MS,
+        );
+      }
+      return next;
+    } catch { return src; }
+  }
+  /** THE ONE FUNNEL. Every setLocalDescription goes through here, so a site added later
+   *  inherits the profile instead of quietly publishing untuned SDP. */
+  async function setLocalTuned(pc: RTCPeerConnection, desc: RTCSessionDescriptionInit) {
+    await pc.setLocalDescription({ type: desc.type, sdp: tuneOpusSdp(desc.sdp) } as RTCSessionDescriptionInit);
+  }
+
   async function callPeer(pin: string, name: string) {
     const peer = createPeer(pin, name, true);
     try {
       const offer = await peer.pc.createOffer();
-      await peer.pc.setLocalDescription(offer);
+      await setLocalTuned(peer.pc, offer);
       sendWS({ type: "signal", to: pin, data: { sdp: peer.pc.localDescription } });
     } catch (e) { console.warn("offer error", e); }
   }
@@ -4240,8 +4485,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
               try { tr.direction = "sendrecv"; } catch { /* older UAs — best effort */ }
             }
           });
+          // THE ANSWERER HALF OF THE THERMAL FIX, and it is the half that matters
+          // most: the OFFERER's preference order is what an answerer normally
+          // adopts, so a Chrome desktop calling an iPhone would otherwise hand the
+          // phone VP8 (measured: Chromium offers VP8 first) and the phone would
+          // encode it in SOFTWARE. Re-stating our own preference before the answer
+          // is what lets the phone answer in H.264.
+          preferHardwareVideoCodec(peer.pc);
           const answer = await peer.pc.createAnswer();
-          await peer.pc.setLocalDescription(answer);
+          await setLocalTuned(peer.pc, answer);
           sendWS({ type: "signal", to: from, data: { sdp: peer.pc.localDescription } });
         }
       } catch (e) { console.warn("sdp error", e); }
@@ -4473,7 +4725,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
       try { peer.pc.setConfiguration(iceConfig as RTCConfiguration); } catch { /* older browsers */ }
       diag("ice restart " + pin.slice(-4) + " (#" + peer.iceRestarts + ")");
       const offer = await peer.pc.createOffer({ iceRestart: true });
-      await peer.pc.setLocalDescription(offer);
+      await setLocalTuned(peer.pc, offer);
       sendWS({ type: "signal", to: pin, data: { sdp: peer.pc.localDescription } });
     } catch (e) { console.warn("ice restart failed", e); }
   }
@@ -6072,7 +6324,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function addInputValue(): string {
     const inp = $("addInput") as HTMLInputElement | null;
-    return (inp?.value || "").replace(/\D/g, "").slice(0, 6);
+    return pinDigits(inp?.value ?? "");
   }
   function setAddInput(v: string) {
     const inp = $("addInput") as HTMLInputElement | null; if (inp) inp.value = v;
@@ -6088,9 +6340,18 @@ export function startRelay(root: HTMLElement): RelayHandle {
     setAddInput(addInputValue().slice(0, -1));
   }
   // Sanitize typed input (desktop) to digits + auto-invite when complete.
+  //
+  // v2.106.65 — this used `replace(/\D/g, "")`, which FOLDS a letter away rather than
+  // dropping it, and this is the one field in the app where that is more than cosmetic:
+  // the sixth digit AUTO-INVITES, so `7a7b7c7d7e7f` silently became `777777` and rang a
+  // stranger into a live call off a typo. `capPinInput` drops as typed, so the field
+  // always shows exactly what will be dialled. The markup's `maxlength` came down from 16
+  // to seven in the same change, so the browser's own cap agrees with ours instead of
+  // letting ten more characters in before our handler trims them.
   function onAddInputType() {
+    const inp = $("addInput") as HTMLInputElement | null;
+    if (inp) inp.value = capPinInput(inp.value);
     const v = addInputValue();
-    setAddInput(v);
     if (v.length === 6) void addToCall();
   }
   let addInviting = false; // re-entry guard (auto-fire + Enter + button can overlap)
@@ -6127,6 +6388,15 @@ export function startRelay(root: HTMLElement): RelayHandle {
     sendWS({ type: "leave", reason });
     // Native Android: leave OS call mode + drop the ongoing-call service.
     if (isNativeAndroid()) void nativeSetInCall(false);
+    // WEB → NATIVE (2026-08-01): tell a WebView shell the call is over so it tears
+    // the OS call screen down; otherwise the phone keeps showing a call that ended.
+    // HERE rather than at the hang-up BUTTON, because this function is the funnel
+    // every teardown reaches — remote-left, kicked, connection-lost and the server
+    // errors all land in it. Degrades silently with no shell, which is every
+    // ordinary browser. `roomId` is read BEFORE the teardown below clears it.
+    if (roomId) notifyNativeCallEnded(roomId);
+    // A native answer that never completed must not survive the call it was for.
+    nativeAnswerRoom = null;
     // The user explicitly ended the call — don't auto-rejoin it on a later reload.
     clearPendingRejoin();
     stopRingtone();
@@ -6563,6 +6833,27 @@ export function startRelay(root: HTMLElement): RelayHandle {
       try { refreshAllTileAddMarks(); } catch { /* */ }
     },
     setOnSaveContact(cb) { onSaveContact = cb; },
+    answerNativeCall(callId, opts) {
+      const voice = !!opts?.voice;
+      // Already on screen? Complete it now.
+      if (pendingRing && pendingRing.roomId === callId) {
+        void acceptInvite({ voice });
+        return true;
+      }
+      // Otherwise arm it. `nativeAnswerArmed` enforces the 70s bound and the room
+      // match, so a stale arm can never answer a later call.
+      nativeAnswerRoom = { roomId: callId, voice, at: Date.now() };
+      return false;
+    },
+    endNativeCall(callId) {
+      // Disarm first, unconditionally — an arm left behind after a decline is the
+      // one that would auto-answer something else.
+      if (nativeAnswerRoom && nativeAnswerRoom.roomId === callId) nativeAnswerRoom = null;
+      if (pendingRing && pendingRing.roomId === callId) { declineInvite(); return; }
+      // In the call the shell is talking about? End it. Never end a DIFFERENT
+      // call: the shell may be reporting a stale OS screen.
+      if (inCall && roomId === callId) hangUp("native-end");
+    },
     knock(number) {
       if (!/^\d{6}$/.test(number) || !me.pin || number === me.pin) return;
       if (!ws || ws.readyState !== 1) { toast("Not connected — try again in a moment.", true); return; }
@@ -6602,6 +6893,12 @@ export function startRelay(root: HTMLElement): RelayHandle {
     },
     destroy() {
       destroyed = true;
+      /* The in-call flag lives on <html>, which OUTLIVES this engine — so a
+       * teardown while the call surface is showing (sign-out, route change) would
+       * leave the shell's background canvas frozen for the rest of the session.
+       * Not a drift risk of the kind show() guards against: this is an
+       * unconditional cleanup, not a second conditional owner. */
+      try { delete document.documentElement.dataset.relayInCall; } catch { /* */ }
       stopHoldMusic();
       cancelSoloEndGrace();
       cancelEndActiveFallback();

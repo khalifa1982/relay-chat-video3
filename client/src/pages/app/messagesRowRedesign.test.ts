@@ -46,11 +46,29 @@ describe("v2.99.37 — the row is airy: avatar + exactly two text lines", () => 
     expect(ROW).toMatch(/text-\[19px\]/);
     expect(ROW).toMatch(/\(unread \? "font-bold" : "font-semibold"\)/);
   });
-  it("no fixed row height anywhere (a hard-coded height clipped a badge before)", () => {
-    // The lookbehinds let `min-h-…` through on purpose: a MINIMUM height sets the
-    // row's rhythm and still grows for a wrapped line — a fixed `h-…` cannot.
+  it("nothing that can WRAP has a fixed height (a hard-coded one clipped a badge)", () => {
+    /* The lookbehinds let `min-h-…` through on purpose: a MINIMUM height sets the row's
+       rhythm and still grows for a wrapped line — a fixed `h-…` cannot.
+
+       v2.106.67 NARROWED THIS TO WHAT IT IS FOR. It banned EVERY `h-[Npx]` in the row,
+       which is broader than the defect: the bug was a hard-coded 16px on a text LINE, so
+       a badge on that line was clipped. A fixed-size CENTRED PUCK — board 1c's 17px unread
+       badge, `grid place-items-center` — cannot clip anything, because its height is its
+       own and its content is centred in it. Banning those too made the rule forbid the
+       board's own row badge while saying nothing about the clipping it exists to prevent.
+
+       So a fixed height is allowed exactly when the element centres its content, and
+       forbidden otherwise. `h-4` stays banned outright: it is the line height that caused
+       the original defect and nothing in this row legitimately wants it. */
     expect(ROW).not.toMatch(/(?<![\w-])h-4(?![\w.[])/);
-    expect(ROW).not.toMatch(/(?<![\w-])h-\[\d+px\]/);
+    for (const m of ROW.matchAll(/className=(?:"([^"]*)"|\{[^}]*?"([^"]*)")/g)) {
+      const cls = m[1] ?? m[2] ?? "";
+      if (!/(?<![\w-])h-\[\d+px\]/.test(cls)) continue;
+      expect(
+        /place-items-center|items-center/.test(cls),
+        `a fixed height on something that is not a centred puck can clip:\n  ${cls}`,
+      ).toBe(true);
+    }
   });
 });
 
@@ -98,9 +116,23 @@ describe("v2.99.37 — every element the owner listed is present", () => {
     expect(marker, "the marker renders inside the pinned gate").toBeGreaterThan(gate);
     expect(ROW.slice(marker, marker + 200)).toMatch(/className="ms-auto size-3\.5 shrink-0/);
   });
-  it("unread reads as colour + weight, not a heavy pill", () => {
-    expect(ROW).toMatch(/\{t\.unreadCount > 99 \? "99\+" : t\.unreadCount\} new/);
-    expect(ROW).not.toMatch(/rounded-full text-white text-\[10/); // the old badge pill
+  it("the unread count is bounded and never a WHITE pill", () => {
+    /* v2.106.67 REWROTE THIS. It read "colour + weight, not a heavy pill" and froze the
+       literal `{n} new` — but board 1c's own row markup IS a pill
+       (`min-width:17px;height:17px;border-radius:10px;background:var(--rb);color:#04211a`),
+       so the pin forbade the board while citing the reference. The comment it came from
+       named "the reference's '2 New Chats' treatment", which is a SECTION heading
+       elsewhere on the board rather than this badge — reasoning about the wrong element.
+
+       WHAT ACTUALLY MATTERED IN THE OLD RULE SURVIVES, and it is the second line: the
+       badge must not be the generic white-on-neutral pill. It is the ACCENT with the
+       on-accent token, which `threadRowFrame.test.ts` pins. Here: the count is BOUNDED
+       (a four-digit backlog must not stretch the row) and it is not white. */
+    expect(ROW).toMatch(/\{t\.unreadCount > 99 \? "99\+" : t\.unreadCount\}/);
+    expect(ROW, "the old white badge pill").not.toMatch(/rounded-full text-white text-\[10/);
+    const at = ROW.indexOf("aria-label={`${t.unreadCount} unread`}");
+    expect(at, "the unread count is gone").toBeGreaterThan(-1);
+    expect(ROW.slice(at, at + 400), "the badge must not be white").not.toMatch(/text-white/);
   });
 });
 

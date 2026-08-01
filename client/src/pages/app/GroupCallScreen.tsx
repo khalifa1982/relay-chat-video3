@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { PIN_INPUT_MAXLENGTH, capPinInput, pinDigits } from "@/app/pinInput";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -89,7 +90,7 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
   }
 
   function addManual() {
-    const n = manual.replace(/\D/g, "").slice(0, 6);
+    const n = pinDigits(manual);
     if (!/^\d{6}$/.test(n)) return;
     // QA L7: reject the caller's OWN number — programmaticGroupDial silently
     // drops it anyway, which used to burn an invitee slot at the mesh cap and
@@ -162,9 +163,12 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
           <div className="flex gap-2">
             <Input
               value={manual}
-              onChange={(e) => setManual(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              // v2.106.65 — dropped rather than folded (see pinInput.ts), and the browser's
+              // own cap now agrees with ours instead of being absent entirely.
+              onChange={(e) => setManual(capPinInput(e.target.value))}
               onKeyDown={(e) => e.key === "Enter" && addManual()}
               placeholder="Add a number (6 digits)"
+              maxLength={PIN_INPUT_MAXLENGTH}
               inputMode="numeric"
               className="font-mono tracking-widest"
               disabled={atLimit}
@@ -322,10 +326,24 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
  * empty Redis mirror), so nothing below ever asserts a line is EMPTY — the same
  * refusal v2.105.25 made on the sibling invite screen.
  */
-function PartyLinesSection({ onJoined }: { onJoined: () => void }) {
+export function PartyLinesSection({
+  onJoined,
+  defaultOpen = false,
+}: {
+  onJoined: () => void;
+  /**
+   * v2.106.64 — the Groups tab mounts this OPEN, because there it IS the section the
+   * owner asked for ("in the group section you will have a group call and group
+   * message") rather than a fold-out inside a dial picker. ONE component with two
+   * mounts, never a second copy: two party-line lists is how the two come to disagree
+   * about which lines exist, and the `enabled: open` query means a closed mount still
+   * costs nothing.
+   */
+  defaultOpen?: boolean;
+}) {
   const engine = useRelayEngine();
   const utils = trpc.useUtils();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [title, setTitle] = useState("");
   /** Which row's manage card is expanded (in flow, below the list). */
   const [manageId, setManageId] = useState<number | null>(null);

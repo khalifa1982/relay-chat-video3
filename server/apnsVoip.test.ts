@@ -17,6 +17,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { execFileSync } from "child_process";
+import { codeOnly } from "./testing/codeOnly";
 import {
   apnsVoipConfig,
   apnsCredentialExpiry,
@@ -290,17 +291,24 @@ describe("v2.105.12 — configuration is read per call and fails to ABSENT", () 
   });
 
   it("needs the key, the key id AND the team id — a partial setup is not configured", () => {
-    // Half-configured must read as OFF, not as broken: the feature then does not
-    // exist, which is the same degradation every other transport here chooses.
+    /* 2026-08-01 REWRITTEN TO THE PROPERTY. This used to assert that key + keyId +
+       teamId with NO topic env reads as unconfigured — which is exactly what the
+       staged-topic fallback legitimately changes, while saying nothing about the
+       rule it stands for: the CREDENTIAL halves are each required.
+
+       Half-configured must read as OFF rather than as broken: the feature then
+       does not exist, which is the degradation every other transport here chooses. */
     process.env.APNS_P8_KEY = privateKey;
-    expect(apnsVoipConfigured()).toBe(false);
+    expect(apnsVoipConfigured()).toBe(false); // no key id, no team id
     process.env.APNS_KEY_ID = "ABC123DEFG";
-    expect(apnsVoipConfigured()).toBe(false);
+    expect(apnsVoipConfigured()).toBe(false); // still no team id
     process.env.APNS_TEAM_ID = "XYZ987WVUT";
-    // Still no topic and no bundle id — nothing to address.
-    expect(apnsVoipConfigured()).toBe(false);
-    process.env.APNS_BUNDLE_ID = "com.app.relaymobile";
+    // The credential is complete now, and the topic no longer has to be named —
+    // it falls back to the owner's staged value. An explicit bundle id still wins.
     expect(apnsVoipConfigured()).toBe(true);
+    expect(apnsVoipConfig()!.topic).toBe("com.app.relaymobile.voip");
+    process.env.APNS_BUNDLE_ID = "com.example.other";
+    expect(apnsVoipConfig()!.topic).toBe("com.example.other.voip");
   });
 
   it("a MISSING key id or team id is refused even when the topic resolves", () => {
@@ -835,5 +843,99 @@ describe("v2.105.12 — sendVoipRing degrades rather than throwing", () => {
     // reads `sent` to decide whether to page, and a throw would bubble into the
     // invite path.
     await expect(sendVoipRing(["a".repeat(64)], ring)).resolves.toEqual({ sent: 0, invalidTokens: [] });
+  });
+});
+
+/**
+ * v2.106.71 — THE TWO GAPS AN AUDIT OF THE PUSH DOC AGAINST THIS FILE FOUND.
+ *
+ * The owner re-uploaded `relaypushbackendconfig.md` and asked whether it had been
+ * done. v2.106.69 wired both credential pipes; checking the file against the doc
+ * CLAUSE BY CLAUSE — rather than against my own notes — turned up two more.
+ */
+describe("v2.106.71 — the staged configuration is reachable, and a 400 no longer deregisters", () => {
+  it("resolves the owner's staged topic when the environment names none", () => {
+    /* THE DOC'S ENV TABLE LISTS ONLY `APNS_KEY_ID` AND `APNS_TEAM_ID`. It names no
+       topic variable and no bundle id, while stating the topic as a fixed value in
+       its own send section. A fleet configured literally to that table therefore had
+       NO topic, `apnsVoipConfig()` returned null, and no iPhone rang — the v2.106.69
+       FCM defect one platform over. */
+    process.env.APNS_P8_KEY = privateKey;
+    process.env.APNS_KEY_ID = "ABC123DEFG";
+    process.env.APNS_TEAM_ID = "XYZ987WVUT";
+    delete process.env.APNS_BUNDLE_ID;
+    delete process.env.APNS_VOIP_TOPIC;
+    expect(apnsVoipConfig()?.topic).toBe("com.app.relaymobile.voip");
+  });
+
+  it("the environment always WINS — the fallback is a last resort, never an override", () => {
+    configure({ APNS_VOIP_TOPIC: "com.example.custom.voip" });
+    expect(apnsVoipConfig()?.topic).toBe("com.example.custom.voip");
+    configure({ APNS_BUNDLE_ID: "com.example.other" });
+    delete process.env.APNS_VOIP_TOPIC;
+    expect(apnsVoipConfig()?.topic).toBe("com.example.other.voip");
+  });
+
+  it("falls back to the staged .p8 PATH, and an unreadable one fails to null", () => {
+    /* Same shape as the FCM fix: the operator's own value is tried first, and a
+       missing file falls THROUGH rather than throwing — a stale path must not mask
+       a good credential, and a box with no key must read as unconfigured. */
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "apns-"));
+    const staged = path.join(dir, "apns-key.p8");
+    fs.writeFileSync(staged, privateKey);
+    try {
+      configure({ APNS_P8_KEY: staged });
+      expect(apnsVoipConfig()?.mode).toBe("token");
+      // A path that does not exist is not a credential.
+      configure({ APNS_P8_KEY: path.join(dir, "absent.p8") });
+      expect(apnsVoipConfig()).toBeNull();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the staged path is WIRED as the last candidate — pinned, and honestly so", () => {
+    /* FOUND BY MUTATION: deleting the fallback SURVIVED the case above, because that
+       one sets APNS_P8_KEY explicitly and therefore never reaches it.
+
+       Said plainly — this property cannot be told apart behaviourally HERE: the
+       staged path is `/home/relay/apns-key.p8`, which does not exist in this sandbox
+       and which a test has no business creating, so with the variable unset both the
+       fixed and the unfixed code return null. A source pin is the honest instrument,
+       and it is comment-stripped so the prose above cannot satisfy it. */
+    const src = codeOnly(fs.readFileSync(new URL("./apnsVoip.ts", import.meta.url), "utf8"));
+    expect(src).toMatch(/const DEFAULT_P8_PATH = "\/home\/relay\/apns-key\.p8";/);
+    // LAST candidate: the env vars are read first and `||` only falls through when
+    // both are empty, so an operator's own value can never be overridden.
+    expect(src).toMatch(
+      /process\.env\.APNS_P8_KEY \|\| process\.env\.APNS_KEY_P8 \|\| ""\)\.trim\(\) \|\| DEFAULT_P8_PATH/,
+    );
+  });
+
+  it("PRUNES ON 410 ONLY — a 400 is kept, because it usually means MIS-CONFIGURED", () => {
+    /* Apple documents BadDeviceToken as "verify the token is valid AND THAT IT
+       MATCHES THE ENVIRONMENT", so a perfectly live token answers 400 whenever
+       APNS_ENV disagrees with the build that registered it. The old rule deleted
+       it: one environment mismatch would have wiped every iPhone registration in
+       the fleet, permanently, on the first push after a deploy.
+
+       Driven against the REAL source rather than asserted, because which statuses
+       reach `invalidTokens` is the whole property. */
+    /* ON COMMENT-STRIPPED SOURCE — the prose trap, for the seventeenth time: the
+       comment ABOVE this gate explains the fix and therefore contains the very word
+       the assertion forbids, so it failed on correct code until it was stripped. */
+    const src = codeOnly(fs.readFileSync(new URL("./apnsVoip.ts", import.meta.url), "utf8"));
+    const at = src.indexOf("out.invalidTokens.push(token)");
+    expect(at).toBeGreaterThan(-1);
+    const gate = src.slice(src.lastIndexOf("if (status === 200)", at), at);
+    expect(gate).toMatch(/status === 410/);
+    expect(gate).toMatch(/\\bUnregistered\\b/);
+    // The two 400 reasons that used to prune must NOT appear in the pruning gate.
+    expect(gate, "BadDeviceToken must no longer prune").not.toMatch(/BadDeviceToken/);
+    expect(gate, "a bare 400 must no longer prune").not.toMatch(/status === 400/);
+    // …and a non-pruning failure is said out loud rather than swallowed.
+    const after = src.slice(at, at + 800);
+    expect(after).toMatch(/console\.warn\(\s*\n?\s*`\[apns-voip\] send failed/);
+    expect(after).toMatch(/KEPT/);
   });
 });

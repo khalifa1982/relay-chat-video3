@@ -36,6 +36,17 @@ const V2DB = read("server", "v2db.ts");
 const ROUTERS = read("server", "v2routers.ts");
 const SCHEMA = read("drizzle", "schema.ts");
 
+/**
+ * The end of the composer ROW. Both slices below take it, and it ASSERTS rather than
+ * returning -1: a stale anchor silently turns `slice(start, -1)` into "the whole file",
+ * which is how a pin comes to report a finding about code it was never looking at.
+ */
+function endOfComposerRow(): number {
+  const i = MESSAGES.indexOf('aria-label="Send"');
+  if (i < 0) throw new Error("composer row end anchor not found: aria-label=\"Send\"");
+  return i;
+}
+
 describe("1 — last seen carries the time on every dated branch", () => {
   const base = new Date("2026-07-25T15:30:00").getTime();
 
@@ -75,7 +86,13 @@ describe("2a — one + replaces the media and paperclip buttons", () => {
        buttons anywhere in the composer, wherever the one control now sits. */
     const composer = MESSAGES.slice(
       MESSAGES.indexOf('<div className="flex items-end gap-1.5">'),
-      MESSAGES.indexOf('aria-label={recording ? "Stop" : "Record"}'),
+      // v2.106.64 — the end anchor WAS the mic's own `aria-label={recording ? "Stop" :
+      // "Record"}`, which this release deletes when Send becomes permanent. `indexOf`
+      // then returned -1 and `slice(start, -1)` ran to the END OF THE FILE, swallowing
+      // the attach menu and reporting 3 `<Plus>` where the property is 1 — a FALSE
+      // finding on correct source, the negative-index trap recorded at v2.99.78 and
+      // v2.106.56. Re-anchored on Send, the row's last control.
+      endOfComposerRow(),
     );
     expect(composer.length).toBeGreaterThan(500);
     expect((composer.match(/<Plus className=/g) ?? []).length, "exactly one").toBe(1);
@@ -104,7 +121,13 @@ describe("2a — one + replaces the media and paperclip buttons", () => {
     // straight to the library, which would now hide "Attach file" entirely.
     const composer = MESSAGES.slice(
       MESSAGES.indexOf('<div className="flex items-end gap-1.5">'),
-      MESSAGES.indexOf('aria-label={recording ? "Stop" : "Record"}'),
+      // v2.106.64 — the end anchor WAS the mic's own `aria-label={recording ? "Stop" :
+      // "Record"}`, which this release deletes when Send becomes permanent. `indexOf`
+      // then returned -1 and `slice(start, -1)` ran to the END OF THE FILE, swallowing
+      // the attach menu and reporting 3 `<Plus>` where the property is 1 — a FALSE
+      // finding on correct source, the negative-index trap recorded at v2.99.78 and
+      // v2.106.56. Re-anchored on Send, the row's last control.
+      endOfComposerRow(),
     );
     expect(composer.length).toBeGreaterThan(500);
     expect(composer).toMatch(/onClick=\{\(\) => setAttachMenuOpen\(\(v\) => !v\)\}/);

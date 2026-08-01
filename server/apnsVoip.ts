@@ -35,11 +35,28 @@
 import crypto from "crypto";
 import http2 from "http2";
 import fs from "fs";
+import { buildCallPush, type CallPushType } from "./callPushPayload";
 
 /** Apple caps a provider token at 1h; refresh well inside that. */
 const TOKEN_TTL_MS = 45 * 60_000;
 /** A ring is worthless late. APNs drops it rather than storing it. */
 const VOIP_EXPIRY_SECONDS = 45;
+
+/**
+ * THE OWNER'S STAGED CONFIGURATION, used ONLY when the environment names nothing.
+ *
+ * Their push-backend doc records the key file at `/home/relay/apns-key.p8` and the
+ * topic as `com.app.relaymobile.voip` (independently corroborated: the certificate
+ * they sent carries `UID=com.app.relaymobile.voip`). What the doc's env table does
+ * NOT do is name a variable for either — it lists `APNS_KEY_ID` and `APNS_TEAM_ID`
+ * and nothing else.
+ *
+ * These are a LAST resort, never an override: every variable is read first, so a
+ * deployment that configures itself is untouched, and the only case these change
+ * is the one that would otherwise be silent.
+ */
+const DEFAULT_P8_PATH = "/home/relay/apns-key.p8";
+const DEFAULT_VOIP_TOPIC = "com.app.relaymobile.voip";
 
 /**
  * APNs accepts TWO provider credentials, and RELAY supports both because an
@@ -174,7 +191,23 @@ export function apnsVoipConfig(): ApnsVoipConfig | null {
   // The VoIP topic is the bundle id plus `.voip`. Appending it ourselves when a
   // bare bundle id is given avoids the most likely configuration mistake, and an
   // explicit topic still wins so an unusual setup is expressible.
-  const topic = topicEnv || (bundleId ? `${bundleId}.voip` : "");
+  //
+  // ── AND WHY THERE IS A FALLBACK AT ALL (2026-08-01) ──────────────────────────
+  // The owner's push-backend doc stages the credentials and lists, under "Env",
+  // exactly two variables: `APNS_KEY_ID` and `APNS_TEAM_ID`. It names neither a
+  // topic variable nor a bundle id — while stating the topic as a fixed value in
+  // its own send section (`apns-topic: com.app.relaymobile.voip`). So a fleet
+  // configured literally to that table has no topic, this function returns null,
+  // and NO iPhone rings while the admin doctor honestly reports "not configured".
+  // That is the v2.106.69 FCM defect one platform over: a staged, proven
+  // credential the code cannot see.
+  //
+  // The env is still read FIRST, so every deployment that works today is
+  // byte-identical. The fallback only rescues the unset case, and it is safe to
+  // be wrong about: an incorrect topic earns a 400 `DeviceTokenNotForTopic`,
+  // which is LOUD and — since the same release stopped 400 from pruning — costs
+  // nothing permanent. A missing topic, by contrast, is silence.
+  const topic = topicEnv || (bundleId ? `${bundleId}.voip` : DEFAULT_VOIP_TOPIC);
   if (!topic) return null;
 
   // Sandbox is a DELIBERATE opt-in. Defaulting to it would make a production
@@ -187,7 +220,11 @@ export function apnsVoipConfig(): ApnsVoipConfig | null {
   // rather than aesthetic: a .p8 never expires, while a certificate lapses on a
   // date nobody is watching. If an operator has configured both, the credential
   // that cannot silently die is the one to use.
-  const p8 = (process.env.APNS_P8_KEY || process.env.APNS_KEY_P8 || "").trim();
+  // The staged path is the LAST candidate, so an operator's own value always wins
+  // and an unreadable one falls through rather than failing shut — the reasoning
+  // v2.106.69 recorded for `GOOGLE_APPLICATION_CREDENTIALS`.
+  const p8 =
+    (process.env.APNS_P8_KEY || process.env.APNS_KEY_P8 || "").trim() || DEFAULT_P8_PATH;
   const keyId = (process.env.APNS_KEY_ID || "").trim();
   const teamId = (process.env.APNS_TEAM_ID || "").trim();
   if (p8 && keyId && teamId) {
@@ -352,6 +389,14 @@ export interface VoipRingPayload {
   /** The room the callee must join to answer. Without it the ring is undialable. */
   roomId: string;
   video: boolean;
+  /** Absent is normal — the shell falls back to initials. Never blocks the ring. */
+  callerAvatar?: string | null;
+  /**
+   * Defaults to a ring. A `call_cancel` is the SAME transport to the SAME tokens,
+   * because a cancel that took another route could arrive at a device the ring
+   * never reached — or worse, not reach the one it did.
+   */
+  type?: CallPushType;
 }
 
 export interface VoipSendResult {
@@ -387,15 +432,22 @@ export async function sendVoipRing(
     if (!jwt) return out;
   }
 
-  const body = JSON.stringify({
-    // A VoIP push has no `aps.alert` — iOS delivers it to PushKit, not to the
-    // notification centre. Everything the shell needs is top-level data.
-    callerName: payload.callerName,
-    callerPin: payload.callerPin,
-    roomId: payload.roomId,
-    video: payload.video ? "1" : "0",
-    kind: "incoming-call",
-  });
+  // A VoIP push has no `aps.alert` — iOS delivers it to PushKit, not to the
+  // notification centre — so the payload object IS the body, exactly as the push
+  // spec asks. The envelope is composed by the SHARED builder so iOS and Android
+  // receive the identical field set; see `callPushPayload.ts` for why that is one
+  // module rather than a literal at each transport.
+  const body = JSON.stringify(
+    buildCallPush({
+      type: payload.type ?? "incoming_call",
+      roomId: payload.roomId,
+      callerName: payload.callerName,
+      callerPin: payload.callerPin,
+      video: payload.video,
+      callerAvatar: payload.callerAvatar,
+      nowMs: Date.now(),
+    }),
+  );
 
   let session: http2.ClientHttp2Session | null = null;
   try {
@@ -447,12 +499,36 @@ export async function sendVoipRing(
               req.on("data", (c: string) => { respBody += c; });
               req.on("end", () => {
                 if (status === 200) out.sent++;
-                // 410 Gone = unregistered. 400 BadDeviceToken = not ours. Both mean
-                // prune; anything else (429, 5xx, a network blip) leaves the token
-                // ALONE, because destroying a registration over a transient failure
-                // is the exact defect v2.105.11 fixed on the FCM path.
-                else if (status === 410 || /BadDeviceToken|Unregistered/.test(respBody)) {
+                /* PRUNE ON 410 ONLY — and the 400 that used to prune is the reason.
+                 *
+                 * Apple documents `BadDeviceToken` as "the token is invalid. Verify
+                 * that the request contains a valid token AND THAT THE TOKEN MATCHES
+                 * THE ENVIRONMENT." So a perfectly live token answers 400 whenever
+                 * `APNS_ENV` disagrees with the build that registered it — and the
+                 * old rule deleted it. One environment mismatch would have wiped
+                 * every iPhone registration in the fleet, permanently, on the first
+                 * push after a deploy, with those handsets never ringing again and
+                 * nothing saying why. `DeviceTokenNotForTopic` is the same shape for
+                 * a topic mismatch, which the topic fallback above can now produce.
+                 *
+                 * This is the defect v2.106.69 fixed on the FCM side (`status === 400
+                 * → prune`, where FCM answers 400 for a malformed MESSAGE as readily
+                 * as a malformed token), still live here — and the owner's own doc
+                 * says only "prune on APNs 410 / FCM UNREGISTERED".
+                 *
+                 * The asymmetry decides it: a stale token costs one wasted request
+                 * per call, a wrongly-pruned live token costs that user every call.
+                 * So 410 (and the `Unregistered` reason it carries) prunes; anything
+                 * else is KEPT and said out loud. */
+                else if (status === 410 || /\bUnregistered\b/.test(respBody)) {
                   out.invalidTokens.push(token);
+                } else if (status >= 400) {
+                  console.warn(
+                    `[apns-voip] send failed status=${status} reason=${respBody.slice(0, 200)} — ` +
+                      `token KEPT (only 410/Unregistered prunes). A 400 BadDeviceToken or ` +
+                      `DeviceTokenNotForTopic here usually means APNS_ENV or the topic is wrong, ` +
+                      `not that the device is gone.`,
+                  );
                 }
                 finish();
               });

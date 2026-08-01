@@ -151,6 +151,12 @@ export function PeerAvatar({
      byte-identical in dark. Callers that pass their own tint (History's per-tone discs)
      are untouched. */
   fallbackClassName = "ravatar-fallback",
+  /* A RUNTIME tint for the initials disc, for a colour that cannot be a class
+     (v2.106.61): the group sender's own hue gradient is composed per person, and a
+     runtime-composed Tailwind class is invisible to the JIT and comes out unstyled.
+     Merged AFTER the size, so a caller can only add colour and can never break the
+     geometry every row's alignment depends on. */
+  fallbackStyle,
   clickable = true,
   children,
 }: {
@@ -163,6 +169,8 @@ export function PeerAvatar({
   className?: string;
   /** Tint classes for the no-photo initials disc (History's tone colors). */
   fallbackClassName?: string;
+  /** Inline tint for the initials disc, for a per-person colour a class cannot express. */
+  fallbackStyle?: React.CSSProperties;
   /** false ⇒ purely decorative (no status/profile click behavior). */
   clickable?: boolean;
   /** Overlays (presence LEDs, direction badges) positioned by the caller. */
@@ -187,7 +195,7 @@ export function PeerAvatar({
     />
   ) : (
     <span
-      style={{ width: size, height: size, fontSize: Math.max(11, size * 0.34) }}
+      style={{ width: size, height: size, fontSize: Math.max(11, size * 0.34), ...fallbackStyle }}
       className={`${rounded} ${fallbackClassName} grid place-items-center font-bold`}
     >
       {initialsFrom(label)}

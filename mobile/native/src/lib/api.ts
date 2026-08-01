@@ -204,7 +204,10 @@ export const api = {
     // `attachment` object — only messages.list joins it).
   }) => client.mutation("messages.send", input) as Promise<Omit<MessageRow, "attachment"> & { attachmentId: number | null }>,
   // Group threads (M3.5): server skips unknown numbers, needs ≥1 other member.
-  createGroup: (input: { title: string; numbers: string[] }) =>
+  // v2.106.66 — `avatarUrl` is optional and additive, so every existing native caller is
+  // byte-identical. It is here because the widening is server-side: without the field the
+  // native app would be the one place a group still cannot be born with a photo.
+  createGroup: (input: { title: string; numbers: string[]; avatarUrl?: string | null }) =>
     client.mutation("messages.createGroup", input) as Promise<{
       conversationId: number;
       title: string | null;

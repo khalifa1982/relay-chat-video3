@@ -31,18 +31,12 @@ export interface Msg {
   code?: string;
   video?: boolean;
   paging?: boolean;
-  /** peer-hold / peer-screen / recording: state flag. */
+  /** peer-hold / peer-screen: state flag. */
   on?: boolean;
   /** screen: "on" | "off" (client→server). */
   action?: string;
-  /** recording: who started it. */
+  /** who performed the action (peer-screen). */
   by?: string;
-  /** registered: server has recording configured. */
-  recording?: boolean;
-  livekit?: boolean;
-  livekitUrl?: string;
-  token?: string;
-  url?: string;
 }
 
 function randomCid(): string {

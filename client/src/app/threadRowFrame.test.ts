@@ -36,8 +36,23 @@ const MSG = codeOnly(readFileSync(resolve(process.cwd(), "client/src/pages/app/M
 const CSS = readFileSync(resolve(process.cwd(), "client/src/index.css"), "utf8");
 
 describe("unread is the accent, in a form that survives the light theme", () => {
-  it("the unread count and the unread timestamp both take text-primary", () => {
-    expect(MSG).toMatch(/className="shrink-0 font-semibold text-\[13px\] text-primary"/);
+  it("the unread COUNT and the unread TIMESTAMP both carry the accent", () => {
+    /* v2.106.67 REWROTE THIS TO THE PROPERTY. It froze the count's exact class string,
+       `shrink-0 font-semibold text-[13px] text-primary` — i.e. the "colour + weight, not
+       a pill" treatment — so it forbade board 1c's own row badge, which is a 17px accent
+       PILL (`background:var(--rb);color:#04211a`). The property is that unread carries
+       the ACCENT and never the retired orange; whether the accent arrives as text or as
+       a fill is the board's business, and it says fill.
+       On-accent text must come from the TOKEN, never the literal: v2.106.4 repointed
+       `--primary-foreground` at `#04211a` inside `.dark.relay-v2` for exactly this
+       pairing, so light keeps its own measured value instead of near-black on a pale
+       accent. */
+    const pill = MSG.slice(MSG.indexOf('aria-label={`${t.unreadCount} unread`}'));
+    expect(pill.length, "the unread count is gone").toBeGreaterThan(100);
+    expect(pill.slice(0, 400)).toMatch(/bg-primary/);
+    expect(pill.slice(0, 400)).toMatch(/text-primary-foreground/);
+    expect(pill.slice(0, 400), "never the on-accent literal").not.toMatch(/#04211a/);
+    // The timestamp is unchanged: still the accent as TEXT when unread.
     expect(MSG).toMatch(/unread \? "font-semibold text-primary" : "text-muted-foreground"/);
   });
 

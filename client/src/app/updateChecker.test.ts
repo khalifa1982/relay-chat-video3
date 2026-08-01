@@ -54,8 +54,8 @@ describe("shared app version", () => {
   it("is a clean semver string", () => {
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it("is the current release (2.106.54)", () => {
-    expect(APP_VERSION).toBe("2.106.54");
+  it("is the current release (2.106.72)", () => {
+    expect(APP_VERSION).toBe("2.106.72");
   });
 });
 
@@ -147,10 +147,17 @@ describe("auto Picture-in-Picture (enable once)", () => {
   });
   it("stops priming when the call ends (no idle compositor leak)", () => {
     expect(RELAY_CLIENT).toMatch(/function unprimeAutoPip\(\)/);
-    const hang = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf("function hangUp"));
-    // Window widened (2000 → 2800) for the v2.78.1 waiting-ring promotion
-    // block inserted earlier in hangUp; the unprime call itself is unchanged.
-    expect(hang.slice(0, 2800)).toMatch(/unprimeAutoPip\(\)/);
+    /* 2026-08-01 REBOUNDED. It sliced a FIXED 2800 characters from `function hangUp`
+       — widened once already, from 2000, for the same reason — so it broke again the
+       moment a line was legitimately added near the top of that function. Dropping
+       the cap is not the fix either: an unbounded slice runs to END OF FILE and would
+       be satisfied by an `unprimeAutoPip()` anywhere below, which is the mirror
+       fragility. Bounded by hangUp's OWN end, with the slice proven real first. */
+    const hAt = RELAY_CLIENT.indexOf("function hangUp");
+    expect(hAt, "hangUp is gone").toBeGreaterThan(-1);
+    const hang = RELAY_CLIENT.slice(hAt, RELAY_CLIENT.indexOf("\n  }", hAt));
+    expect(hang.length, "the hangUp slice collapsed").toBeGreaterThan(400);
+    expect(hang).toMatch(/unprimeAutoPip\(\)/);
   });
 });
 
@@ -193,8 +200,16 @@ describe("call-routing fixes (v2.50)", () => {
     // pad can hit either code depending on whether the number is a real user);
     // v2.99.47 added `unavailable` (the offline-dial throttle) for the same
     // reason and pushed the guard further down the case, hence the wider window.
-    const errCase = RELAY_CLIENT.slice(RELAY_CLIENT.indexOf('case "error"'));
-    expect(errCase.slice(0, 2400)).toMatch(
+    /* BOUNDED BY THE CASE'S OWN END rather than a fixed character count: the window was
+       2400 chars and v2.106.59's comment for the new `saturated` classification pushed
+       the guard past it, so the pin failed on correct source while saying nothing about
+       the property. The fixed-slice fragility, for the umpteenth time. */
+    const errStart = RELAY_CLIENT.indexOf('case "error"');
+    expect(errStart).toBeGreaterThan(0);
+    const errEnd = RELAY_CLIENT.indexOf('case "ringing"', errStart);
+    const errCase = RELAY_CLIENT.slice(errStart, errEnd > errStart ? errEnd : errStart + 6000);
+    expect(errCase.length).toBeGreaterThan(1000);
+    expect(errCase).toMatch(
       /addInviteOfflineGuard\s*&&\s*\(m\.code === ["']offline["']\s*\|\|\s*m\.code === ["']nonexistent["']/,
     );
   });

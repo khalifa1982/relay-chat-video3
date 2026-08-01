@@ -1,7 +1,7 @@
 /**
  * THE `WebRtcServer` CONVERSION — pinned on source, and honest that it is.
  *
- * `agent.mjs` cannot be imported here: importing it starts mediasoup workers, binds a port and
+ * `index.js` (the agent) cannot be imported here: importing it starts mediasoup workers, binds a port and
  * connects to Redis. So these are source assertions, which this repo generally treats as the
  * weaker kind — and they are chosen for the cases where a plausible edit produces a node that
  * looks completely healthy and serves a call nobody can join. Every one of the four API facts
@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const AGENT = readFileSync(resolve(__dirname, "..", "voip-node", "agent.mjs"), "utf8");
+const AGENT = readFileSync(resolve(__dirname, "..", "voip-node", "index.js"), "utf8");
 
 /** Comment-stripped, because the file EXPLAINS in prose what it must not do — and this repo
  *  has matched its own prose fifteen times. Both forms, since the explanations are blocks. */
@@ -189,7 +189,7 @@ describe("an address change EXITS rather than carrying on with a stale announcem
  * drift away from the thing it claims to test.
  * ────────────────────────────────────────────────────────────────────────────────────── */
 describe("a transport stat never carries an address off the node", () => {
-  /** Lifted verbatim from `agent.mjs`; the assertion below proves it is still verbatim. */
+  /** Lifted verbatim from the agent (`voip-node/index.js`); the assertion below proves it is still verbatim. */
   function sanitizeTransportStat(stat: unknown): unknown {
     if (!stat || typeof stat !== "object") return stat;
     const { iceSelectedTuple, ...rest } = stat as Record<string, unknown>;

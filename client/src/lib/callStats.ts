@@ -51,6 +51,24 @@ export interface StatEntry {
   framesPerSecond?: number;
   bytesSent?: number;
   bytesReceived?: number;
+  /* THE THERMAL PAIR (v2.106.56). `encoderImplementation` names the encoder the
+     browser actually chose — a value containing "libvpx"/"openh264" is SOFTWARE
+     (the phone's CPU), while "VideoToolbox"/"ExternalEncoder"/"MediaFoundation"
+     is the hardware block. `qualityLimitationReason === "cpu"` is the
+     throttling itself, reported by the sender. Both are standard
+     `outbound-rtp` fields, so they read identically on the mesh and on
+     mediasoup. */
+  encoderImplementation?: string;
+  qualityLimitationReason?: string;
+  /* THE IDENTITY FIELDS (v2.106.58). All three live on an entry OTHER than the one
+     that references them, which is why the two-pass `byId` index below is not
+     optional: `protocol` is on the local/remote CANDIDATE (never on the pair), and
+     `mimeType` is on the `codec` entry named by an rtp entry's `codecId`. Reading
+     either off the referencing entry yields `undefined` and would render nothing
+     while looking implemented. */
+  protocol?: string;
+  codecId?: string;
+  mimeType?: string;
 }
 
 /**
@@ -83,8 +101,26 @@ export type MediaPath = "relay" | "direct" | "unknown";
 export interface CallStats {
   /** Round trip to the far end, ms. Null when no succeeded candidate pair reported one. */
   rttMs: number | null;
-  /** Inbound packet loss, percent, 0–100. Null when nothing has been received yet. */
+  /** Inbound packet loss, percent, 0–100. Null when nothing has been received yet.
+   *  POOLED across every leg — see `lossWorstPct` for the per-leg worst. */
   lossPct: number | null;
+  /**
+   * The WORST single leg's loss, percent. Null when no leg has enough evidence.
+   *
+   * `lossPct` pools every leg into one ratio, which is right for a 1:1 call and
+   * DILUTES on a group one: a peer losing 20% is invisible behind four clean peers,
+   * and that peer's call is bad. Jitter has always been worst-case for exactly this
+   * reason ("one smooth leg does not make a choppy call smooth") — loss was the
+   * inconsistent sibling.
+   *
+   * A LEG NEEDS `LOSS_MIN_PACKETS` OF EVIDENCE TO COUNT, and that floor is
+   * load-bearing rather than cautious: these counters are cumulative from the leg's
+   * own start, so a peer who joined two seconds ago can legitimately read 1 received
+   * / 1 lost — 50% — and without the floor a newcomer would spike the whole call to
+   * "poor" for one tick. Under-evidenced legs still contribute to the pooled figure,
+   * so nothing is discarded.
+   */
+  lossWorstPct: number | null;
   /** Inbound jitter, ms. Null when unreported. */
   jitterMs: number | null;
   /**
@@ -96,6 +132,41 @@ export interface CallStats {
    * other leg happened to be direct would hide the thing being looked for.
    */
   path: MediaPath;
+  /**
+   * The ICE candidate type actually carrying media — the doc asks for this by name,
+   * and `path` alone cannot answer it: `host` (same LAN) and `srflx` (NAT-traversed
+   * direct) both read "direct", and those are different situations to be in.
+   *
+   * WORST-CASE across legs by distance from ideal (host < prflx < srflx < relay),
+   * which is the same discipline `path` uses — and `path` is now DERIVED from this,
+   * so there is one rule rather than two that can come to disagree. An
+   * UNRECOGNISED type is ignored rather than ranked, so a future candidate kind
+   * cannot read as "relay" and cry wolf; that also makes the derivation
+   * behaviour-identical to the `anyRelay` flag it replaced.
+   */
+  candidate: string | null;
+  /**
+   * The selected pair's transport protocol, lowercased — `udp` or `tcp`.
+   *
+   * Needed for the mediasoup verification ("confirm media flows over UDP to that
+   * node's public IP"), and a finding in its own right: a call relayed over
+   * TURN/TCP:443 is indistinguishable from TURN/UDP:3478 without it, while their
+   * latency is not. WORST-CASE across legs (udp < tcp < ssltcp/tls) for the same
+   * reason as `candidate`.
+   */
+  protocol: string | null;
+  /**
+   * What WE are ENCODING, from the `codec` entry the outbound stream names. The
+   * send side deliberately, because that is what the H.264 preference is about and
+   * what burns a phone's CPU — and on an SFU the forwarded codec is the produced
+   * one, so it stays the right question after the cutover.
+   *
+   * `codecVideo === null` on a voice call is itself the confirmation the voice/video
+   * doc asks for ("confirm no camera track is published"). Legs that disagree are
+   * joined rather than collapsed, so a heterogeneous mesh is visible.
+   */
+  codecAudio: string | null;
+  codecVideo: string | null;
   /** What WE are sending: the largest published frame + its rate. */
   up: { w: number; h: number; fps: number | null } | null;
   /** What we are RECEIVING: the largest inbound frame + its rate. */
@@ -105,6 +176,24 @@ export interface CallStats {
   kbpsDown: number | null;
   /** How many peer connections / tracks this summary covers. */
   legs: number;
+  /**
+   * WHERE our video is being encoded, verbatim from the browser. Null when we are
+   * publishing no video (a voice call) or the UA does not report it.
+   *
+   * This is the pass/fail signal for the H.264 preference: on an iPhone it must
+   * read a hardware encoder. VP8 has no hardware encoder there, so a software
+   * value on a video call means the phone is burning CPU for the call's duration.
+   */
+  encoder: string | null;
+  /** True when the encoder names a known SOFTWARE implementation. Null = unknown. */
+  encoderSoftware: boolean | null;
+  /**
+   * The sender's own reason for degrading quality. `"cpu"` is the thermal-throttle
+   * smoking gun — the device could not keep up, which is exactly what a hot phone
+   * looks like from inside the page. WORST-CASE across legs, like `path`: one
+   * cpu-limited leg is a cpu-limited call.
+   */
+  limitedBy: string | null;
 }
 
 /** Byte counters plus the moment they were read, so the next call can difference them. */
@@ -116,6 +205,32 @@ export interface ByteSample {
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * How far each ICE candidate type is from ideal, and each transport protocol.
+ *
+ * Worst-case reductions need an ORDER, and an order has to be chosen rather than
+ * assumed — a 5-leg mesh call has no single candidate type. Ranked by round-trip
+ * cost: a host pair is same-LAN, prflx/srflx are direct through NAT, and a relay
+ * pair detours through coturn. UNLISTED values are ignored, not ranked, so an
+ * unrecognised type can never be reported as the worst one.
+ */
+const CANDIDATE_RANK: Record<string, number> = { host: 0, prflx: 1, srflx: 2, relay: 3 };
+const PROTOCOL_RANK: Record<string, number> = { udp: 0, tcp: 1, ssltcp: 2, tls: 3 };
+
+/** How much of a leg's own evidence makes its loss ratio trustworthy. At ~50
+ *  audio packets a second that is one second of call; below it a freshly-joined
+ *  peer's 1-of-2 reads as 50% and would flip a healthy call to "poor". */
+export const LOSS_MIN_PACKETS = 50;
+
+/** Take the worse of two ranked values, ignoring anything the table does not know. */
+function worseOf(cur: string | null, next: unknown, rank: Record<string, number>): string | null {
+  if (typeof next !== "string") return cur;
+  const v = next.toLowerCase();
+  if (!(v in rank)) return cur;
+  if (cur === null) return v;
+  return rank[v] > rank[cur] ? v : cur;
 }
 
 /**
@@ -134,10 +249,15 @@ export function summarizeStats(
   let lost = 0;
   let received = 0;
   let jitterWorstMs: number | null = null;
-  let anyRelay = false;
+  let lossWorstPct: number | null = null;
+  let candidate: string | null = null;
+  let protocol: string | null = null;
+  const codecUp = { audio: new Set<string>(), video: new Set<string>() };
   let sawPair = false;
   let up: CallStats["up"] = null;
   let down: CallStats["down"] = null;
+  let encoder: string | null = null;
+  let limitedBy: string | null = null;
   let bytesSent = 0;
   let bytesReceived = 0;
   let legs = 0;
@@ -155,6 +275,12 @@ export function summarizeStats(
       if (e && typeof e.id === "string") byId.set(e.id, e);
     }
 
+    /* This leg's own loss, so the worst peer can be reported alongside the pooled
+       figure. Pooling audio and video WITHIN a leg is right — that is one peer's
+       loss — while pooling ACROSS legs is what hides a bad one. */
+    let legLost = 0;
+    let legReceived = 0;
+
     for (const e of entries) {
       if (!e) continue;
 
@@ -169,12 +295,21 @@ export function summarizeStats(
         sawPair = true;
         const l = e.localCandidateId ? byId.get(e.localCandidateId) : undefined;
         const rm = e.remoteCandidateId ? byId.get(e.remoteCandidateId) : undefined;
-        if (l?.candidateType === "relay" || rm?.candidateType === "relay") anyRelay = true;
+        candidate = worseOf(candidate, l?.candidateType, CANDIDATE_RANK);
+        candidate = worseOf(candidate, rm?.candidateType, CANDIDATE_RANK);
+        /* The protocol is read from the CANDIDATES, never from the pair — the pair
+           carries no `protocol` field, so reading it there returns undefined and
+           renders nothing while appearing done. Local first: it is the leg WE own,
+           and a relayed pair's two ends can legitimately differ. */
+        protocol = worseOf(protocol, l?.protocol, PROTOCOL_RANK);
+        protocol = worseOf(protocol, rm?.protocol, PROTOCOL_RANK);
       }
 
       if (e.type === "inbound-rtp") {
         lost += num(e.packetsLost) ?? 0;
         received += num(e.packetsReceived) ?? 0;
+        legLost += num(e.packetsLost) ?? 0;
+        legReceived += num(e.packetsReceived) ?? 0;
         const j = num(e.jitter);
         // Jitter is SECONDS too, and worst-case across legs for the same reason as
         // `path`: one smooth leg does not make a choppy call smooth.
@@ -191,6 +326,44 @@ export function summarizeStats(
         bytesSent += num(e.bytesSent) ?? 0;
         const w = num(e.frameWidth);
         const h = num(e.frameHeight);
+        /* THE CODEC'S OWN mimeType DECIDES WHICH KIND IT IS, so no `kind` guess is
+           needed at all: a codec entry reads "audio/opus" or "video/H264" and is
+           self-describing. Deriving the kind from the rtp entry instead would have
+           to guess for a UA that reports neither `kind` nor `mediaType`.
+
+           A VIDEO CODEC IS REPORTED ONLY WHEN FRAMES ARE ACTUALLY BEING SENT, and
+           that gate came out of a real voice call: under mutual consent the offerer
+           negotiates a video m-line with a NULL TRACK for the slot the camera would
+           later fill (v2.106.51), so a voice call HAS an outbound video stream with
+           a codec and no frames — and the readout said "VP8" on a call with no
+           camera, which is the exact false impression this release exists to
+           remove. The evidence used is the frame size, i.e. the SAME evidence `up`
+           below uses, so the codec line and the resolution line can never disagree
+           about whether video is live. */
+        const c = e.codecId ? byId.get(e.codecId) : undefined;
+        const mime = typeof c?.mimeType === "string" ? c.mimeType : "";
+        const slash = mime.indexOf("/");
+        if (slash > 0) {
+          const top = mime.slice(0, slash).toLowerCase();
+          const name = mime.slice(slash + 1);
+          if (name && top === "audio") codecUp.audio.add(name);
+          if (name && top === "video" && w && h) codecUp.video.add(name);
+        }
+        /* VIDEO ONLY, and the guard matters: an audio outbound-rtp reports no
+           encoder and no limitation, so folding it in would let a voice leg
+           overwrite a real video reading with nulls. A frame size is the test
+           that works even when `kind` is absent (older UAs spell it
+           `mediaType`), because only video has one. */
+        const isVideo = e.kind === "video" || e.mediaType === "video" ||
+                        (num(e.frameWidth) ?? 0) > 0;
+        if (isVideo) {
+          const impl = typeof e.encoderImplementation === "string" ? e.encoderImplementation : null;
+          if (impl) encoder = impl;
+          const lim = typeof e.qualityLimitationReason === "string" ? e.qualityLimitationReason : null;
+          /* "none" is the healthy value and must not shadow a real reason from
+             another leg — worst-case wins, and cpu outranks everything. */
+          if (lim && lim !== "none" && (limitedBy === null || lim === "cpu")) limitedBy = lim;
+        }
         // LARGEST, not last: with simulcast a publisher reports one outbound-rtp per
         // spatial layer, and the low layer would otherwise be shown as "what you are
         // sending" — making a healthy 720p publish read as 180p.
@@ -198,6 +371,14 @@ export function summarizeStats(
           up = { w, h, fps: num(e.framesPerSecond) };
         }
       }
+    }
+
+    /* Reduced AFTER the leg's entries, so audio and video are pooled within the leg
+       and only then compared across legs. */
+    const legSeen = legLost + legReceived;
+    if (legSeen >= LOSS_MIN_PACKETS) {
+      const pct = Math.round((legLost / legSeen) * 1000) / 10;
+      if (lossWorstPct === null || pct > lossWorstPct) lossWorstPct = pct;
     }
   }
 
@@ -225,18 +406,61 @@ export function summarizeStats(
       // dividing by `received` alone understates loss, and by anything else is
       // meaningless.
       lossPct: received + lost > 0 ? Math.round((lost / (received + lost)) * 1000) / 10 : null,
+      lossWorstPct,
       jitterMs: jitterWorstMs === null ? null : Math.round(jitterWorstMs * 10) / 10,
       // `unknown` when no succeeded pair was reported at all — never "direct",
       // which would be a claim about the media path we have no evidence for.
-      path: !sawPair ? "unknown" : anyRelay ? "relay" : "direct",
+      // DERIVED from `candidate` so the relay rule lives in exactly one place; an
+      // unrecognised candidate type leaves `candidate` null and reads "direct",
+      // which is byte-identical to the `anyRelay` flag this replaced.
+      path: !sawPair ? "unknown" : candidate === "relay" ? "relay" : "direct",
+      candidate,
+      protocol,
+      codecAudio: joinCodecs(codecUp.audio),
+      codecVideo: joinCodecs(codecUp.video),
       up,
       down,
       kbpsUp,
       kbpsDown,
       legs,
+      encoder,
+      encoderSoftware: encoder === null ? null : isSoftwareEncoder(encoder),
+      limitedBy,
     },
     sample,
   };
+}
+
+/** One codec name, or every distinct one joined — because legs that disagree about
+ *  the codec is a real finding, and collapsing to "the first one" would hide it.
+ *  Sorted so the string is stable across reports rather than following whichever
+ *  peer's entry the browser emitted first. */
+function joinCodecs(set: Set<string>): string | null {
+  const out: string[] = [];
+  set.forEach((v) => out.push(v));
+  if (!out.length) return null;
+  out.sort();
+  return out.join("/");
+}
+
+/**
+ * Is this encoder name a SOFTWARE implementation?
+ *
+ * Matched on the software names rather than the hardware ones, deliberately: the
+ * hardware list is open-ended and vendor-specific (VideoToolbox, MediaFoundation,
+ * ExternalEncoder, NVENC, …), so an unrecognised value would read as "software"
+ * and cry wolf on a perfectly good call. The software encoders are a short, stable,
+ * well-known set. An unknown name is therefore NOT reported as software — it
+ * reports as not-software, which is the quiet direction to be wrong in.
+ *
+ * Chromium prefixes its own with "libvpx"/"libaom"/"OpenH264"; a value may also be
+ * decorated, e.g. "SimulcastEncoderAdapter (libvpx, libvpx)", so it is a substring
+ * test rather than an equality one.
+ */
+export function isSoftwareEncoder(impl: string): boolean {
+  const v = impl.toLowerCase();
+  return v.includes("libvpx") || v.includes("libaom") || v.includes("openh264") ||
+         v.includes("ffmpeg") || v.includes("x264");
 }
 
 /** One line, for the in-call chip. Every field is omitted rather than shown empty,
@@ -253,7 +477,49 @@ export function formatCallStats(s: CallStats): string {
   if (s.kbpsUp !== null) parts.push(`↑${s.kbpsUp}kbps`);
   if (s.down) parts.push(`↓${s.down.w}×${s.down.h}${s.down.fps !== null ? `@${Math.round(s.down.fps)}` : ""}`);
   if (s.kbpsDown !== null) parts.push(`↓${s.kbpsDown}kbps`);
+  /* THE THERMAL READOUT. "sw encode" is surfaced only for the BAD case, because a
+     hardware encoder is the expectation and naming it every call would be noise —
+     the raw name goes on the DETAIL line instead, where the owner's phone test can
+     read it. The LIMITATION, though, is surfaced whatever it says: `bandwidth` is
+     the literal "starts fine and then degrades" signal the owner reported, and it
+     was captured and invisible until v2.106.58. */
+  if (s.encoderSoftware === true) parts.push("sw encode");
+  if (s.limitedBy) parts.push(`${s.limitedBy} limited`);
   return parts.length ? parts.join(" · ") : "measuring…";
+}
+
+/**
+ * The DIAGNOSTIC line: what the call is made of, rather than how well it is going.
+ *
+ * SEPARATE FROM `formatCallStats` rather than appended to it, and that split is the
+ * point. The two lines answer different questions — "is this call bad?" versus "what
+ * is this call?" — and merging them would put the always-relevant numbers and the
+ * only-relevant-while-diagnosing detail in one `text-overflow: ellipsis` run, where
+ * anything added silently truncates the END. The thermal words already sit there.
+ *
+ * Every field is omitted when absent, so a call with nothing distinctive to say
+ * produces an EMPTY string and the readout stays one line.
+ */
+export function formatCallDetail(s: CallStats): string {
+  const parts: string[] = [];
+  /* The specific candidate type, which `path` cannot express: `host` and `srflx`
+     both read "direct" and are different situations. Protocol rides with it because
+     the pair is the one thing they both describe. */
+  if (s.candidate) parts.push(s.protocol ? `${s.candidate}/${s.protocol}` : s.candidate);
+  else if (s.protocol) parts.push(s.protocol);
+  /* ↑ reuses the send-direction glyph line 1 already uses for resolution and
+     throughput, so one vocabulary covers both lines. */
+  if (s.codecAudio) parts.push(`↑${s.codecAudio}`);
+  if (s.codecVideo) parts.push(`↑${s.codecVideo}`);
+  if (s.encoder) parts.push(`enc ${s.encoder}`);
+  /* WORST LEG, and only when it differs from the pooled figure — on a 1:1 call they
+     are the same number by construction, so showing both would be noise on the
+     overwhelmingly common case. */
+  if (s.lossWorstPct !== null && s.lossPct !== null && s.lossWorstPct > s.lossPct) {
+    parts.push(`worst leg ${s.lossWorstPct}%`);
+  }
+  if (s.legs > 1) parts.push(`${s.legs} legs`);
+  return parts.join(" · ");
 }
 
 /**
@@ -266,8 +532,21 @@ export function formatCallStats(s: CallStats): string {
  */
 export function callStatsVerdict(s: CallStats): "relay" | "poor" | "ok" {
   if (s.path === "relay") return "relay";
+  /* A CPU-LIMITED SENDER IS A POOR CALL EVEN WHEN THE NETWORK NUMBERS ARE PERFECT,
+     and that is the whole point of reading it: thermal throttling degrades the
+     picture with a 1ms RTT and zero loss, so every other threshold here says the
+     call is fine while the person is watching it fall apart. Software encoding
+     ALONE is deliberately NOT poor — it is a warning sign about heat over time,
+     not a statement about this instant, and a desktop encoding VP8 in software is
+     perfectly healthy. */
+  if (s.limitedBy === "cpu") return "poor";
   if ((s.rttMs ?? 0) > 300) return "poor";
   if ((s.lossPct ?? 0) > 5) return "poor";
+  /* AND THE WORST SINGLE LEG, because the pooled ratio above dilutes: on a 5-way
+     mesh call one peer losing 20% is a bad call for that peer and reads as 4% once
+     four clean legs are averaged in. The `LOSS_MIN_PACKETS` floor inside
+     `summarizeStats` is what stops a two-second-old leg's 1-of-2 firing this. */
+  if ((s.lossWorstPct ?? 0) > 5) return "poor";
   if ((s.jitterMs ?? 0) > 50) return "poor";
   return "ok";
 }

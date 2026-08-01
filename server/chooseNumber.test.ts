@@ -304,7 +304,10 @@ describe("Profile lets the owner do it themselves", () => {
     // Two gates disagreeing about one rule is the recurring bug in this codebase.
     // The client only gates the BUTTON; the server re-validates regardless, which
     // is why this is a UX check and not the security boundary.
-    expect(PROFILE).toMatch(/const wantedDigits = wanted\.replace\(\/\[\\s\\-\.\]\/g, ""\);/);
+    /* REWRITTEN (v2.106.63): this froze the hand-rolled strip, now the shared `pinDigits`.
+       The property is that the client derives the digits behind whatever grouping was
+       typed before shape-checking them — the same reduction the server does. */
+    expect(PROFILE).toMatch(/const wantedDigits = pinDigits\(wanted\);/);
     expect(PROFILE).toMatch(/\/\^\\d\{6\}\$\/\.test\(wantedDigits\) && !\/\^\(000\|111\)\/\.test\(wantedDigits\)/);
   });
 

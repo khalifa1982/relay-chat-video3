@@ -11,11 +11,25 @@ const URL_RE = /((?:https?:\/\/|www\.)[^\s<]+[^\s<.,!?)\]}"'])/gi;
  * `/@\w+/` rule would light up "email me @ 5pm", and would render `@Dana` in accent
  * bold whether or not Dana is in the group, which SAYS she was addressed.
  *
- * MINE gets no accent, deliberately: the outgoing bubble is orange and a bright
- * accent span on it is the one combination that does not read. It stays emphasised
- * by weight, which is what carries the meaning anyway.
+ * EVERY BUBBLE GETS THE ACCENT NOW, INCLUDING MINE (v2.106.62) — and the branch that used
+ * to exclude mine is deleted rather than kept as a no-op, because its stated reason turned
+ * out to be about a surface the app had chosen for itself.
+ *
+ * It read: *"the outgoing bubble is orange and a bright accent span on it is the one
+ * combination that does not read."* True of the SOLID `#fb923c` gradient the app used to
+ * fill an own bubble with — and the board never drew that. Frames 1d and 3c both fill it
+ * `rgba(245,140,60,.17)` over a near-black page, and the board draws its own `@Marcus`
+ * mention in `var(--rb)` on exactly that.
+ *
+ * MEASURED on both fills, across all 12 accent hues, worst case:
+ *
+ *   accent on the OLD solid #fb923c      1.06:1   <- invisible; the old reason was right
+ *   accent on the board's .17 tint       5.44:1 mobile / 4.82:1 desktop   <- clears AA
+ *
+ * So the mention is the accent everywhere, `mine` is gone from the signature, and the
+ * emphasis no longer has to be carried by weight alone on half the messages.
  */
-function withMentions(text: string, members: readonly MentionCandidate[], mine: boolean, keyBase: number): ReactNode {
+function withMentions(text: string, members: readonly MentionCandidate[], keyBase: number): ReactNode {
   const spans = findMentions(text, members);
   if (!spans.length) return text;
   const out: ReactNode[] = [];
@@ -26,7 +40,10 @@ function withMentions(text: string, members: readonly MentionCandidate[], mine: 
       <span
         key={`${keyBase}m${n}`}
         className="font-semibold"
-        style={mine ? undefined : { color: "var(--rb, #3FE0C5)" }}
+        // A LITERAL fallback, never `var(--rb, var(--rb))` — a custom-property cycle
+        // resolves to the guaranteed-invalid value and the browser DROPS the declaration,
+        // leaving the mention with no colour at all (v2.106.7).
+        style={{ color: "var(--rb, #3FE0C5)" }}
       >
         {s.text}
       </span>
@@ -48,8 +65,7 @@ function withMentions(text: string, members: readonly MentionCandidate[], mine: 
  */
 export function linkify(
   text: string | null | undefined,
-  members?: readonly MentionCandidate[],
-  mine?: boolean
+  members?: readonly MentionCandidate[]
 ): ReactNode {
   if (!text) return text ?? null;
   const parts = text.split(URL_RE);
@@ -74,7 +90,7 @@ export function linkify(
        inside an anchor. */
     return (
       <Fragment key={i}>
-        {members && members.length ? withMentions(part, members, !!mine, i) : part}
+        {members && members.length ? withMentions(part, members, i) : part}
       </Fragment>
     );
   });

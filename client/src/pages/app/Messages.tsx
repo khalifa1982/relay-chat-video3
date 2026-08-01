@@ -12,6 +12,7 @@ import {
   Mic,
   Image as ImageIcon,
   Phone,
+  PhoneCall,
   Video,
   Search,
   MessageSquare,
@@ -87,6 +88,8 @@ import { describeProfileStatus } from "@shared/profileStatus";
 import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
 import { formatLastSeen } from "@shared/profileFields";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
+import { GroupCallScreen, PartyLinesSection } from "./GroupCallScreen";
+import { AvatarPicker } from "@/app/AvatarPicker";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { videoRecorderSupported } from "@/lib/videoNote";
 import { VideoRecordSheet } from "@/app/VideoRecordSheet";
@@ -98,7 +101,7 @@ import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useThreadMuted, isThreadMuted, setThreadMuted, onMutedChange } from "@/app/mutedThreads";
 import { useTypers, useTypingConversations } from "@/app/typingStore";
-import { bubbleStyleFor, bubbleGlyphColor, nameColorFor } from "@/app/peerColors";
+import { bubbleStyleFor, bubbleGlyphColor, nameColorFor, senderAvatarStyle } from "@/app/peerColors";
 import { TypingLine } from "@/app/TypingLine";
 import { useDraft } from "@/app/draftStore";
 
@@ -108,6 +111,34 @@ import { useDraft } from "@/app/draftStore";
 function initialsFrom(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
   return parts.map((p) => p[0]?.toUpperCase() ?? "").join("").slice(0, 2) || "??";
+}
+
+/**
+ * THE NAME YOU SAVED, not only the name they chose (2026-08-01).
+ *
+ * `peerDisplayName` on a thread is the LIVE identity name — whatever that person
+ * calls themselves. It is never what YOU saved them as, so a thread with somebody
+ * stored in your contacts as "Dad" was unreachable by typing "Dad": the one word
+ * most likely to be typed matched nothing, against the owner's ask that search work
+ * "by name … anywhere and the entire system".
+ *
+ * ONE HOOK, because the thread list and the Forward picker both need it and two
+ * copies is how the two come to disagree about what a conversation is called.
+ *
+ * COSTS NO REQUEST. `RelayEngine` already runs `contacts.list` app-wide (it feeds the
+ * blocked-pin set), and this is the same procedure with the same input — so
+ * react-query serves it from the shared cache key rather than fetching again.
+ */
+function useSavedNames(): Map<string, string> {
+  const saved = trpc.contacts.list.useQuery(undefined, { staleTime: 30_000 });
+  return useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of saved.data ?? []) {
+      const n = (c.displayName ?? "").trim();
+      if (c.number && n) m.set(c.number, n);
+    }
+    return m;
+  }, [saved.data]);
 }
 
 function timeAgo(iso: string | Date): string {
@@ -238,9 +269,12 @@ function isEmojiOnly(body: string | null | undefined): boolean {
 function SenderThumb({
   member,
   show,
+  senderIdentityId,
 }: {
   member?: { name: string; number: string; avatarUrl: string | null };
   show: boolean;
+  /** Whose disc this is — the hue its initials fallback is tinted with (v2.106.61). */
+  senderIdentityId: number;
 }) {
   return (
     <span className="w-9 shrink-0 self-start grid place-items-center">
@@ -252,6 +286,14 @@ function SenderThumb({
           size={28}
           clickable={!!member?.number}
           className="mt-[2px]"
+          /* THE PERSON'S OWN COLOUR, now that the bubble no longer carries it
+             (v2.106.61). Board frame 3c builds each sender's disc from one hue —
+             `linear-gradient(135deg, hsl(H 65% 62%), hsl(H+45 70% 42%))` with near-black
+             initials — and it comes from the SAME palette entry as their name, so the
+             disc, the name and the typing line cannot disagree about who is who.
+             Only the initials fallback is tinted: somebody with a real photo shows the
+             photo, exactly as the board's own first sender does. */
+          fallbackStyle={senderAvatarStyle({ isGroup: true, senderIdentityId })}
         />
       )}
     </span>
@@ -314,9 +356,12 @@ export default function MessagesPage({
   // GROUPS / NOTES sections. Derived purely from the existing threads query
   // (no new request, no data-flow change); collapse state is UI-only.
   const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
+  /** v2.106.64 — the ad-hoc group-call picker, opened from the Groups tab's call section. */
+  const [showGroupCall, setShowGroupCall] = useState(false);
   // Thread-list search (v2.95): filter conversations by peer name/number. Pure
   // client filter over the already-loaded list — instant, no new request.
   const [threadSearch, setThreadSearch] = useState("");
+  const savedNameByNumber = useSavedNames();
   // The GROUPS tab is this same page narrowed to group threads. The narrowing is a memo
   // of its OWN, ahead of the categories, for two reasons. (1) Narrowing by picking
   // categories below would leak archived DIRECT threads into a tab that says Groups,
@@ -327,9 +372,17 @@ export default function MessagesPage({
   // SCOPED list: `threads.data.length` counts DMs, so on the Groups tab of an account
   // with DMs and no groups it reads non-zero and the page falls through to the
   // no-search-matches branch, rendering `No conversations match “”`.
+  //
+  // v2.106.64 — the split is now BOTH ways. Owner: *"from the messages section, remove
+  // the group message and just keep it in the group section"*. Messages is DMs and Notes;
+  // Groups is groups. The complement is taken on the same INPUT for the same reason the
+  // narrowing was: `archived` is kind-agnostic, so filtering by picking categories would
+  // leave an archived GROUP sitting in a tab that no longer holds groups.
   const scopedThreads = useMemo(() => {
     const all = threads.data ?? [];
-    return only === "groups" ? all.filter((t) => t.kind === "group") : all;
+    return only === "groups"
+      ? all.filter((t) => t.kind === "group")
+      : all.filter((t) => t.kind !== "group");
   }, [threads.data, only]);
   const threadCategories = useMemo(() => {
     const scoped = scopedThreads;
@@ -340,7 +393,17 @@ export default function MessagesPage({
       ? scoped.filter((t) =>
           // v2.102.0: a group is findable by its OWN 6-digit id too, not only its
           // title — which is the point of giving it one.
-          matchQuery(threadSearch, [t.peerDisplayName, t.peerNumber, t.title, t.groupNumber]),
+          matchQuery(threadSearch, [
+            t.peerDisplayName,
+            t.peerNumber,
+            t.title,
+            t.groupNumber,
+            // 2026-08-01: the name YOU saved them under. An extra FIELD rather than a
+            // replacement, because both are legitimate readings of the same
+            // keystrokes — somebody may search for the name on screen or the name in
+            // their own address book.
+            t.peerNumber ? savedNameByNumber.get(t.peerNumber) : undefined,
+          ]),
         )
       : scoped;
     const meId = me?.id;
@@ -354,30 +417,40 @@ export default function MessagesPage({
       icon: ReactNode;
       rows: typeof list;
     }[] = [
-      {
-        key: "direct",
-        label: "Direct",
-        rgb: "251,146,60",
-        hex: "#fb923c",
-        icon: <MessageSquare className="size-3.5" />,
-        rows: list.filter((t) => t.kind !== "group" && !isNotes(t) && !t.archived),
-      },
-      {
-        key: "groups",
-        label: "Groups",
-        rgb: "167,139,250",
-        hex: "#a78bfa",
-        icon: <Users className="size-3.5" />,
-        rows: list.filter((t) => t.kind === "group" && !t.archived),
-      },
-      {
-        key: "notes",
-        label: "Notes",
-        rgb: "251,191,36",
-        hex: "#fbbf24",
-        icon: <StickyNote className="size-3.5" />,
-        rows: list.filter((t) => isNotes(t) && !t.archived),
-      },
+      // v2.106.64 — the sections are built PER SCOPE rather than defined for both and
+      // left to filter to nothing. A "Groups" heading declared on the Messages tab is
+      // dead code that reads as live: it would silently come back the moment anything
+      // upstream stopped excluding groups, which is exactly the regression this split
+      // has to survive.
+      ...(only === "groups"
+        ? [
+            {
+              key: "groups",
+              label: "Group chats",
+              rgb: "167,139,250",
+              hex: "#a78bfa",
+              icon: <Users className="size-3.5" />,
+              rows: list.filter((t) => t.kind === "group" && !t.archived),
+            },
+          ]
+        : [
+            {
+              key: "direct",
+              label: "Direct",
+              rgb: "251,146,60",
+              hex: "#fb923c",
+              icon: <MessageSquare className="size-3.5" />,
+              rows: list.filter((t) => t.kind !== "group" && !isNotes(t) && !t.archived),
+            },
+            {
+              key: "notes",
+              label: "Notes",
+              rgb: "251,191,36",
+              hex: "#fbbf24",
+              icon: <StickyNote className="size-3.5" />,
+              rows: list.filter((t) => isNotes(t) && !t.archived),
+            },
+          ]),
       {
         // v2.103.0 — archived threads leave the other sections and gather here, LAST,
         // which is the whole point of archiving: out of the way but not gone. The
@@ -395,7 +468,14 @@ export default function MessagesPage({
     // was missing here — so typing in the search box re-rendered yet returned the
     // cached unfiltered list (threads.data is stable via structural sharing), and
     // search silently did nothing.
-  }, [scopedThreads, me, threadSearch]);
+    // `only` is an explicit dep even though `scopedThreads` already moves with it: the
+    // section LIST is now derived from it too, and depending on that coupling is how a
+    // memo comes to serve a stale section set (the v2.99.22 H3 shape).
+    // `savedNameByNumber` is a dep for the same reason `threadSearch` is (QA H3): the
+    // memo filters by it, and react-query's structural sharing keeps `scopedThreads`
+    // referentially stable, so without it a contact renamed while the list is open
+    // would go on matching only their old name.
+  }, [scopedThreads, me, threadSearch, only, savedNameByNumber]);
 
   /**
    * The swipe actions (v2.103.0). Every one is a TOGGLE reading the row's own state, so
@@ -434,8 +514,23 @@ export default function MessagesPage({
     {
       key: "pin",
       label: t.pinned ? "Unpin" : "Pin",
+      /* v2.106.66 — SKY, NOT `#22c55e`. That hex is `VerifiedBadge`'s `registered` tier
+         VERBATIM, and these rows render that badge (line ~883) — so swiping a row put a
+         green Pin chip beside a green tier seal, two meanings on one hue a few pixels
+         apart. v2.106.40 retired exactly this pairing in the 1:1 header and the tray was
+         never swept; this is the same collision one screen along.
+
+         SAID PLAINLY, THE BOARD DOES NOT DECIDE THIS: 1c draws the row at rest, so it
+         shows no open tray and specifies no Pin colour. The change is the collision, not
+         a match — claiming otherwise would be inventing a spec.
+
+         Sky is what is left once this SCREEN's vocabulary is subtracted: green is the
+         registered tier and presence, the accent is UNREAD in that same row (v2.106.42,
+         which is also why the pinned MARKER is muted rather than accent), grey is already
+         both neutral actions in this tray, amber is Mute, red is Delete, and violet means
+         a group in a list that contains groups. */
       icon: t.pinned ? <PinOff className="size-5" /> : <Pin className="size-5" />,
-      color: "#22c55e",
+      color: "#0ea5e9",
       onSelect: () => threadState.mutate({ conversationId: t.conversationId, pinned: !t.pinned }),
     },
   ];
@@ -509,6 +604,17 @@ export default function MessagesPage({
             <NewMessageDialog defaultMode={only === "groups" ? "group" : "dm"} />
           </div>
         </header>
+        {/* v2.106.66 — THE STORIES STRIP IS CHROME, NOT THE FIRST ROW OF THE LIST.
+            Board 1c's own order is header → strip → search → threads, and its caption reads
+            "Stories strip · threads · swipe actions"; the app had it BELOW the search and
+            INSIDE the scroller, so it scrolled away with the threads and sat under a field
+            it is not part of. Read off the board's markup rather than a description of it.
+
+            Out of the scroller matters more than the order does: a story is a 24h thing and
+            the ring is the only signal it exists, so scrolling two threads down used to hide
+            every one of them. Above the search because the search narrows THREADS — putting
+            a stories row under it implies it filters those too. */}
+        <StatusStrip />
         {scopedThreads.length > 0 && (
           <div className="px-3 py-2 border-b border-border/60">
             <div className="relative">
@@ -524,8 +630,18 @@ export default function MessagesPage({
           </div>
         )}
         <div className="flex-1 overflow-y-auto">
-          {/* Rich user status (story-style) — rings for me + contacts, above the threads. */}
-          <StatusStrip />
+          {/* v2.106.64 — GROUP CALLS live in the group section, per the owner: *"in the
+              group section, add group calls … so in the group section you will have a
+              group call and group message"*. A party line is the durable thing a group
+              call leaves behind (a titled room with its own 6-digit number you can
+              return to), which is why it is what this section lists; an ad-hoc
+              conference ends, and its record is History's job rather than a second copy
+              here. `PartyLinesSection` is the SAME component the dial picker mounts —
+              two lists of the same lines is how the two come to disagree about which
+              exist. It sits ABOVE the chats because it is the half that was missing. */}
+          {only === "groups" && (
+            <GroupCallsSection onOpenPicker={() => setShowGroupCall(true)} />
+          )}
           {threads.isError ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
               <p>Couldn't load your conversations.</p>
@@ -670,9 +786,25 @@ export default function MessagesPage({
                         return (
                           <SwipeRow
                             key={t.conversationId}
+                            /* EVERY STATE IS OPAQUE, and that is a swipe requirement rather
+                               than a style preference (v2.106.60). A dragged row is
+                               `:active` for the whole gesture, so a translucent tint here
+                               made the row see-through exactly while it was sliding —
+                               measured at 35% alpha, with both trays' pucks and the app's
+                               live background canvas reading through the row's own name and
+                               preview text. `bg-background` also used to sit in the SAME
+                               class list as the selected tint, and two `background-color`
+                               utilities of equal specificity are decided by stylesheet
+                               emission order rather than by the order written here, so
+                               which one won was not this file's decision to make; the base
+                               now lives only in the branch that wants it.
+                               The ladder is three opaque steps of the app's own tokens —
+                               rest `--background`, hover `--card`, selected `--muted` —
+                               which is the same subtle lift the alpha tints were reaching
+                               for, minus the transparency. */
                             rowClassName={
-                              "flex items-center gap-3.5 rounded-2xl mx-1.5 my-0.5 px-3 py-3.5 transition-colors bg-background " +
-                              (isActive ? "bg-muted/45" : "hover:bg-muted/25 active:bg-muted/35")
+                              "flex items-center gap-3.5 rounded-2xl mx-1.5 my-0.5 px-3 py-3.5 transition-colors " +
+                              (isActive ? "bg-muted" : "bg-background hover:bg-card")
                             }
                             left={swipeLeftActions(t)}
                             right={swipeRightActions(t)}
@@ -701,7 +833,7 @@ export default function MessagesPage({
                                   const st = groupStatus.get(t.conversationId);
                                   const ring = st?.hasAny
                                     ? st.hasUnseen
-                                      ? "bg-gradient-to-tr from-[#06d6a0] via-[#0ea5e9] to-[#8b5cf6]"
+                                      ? "rstoryring" // v2.106.66 — the ONE recipe, not a copy
                                       : "bg-border"
                                     : "";
                                   const disc = t.groupAvatarUrl ? (
@@ -900,18 +1032,110 @@ export default function MessagesPage({
                                     </span>
                                   </span>
                                 ) : (
-                                  <span
-                                    dir="auto"
-                                    className={"min-w-0 flex-1 truncate " + (unread ? "text-foreground/90" : "")}
-                                  >
-                                    {preview}
-                                  </span>
+                                  <>
+                                    {/* v2.106.67 — board 1c puts a ✓/✓✓ BEFORE the preview
+                                        whenever the newest message is mine, and this row had
+                                        none: the conversation showed a receipt and its own
+                                        row did not, so "did that send?" needed opening the
+                                        thread to answer.
+
+                                        MINE ONLY, enforced server-side (`lastMessageStatus`
+                                        is null unless `mine`), because a receipt is a
+                                        statement about MY message — rendering one for a
+                                        peer's inverts what ✓✓ means.
+
+                                        THE ACCENT IS SAFE HERE despite meaning UNREAD in this
+                                        same row, and the reason is structural rather than
+                                        lucky: unread counts messages that are NOT mine, so a
+                                        thread whose newest message is mine has nothing to
+                                        count. The one way they co-occur is a hand-marked
+                                        unread (v2.103.0), where the pill is a deliberate act
+                                        and a read tick beside it still says something
+                                        different and true.
+
+                                        `failed` renders NOTHING rather than a tick: a failed
+                                        send has not been delivered to anybody, and the single
+                                        ✓ would say it had. */}
+                                    {t.lastMessageStatus === "read" ? (
+                                      <CheckCheck
+                                        aria-label="Read"
+                                        className="size-3.5 shrink-0 text-primary"
+                                        strokeWidth={2.6}
+                                      />
+                                    ) : t.lastMessageStatus === "delivered" ? (
+                                      <CheckCheck
+                                        aria-label="Delivered"
+                                        className="size-3.5 shrink-0 text-muted-foreground"
+                                        strokeWidth={2.6}
+                                      />
+                                    ) : t.lastMessageStatus === "sent" ? (
+                                      <Check
+                                        aria-label="Sent"
+                                        className="size-3.5 shrink-0 text-muted-foreground"
+                                        strokeWidth={2.6}
+                                      />
+                                    ) : null}
+                                    <span
+                                      dir="auto"
+                                      className={"min-w-0 flex-1 truncate " + (unread ? "text-foreground/90" : "")}
+                                    >
+                                      {/* v2.106.67 — WHO SAID IT. Board 1c's own sample rows
+                                          are `'Amira: The final board is up'` for a group and
+                                          `'You: Voice note · 0:42'` for my own, and this row
+                                          had neither: in a GROUP the title is the group, so
+                                          the words alone said nothing about who said them.
+
+                                          INSIDE the truncating span rather than beside it, so
+                                          a long name is clipped WITH the words it introduces
+                                          instead of squeezing them to nothing on a narrow
+                                          phone.
+
+                                          THE LOCK COVERS IT BY CONSTRUCTION: `preview` is the
+                                          literal "Locked" when hidden, and this renders only
+                                          when there is a real message to introduce — so a
+                                          locked group cannot leak a member's NAME, which
+                                          would be a worse leak than the preview it replaces.
+                                          `lastMessageSender` is likewise null for a DM
+                                          server-side: the row's title already is that person. */}
+                                      {!hidden && t.lastMessageAt && (t.lastMessageMine || t.lastMessageSender) ? (
+                                        <span className="text-muted-foreground/70">
+                                          {t.lastMessageMine ? "You" : t.lastMessageSender}:{" "}
+                                        </span>
+                                      ) : null}
+                                      {preview}
+                                    </span>
+                                  </>
                                 )}
                                 {unread && (
-                                  /* Colour + weight, not a heavy pill (the reference's
-                                     "2 New Chats" treatment). */
-                                  <span className="shrink-0 font-semibold text-[13px] text-primary">
-                                    {t.unreadCount > 99 ? "99+" : t.unreadCount} new
+                                  /* v2.106.67 — THE BOARD'S PILL, read off 1c's own row markup:
+                                     `min-width:17px;height:17px;border-radius:10px;
+                                      background:var(--rb);color:#04211a;font-size:10px;
+                                      font-weight:700;padding:0 5px`.
+
+                                     THE COMMENT THIS REPLACES WAS REASONING ABOUT A DIFFERENT
+                                     ELEMENT: it read "colour + weight, not a heavy pill (the
+                                     reference's '2 New Chats' treatment)" — but "2 New Chats" is
+                                     a SECTION heading elsewhere on the board, and 1c's ROW badge
+                                     is exactly the pill it declined to build. Same class as
+                                     v2.106.62, where a value was described from a screenshot
+                                     rather than read from the markup.
+
+                                     IT IS ALSO NARROWER, WHICH IS THE PART THAT BITES: this row
+                                     is `flex-wrap`, so "99+ new" (~55px, shrink-0) beside a
+                                     6-digit PIN could push itself onto a third line on a narrow
+                                     phone. A 17px puck cannot.
+
+                                     `text-primary-foreground`, never the literal — v2.106.4
+                                     repointed that token at the board's `#04211a` inside
+                                     `.dark.relay-v2` for precisely this pairing, so light keeps
+                                     its own measured value instead of near-black on a pale
+                                     accent. `aria-label` because the pill drops the word
+                                     "new", which a screen reader still needs. */
+                                  <span
+                                    aria-label={`${t.unreadCount} unread`}
+                                    className="grid h-[17px] min-w-[17px] shrink-0 place-items-center rounded-[10px] bg-primary px-[5px] text-[10px] font-bold tabular-nums text-primary-foreground"
+                                  >
+                                    {t.unreadCount > 99 ? "99+" : t.unreadCount}
                                   </span>
                                 )}
                                 {/* Hand-marked unread (v2.103.0): a DOT, not a count —
@@ -1007,6 +1231,60 @@ export default function MessagesPage({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* The ad-hoc picker, mounted at the ROOT rather than inside the scrolling list:
+          it is a full-screen surface, and a modal nested in a scroll container that
+          unmounts under it is how a picker ends up half on screen. */}
+      {showGroupCall && <GroupCallScreen onClose={() => setShowGroupCall(false)} />}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────── */
+
+/**
+ * GROUP CALLS, in the group section (v2.106.64).
+ *
+ * Owner: *"in the group section, add group calls where whenever you create any group
+ * calls or conference call, it will be there so in the group section you will have a
+ * group call and group message."*
+ *
+ * WHAT A "GROUP CALL THAT IS THERE" ACTUALLY IS. An ad-hoc conference is over when the
+ * last person leaves — nothing persists but the History row, which is History's job. A
+ * PARTY LINE is the durable one: a titled room with its own 6-digit number that stays
+ * dialable and shows how many are on it right now, which is the thing you can come back
+ * to and therefore the thing a list can hold. So this section lists the lines and offers
+ * the picker for a call you want to place immediately.
+ *
+ * `PartyLinesSection` is the SAME component the Dialer's picker mounts, imported rather
+ * than reimplemented — two lists of the same lines is how the two come to disagree about
+ * which exist, which is the class this repo keeps removing.
+ */
+function GroupCallsSection({ onOpenPicker }: { onOpenPicker: () => void }) {
+  return (
+    <div className="border-b border-border/60">
+      <div className="flex items-center gap-2 px-4 md:px-5 pt-3 pb-1.5 text-muted-foreground">
+        <span className="grid place-items-center" style={{ color: "#22d3ee" }}>
+          <PhoneCall className="size-3.5" />
+        </span>
+        <span className="flex-1 text-left text-[11px] font-bold uppercase tracking-[0.12em]">
+          Group calls
+        </span>
+      </div>
+      <div className="px-4 md:px-5 pb-2">
+        <button
+          type="button"
+          onClick={onOpenPicker}
+          className="rchip-accent flex min-h-11 w-full items-center justify-center gap-2 rounded-[11px] px-4 text-[12px] font-bold transition"
+        >
+          <Users className="size-4" />
+          Start a group call
+        </button>
+      </div>
+      {/* `onJoined` is a no-op rather than a close: this is a LIST on a tab, not a modal
+          over the call, so there is nothing to dismiss — the engine's own call UI takes
+          the screen from here. */}
+      <PartyLinesSection onJoined={() => {}} defaultOpen />
     </div>
   );
 }
@@ -1490,10 +1768,33 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const [forwardBusy, setForwardBusy] = useState(false);
   // Every conversation EXCEPT this one — forwarding a message back into the thread
   // it is already in is never what anybody means, and offering it invites the tap.
-  const forwardTargets = useMemo(
-    () => (threadsQuery.data ?? []).filter((t) => t.conversationId !== conversationId),
-    [threadsQuery.data, conversationId]
-  );
+  /**
+   * THE FORWARD PICKER HAD NO SEARCH AT ALL (2026-08-01).
+   *
+   * It listed every other conversation in a 64px-tall scroller — past a handful of
+   * threads that is a list you scroll rather than a picker you use, and the owner's
+   * ask is that every box searches by name OR pin. Same shared `matchQuery` and the
+   * same fields as the thread list, saved name included, so a forward and a search
+   * can never disagree about what a conversation is called.
+   */
+  const savedNameByNumber = useSavedNames();
+  const [forwardSearch, setForwardSearch] = useState("");
+  const forwardTargets = useMemo(() => {
+    const others = (threadsQuery.data ?? []).filter(
+      (t) => t.conversationId !== conversationId
+    );
+    const q = forwardSearch.trim();
+    if (!q) return others;
+    return others.filter((t) =>
+      matchQuery(q, [
+        t.peerDisplayName,
+        t.peerNumber,
+        t.title,
+        t.groupNumber,
+        t.peerNumber ? savedNameByNumber.get(t.peerNumber) : undefined,
+      ])
+    );
+  }, [threadsQuery.data, conversationId, forwardSearch, savedNameByNumber]);
 
   /**
    * Forward one message into another conversation.
@@ -2412,9 +2713,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                           />
                         )}
                         {m.body && (
-                          <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body, mentionRoster, !!mine)}</div>
+                          <div className="whitespace-pre-wrap leading-relaxed">{linkify(m.body, mentionRoster)}</div>
                         )}
-                        <div className={"font-mono text-[9px] mt-1 " + "text-white/70"}>
+                        {/* The SAME stamp treatment as the conversation bubble (v2.106.62).
+                            Found by this release's own pin: I moved the conversation stamp to
+                            the board's mono 8.5px with per-side colours and left this one on
+                            the old flat `text-white/70` at 9px — so a search result and the
+                            message it points at rendered their time two different ways. */}
+                        <div
+                          className="font-mono text-[8.5px] mt-1"
+                          style={{ color: mine ? "#9fb0ab" : "#7d8f8a" }}
+                        >
                           {formatTime(m.createdAt)}
                         </div>
                       </div>
@@ -2465,12 +2774,36 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   through it, which is invisible while the pill is in the flow and
                   obvious the moment it starts overlapping content. */}
               <div className="sticky top-0 z-10 flex justify-center py-1.5">
-                {/* Board 1d: "day headers (mono, .26em)". Uppercased and tracked out,
-                    which is what makes it read as a divider rather than as content.
-                    Still OPAQUE and still z-10 — see the note above. */}
+                {/* BOARD 3c'S DIVIDER IS BARE TEXT, and reconciling that with STICKY is the
+                    whole of this (v2.106.62). The board draws `mono 9px / .22em / #68797c`
+                    with no pill at all; this shipped as a `bg-muted` pill with a ring and a
+                    shadow at 10px / .26em, which reads as a chip of content rather than a
+                    divider.
+
+                    IT CANNOT SIMPLY LOSE THE BACKING. The board's frame is a static mock, so
+                    it never had to solve what v2.105.3 solved here: this header is STICKY, and
+                    bubbles scroll behind it — bare letters with a transparent background have
+                    message text sliding through them, which is exactly the defect that release
+                    made the pill opaque to fix.
+
+                    SO THE BACKING MATCHES THE SCROLL CONTAINER'S OWN SURFACE rather than
+                    contrasting with it: `bg-background md:bg-card` is character-for-character
+                    what the scroller sets, so the pill is invisible against it and READS as
+                    the board's bare text while still occluding what passes underneath. The
+                    ring and the shadow go, because those are what made it a chip.
+
+                    Still z-10: above the bubbles, below the search overlay (z-20) and the
+                    lightbox (z-[90]) — a date pill over an opened photo would be absurd. */}
                 <span
-                  className="rounded-full bg-muted px-3 py-1 font-mono text-[10px] font-semibold uppercase text-muted-foreground shadow-sm ring-1 ring-border/60"
-                  style={{ letterSpacing: ".26em" }}
+                  className="rounded-full bg-background md:bg-card px-2.5 py-0.5 font-mono text-[9px] font-semibold uppercase"
+                  /* `#708285`, not the board's `#68797c` — the closest value to the board's
+                     that clears AA on BOTH of our scroll surfaces. Measured: the board's own
+                     hue is 4.46:1 on our mobile `--background` (fine — that is essentially
+                     the surface the board drew it on) but only 4.13:1 on the DESKTOP `--card`,
+                     which is lighter and which the board never drew. One step lighter gives
+                     5.05 / 4.67, so the colour moves as little as possible from what was
+                     specified while being legible on the surface we actually have. */
+                  style={{ letterSpacing: ".22em", color: "#708285" }}
                 >
                   {day.label}
                 </span>
@@ -2498,7 +2831,20 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               dayKey(next.createdAt) === dayKey(m.createdAt) &&
               new Date(next.createdAt).getTime() - new Date(m.createdAt).getTime() < GROUP_MS;
             const lastOfGroup = !sameAsNext;
-            const tail = mine ? (lastOfGroup ? "rounded-br-sm" : "") : (lastOfGroup ? "rounded-bl-sm" : "");
+            /* THE TAIL CORNER IS THE BOARD'S 5px, not Tailwind's `rounded-*-sm` (v2.106.62).
+               Frames 1d and 3c both spell it out: `16px 16px 16px 5px` for a received bubble
+               and `16px 16px 5px 16px` for mine — a small notch on the side the speaker is
+               on. In Tailwind v4 `rounded-bl-sm` is 2px, which at bubble scale is close
+               enough to a square corner to read as one, so the "shaped" the owner keeps
+               asking for was not actually there.
+
+               ONLY THE LAST BUBBLE OF A RUN GETS IT, which is a deliberate deviation: the
+               board's frames show single messages, so they cannot say what a stacked run
+               should do, and tailing every bubble is what makes a run stop reading as one
+               run. */
+            const tail = mine
+              ? (lastOfGroup ? "rounded-br-[5px]" : "")
+              : (lastOfGroup ? "rounded-bl-[5px]" : "");
             return (
               <div key={m.id}>
                 {/* Board 4c — the quick row, ABOVE the bubble it is about. In flow
@@ -2534,7 +2880,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     exist in the first place. Only for a group, and only for somebody
                     else's message: my own bubbles are already unambiguous. */}
                 {isGroup && !mine && (
-                  <SenderThumb member={memberById.get(m.senderIdentityId)} show={!sameAsPrev} />
+                  <SenderThumb member={memberById.get(m.senderIdentityId)} show={!sameAsPrev} senderIdentityId={m.senderIdentityId} />
                 )}
                 {mine && (
                   <MessageMenu
@@ -2643,19 +2989,76 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       )}
                     </div>
                   )}
-                  {m.replyToId != null && (
-                    <div
-                      className={
-                        "mb-1 rounded-lg border-l-2 pl-2 py-0.5 text-[11px] leading-tight " +
-                        (mine
-                          ? "border-white/50 bg-white/15 text-white/90"
-                          : "border-foreground/30 bg-foreground/10 text-foreground/80")
-                      }
-                    >
-                      <span className="font-semibold">{senderLabel(msgById.get(m.replyToId)?.senderIdentityId ?? -1)}</span>
-                      <span className="opacity-80"> · {previewOf(msgById.get(m.replyToId))}</span>
-                    </div>
-                  )}
+                  {m.replyToId != null && (() => {
+                    /* BOARD 3c'S REPLY QUOTE — an accent-tinted panel with an accent left
+                       border, and the quoted person's name in THEIR OWN hue:
+
+                         margin-top:4px; padding:6px 9px; border-radius:9px;
+                         background: rgba(var(--rb-rgb),.08);
+                         border-left: 2.5px solid var(--rb);
+                         name  9.5px/700 in the ORIGINAL sender's colour
+                         text 10.5px #9fb0ab, one line, ellipsised
+
+                       THIS IS WHAT v2.106.61 EXISTED TO UNLOCK, and `peerColors.ts` says so:
+                       on a saturated per-person fill an accent panel cannot read, because the
+                       accent would be competing with a different strong hue in every bubble.
+                       A neutral surface is what lets one accent mean one thing everywhere.
+
+                       THE NAME CARRIES THE COLOUR, which is the point of the quote rather than
+                       decoration — it answers "whose message is this replying to" before you
+                       read a word, from the SAME `nameColorFor` the sender label and the
+                       typing line use, so a quote can never disagree with the bubble it
+                       quotes about who that person is.
+
+                       ONE LINE, ELLIPSISED, deliberately: a quote that wraps to three lines
+                       stops being a reference and becomes a second message. The board sets
+                       `white-space:nowrap` for exactly that.
+
+                       MINE KEEPS THE WHITE TREATMENT. The accent on a translucent orange is
+                       readable (that is why the mention and the tick moved onto it this
+                       release), but an accent-tinted panel with an accent border INSIDE an
+                       orange bubble is two tints fighting for the same few pixels, and the
+                       board only ever draws a quote on a received bubble — so it has nothing
+                       to say about this case and white is what already worked. */
+                    const quoted = msgById.get(m.replyToId);
+                    const quotedId = quoted?.senderIdentityId ?? -1;
+                    return (
+                      <div
+                        className={
+                          "mb-1 rounded-[9px] py-1 ps-2 pe-2.5 leading-tight " +
+                          (mine ? "border-l-[2.5px] border-white/50 bg-white/15" : "border-l-[2.5px]")
+                        }
+                        style={
+                          mine
+                            ? undefined
+                            : {
+                                // A LITERAL fallback, never `var(--rb, var(--rb))` — that is a
+                                // custom-property cycle and the browser drops the whole
+                                // declaration, leaving a panel with no tint at all (v2.106.7).
+                                backgroundColor: "rgba(var(--rb-rgb, 63,224,197),.08)",
+                                borderLeftColor: "var(--rb, #3FE0C5)",
+                              }
+                        }
+                      >
+                        <div
+                          className="text-[9.5px] font-semibold"
+                          style={
+                            mine
+                              ? { color: "rgba(255,255,255,.9)" }
+                              : { color: nameColorFor({ isGroup, senderIdentityId: quotedId }) }
+                          }
+                        >
+                          {senderLabel(quotedId)}
+                        </div>
+                        <div
+                          className="overflow-hidden text-ellipsis whitespace-nowrap text-[10.5px]"
+                          style={{ color: mine ? "rgba(255,255,255,.75)" : "#9fb0ab" }}
+                        >
+                          {previewOf(quoted)}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {/* Voicemail label (v2.88): an audio message recorded after a
                       failed call carries meta.voicemail — say so, phone-style. */}
                   {(m.meta as { voicemail?: boolean } | null)?.voicemail && (
@@ -2716,7 +3119,16 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             onOpen={openMedia(m)}
                           />
                         )}
-                        {body && <div className="whitespace-pre-wrap leading-relaxed">{linkify(body)}</div>}
+                        {/* THE MENTION ROSTER HAS TO BE PASSED HERE, and until v2.106.62 it
+                            was not — which meant board 3c's accent `@mention` had NEVER
+                            rendered in a conversation. `content()` is the ordinary path
+                            (`if (!expiring) return content(m.body, m.attachment)` below), so
+                            this bare `linkify(body)` was every non-expiring message; the only
+                            call site that DID pass the roster is the search-results list,
+                            i.e. the one place almost nobody looks. v2.106.17 built the
+                            resolver, the composer picker and the shared `findMentions`, and
+                            the single render that matters got no arguments. */}
+                        {body && <div className="whitespace-pre-wrap leading-relaxed">{linkify(body, mentionRoster)}</div>}
                       </>
                     );
                     if (!expiring) return content(m.body, m.attachment);
@@ -2776,10 +3188,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   {/* WhatsApp-style meta: tiny time + ticks, tucked bottom-right.
                       Receipt owns its own mine/status guard, so there is no outer
                       condition here to fall out of step with it. */}
+                  {/* Board 1d/3c: `IBM Plex Mono` 8.5px, right-aligned, `#7d8f8a` inside a
+                      received bubble and `#9fb0ab` inside mine — the own bubble's tint is
+                      warmer, so its stamp needs to sit a step lighter to read the same. Both
+                      replace a flat `text-white/70`, which was chosen when every bubble was a
+                      saturated fill and is now brighter than the board's on the glass. */}
                   <div
-                    className={
-                      "flex justify-end items-center gap-1 font-mono text-[9px] leading-none mt-0.5 -mb-0.5 text-white/70"
-                    }
+                    className="flex justify-end items-center gap-1 font-mono text-[8.5px] leading-none mt-0.5 -mb-0.5"
+                    style={{ color: mine ? "#9fb0ab" : "#7d8f8a" }}
                   >
                     {formatTime(m.createdAt)}
                     <Receipt status={m.status} mine={!!mine} />
@@ -2984,6 +3400,29 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             >
               <Paperclip className="size-4 shrink-0" /> <span className="truncate">Attach file</span>
             </button>
+            {/* v2.106.64 — VOICE NOTE lives here now, beside the other things you can
+                attach, per the owner: *"on the attachment inside the chat on the plus
+                button add the voice note beside of the other features set as video
+                photos"*. It carries the SAME guards the mic button had, and they are not
+                decoration: `uploading` is what stops a tap opening the recording bar with
+                a LIVE microphone while all three of its controls are already disabled by
+                that same flag — a recording nobody could stop, discard or send
+                (v2.99.72). An unsupported recorder disables the row and SAYS why rather
+                than hiding it, so the absence is explained instead of looking like a
+                missing feature. */}
+            <button
+              type="button"
+              onClick={() => { setAttachMenuOpen(false); startRecording(); }}
+              disabled={!recorderSupported() || uploading}
+              title={
+                recorderSupported()
+                  ? "Record a voice note"
+                  : "Voice notes need a newer browser — use Attach file for an audio file instead"
+              }
+              className="flex items-center justify-center gap-2 rounded-xl bg-muted/60 px-3 py-3 text-sm font-semibold text-foreground active:scale-95 transition-transform disabled:opacity-50"
+            >
+              <Mic className="size-4 shrink-0" /> <span className="truncate">Voice note</span>
+            </button>
           </div>
         )}
         {expire !== null && (
@@ -3129,58 +3568,40 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               <Plus className={"size-5 transition-transform" + (attachMenuOpen ? " rotate-45" : "")} />
             </Button>
           </div>
-          {text.trim() || pendingUpload ? (
-            <Button
-              type="button"
-              onClick={send}
-              disabled={sendMutation.isPending || uploading}
-              size="icon"
-              /* Board 1d: the composer's primary is the ACCENT circle. The orange stays
-                 where the owner asked for it in v2.99.85 — on their own message BUBBLES —
-                 which is a different thing from the send button. `.rcta` carries the
-                 board's on-accent `#04211a`, so no hardcoded white. */
-              className="rcta h-11 w-11 rounded-full border-0"
-              aria-label="Send"
-            >
-              <Send className="size-4" />
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              onClick={recording ? stopRecording : startRecording}
-              variant={recording ? "destructive" : "default"}
-              size="icon"
-              /* Board 1d: the mic is the composer's ACCENT circle, and it swaps to Send
-                 when there is text — so the two occupy the SAME position. This was the old
-                 FIXED cyan (`#3FE0C5`/`#6EE7FF`) while Send beside it uses `.rcta`, so the
-                 hue visibly JUMPED the moment you typed a character: one control on the
-                 cycling accent, its twin on a literal the accent replaced in v2.106.7.
-                 `.rcta` carries the board's on-accent `#04211a`, which stays legible across
-                 all twelve hues where white fails on the yellow and lime entries.
-                 While RECORDING the button is `destructive`, so it must NOT also carry the
-                 accent — a red stop control tinted with the accent reads as neither. */
-              className={"h-11 w-11 rounded-full border-0" + (recording ? "" : " rcta")}
-              aria-label={recording ? "Stop" : "Record"}
-              /* `|| uploading`, matching the gate the text field one row up already has.
-                 Without it, tapping the mic while a photo or file was still uploading
-                 opened the recording bar with a LIVE microphone and all three of its
-                 controls already disabled by that same `uploading` flag — a recording
-                 nobody could stop, discard or send, entered from the button that is the
-                 composer's primary while the field is empty. Stopping is still allowed
-                 once a recording is live, because `recording` is the state that owns the
-                 bar and the upload it would wait on is a different one. */
-              disabled={!recorderSupported() || (!recording && uploading)}
-              title={
-                recorderSupported()
-                  ? recording
-                    ? "Stop recording"
-                    : "Record a voice note"
-                  : "Voice notes need a newer browser \u2014 use the paperclip to attach an audio file instead"
-              }
-            >
-              <Mic className="size-5" />
-            </Button>
-          )}
+          {/* v2.106.64 — SEND IS PERMANENT, and the mic is gone from this position.
+              Owner: *"in place of the voice icon in the bar put send button as icon … and
+              inside the plus it will have everything that you already added, including the
+              voice note."*
+
+              What the swap cost: the composer's primary control CHANGED MEANING on the
+              first keystroke, so the button you were aiming at became a different action
+              under your thumb — and it was the reason recording had to be reachable from
+              a position that is really Send's. Now the position means one thing.
+
+              The disabled state is honest rather than a trap: it enables the instant there
+              is anything to send, so it is never a control that always refuses (the
+              v2.103.3 rule) — it is Send, greyed because there is nothing to send yet.
+
+              The RECORDING branch that used to live here was already unreachable: while
+              `recording` the whole row is replaced by `RecordingBar` (v2.99.72), so its
+              `recording ? stopRecording` arm could never render. Removing it removes dead
+              code rather than a capability. */}
+          <Button
+            type="button"
+            onClick={send}
+            disabled={(!text.trim() && !pendingUpload) || sendMutation.isPending || uploading}
+            size="icon"
+            /* Board 1d: the composer's primary is the ACCENT circle. The orange stays
+               where the owner asked for it in v2.99.85 — on their own message BUBBLES —
+               which is a different thing from the send button. `.rcta` carries the board's
+               on-accent `#04211a`, which stays legible across all twelve palette hues
+               where white fails on the yellow and lime entries. */
+            className="rcta h-11 w-11 rounded-full border-0 disabled:opacity-50"
+            aria-label="Send"
+            title="Send"
+          >
+            <Send className="size-4" />
+          </Button>
         </div>
         )}
       </div>
@@ -3269,7 +3690,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       </AlertDialog>
 
       {/* ── Forward to another conversation (v2.99.74) ── */}
-      <AlertDialog open={forwarding !== null} onOpenChange={(open) => !open && setForwarding(null)}>
+      <AlertDialog
+        open={forwarding !== null}
+        onOpenChange={(open) => {
+          if (open) return;
+          setForwarding(null);
+          // Or the NEXT forward opens filtered by a query nobody typed for it.
+          setForwardSearch("");
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Forward to…</AlertDialogTitle>
@@ -3280,7 +3709,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {forwarding && (forwarding.meta as { expire?: unknown } | null)?.expire == null && (
-            <div className="max-h-64 space-y-1 overflow-y-auto">
+            <>
+              <Input
+                value={forwardSearch}
+                onChange={(e) => setForwardSearch(e.target.value)}
+                placeholder="Search by name or number"
+                aria-label="Search conversations to forward to"
+                className="mb-2"
+              />
+              <div className="max-h-64 space-y-1 overflow-y-auto">
               {forwardTargets.map((t) => (
                 <button
                   key={t.conversationId}
@@ -3295,11 +3732,18 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 </button>
               ))}
               {forwardTargets.length === 0 && (
+                /* The two emptinesses are DIFFERENT and must not share a sentence:
+                   "no other conversations yet" becomes a false claim about somebody's
+                   own inbox the moment a search is narrowing it — the v2.106.25
+                   defect, which is what an empty state that ignores its filter is. */
                 <p className="px-1 py-2 text-sm text-muted-foreground">
-                  No other conversations yet.
+                  {forwardSearch.trim()
+                    ? `No conversations match \u201C${forwardSearch.trim()}\u201D.`
+                    : "No other conversations yet."}
                 </p>
               )}
-            </div>
+              </div>
+            </>
           )}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -3462,36 +3906,44 @@ function Receipt({ status, mine }: { status?: string | null; mine: boolean }) {
      read, grey = delivered", so READ now takes the cycling accent rather than a fixed
      blue — the state change the owner asked to see at a glance, in the app's one accent.
 
-     THE OWN BUBBLE STAYS ORANGE, deliberately: the board draws the outgoing bubble as a
-     translucent accent tint, but the owner asked for orange own-bubbles in their own words
-     in v2.99.85 ("when he post mind bubble is orange"), and an explicit request is not
-     something a later visual spec overrides.
+     READ IS THE ACCENT AGAIN (v2.106.62), AND THE REASON IT LEFT WAS A MEASUREMENT ON THE
+     WRONG SURFACE — a correction to the paragraph that used to sit here.
 
-     AND THAT IS EXACTLY WHY THE ACCENT IS WRONG HERE — a correction to my own claim above,
-     which said "a bright accent tick on the orange fill is high contrast". It is not.
-     MEASURED against the orange bubble's own pale gradient stop (#fb923c), which is the
-     worst case a tick can land on:
+     It said the board "draws the outgoing bubble as a translucent ACCENT tint" and treated
+     that as something the owner's orange request overrode. Read off the board's own markup,
+     frames 1d and 3c both fill the outgoing bubble `rgba(245,140,60,.17)` — orange, not the
+     accent — and draw the ✓✓ in `var(--rb)` on it. So there was no conflict, and the app's
+     SOLID `#fb923c` gradient was its own choice. v2.106.40 then measured the tick against
+     that solid fill and correctly found the accent invisible on it. Right number, wrong
+     surface.
 
-       read = accent            1.34:1      <- the state that matters most
-       delivered = white 70%    1.77:1      <- MORE visible than read
+     RE-MEASURED on the board's fill, worst case across all 12 accent hues (mobile
+     `--background` / desktop `--card`):
 
-     So the vocabulary was not merely faint, it was INVERTED: the more important state was
-     the fainter one, which is why the ✓✓ in the owner's screenshot is hard to pick out at
-     all. Read is now solid WHITE (2.26:1) and delivered white at 55% (1.57:1), so the
-     distinction rides opacity on a surface built for white text and read is the more
-     visible of the two.
-     SAID PLAINLY: neither clears AA's 4.5, and neither can on a mid-tone fill — but a tick
-     is a small state indicator rather than body text, it sits beside a label that names the
-     state in words, and every alternative measured worse. The accent stays the app's
-     read-vs-delivered vocabulary everywhere it sits on a CARD (the thread row, Message
-     info); it is only on a saturated bubble that it cannot be seen.
+       accent on the OLD solid #fb923c            1.06:1     <- the old finding, confirmed
+       accent on the board's .17 tint       5.44 / 4.82:1     <- clears AA
+       white                                     16.4:1
+       white 55%                            5.77 / 5.44:1
+       white 45%                            4.35 / 4.13:1
+
+     So read = the accent and delivered = white at **45%**, not 55%. That alpha is the whole
+     point of re-measuring rather than just flipping read back: at 55% delivered (5.77/5.44)
+     would OUTRANK read (5.44/4.82) and reinstate the exact inversion v2.106.40 existed to
+     fix — the more important state being the fainter one. At 45% there is a real gap, so
+     read is unambiguously the louder of the two AND the app's read-vs-delivered vocabulary
+     is the same accent here as it already is on a card (the thread row, Message info).
 
      ONE mechanism, deliberately. The first cut set a grey CLASS and then overrode it with
      an inline colour for the read case — and the mutation run showed the class could be
      deleted with no visible change at all, because an inline `style` beats it. Two
      individually-removable mechanisms are dead weight that reads as load-bearing
-     (v2.105.17), so the colour is decided in exactly one expression. */
-  const tickStyle = { color: read ? "#fff" : "rgba(255,255,255,0.55)" };
+     (v2.105.17), so the colour is decided in exactly one expression.
+
+     A LITERAL fallback, never `var(--rb, var(--rb))`: that is a custom-property cycle and
+     the browser drops the declaration, leaving the tick with no colour (v2.106.7). */
+  const tickStyle = {
+    color: read ? "var(--rb, #3FE0C5)" : "rgba(255,255,255,0.45)",
+  };
   const label = failed
     ? "Not sent"
     : read
@@ -4615,6 +5067,14 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
   const contactsQ = trpc.contacts.list.useQuery(undefined, { enabled: open, staleTime: 30_000 });
   // group-builder state
   const [groupTitle, setGroupTitle] = useState("");
+  /* v2.106.66 — the group's photo, chosen BEFORE the group exists. The owner reported that
+     picking one did nothing, and it never could: this sheet had no picker at all, and the
+     server's `createGroup` schema accepted only a title and members. The url is held here
+     and sent with the create — `AvatarPicker` uploads into the CALLER's own storage
+     namespace, which is exactly what the server's ownership gate requires, so a photo can
+     legitimately be chosen before there is any conversation to attach it to. */
+  const [groupAvatar, setGroupAvatar] = useState<string | null>(null);
+  const [groupAvatarOpen, setGroupAvatarOpen] = useState(false);
   const [groupNumbers, setGroupNumbers] = useState<string[]>([]);
   const [groupInput, setGroupInput] = useState("");
 
@@ -4625,6 +5085,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
     setMode(defaultMode);
     setNumber("");
     setGroupTitle("");
+    setGroupAvatar(null);
     setGroupNumbers([]);
     setGroupInput("");
   }
@@ -4640,7 +5101,16 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
     onSuccess: (res) => {
       utils.messages.threads.invalidate();
       resetAll();
-      setLocation(`${basePath}?c=${res.conversationId}`);
+      /* v2.106.64 — a NEW GROUP always lands on the Groups tab, never on `basePath`.
+         `useTabBasePath` exists so opening a conversation does not change the active tab
+         under a tap that only meant "open this" — and that rule still holds for every
+         other navigation here. This is the one case it must NOT: the sheet's Direct/Group
+         toggle is reachable from the Messages tab, so creating a group there used to land
+         on `/app/messages?c=<groupId>` — a group conversation on a tab whose list, since
+         this release, cannot contain it. The user would close it and find nothing, with
+         the group only reachable by switching tabs. The destination genuinely IS a
+         groups-tab object, so the tab moves with it. */
+      setLocation(`/app/groups?c=${res.conversationId}`);
     },
   });
   /** Add by the typed number, or by a number a suggestion supplied. */
@@ -4823,6 +5293,26 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
               </>
             ) : (
               <>
+                <div className="mb-4 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setGroupAvatarOpen(true)}
+                    aria-label={groupAvatar ? "Change the group photo" : "Choose a group photo"}
+                    className="relative grid size-[52px] shrink-0 place-items-center overflow-hidden rounded-[14px] border border-border bg-muted/40 transition hover:border-primary/50"
+                  >
+                    {groupAvatar ? (
+                      <img src={groupAvatar} alt="" className="size-full object-cover" />
+                    ) : (
+                      <Users className="size-6 text-[#a78bfa]" />
+                    )}
+                    <span className="absolute -bottom-0.5 -end-0.5 grid size-5 place-items-center rounded-full bg-background">
+                      <Plus className="size-3.5 text-primary" />
+                    </span>
+                  </button>
+                  <p className="text-xs text-muted-foreground">
+                    {groupAvatar ? "Group photo set." : "Add a group photo (optional)."}
+                  </p>
+                </div>
                 <label className="mb-2 block font-mono text-[10px] uppercase tracking-[.2em] text-muted-foreground">
                   Group name
                 </label>
@@ -4905,7 +5395,13 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                 )}
                 <Button
                   className="w-full mt-4"
-                  onClick={() => createGroup.mutate({ title: groupTitle.trim(), numbers: groupNumbers })}
+                  onClick={() =>
+                    createGroup.mutate({
+                      title: groupTitle.trim(),
+                      numbers: groupNumbers,
+                      avatarUrl: groupAvatar,
+                    })
+                  }
                   disabled={pending || groupTitle.trim().length === 0 || groupNumbers.length === 0}
                 >
                   <Users className="size-4 mr-1.5" />
@@ -4926,6 +5422,19 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
           </div>
         </div>
       )}
+      {/* ONE picker component, an injected sink (v2.102.1). There is no conversation yet,
+          so `onSave` only holds the url — the write happens with the create. A second
+          picker would be a second copy of the upload pipeline, the emoji renderer, the
+          animated-GIF path, the 4 MB cap and the mime check, which is the duplicate
+          v2.99.89 found and removed. */}
+      <AvatarPicker
+        open={groupAvatarOpen}
+        onClose={() => setGroupAvatarOpen(false)}
+        displayName={groupTitle || "Group"}
+        title="Choose a group photo"
+        removeLabel="the group photo"
+        onSave={async (url) => setGroupAvatar(url)}
+      />
     </>
   );
 }

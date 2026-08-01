@@ -29,7 +29,10 @@ describe("Messages thread-list search", () => {
     // v2.102.0 added the group's OWN 6-digit id as a fourth field, so this asserts the
     // three that were here plus that the call still goes through matchQuery — rather
     // than freezing an exact argument list that grows every time a group gains a field.
-    expect(src).toMatch(/matchQuery\(threadSearch, \[[\s\S]{0,120}\]\)/);
+    /* 2026-08-01: the window was {0,120}, which one added field plus its reason
+       overflowed. Bounded by the call's own closing bracket instead, so it cannot go
+       stale again — and the FIELDS are what this asserts, below. */
+    expect(src).toMatch(/matchQuery\(threadSearch, \[[\s\S]*?\n\s*\]\)/);
     for (const f of ["t.peerDisplayName", "t.peerNumber", "t.title", "t.groupNumber"]) {
       expect(src, f).toContain(f);
     }

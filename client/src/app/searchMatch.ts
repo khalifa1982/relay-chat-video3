@@ -37,6 +37,8 @@
  * also matches "Khalifa", which is accepted rather than overlooked.
  */
 
+import { digitsOf, isNumberQuery, pinFromQuery } from "../../../shared/searchNumber";
+
 /** Fold case and strip diacritics, so "alv" reaches "Ålvaro" and "jose" reaches "José". */
 export function foldText(s: string | null | undefined): string {
   return (s ?? "")
@@ -47,23 +49,16 @@ export function foldText(s: string | null | undefined): string {
     .trim();
 }
 
-/** Just the digits, so the `777-777` the app displays finds the number 777777. */
-export function digitsOf(s: string | null | undefined): string {
-  return (s ?? "").replace(/[^0-9]/g, "");
-}
+/* THE NUMBER RULE MOVED TO `shared/searchNumber.ts` (2026-08-01) and is re-exported
+   here, so every existing import is unchanged and there is exactly ONE definition.
 
-/**
- * Is this query a NUMBER search? Only when it holds a digit and nothing that looks
- * like a name — otherwise "7th floor" would be read as the number 7.
- *
- * Accepts the separators people and phones actually use, including the grouping this
- * app itself renders, because refusing the app's own format back is rude.
- */
-export function isNumberQuery(query: string | null | undefined): boolean {
-  const q = (query ?? "").trim();
-  if (!q) return false;
-  return /^[0-9\s\-.()+]+$/.test(q) && digitsOf(q).length > 0;
-}
+   The admin panel's server-side search needs the same rule and had its own — it
+   tested `/^\d{6}$/` against the RAW query, so `777-777`, the form the app itself
+   renders and the owner types, matched nothing. A second copy of one rule is the
+   two-gates-disagree defect this repo keeps paying for (v2.99.71's TURN checker,
+   v2.105.11's token classifier), and `shared/` is where a rule both sides need
+   belongs. */
+export { digitsOf, isNumberQuery, pinFromQuery };
 
 /** Split a query into the words a person meant, keeping hyphenated names whole. */
 export function tokenize(query: string | null | undefined): string[] {

@@ -176,7 +176,7 @@ export const RELAY_MARKUP = `
     <div class="controls">
       <div class="addpad" id="addpad">
         <div class="addpad-head"><span>Add person</span><button id="addClose" type="button" aria-label="Cancel" title="Cancel">&#10005;</button></div>
-        <input id="addInput" maxlength="16" inputmode="numeric" placeholder="000000">
+        <input id="addInput" maxlength="7" inputmode="numeric" placeholder="000000">
         <div class="addpad-keys" id="addKeys"></div>
         <button id="addGo">Add to call</button>
         <div class="addpad-hint">Invites automatically once you enter all 6 digits</div>
@@ -871,12 +871,36 @@ export const RELAY_CSS = `
    expensive surface in the app to re-blur every frame — v2.99.84 measured 36 such
    layers and removed all of them on phones. An opaque panel costs nothing.
    pointer-events:none so it can never intercept a tap meant for the hang-up
-   button underneath it. */
-.relay-root .call-qual{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);
-  margin-bottom:8px;pointer-events:none;white-space:nowrap;max-width:96vw;overflow:hidden;
-  text-overflow:ellipsis;font:600 11px/1.5 'IBM Plex Mono',ui-monospace,monospace;
+   button underneath it.
+   v2.106.58 — IT WRAPS INSTEAD OF TRUNCATING, and that is a correctness change
+   rather than a style one: this was white-space:nowrap + text-overflow:ellipsis,
+   so every field added to the line silently clipped the END — which is exactly where
+   the thermal words sit. A readout that hides the diagnosis is worse than a tall
+   one, and it is OPT-IN, so growth is what the reader asked for. pre-line honours
+   the newline between the two lines (how the call is GOING / what it is MADE OF)
+   while still wrapping; overflow-wrap:anywhere means a long unbroken encoder name
+   breaks rather than being clipped by the surviving overflow:hidden.
+   The radius drops from 999px because a stadium end-cap on a three-line box reads
+   as a rendering fault; 14px is a rounded card and still reads as a pill at one
+   line. Centred text so a short second line does not look ragged.
+   AND IT IS CENTRED BY left:0;right:0 + margin:auto, NOT by left:50% +
+   translateX(-50%) — MEASURED, because the difference is 8 lines versus 3 on a
+   phone. For an absolutely-positioned box with left:50% and auto width, the
+   shrink-to-fit AVAILABLE width is only what remains to the containing block's
+   right edge, i.e. HALF of it: at 320px the pill came out 160px wide and 175px
+   tall while max-width:96vw said 307px, because max-width cannot widen a box the
+   available space has already squeezed. Spanning the containing block and
+   centring with auto margins gives fit-content the full width. It also drops the
+   transform, and with it the whole class of hazard that mis-centred the
+   video-consent card in v2.99.54 (an animation with fill:both whose last
+   keyframe is transform:none wipes the centring). */
+.relay-root .call-qual{position:absolute;bottom:100%;left:0;right:0;
+  margin:0 auto 8px;width:fit-content;
+  pointer-events:none;white-space:pre-line;overflow-wrap:anywhere;
+  max-width:min(96vw,520px);overflow:hidden;text-align:center;
+  font:600 11px/1.5 'IBM Plex Mono',ui-monospace,monospace;
   letter-spacing:.02em;color:rgba(255,255,255,.82);background:rgba(12,14,18,.92);
-  border:1px solid rgba(255,255,255,.10);border-radius:999px;padding:4px 12px}
+  border:1px solid rgba(255,255,255,.10);border-radius:14px;padding:4px 12px}
 /* board 5c — the readout wears a HUE for its state, set by renderCallQuality as
    one of three complete literal class strings.
    ACCENT TEXT on the existing opaque fill, never an accent FILL: this is a

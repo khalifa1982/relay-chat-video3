@@ -11278,6 +11278,1078 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.68 — the preview says who said it (2026-08-01)
+
+The last of the design audit's thread-row findings, and the board's own sample data is what
+settles it: `preview: 'Amira: The final board is up'` for a group, `'You: Voice note · 0:42'`
+for my own.
+
+- [x] **IN A GROUP THE ROW'S TITLE IS THE GROUP**, so the words alone said nothing about who
+      said them — the one place a prefix carries real information, and it was absent.
+- [x] **FIRST NAME ONLY**: the row has one line, and a full name would eat the words it
+      introduces.
+- [x] **NULL FOR A DM, DECIDED SERVER-SIDE** — that row's title already IS the other person,
+      so prefixing their words with their own name says nothing. Set only in the group
+      branch, for the same reason the group id is.
+- [x] **AN UNRESOLVED SENDER YIELDS NULL, NEVER A PLACEHOLDER**: a wrong name on somebody
+      else's message is worse than no name. Resolved from `otherById`, the SAME map the row's
+      title and avatars come from, so a row can never name a member the projection does not
+      otherwise know about.
+- [x] **A LOCKED GROUP LEAKS NO MEMBER NAME**, which would be a worse leak than the preview
+      the lock replaces — gated on `!hidden`, and pinned, because naming who spoke is exactly
+      the activity the lock exists to cover.
+- [x] **INSIDE the truncating span**, so a long name is clipped WITH the words it introduces
+      rather than squeezing them to nothing on a narrow phone.
+- [x] **6 of 6 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+      backups; sources byte-identical afterwards.
+- [x] **A COLLAPSED SLICE IN MY OWN TEST, caught by its own non-empty guard**: `kind:
+      "group",` also occurs ~950 lines EARLIER in `createGroupConversation`, so a bare
+      `indexOf` put the end before the start and the slice was `""` — every assertion in it
+      would have passed vacuously the moment one was a `not.toMatch`.
+- [x] `pnpm verify` green: 285 files, 5111 tests. One additive wire field, no schema change,
+      no new dependency, no new env var.
+
+## v2.106.67 — the stories strip stops scrolling away, and the Pin chip stops wearing the badge's green (2026-08-01)
+
+Two findings from the design audit, each **checked against the board's own markup before
+acting** rather than taken from the audit's description of it.
+
+- [x] **THE STRIP WAS BELOW THE SEARCH AND INSIDE THE SCROLLER.** Board 1c's element order
+      is header → strip → search → threads, and its own caption reads *"Stories strip ·
+      threads · swipe actions"*. The app had it as the first row of the scrolling list.
+- [x] **OUT OF THE SCROLLER MATTERS MORE THAN THE ORDER DOES**: a story lives 24 hours and
+      the ring is the only signal one exists, so scrolling two threads down hid every one
+      of them. Above the search because the search narrows THREADS — a stories row beneath
+      it implies it filters those too.
+- [x] **MEASURED AGAINST THE REAL BUNDLE, 4/4** (`scratchpad/strip-verify.mjs`): strip
+      136–223, search field at 244, thread scroller starts at 289 and does not contain the
+      strip. Source order is not layout order, which is the whole reason this is measured.
+- [x] **A HARNESS BUG OF MY OWN, reported rather than counted**: my first locator took the
+      FIRST scrolling div on the page — the shell's own — and reported the strip "inside a
+      scroller" when the question is whether it scrolls WITH THE THREADS. It now finds the
+      scroller by walking up from a thread row, which is the same class of mistake as the
+      `querySelector("aside")` one two releases ago.
+
+- [x] **THE PIN CHIP WORE `#22c55e`, WHICH IS `VerifiedBadge`'s `registered` HEX VERBATIM**
+      — and these rows render that badge, so swiping put a green Pin chip beside a green
+      tier seal a few pixels apart. v2.106.40 retired exactly this pairing in the 1:1
+      header (*"Two different meanings on one green, side by side, in the owner's own
+      screenshot"*) and the swipe tray was never swept. Same collision, one screen along.
+- [x] **SAID PLAINLY, THE BOARD DOES NOT DECIDE THE REPLACEMENT**: 1c draws the row at
+      rest, so it shows no open tray and specifies no Pin colour. The audit's claim that
+      the board uses the accent there is unsupported and was not acted on — the change is
+      the collision, not a match, because inventing a spec would be worse than the bug.
+- [x] Sky is what remains once this SCREEN's vocabulary is subtracted: green is the
+      registered tier and presence, the accent means UNREAD in that same row (v2.106.42,
+      which is also why the pinned MARKER is muted rather than accent), grey is already
+      both neutral actions in this tray, amber is Mute, red is Delete, and violet means a
+      group in a list that contains groups.
+- [x] **PINNED AS THE COLLISION RATHER THAN THE LITERAL**: no swipe chip in EITHER tray may
+      use the badge's hex, and the rule asserts the badge really does own it and really
+      does render on these rows — without that pair it would be a claim about a collision
+      that might not exist.
+### The row's unread count and its read receipt, both read off 1c's markup
+
+- [x] **THE UNREAD COUNT IS THE BOARD'S PILL.** 1c's row spells it
+      `min-width:17px;height:17px;border-radius:10px;background:var(--rb);color:#04211a;
+      font-size:10px;font-weight:700;padding:0 5px`; the app rendered "3 new" as a text
+      run. **THE COMMENT THAT CHOSE THAT WAS REASONING ABOUT A DIFFERENT ELEMENT** — it
+      read *"colour + weight, not a heavy pill (the reference's '2 New Chats'
+      treatment)"*, and "2 New Chats" is a SECTION heading elsewhere on the board, not
+      this badge. Same class as v2.106.62, where a value was described from a screenshot
+      rather than read from the markup.
+- [x] It is also NARROWER, which is the part that bites: line 2 is `flex-wrap`, so
+      "99+ new" (~55px, `shrink-0`) beside a 6-digit PIN could push itself onto a third
+      line on a narrow phone. A 17px puck cannot.
+- [x] `text-primary-foreground`, never the literal — v2.106.4 repointed that token at the
+      board's `#04211a` inside `.dark.relay-v2` for exactly this pairing, so light keeps
+      its own measured value instead of near-black on a pale accent.
+- [x] **THE ROW HAD NO READ RECEIPT.** Board 1c puts a ✓/✓✓ before the preview whenever
+      the newest message is mine; the conversation showed one and its own row did not, so
+      *"did that send?"* needed opening the thread to answer.
+- [x] **MINE-ONLY, ENFORCED SERVER-SIDE**: `lastMessageStatus` is null unless `mine`,
+      because a receipt is a statement about MY message and rendering one for a peer's
+      inverts what ✓✓ means. Deciding it in the component would leave the field on the
+      wire for the next reader to get wrong.
+- [x] **IT COSTS NO EXTRA QUERY**, on the reasoning #115 recorded and then had to correct:
+      the groupwise-max aggregate selects two integer columns and is a separate query,
+      untouched; this row comes from a bare `.select()` over a few dozen PRIMARY KEYS, so
+      `status` arrives beside the `meta` and `senderIdentityId` the adjacent lines read.
+- [x] **`failed` RENDERS NO TICK AT ALL** — a failed send has reached nobody, and the
+      single ✓ would say it had. Read is the accent, delivered and sent are muted, so ✓✓
+      is not one state twice (the v2.99.74 defect, where `delivered` existed in the schema
+      and nothing wrote it).
+- [x] **THE ACCENT IS SAFE HERE despite meaning UNREAD in the same row**, and structurally
+      rather than by luck: unread counts messages that are NOT mine, so a thread whose
+      newest message is mine has nothing to count. The one co-occurrence is a hand-marked
+      unread, where the pill is a deliberate act and a read tick still says something else.
+- [x] **THREE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, two of which froze the "not a
+      pill" decision the board contradicts (one by the count's exact class string, one by
+      the literal `{n} new`), and one of which banned EVERY fixed height in the row when
+      the defect was a hard-coded 16px on a text LINE — a fixed-size CENTRED puck cannot
+      clip, so the rule now allows one and still catches a line-height regression.
+- [x] **TWO OF MY OWN ASSERTIONS WERE WRONG ABOUT THE CODE**, each caught by failing on
+      correct source: a fixed 1600-character slice ran past the builder into code that
+      legitimately awaits (the fixed-slice fragility, again — now bounded by the entry's
+      own end), and a 120-character window was too short to reach the tick's className.
+- [x] **14 of 14 tripwires verified by MUTATION** off a confirmed-GREEN baseline from
+      byte-exact backups; sources byte-identical afterwards.
+- [x] `pnpm verify` green: 285 files, 5108 tests. One additive nullable wire field, no
+      schema change, no new dependency, no new env var.
+
+## v2.106.66 — a group can be born with its photo, and the green guard was self-allowing (2026-08-01)
+
+Owner, verbatim: *"there is a problem with the avatar of the group when you created you select
+avatar by default, it comes with default avatar, but if you select another avatar doesn't
+appear."*
+
+- [x] **THEY WERE RIGHT, AND IT WAS NEVER A UI BUG.** `createGroup`'s input schema accepted ONLY
+      `title` and `numbers` — and a plain `z.object` **STRIPS** unknown keys rather than rejecting
+      them, so a client sending an avatar got a clean success and a group born with a NULL photo.
+      Nothing anywhere said no. The column has existed since v2.102.0; `createGroupConversation`
+      simply never wrote it, so EVERY group started with the purple glyph whatever was picked.
+- [x] `avatarUrl` is now accepted, gated, forwarded and written — four hops, each pinned, because
+      the defect is a SILENT DROP and a break in any one link reproduces it exactly.
+- [x] **THE LAUNDERING GATE IS ONE FUNCTION WITH TWO CALLERS.** It was inline in `setGroupProfile`;
+      the moment `createGroup` also took an avatar that became a rule with two homes, which is how
+      the second one comes to be written without it. `assertOwnedAvatarUrl` uses `lastIndexOf`
+      because the ABSOLUTE form must be gated too — the storage proxy matches the key as a SUFFIX
+      (v2.99.26/H5) — and runs BEFORE any member resolution or write.
+- [x] `mobile/native`'s `createGroup` takes the optional field too: the widening is server-side, so
+      without it the native app would be the one place a group still cannot be born with a photo.
+- [x] **VERIFIED BY DRIVING THE REAL BUNDLE, 6/6** (`scratchpad/avatar-verify.mjs`): open the sheet,
+      pick a character through the REAL `AvatarPicker`, name the group, tap a contact suggestion,
+      Create — and read the outgoing request. It carries
+      `avatarUrl: "/manus-storage/relay-chat/99/…_status_emoji.png"`, in the caller's own namespace
+      so the server gate accepts it. Zero page errors.
+- [x] **FOUR HARNESS BUGS OF MY OWN, each reported rather than counted as a product failure**: the
+      picker's `aria-label` FLIPS to "Change the group photo" once set, so reading the stale one
+      reported a FAIL on correct code; tRPC BATCHES, so the body is `{"0":{"json":{…}}}` and
+      unwrapping only `.json` read undefined across three checks; the member field resolves against
+      CONTACTS, so with an empty stub there was no suggestion to tap and Create stayed disabled; and
+      my own `/api/relay/**` stub answered the EventSource as JSON, whose MIME abort I was counting
+      as a page error.
+
+### The green guard was self-allowing, half-blind, and its list was hand-kept
+
+- [x] **`/\bonline\b/.test("var(--relay-online)")` is `true`.** The allow-list was tested against the
+      raw element, so every `--relay-online` hit allowed ITSELF and only `--relay-green-text` was ever
+      constrained. Fixed by testing the RENDERED text with the token names stripped.
+- [x] **AN ELEMENT SAYS IT IS ABOUT PRESENCE IN ITS WORDS *OR* IN ITS CONDITION.** `p.isOnline &&
+      !p.idle ? green : muted` is a presence statement with no prose in it; a text-only allow-list
+      flagged four such sites and every one was correct.
+- [x] **THE TWO GREEN TOKENS DO NOT CARRY THE SAME LICENCE.** `--relay-online` is the LED hue and
+      means ONLINE, full stop. `--relay-green-text` additionally means a 6-digit RELAY NUMBER (the
+      top bar since v2.99.86, a contact's number since v2.106.43) — a recorded decision, so it is
+      exempted BY NAME and narrowly. Painting a number with the LED hue stays a violation.
+- [x] **THE WINDOW LOOKS BOTH WAYS.** A dot's evidence can be its parent's ATTRIBUTE: the Contacts
+      ONLINE section renders a bare count (v2.99.97) and carries the meaning in a `title` one line
+      above the LED. Forward-only, the widened guard flagged that correct element.
+- [x] **THE `className={…}}` STRIP WAS OVER-EATING.** Its non-greedy multi-line form ran to the next
+      `}}`, swallowing the `p.isOnline` that made a PeerOverlays element legitimate. Removed — it was
+      redundant, since stripping the token name is what stops the self-allow.
+- [x] **THE PROSE TRAP, for the sixteenth time, INSIDE the guard for the thing the comment
+      describes**: a comment recording why the waveform moved OFF the presence green satisfied a
+      search FOR the misuse. Now `codeOnly`, with a companion pair proving the strip does real work.
+- [x] **THE FILE LIST IS DERIVED, NOT HAND-KEPT** — and that is why there was a seventh occurrence:
+      the old sweep read `Messages.tsx` alone, so `Status.tsx` (the stories strip, on that very
+      screen) was outside it and held a `+` badge in the presence green. Now the client tree is
+      walked for the tokens.
+- [x] **AND DERIVING IT IMMEDIATELY FOUND AN EIGHTH, in a file nothing had ever read**:
+      `GroupInfoSheet.tsx` painted "Saved ✓" with `--relay-green-text` — green meaning SUCCESS — in
+      the one sheet that ALSO draws a presence LED on every member's disc. One colour, two meanings,
+      one view. It is `emerald-400` now, matching Profile's own save pill (v2.99.89), so this removes
+      a colour rather than inventing one.
+- [x] **THE REST IS ENUMERATED AS DEBT, honestly rather than overclaimed**: 35 uses across 14 files —
+      CTA fills, links, a spinner, toggle states, the History PIN, a "Party line" chip. Each needs
+      the same per-site judgement the two fixed ones got, which is a design pass and not a
+      find-and-replace. So the list may SHRINK freely and may never GROW: a file not on it must be
+      clean, so a NEW misuse anywhere else is red immediately, and every entry must still really
+      offend or the exemption is stale.
+
+### The ring pin froze one implementation of a rule about consistency
+
+- [x] `groupStories.test.ts` asserted the literal `from-[#06d6a0] via-[#0ea5e9] to-[#8b5cf6]` — a
+      hand-rolled COPY of `.rstoryring` carrying that recipe's LIGHT values and nothing else. In
+      DARK, `.rstoryring` is the cycling accent and the copy was not, so a group's "unseen" ring drew
+      a different colour from a person's on the same screen. Freezing the copy made that divergence
+      mandatory, under a comment reading *"one shape must not acquire a second meaning"*.
+- [x] Rewritten to the property: three distinct STATES (gradient/subtle/absent), the shared recipe,
+      no private copy — plus a new sweep that all three surfaces (thread row, `PeerAvatar`, stories
+      strip) reach for the same class, which is a property of the SET and cannot be pinned in one
+      file.
+
+### Verification
+
+- [x] **19 of 19 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+      backups, the mutator aborting unless its target occurs exactly once; all eight sources
+      byte-identical afterwards.
+- [x] **THE FIRST RUN CAME BACK 9/14 AND FOUR SURVIVORS WERE REAL GAPS IN MY OWN TESTS** — all one
+      class: the avatar could be gated, and the ORDERING of the gate pinned, while the value was
+      thrown away at three separate layers with every assertion green. Reported, then pinned hop by
+      hop and re-verified.
+- [x] A fifth survivor was the debt branch swallowing every file rather than the listed ones; it only
+      creates a defect COMBINED with a new misuse, so the decision is now a named `mustBeClean(f)`
+      asserted directly, and the mutation bites.
+- [x] **TWO STALE END ANCHORS FOUND BY A GUARD I ADDED IN THE SAME COMMIT**: `openThread` sits BEFORE
+      `createGroup` and `addMember` does not follow `setGroupProfile`, so both slices had been
+      running to end-of-file — the unbounded-slice fragility, live. The end anchor must now EXIST and
+      FOLLOW its start.
+- [x] `pnpm verify` green: 285 files, 5102 tests. No schema change, no new dependency, no new env var.
+
+## v2.106.65 — the composer's Send is permanent, and my own six-digit sweep was largely vacuous (2026-08-01)
+
+Owner, two composer items: *"on the attachment inside the chat on the plus button add the
+voice note beside of the other features set as video photos"* and *"in place of the voice
+icon in the bar put send button as icon … and inside the plus it will have everything that
+you already added, including the voice note."*
+
+**THE COMPOSER.** Send now renders unconditionally and is DISABLED when there is nothing to
+send; the mic is gone from that slot and voice-note recording lives in the `+` menu beside
+Record video, Photo & video and Attach file. What the old swap cost is worth naming: the
+composer's primary control CHANGED MEANING on the first keystroke, so the button you were
+aiming at became a different action under your thumb — and that is the reason recording had
+to be reachable from a position that is really Send's. The disabled state is not a trap: it
+enables the instant there is anything to send, so it is Send greyed out rather than a
+control that always refuses. The voice-note menu item carries the SAME guards the mic had,
+and `uploading` is not decoration — it is what stops a tap opening the recording bar with a
+live microphone while all three of its controls are already disabled by that same flag
+(v2.99.72). The mic's `recording ? stopRecording` arm was already DEAD CODE: while
+recording, the whole row is replaced by `RecordingBar`, so that branch could never render.
+
+**AND THEN THE PART THAT MATTERS MORE — MY OWN v2.106.63 SWEEP WAS LARGELY VACUOUS.** It
+claimed to make "no PIN box accepts a seventh digit" true anywhere in the system. Measured,
+it did not:
+
+  • **Contacts, GroupCallScreen and Dialer yielded ZERO elements** — three of the six files
+    it names, two of which its own comment explicitly claimed to cover — because it searched
+    for `<input` (lower case) and those files use shadcn's `<Input>`, capital I.
+  • **In Profile the "elements" ran to 46,118 and 46,803 characters** — most of the file. A
+    `capPinInput(` anywhere in 46KB satisfied the is-it-capped check, so a genuinely
+    uncapped box in that file would have passed.
+  • **The vacuity guard passed for the wrong reason**, which is the class it was written to
+    prevent: it required `total >= 6` and got 8, of which four were those slabs.
+  • **The predicate missed a real box even where the parser found one**: GroupCallScreen
+    says "(6 digits)", which neither `6-digit` nor `six digits` matched.
+
+**SO THREE MORE PIN BOXES WERE STILL UNCAPPED, AND ONE OF THEM IS THE OWNER'S COMPLAINT
+VERBATIM.** The in-call **add-person** field carried `maxlength="16"` — the one box in the
+app whose browser cap genuinely exceeded six digits. It is raw DOM inside a template
+literal, so no JSX sweep can ever reach it; it is pinned by name now. Contacts'
+add-by-number and the group-call picker had no `maxLength` at all.
+
+**AND ALL THREE FOLDED A NON-DIGIT AWAY** with `replace(/\D/g, "")` — the exact hazard
+`pinInput.ts`'s own header forbids. In the in-call field that is more than cosmetic,
+because the sixth digit AUTO-INVITES: `7a7b7c7d7e7f` silently became `777777` and rang a
+stranger into a live call off a typo.
+
+**A CLAIM OF MY OWN, CORRECTED RATHER THAN SHIPPED.** A first draft of the
+`programmaticGroupDial` comment said `capPinInput` fixes that. It does not — it also yields
+`777777`, keeping the digits and dropping the letters. What makes it safe at a TYPING site
+is that the field is rewritten as you type, so you always see what will be sent. There is
+no field at a programmatic boundary, so the honest rule there is different and is what
+shipped: accept a target that is ALREADY a number (grouping allowed, since the app renders
+`777-777`) and DROP anything else, rather than repairing it into somebody's real number.
+
+**THE SWEEP IS REBUILT AROUND THE PROPERTY.** It scans FORWARD from each `<input>`/`<Input>`
+and stops at the `/>` that closes THAT tag, tracking `{}` depth so a JSX expression cannot
+end it early; it refuses an implausibly long span; and the vacuity guard now requires every
+listed file to yield at least one element AND at least one recognised PIN box, which is
+what a bare count could never say. `Dialer.tsx` is dropped from the list with the reason:
+it has no numeric text input at all — it is a keypad, capped structurally because there is
+nothing to paste into — so listing it made the entry inert while reading as coverage. Being
+"capped" now requires BOTH `capPinInput` and the browser cap; `.slice(0, 6)` is no longer
+an accepted spelling, because it bounds the LENGTH and says nothing about the fold, and
+every site that used it also folded.
+
+**ALSO — A GAP THE MAPPING RUN FOUND IN v2.106.64, WHICH I HAD JUST SHIPPED.** The
+new-message sheet's Direct/Group toggle is reachable from the Messages tab, so creating a
+group there navigated to `${basePath}?c=<id>` — i.e. `/app/messages?c=<groupId>`, a group
+conversation on a tab whose list can no longer contain it. Close it and you find nothing.
+That one navigation now names the Groups tab; `useTabBasePath`'s rule (opening a
+conversation must not move you between tabs) is untouched everywhere else, and the pin
+asserts the exception explicitly rather than being loosened.
+
+**12 of 14 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, all six sources byte-identical afterwards — including the parser narrowed back to
+lower-case, the predicate re-narrowed, each of the three boxes reverted to the fold,
+Contacts' cap removed, the in-call markup back to 16, the programmatic dial repairing
+again, voice note removed from the menu, its `uploading` guard dropped, Send made
+conditional again, and the new group routed back to Messages.
+
+**FIVE SURVIVED THE FIRST RUN. THREE WERE REAL GAPS IN MY OWN TESTS and are fixed**: nothing
+asserted that Send is permanent (so the mic/Send swap could return with every assertion
+green — the owner's actual ask, unpinned); nothing drove the programmatic dial's refusal
+(behaviour changed with no test); and the accepted-shape rule was asserted only through
+today's source, where every site already satisfies both halves, so relaxing it to an OR
+changed nothing observable.
+
+**THE OTHER TWO ARE REPORTED AS NON-DEFECTS rather than counted or papered over.** Widening
+`MAX_ELEMENT`, and weakening the vacuity guard, each survive ALONE because the parser is
+correct — the forward scan terminates at the element's own tag, so the bound never binds.
+They are guards against a parser regression, and mutation 1 proves they work: narrowing the
+parser fails exactly those two assertions. One self-reference was still worth removing —
+the size check compared against `MAX_ELEMENT` itself, so widening the constant moved both
+sides together; it is a literal now.
+
+**FIVE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, four of them frozen on the mic's slot:
+two in `accentAsText.test.ts` (one froze the mic's `recording ? "" : " rcta"` expression,
+the other its destructive variant — the half about COLOUR is kept and asserted where the
+destructive control now lives), one in `cannotSendOrSee.test.ts` (it required the guard on
+the mic BUTTON and a `!recording` clause that only made sense while one button did both
+jobs — now every control that calls `startRecording` must be gated), and TWO in
+`ownerUiBatch2.test.ts` that shared a stale END anchor: the mic's own `aria-label`. With it
+deleted `indexOf` returned -1 and `slice(start, -1)` ran to the END OF THE FILE, reporting
+3 `<Plus>` where the property is 1 — a FALSE finding on correct source, and the
+negative-index trap recorded at v2.99.78 and v2.106.56. Both now take one helper that
+THROWS on a missing anchor, so a slice can never silently become the whole file again. No
+schema change, no new dependency, no new env var. 5101 tests.
+
+## v2.106.64 — Messages and Groups now partition the list, and Groups holds the calls (2026-08-01)
+
+Owner, three items from one message:
+
+  *"Also from the messages section, remove the group message and just keep it in the group
+  section"*
+
+  *"in the group section, add group calls where whenever you create any group calls or
+  conference call, it will be there so in the group section you will have a group call and
+  group message"*
+
+  *"it will list all groups messages and if there is any new message inside the group, it
+  will appear the first unless if you put it as a pin"*
+
+**THE THIRD WAS ALREADY TRUE AND IS PINNED RATHER THAN REBUILT.** `listThreads` has sorted
+pinned-first-then-newest since v2.103.0, and the Groups tab is that same list narrowed — so
+a group that receives a message already rose to the top, and a pinned one already stayed
+above it. Saying so plainly is better than shipping a second sort; a client-side re-sort is
+how the two come to disagree, so the test forbids one.
+
+**THE SPLIT RUNS BOTH WAYS NOW, AND THE SCOPE IS TAKEN ON THE INPUT.** Groups has been
+`MessagesPage` narrowed to `kind === "group"` since v2.106.2; Messages was still everything.
+The else-arm is now the COMPLEMENT — and it is written `!== "group"` rather than as an
+allow-list of the other kinds, because those are not the same rule: an allow-list that
+misses a kind puts that conversation in NEITHER tab, which is not a wrong list but a
+DISAPPEARED conversation, with nothing anywhere saying so. Complement means exhaustive by
+construction. It stays on the INPUT for the reason the memo exists at all: `archived` is
+kind-agnostic, so narrowing by picking categories leaves an archived GROUP sitting in a tab
+that holds no groups — measured, and it is one of the twelve checks below.
+
+**THE SECTION LIST IS BUILT PER SCOPE rather than defined for both and left to filter to
+nothing.** A "Groups" heading declared on the Messages tab renders nothing today only
+because its rows filter to zero — dead code that reads as live, and that would come back
+silently the moment anything upstream stopped excluding groups, which is exactly the
+regression this has to survive.
+
+**THE BADGE IS THE HALF THAT BREAKS SILENTLY, and it is where most of the care went.**
+`unreadTotal` counted every thread and rendered only on the Messages tab. With the lists
+disjoint, a group message would have lit the MESSAGES badge for a thread that tab no longer
+contains — you tap it and find nothing, the silent-no-op class. The count is now split by
+ONE pass that puts each thread in exactly one bucket (two independent reduces is how the
+two come to drift), each tab renders its own, and `unreadTotal` SURVIVES as their sum
+because the "while you were away" card is about the ACCOUNT rather than about one tab. That
+card also names one conversation, so it now routes to the tab that actually holds it.
+
+**GROUP CALLS: WHAT A "CALL THAT IS THERE" ACTUALLY IS.** An ad-hoc conference is over when
+the last person leaves — nothing persists but the History row, which is History's job, and
+a second copy in Groups would be duplication rather than a feature. A PARTY LINE is the
+durable one: a titled room with its own 6-digit number that stays dialable and reports how
+many are on it right now. That is the thing a list can hold and the thing you can return
+to, so the section lists the lines and offers the picker for a call to place immediately.
+
+**ONE COMPONENT, TWO MOUNTS.** `PartyLinesSection` is exported and IMPORTED by Messages
+rather than reimplemented — two lists of the same lines is how the two come to disagree
+about which exist, the class this repo keeps removing. It gained a `defaultOpen` prop
+because in the Groups tab it IS the section rather than a fold-out inside a contact picker;
+the DEFAULT is still closed, and `enabled: open` means the dial picker still pays nothing,
+which is the rule the old pin stood for. The ad-hoc picker is mounted at the ROOT of the
+page, not inside the scroll container, because a full-screen modal nested in a list that
+unmounts under it is how a picker ends up half on screen.
+
+**VERIFIED BY DRIVING THE REAL BUNDLE, 12/12** at 390px in dark against a fixture holding a
+DM, a group and an ARCHIVED group: Messages shows the DM and neither group (including the
+archived one — the leak case) and has no call section; Groups shows the group, the archived
+group under Archived, and not the DM; Groups offers "Start a group call" and lists the
+party line open by default with its live count; the Messages badge reads 3 and the Groups
+badge reads 5; zero page errors.
+
+**TWO HARNESS BUGS OF MY OWN PRODUCED FIVE FAILS ON CORRECT CODE and are reported rather
+than counted**: `innerText` is layout-dependent and read empty for a list the screenshot
+shows plainly, and `querySelector("aside")` returns the FIRST aside — the DESKTOP SIDEBAR,
+hidden at 390px, whose text is nothing but nav labels. Reporting either as a product
+failure would have been a false finding of the v2.106.0 class. The harness now reads
+`textContent` page-wide and ABORTS unless a substantial list rendered.
+
+**15 of 15 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once, all four sources
+byte-identical afterwards — including Messages keeping groups, the allow-list arm that
+loses a kind, the scope moved off the input, the section list defined for both scopes,
+`only` dropped from the deps, the call section removed, the picker mounted inside the
+scroller, the badge reverted to one total, the two buckets split into drifting reduces, the
+away card routed to Messages regardless, and the pinned-first sort deleted.
+
+**FIVE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY, and every one had frozen exactly what
+the owner asked to change** — two froze `tab.key === "messages" && unreadTotal > 0`, one of
+them with the recorded reason *"the Messages list still contains every group thread, so its
+count is the complete one"*, which is the sentence this release makes false; one froze the
+one-way narrowing; one froze the section's `label: "Groups"` and its position in a
+both-scopes array; and one froze `useState(false)` on the party-line section, i.e. it
+forbade the section ever being opened by default anywhere. Each now asserts the rule rather
+than the arrangement. No schema change, no new dependency, no new env var. 5094 tests.
+
+## v2.106.63 — a RELAY number could be typed past six digits, in four boxes (2026-07-31)
+
+Owner, stated twice in one message: *"anywhere in the system for the pin number don't exceed
+six digits such as like when you add inside the group it give you more than six digits you
+need to put a restriction only six digits."*
+
+**THE BOX THEY NAMED IS THE CLEAREST CASE AND THERE WERE FOUR OF THEM.** The group
+add-member input carried `maxLength={9}` and an `onChange` that wrote `e.target.value`
+STRAIGHT through — no digit count, no strip — so nine characters went in and the only
+feedback was a submit button that stayed disabled without saying why. Same shape in
+Profile's choose-number box and BOTH of Admin's (the delete confirmation and set-number).
+Measured on the real bundle before the fix: the attribute really was `9`.
+
+**ONE MODULE RATHER THAN FOUR EDITS, because "anywhere in the system" is a rule.**
+`client/src/app/pinInput.ts` owns `capPinInput` / `pinDigits` / `isCompletePin` /
+`PIN_INPUT_MAXLENGTH`, and the load-bearing part is the SWEEP beside it: the test walks
+every numeric input in the client, identifies a PIN box by what it is FOR (its placeholder,
+label or aria-label names a six-digit number) rather than by which file it sits in, and
+fails on one that is not capped — so the input somebody adds NEXT is covered instead of
+exempt. Four hand-edits is exactly how the fifth forgets.
+
+**LETTERS ARE DROPPED AS TYPED, NEVER FOLDED AWAY, and that is a security decision rather
+than a nicety.** The obvious implementation is `raw.replace(/\D/g, "")`, which reads
+`7a7b7c7d7e7f` as `777777` — a typo becoming a *successful* operation on somebody ELSE's
+number. That is the v2.99.75 reasoning (`normalizeDesiredNumber` on the server) applied at
+the input layer: the field always shows exactly what will be submitted, and the strict
+`/^\d{6}$/` submit gates stay in place regardless, because this is a typing aid and not the
+boundary.
+
+**THE APP'S OWN GROUPING SURVIVES.** `formatPin` renders `777-777`, so refusing the form
+the app just showed you would be the app arguing with itself; spacing and grouping are kept
+while counting as nothing, so `777-777` is complete and `77-77-77-99` still yields six.
+
+**THE BROWSER'S CAP NOW AGREES WITH OURS INSTEAD OF CONTRADICTING IT** — `maxLength` is six
+digits plus one separator. `capPinInput` alone already makes the field behave, which is why
+a stale `maxLength={9}` SURVIVED the first mutation run; it still matters, because a browser
+cap wider than the value means the field visibly accepts a keystroke and then discards it,
+which is the flicker being reported. Pinned as an upper bound, so a retune is free and a
+loosening is not.
+
+**FOUR HAND-ROLLED COPIES OF `replace(/[\s\-.]/g, "")` COLLAPSE INTO `pinDigits`**, and
+they had already drifted in which separators they knew about — the same rule in four places
+is how two of them come to disagree about whether a non-ASCII hyphen is part of a number.
+
+**VERIFIED BY DRIVING THE REAL BUNDLE, not by reading**: at 390px in dark, in the group
+add-member box the owner named — the attribute reads `7`, typing `7777779` leaves `777777`
+(the seventh keystroke does nothing), `777-777` survives as typed and enables Add,
+`7a7b7c7d` yields `7777` with the letters gone rather than folded, a short number keeps Add
+disabled, zero page errors.
+
+**12 of 12 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once, all four sources
+byte-identical afterwards — including the cap deleted, the browser cap reverted to 9,
+non-digits folded away, grouping counted as a digit, each of the four boxes reverted to raw
+individually, and the separator strip reinstated.
+
+**TWO SURVIVED THE FIRST RUN AND BOTH WERE REAL GAPS IN MY OWN TESTS**: `isCompletePin`
+loosened to `>=` survived because every value the fields hand it has already been capped, so
+it can only ever fail SHORT there — it is now driven with an uncapped over-long value, which
+is what a caller hydrating from a draft or a paste handler would supply; and the group
+SUBMIT gate was unasserted, so swapping `isCompletePin(addNumber)` for
+`addNumber.length === 0` left a three-digit number submittable with every other assertion
+green. The cap and the gate are two different rules — one stops a seventh digit, the other
+stops a third being sent — and loosening either while the other holds reads as fixed.
+
+**AND THE PROSE TRAP FIRED IN THE ASSERTION WRITTEN TO CATCH THE REGRESSION IT DESCRIBES**:
+the new `maxLength` sweep flagged two offenders on CORRECT source, both of them my own
+comments quoting the `maxLength={9}` they replaced. It runs on comment-stripped source now,
+via the shared `codeOnly` helper rather than a fourteenth private copy.
+
+**TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, both having frozen one of the four
+duplicated separator strips — `server/identityPurge.test.ts` and `server/chooseNumber.test.ts`
+each asserted the literal `replace(/[\s\-.]/g, "")`, i.e. they forbade the consolidation
+while saying nothing about the rule it stands for. No schema change, no new dependency, no
+new env var. 5082 tests.
+
+## v2.106.62 — @mentions had never rendered in a chat; the own bubble was the wrong weight (2026-07-31)
+
+Owner: *"you didn't match it 100%; you matched it about 60%… do it exactly how I did it there."*
+Continuing on the screen they named. Every value below is read off the board's own markup.
+
+- [x] **@mentions reach a conversation at last.** `Messages.tsx` had exactly two `linkify`
+      call sites; the one that renders a chat passed no roster. `content()` is the ordinary
+      path (`if (!expiring) return content(m.body, m.attachment)`), so its bare
+      `linkify(body)` was every non-expiring message — the only site passing `mentionRoster`
+      was the search-results list. Board 3c's accent `@mention` has therefore been invisible
+      since v2.106.17 built the resolver, the shared `findMentions` and the composer picker.
+      The new pin is a SWEEP over every `linkify(` occurrence, because "the roster is passed
+      somewhere" is exactly what was true while the bug shipped.
+- [x] **The own bubble takes the board's weight — and this corrects my own note, in two
+      files.** v2.106.40 recorded that *"the board draws the outgoing bubble as a translucent
+      ACCENT tint"*. Frames 1d AND 3c fill it `rgba(245,140,60,.17)` with a
+      `rgba(245,140,60,.45)` border. 245,140,60 is orange; every accent surface on that board
+      is `rgba(var(--rb-rgb), …)` and this one is not. The board and the owner agreed all
+      along; only the weight differed.
+- [x] **The ✓✓ and the `@mention` go back on the accent, re-measured on the right surface.**
+      v2.106.40 measured against the SOLID `#fb923c` and was right about it. Composited in a
+      real browser across all 12 accent hues, worst case (mobile `--background` / desktop
+      `--card`): accent on the old solid fill **1.06:1**; accent on the board's .17 tint
+      **5.44 / 4.82:1**; white 55% **5.77 / 5.44:1**; white 45% **4.35 / 4.13:1**. So read is
+      the accent and delivered drops to **45%** — the load-bearing half, since at 55%
+      delivered would outrank read and reinstate the inversion v2.106.40 existed to fix. The
+      `mine ? undefined :` branch in `linkify.tsx` and its parameter are deleted, not left as
+      a no-op.
+- [x] **The 1:1 peer bubble — a second real conflict, put to the owner.** Frames 1d and 3c
+      use byte-identical neutral glass for a 1:1 peer and a group member, so matching the
+      board means deleting the blue asked for by name in v2.99.85. Offered three readings the
+      owner chose **neutral glass plus a blue edge**: the fill is the board's verbatim and
+      only `borderColor` differs, at `.45` mirroring the own bubble's orange edge. A 1:1
+      received bubble renders no name label, so the border is the whole of the blue; the chat
+      header's title stays `#eafff6` rather than being recoloured to satisfy a bubble.
+- [x] **Board 3c's reply quote** — `margin-top:4px · padding:6px 9px · radius 9px ·
+      rgba(var(--rb-rgb),.08) · border-left 2.5px solid var(--rb)`, the quoted person's name
+      at 9.5px/700 in THEIR OWN hue via the same `nameColorFor` the sender label uses, one
+      line and ellipsised, logical `ps-` padding for RTL. Mine keeps the white treatment: the
+      board only ever draws a quote on a received bubble, and an accent panel with an accent
+      border inside an orange bubble is two tints competing for the same pixels.
+- [x] **The tail notch is the board's 5px**, not Tailwind v4's 2px `rounded-bl-sm`. Still only
+      on the last bubble of a run — a deliberate deviation, since the board's frames show
+      single messages and tailing every bubble stops a run reading as one run.
+- [x] **The day divider**, the one place the board could not be taken literally: 3c draws bare
+      mono 9px / `.22em` / `#68797c` with no pill, which a static mock can. This header is
+      STICKY and bubbles pass behind it (v2.105.3). Resolved with a backing that MATCHES the
+      scroller's own surface (`bg-background md:bg-card`), so it reads as bare text and still
+      occludes; ring and shadow gone. Colour is **`#708285`** because the board's own literal
+      measures 4.46:1 on mobile but **4.13:1** on our desktop `--card` — sub-AA on a surface
+      the board never drew.
+- [x] **My own new pin found a real inconsistency mid-release**: it requires the conversation
+      stamp and the search-result stamp to be the same treatment, and caught that I had moved
+      the first to mono 8.5px with `#7d8f8a`/`#9fb0ab` and left the second on the pre-board
+      flat `text-white/70` at 9px.
+- [x] **Verified by DRIVING the real built bundle** at 390px in dark with stubbed tRPC, reading
+      back COMPUTED values: received glass + `rgba(255,255,255,.11)` at radius
+      `16px 16px 16px 5px`; own `rgba(245,140,60,.17)` + `.45` at `16px 16px 5px 16px`; both
+      stamps 8.5px mono `#7d8f8a` / `#9fb0ab`; the quote at `rgba(61,201,231,.08)` with an
+      accent left border, its name `#fca5a5` (the QUOTED person's hue, not the sender's) over
+      nowrap/ellipsis `#9fb0ab`; the `@Marcus Chen` mention painting `rgb(61,201,231)` w600 on
+      my own bubble — the feature rendering in a chat for the first time; divider 9px mono,
+      1.98px tracking, `#708285`, backed by `oklch(0.12 0.008 245)` = `--background`. Zero page
+      errors. The harness ABORTED once on its own bug (a `presenceMany` stub returning an
+      object where the app filters an array) rather than measuring an error boundary. One
+      honest discrepancy: Chromium computes the quote's border-left as 2px where the class
+      declares the board's 2.5px — value rounding, not a missed value.
+- [x] 15 of 15 tripwires verified by MUTATION off a confirmed-GREEN baseline from byte-exact
+      backups; the mutator aborts unless its target occurs exactly once and treats a changed
+      test TOTAL as a failure (an unparseable file reports "no tests", not a failure). All
+      three sources byte-identical afterwards.
+
+**Deferred, with the reason rather than silently:**
+- [ ] Board 3c's **"seen by 4"** is NOT buildable honestly today: `messages.status` is ONE
+      shared row and v2.99.74 recorded that in a group `read` means AT LEAST ONE member.
+      There is no per-participant receipt table, so any count would be invented.
+- [ ] The **verified badge beside a sender's name** needs a `role` on `conversationInfo`'s
+      member list, which carries only `{name, number, avatarUrl}`.
+- [ ] The 3c **header** (video neutral / call accent / member line in the accent), the
+      **composer** mic, and the **typing pill** — to the design audit's verified list.
+
+**Four of my own assertions were wrong about the code**, each caught by failing on CORRECT
+source: a single-line pattern for a ternary prettier breaks over three lines; a window
+anchored AT `font-mono text-[8.5px]` when `justify-end` sits earlier in the same class
+string; a widened `text-[Npx]` sweep that matched twelve unrelated mono classes; and a
+capture anchored at `font-mono` when the conversation stamp's class opens `flex justify-end`.
+
+**Six pre-existing pins rewritten to the property**, every one having frozen a literal whose
+stated reason this release corrects: two froze the tick's `#fff`/`.55` arms on the
+wrong-surface measurement, two froze `bg-muted` on the day divider (the property is OPACITY,
+not which token), one froze `rounded-br-sm` (the property is that the tail is conditional on
+being last of a run), and one froze `font-mono text-[9px]` at a count of two plus both rows'
+exact class strings.
+
+## v2.106.61 — a group person's colour moves off the bubble onto their name and face (2026-07-31)
+
+Owner: *"you matched it about 60% ... for example, inside the message, where different people participate in the messages with different bubble colors"* — the one screen they named.
+
+- [x] **Board frame 3c and the owner's own earlier words genuinely conflict**, so it was asked rather than decided: the board gives every received bubble ONE neutral glass and colours the sender's NAME and AVATAR; `peerColors.ts` records them asking for per-person BUBBLE colours twice, widened to sixteen in v2.103.3. Asked directly, they chose **"Match the board exactly"**.
+- [x] The board's choice is load-bearing: 3c's reply quote and `@mention` are accent-coloured INSIDE the bubble, which only reads on a neutral fill. This is what unblocks the rest of the frame.
+- [x] **Nobody's colour moves** — `peerPaletteIndex` untouched, so the same identity picks the same entry; only what it tints changed. Each entry gained a `hue` derived from its own `from` colour, so the two cannot disagree.
+- [x] Mine (orange) and the 1:1 peer (blue) deliberately untouched — both named explicitly by the owner and neither is what they asked about.
+- [x] `PeerAvatar` gained `fallbackStyle` (a style, not a class — a runtime-composed Tailwind class comes out unstyled), merged after the geometry so a caller can only add colour.
+- [x] **9 tripwires bite by mutation**, sources byte-identical. Two survived first and were real gaps: the disc-agrees-with-name check compared only cardinality, and nothing asserted `PeerAvatar` APPLIES the tint (dropping the spread made the whole feature a silent no-op).
+- [x] Three pre-existing pins rewritten to the property — all three had frozen WHERE the colour was applied rather than the rule.
+- [ ] **The rest of frame 3c is unbuilt**: reply quote, `@mention`, seen-by, mono day divider, in-bubble timestamp, bubble radii, header, composer. Waiting on the fidelity audit's verified list rather than guessing at forty values.
+- [ ] Not verified on a device.
+
+## v2.106.60 — the swipe row stays where you slid it, opaque, one side at a time (2026-07-31)
+
+Owner: *"when you slide on a message or group, the back buttons above the cover of the message or group become transparent, which is incorrect. When you slide right or left, that bar shouldn't be transparent; it should only show you the icons, either on the left or the right. When you remove your hand, the bar should stop where you slid it, and you can then click on these buttons: pen, delete, or whatever is mentioned there."*
+
+- [x] **Measured all three on the real bundle before changing anything** — and my first two diagnoses were both wrong. A grep of the built stylesheet said the row's tint had no alpha; a real drag reports `oklab(0.24 … / 0.35)`. A distance sweep then killed the `OPEN_THRESHOLD` theory: 60/100/140/180/220/260px all sprang back.
+- [x] **The tray opened and the CLICK that ends the drag closed it.** Timeline via a `window`-capture listener (React dispatches `onClickCapture` from its root, above the row, and its `stopPropagation` stops the native event too — which is why two earlier "no click" readings were inconclusive): `pointerup` −220 closed → `lostpointercapture` −228 **open** → `click` → closed. `onClickCapture` could not tell the click ending the OPENING gesture from a later tap on an open row.
+- [x] Press-and-hold had the same defect: the hold settled it open, then `finish` re-decided on `d.x = 0` and closed it. Both flagged on the gesture (`justOpened` / `heldOpen`), cleared on the next `pointerdown` so neither can go stale and swallow a real tap.
+- [x] Full-swipe-fires-the-action **deleted** (contradicts the ask, would Delete without confirmation, and was unreachable — no side has exactly one action). Opening is an absolute `OPEN_PX` rather than a fraction, so the 3-action side no longer needs twice the drag.
+- [x] One side at a time, structurally: `paint` is the single funnel for position AND revealed side, using `visibility` so a hidden tray leaves hit-testing; React owns the settled truth in JSX.
+- [x] Transparency fixed at the CALLER (`:active` is true for a whole drag): three opaque steps — rest `--background`, hover `--card`, selected `--muted`. Also removed a same-specificity `bg-background` vs selected-tint rivalry whose winner was decided by stylesheet emission order.
+- [x] `trayWidth` derives the open offset from the classes that draw the tray (was a flat `76 * count` against a real 216px tray, so a full drag over-revealed by 12px).
+- [x] Board spec: puck 40px / 13px radius, revealed surface `rgba(255,255,255,.02)` over an opaque panel via `background-color` + `background-image` (never the shorthand — the v2.106.40 `.rglass` trap). `backdrop-blur` dropped.
+- [x] **Verified 11/11 driving the rebuilt bundle** at 390px dark: opaque mid-drag, correct side each way, stays open at 216px after both a 110px and a 42px swipe, buttons hit-testable, tapping Delete reaches its confirmation, hold stays open, scrolling still works.
+- [x] **19/19 tripwires bite by mutation**, byte-exact restore. Four were first misreported as aborts by my own count-guard (`"(44)".isdigit()` is false) — fixed and re-run, all four bit.
+- [x] Two pre-existing pins rewritten to the property; both had frozen exactly what the owner asked to change (the full-swipe conjuncts, and `backdrop-blur-md`).
+- [ ] **Not verified on a phone** — a touch pointer's click behaviour is the one thing that differs from the Chromium mouse drag measured here.
+- [x] **CI caught a defect in my own test that the local gate cannot**: it resolved the repo root from a literal `/home/user/...`, so `pnpm verify` was green and the runner failed with an ENOENT. Fixed to `resolve(__dirname, "../../..")` and added a standing sweep in `repoHygiene.test.ts`, mutation-verified. That sweep flagged correct code twice on its first run — its own comment (prose trap) and `voipDeploy.test.ts` asserting the fleet's real `/home/relay/.env` — so it strips comments and is scoped to a literal that is READ FROM rather than any absolute path.
+
+## v2.106.59 — a group call is refused when the media pool is full, never meshed (2026-07-31)
+
+The ONE clause that differs between the node-scaling doc the owner re-uploaded and the
+version v2.106.54 answered: "Mesh fallback is for 1:1 calls. If group rooms exist and the
+pool is saturated, reject with a clear 'service busy' error and fire the saturation alarm
+loudly — a large group over mesh is worse than an honest error." Everything else in that
+doc was already shipped, and v2.106.54's own note records the mesh fallback as a DEVIATION
+it took unilaterally — which this doc now ratifies, adding only the group half.
+
+- [x] **THE DOC IS RIGHT FOR A MEASURED REASON RATHER THAN A PREFERENCE**: on the mesh each
+      phone runs N−1 encoders and N−1 decoders (v2.99.84), so a large group there is not a
+      degraded call, it is a hot phone and a call nobody can hear. An honest refusal genuinely
+      beats it. That is why this is an exception to `chooseCallTransport`'s fail-open rule
+      rather than a softening of it.
+- [x] **THE REFUSAL IS ITS OWN FIELD, NOT A THIRD ARM OF `CallTransport`.** A refusal is not
+      a transport, and widening that union would make every reader handle a case that is not
+      one. `chooseCallTransport` is UNCHANGED and still cannot return nothing; the v2.106.32
+      invariant holds untouched (mediasoup always carries a `voip`, anything else always
+      carries null) and a refused plan still names `mesh` with `voip: null`.
+- [x] **IT IS KEYED ON `all-saturated` SPECIFICALLY, NEVER ON AN EMPTY POOL, and that is the
+      single most important line in the release.** `partitionNodes` distinguishes FIVE ways
+      the eligible list can come back empty (v2.106.54) and only one of them means "the fleet
+      is full". Wiring the reject to `!node` instead would make a node agent that is not
+      running, stale heartbeats, a drained fleet, or a wrong `VOIP_NODE_SECRET` REFUSE every
+      group call outright — the exact false-alarm inversion the PoolReason funnel was built
+      to avoid, and far worse than the mesh it would replace. Each of the five is driven
+      through the real selector and asserted separately; `disabled` and `forceMesh` are
+      likewise not refusals, because an operator who turned mediasoup off asked for the mesh
+      and not for group calling to stop.
+- [x] **THE PARTY SIZE CANNOT BE DERIVED SERVER-SIDE, AND THE AUDIT PROVED ALL THREE
+      CANDIDATES WRONG.** A group dial sends its FIRST invite alone and flushes the rest off
+      the `room` ack, so at room-creation time — the moment a transport is chosen — the server
+      sees one invitee and a room of size 1 whatever the party becomes. `msg.seed` proves a
+      group CONVERSATION call but is absent for an ad-hoc number-picker group; `room.size` is
+      only known later, after the transport exists; and a bare client flag treated as
+      authority would let a caller opt out. So the count RIDES THE INVITE as a HINT, and the
+      direction of trust is the whole safety argument: understating it (or being an older
+      bundle that sends nothing) yields the MESH, i.e. byte-identical to today, so
+      understating buys an attacker nothing; overstating it refuses only the caller's OWN
+      call; and treating a MISSING value as "group" would refuse every 1:1 placed by a
+      not-yet-updated bundle for the ~60 seconds of a rolling deploy.
+- [x] **AN ADD-PERSON INVITE CARRIES NO COUNT, SO GROWING A LIVE CALL IS NEVER REFUSED** —
+      correct rather than incidental: that room already has its transport, and refusing there
+      would break the expansion of a call in progress rather than prevent a bad one.
+- [x] **`+1` FOR THE CALLER**, because `clean` is the invitees and a rule about how many
+      people are ON the call must count the person placing it — a mutation dropping it bites.
+- [x] **THE REFUSAL COMES FIRST, so a refused call spends nothing**: no identity resolved, no
+      room minted, nobody rung, no missed-call row. Asserted by index against both
+      `ensureDialRoom` and `runIdentityInvite`.
+- [x] **CLASSIFYING THE CODE ON THE CLIENT IS LOAD-BEARING, and the audit named the failure
+      it prevents**: an unclassified error code reaches neither the fatal branch nor the
+      group-dial promotion, so the caller would sit on "Ringing…" until the 65s backstop and
+      be told nothing at all. `saturated` is a JOIN error, deliberately NOT a reach error —
+      the failure is ours, not the invitee's, and `reachErr` would raise the leave-a-voice-
+      message card for somebody who is perfectly reachable.
+- [x] **A NEW CODE RATHER THAN REUSING `busy`**, which already means "hang up your current
+      call first to join the party line". One word, two meanings is the collision this repo
+      keeps removing.
+- [x] **THE SATURATION LOG STOPPED CONTRADICTING THE BEHAVIOUR.** It read "so new calls are
+      falling back to the mesh", which after this release is false for exactly the calls a
+      person would notice — in the one place an operator goes to find out what the fleet is
+      doing. It now names both outcomes, because they need different responses: a 1:1 on the
+      mesh is a quality note, a refused group call is somebody who could not make their call.
+      Every OTHER reason's wording is asserted unchanged so no other line starts claiming a
+      refusal.
+- [x] **THE DIAL DECISION IS SYNCHRONOUS BY CONSTRUCTION.** New `planDialTransport` reads the
+      CACHED snapshot — room creation runs inside the signaling handler with no await, and a
+      Redis round trip there would add its latency to every call and its failure modes to
+      call setup. Asserted to contain no `await`, no `async` and no `readVoipNodes`.
+- [x] **IT CANNOT FIRE TODAY, said plainly**: `poolSnapshot()` is empty without `REDIS_URL`
+      and a registered agent, so `reason` is `no-nodes` and `refused` is null — byte-identical
+      to the behaviour before this release. The rule goes live with the fleet, not with this
+      deploy. **AND THIS IS THE FIRST TIME `relay.ts` IMPORTS ANY OF THE voip MODULES** (it
+      previously contained one prose mention and nothing else), which is the seam the
+      mediasoup cutover needs and the reason to put the rule in now rather than remember it
+      later.
+- [x] **12 of 12 tripwires verified by MUTATION** off a confirmed-GREEN baseline from
+      byte-exact backups, the mutator aborting unless its target occurs exactly once, all four
+      sources byte-identical afterwards — including the refusal keyed on a missing node
+      instead of saturation (7 failures), the 1:1 case refused too, an absent count reading as
+      group, the count sent unvalidated, the guard moved after the room, and the log line
+      reverted.
+- [x] **TWO OF MY OWN ASSERTIONS WERE WRONG ABOUT THE CODE, each caught by failing on CORRECT
+      source.** One demanded that every non-saturated warning line mention the mesh, and
+      `all-draining` correctly does not — a drained fleet is an operator action with its own
+      remedy rather than a fallback to describe. The other was **the `fnBody` parameter-object
+      trap for the fifth recorded time** (v2.105.9 / v2.105.27 / v2.106.4 / v2.106.48):
+      `planDialTransport`'s parameter is an inline object type whose closing brace starts a
+      line, so `indexOf("\n}")` sliced off the entire body and the "no await" assertion was
+      reading the signature.
+- [x] **TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, both fallout of adding one field to
+      the invite: `groupCallHost.test.ts` froze the whole one-line `sendWS({...})` including
+      its field list, so it broke the moment `parties` joined it while saying nothing about
+      the rule (that the seed rides only the room-creating invite); and
+      `updateChecker.test.ts` sliced a FIXED 2400 characters from `case "error"`, which this
+      release's comment pushed the guard past — now bounded by the case's own end.
+- [x] No schema change, no new dependency, no new env var. 5025 tests.
+
+## v2.106.58 — the readout says WHAT and WHERE, not only how bad (2026-07-31)
+
+The mediasoup doc's §3 closes with "Also finish the in-call stats readout … ICE candidate
+type … It is the only instrument that can explain the 'becomes slow' complaint, and it
+must work on both transports so the two can be compared with numbers rather than
+impressions." A six-dimension audit of the four docs verified four of its named fields
+missing and one aggregation rule hiding the thing it was meant to surface.
+
+- [x] **ICE CANDIDATE TYPE WAS CAPTURED AND THROWN AWAY.** `candidateType` was read only
+      to set a boolean — `if (… === "relay") anyRelay = true` — so `host` (same LAN) and
+      `srflx` (NAT-traversed direct) both rendered as the single word "direct", which are
+      different situations to be in. Now reported, WORST-CASE across legs by distance from
+      ideal (host < prflx < srflx < relay), and **`path` is DERIVED from it** so the relay
+      rule lives in one place rather than two that can drift. An UNRECOGNISED type is
+      ignored rather than ranked, which is what makes the derivation byte-identical to the
+      flag it replaced: a future candidate kind cannot read as relay and cry wolf.
+- [x] **THE TRANSPORT PROTOCOL WAS CAPTURED NOWHERE**, so a call relayed over TURN/TCP:443
+      was indistinguishable from TURN/UDP:3478 while their latency is not — and the doc's
+      own verification 1 asks to "confirm media flows over UDP". **IT HAS TO COME FROM THE
+      CANDIDATE, NOT THE PAIR**: the spec puts no `protocol` on a `candidate-pair`, so
+      reading it there returns undefined and renders nothing while looking implemented.
+      Resolved through the same two-pass `byId` index the candidate type needs, and pinned
+      by a test that puts the field in the WRONG place and requires null.
+- [x] **THE NEGOTIATED CODEC WAS UNAVAILABLE, so v2.106.56's H.264 preference and
+      v2.106.57's Opus profile both had NO direct pass/fail signal in the readout they
+      were measured for.** `mimeType` lives on the `codec` entry an rtp entry names by
+      `codecId` — another byId resolution — and **the codec's own mimeType decides which
+      kind it is**, so no `kind` guess is involved at all: an entry reads "audio/opus" or
+      "video/H264" and is self-describing.
+- [x] **AND A REAL VOICE CALL FOUND THE DEFECT THAT NO UNIT TEST WOULD HAVE**: the first
+      version reported **`↑VP8` on a call with no camera**. Under mutual consent the
+      offerer negotiates a video m-line with a NULL TRACK for the slot the camera would
+      later fill (v2.106.51), so Chromium reports an outbound video stream with a codec and
+      zero frames — and a readout claiming VP8 on a voice call is the exact false
+      impression this release exists to remove, the opposite of the doc's "confirm no
+      camera track is published". A video codec is now reported only with FRAMES, gated on
+      the same evidence `up` uses so the codec line and the resolution line can never
+      disagree about whether video is live. **Re-measured: voice reads `host/udp · ↑opus`
+      with `outVideoPackets: 0`; video reads `host/udp · ↑opus · ↑VP8 · enc libvpx` with
+      551.**
+- [x] **`bandwidth` WAS CAPTURED AND INVISIBLE, AND IT IS THE OWNER'S OWN COMPLAINT IN ONE
+      WORD.** `qualityLimitationReason` was stored for any reason and rendered only for
+      `"cpu"`, so the literal "starts fine and then degrades" signal never reached the
+      screen. Now surfaced whatever it says — and it FIRED on a real video call. `cpu`
+      remains the only one that makes the verdict POOR: bandwidth is a network condition,
+      not a thermal one.
+- [x] **THE RAW ENCODER NAME IS ON SCREEN**, which the thermal doc calls the pass/fail
+      signal ("must flip software → hardware"). It was on the record object under a comment
+      claiming it was "for the debug log and the harness" — and the audit proved NEITHER
+      read it. It now renders, AND goes to the debug log the doc asks for, logged on CHANGE
+      rather than every tick or a 2s poller buries every other line in the buffer.
+- [x] **LOSS WAS THE INCONSISTENT SIBLING.** Jitter has always been worst-case ("one smooth
+      leg does not make a choppy call smooth") while loss POOLED every leg into one ratio —
+      so on a 5-way mesh call a peer losing 20% reads as 4% behind four clean peers, and
+      that peer's call is bad. `lossWorstPct` is computed per leg (audio and video pooled
+      WITHIN a leg, which is one peer's loss) and verdicted. **The `LOSS_MIN_PACKETS` floor
+      is load-bearing rather than cautious**: these counters are cumulative from the leg's
+      own start, so a peer who joined two seconds ago legitimately reads 1 received / 1
+      lost — 50% — and without it a newcomer would spike the whole call to "poor" for one
+      tick. Under-evidenced legs still feed the POOLED figure, so nothing is discarded, and
+      a 1:1 call is unchanged by construction.
+- [x] **TWO LINES, BECAUSE ONE WOULD HAVE TRUNCATED THE DIAGNOSIS.** The chip was
+      `white-space:nowrap` + `text-overflow:ellipsis`, so every field added clipped the END
+      of the line — which is exactly where the thermal words sit. `formatCallDetail` is a
+      SEPARATE function rather than an append: the two lines answer different questions
+      (how the call is GOING / what it is MADE OF), and a mutation that folds them together
+      bites. It renders EMPTY when there is nothing distinctive, so an ordinary reading
+      stays one line. Written with `textContent` and `white-space:pre-line`, never
+      innerHTML — the encoder name and the codec are browser-supplied strings and there is
+      no reason to hand either to a parser.
+- [x] **THE MEASUREMENT FOUND A SECOND DEFECT I WOULD HAVE SHIPPED, and max-width could not
+      have fixed it.** At 320px the pill came out **160px wide and 175px tall** — eight
+      lines — while `max-width:min(96vw,520px)` said 307px. For an absolutely-positioned box
+      with `left:50%` and auto width the shrink-to-fit AVAILABLE width is only what remains
+      to the containing block's right edge, i.e. HALF of it, and `max-width` cannot widen a
+      box the available space has already squeezed. Spanning the block (`left:0;right:0`)
+      and centring with auto margins measured **307×76 at 320px** and **374×60 at 390px**,
+      with desktop UNCHANGED at 520×60 — and no clipping, inside the viewport, no sideways
+      page scroll at any width. It also drops the transform, and with it the class of
+      hazard that mis-centred the video-consent card in v2.99.54.
+- [x] **THE ACTIVE SIMULCAST LAYER IS DEFERRED, WITH THE REASON, because a sender-side
+      reading would ASSERT THE OPPOSITE of what the doc wants made visible**: on mediasoup
+      the active layer is a per-CONSUMER decision made server-side, so the publisher's own
+      `getStats()` reports the top layer it is still sending while a weak receiver is being
+      served the low one. The honest source is `consumer.getStats()` on the node, and there
+      is no client to request it. On the mesh it would also always say the same thing —
+      v2.106.57 measured `scalabilityMode: "L1T1"` on a real call.
+- [x] **22 of 22 tripwires verified by MUTATION** off a confirmed-GREEN baseline from
+      byte-exact backups, the mutator aborting unless its target occurs exactly once, all
+      three sources byte-identical afterwards.
+- [x] **ONE SURVIVED AND IT WAS THE CENTRING FIX I HAD JUST MEASURED** — the pin-the-
+      presence-not-the-property class: the CSS assertions covered wrapping, position and
+      hit-testing and said NOTHING about the centring mechanism, so reverting to
+      `left:50%` + a transform put the pill back to 175px tall with every test green. Now
+      pinned structurally with the measured numbers as the recorded reason, and re-verified.
+- [x] **AND THE BACKTICK TRAP BIT FOR THE FIFTH RECORDED TIME**, in a CSS comment inside a
+      template literal — reported by `pnpm check` as ten syntax errors on one line. The
+      existing guard (RELAY_CSS contains no backtick) is a runtime assertion on the PARSED
+      value, which a terminated literal can never contain, so it cannot report this; the
+      typecheck is what catches it and did.
+- [x] No schema change, no new dependency, no new env var. 4998 tests.
+
+## v2.106.57 — the voice-mode audio profile, negotiated (2026-07-31)
+
+Four docs re-uploaded. THREE were already shipped and the diffs prove it: the thermal doc
+is BYTE-IDENTICAL to the one v2.106.56 answered, and the node-scaling doc differs from the
+version v2.106.54 answered in exactly one way — it now RATIFIES the mesh fallback I had
+deviated to and recorded. This release takes the one measured gap from the fourth.
+
+- [x] **THE DOC'S OWN STEP 2 IS NOW SATISFIED WITH NUMBERS.** The mediasoup doc gates the
+      cutover on "one real call with the stats readout open… do not start the mediasoup
+      cutover until this reading exists". Driven, two browsers, real guest identities,
+      the built server against a real database — **VOICE**: RTT 1ms, 0 loss, 0 jitter,
+      candidate type `host`, 748 audio packets in, playout energy 4.06/3.62, connected
+      ~600ms after the answer. **VIDEO**: 640×360 @ 19fps, RTT 1ms, 0 loss, jitter 1ms,
+      606/459 packets and 222/295 frames decoded both ways.
+- [x] **AND THE READOUT SETTLED THE SIMULCAST QUESTION OUTRIGHT**: the outbound video
+      reports **`scalabilityMode: "L1T1"`** and `rid: null` — one spatial layer, one
+      temporal layer. The thermal doc's "the phone encodes 2–3 copies simultaneously" was
+      a behaviour of the DELETED hosted-SFU client, whose SDK defaults simulcast on. On
+      the mesh there is exactly one encoding, measured on a real call rather than argued.
+      `encoderImplementation: "libvpx"` confirms software encoding empirically, and
+      `qualityLimitationReason: "bandwidth"` (not `cpu`) confirms v2.106.56's new
+      cpu-limited verdict is not firing spuriously.
+- [x] **THE AUDIO GAP WAS TWO OF FIVE PARAMETERS, NOT FIVE.** The voice/video doc asks for
+      Opus / 24–32 kbps / DTX / FEC / ptime 20. A real call already reported
+      **`useinbandfec=1`** and **`targetBitrate: 32000`** — FEC and the bitrate band are
+      Chromium defaults and needed nothing. Genuinely absent: `usedtx=1` and any `ptime`.
+      Measuring first is what stopped this being a five-part change where two parts would
+      have been re-implementing a default.
+- [x] **THE OBVIOUS MECHANISM WAS RULED OUT BY MEASUREMENT, AND IT FAILS SILENTLY.**
+      `RTCRtpSender.setParameters` with `encodings[0].dtx = "enabled"` is **ACCEPTED
+      WITHOUT THROWING** and then dropped — the key is ABSENT when read straight back and
+      the encoding key set is unchanged. An API-level version of this would have read as
+      done and changed nothing, which is the class this repo keeps removing. SDP is the
+      only mechanism that works here, so that is what shipped, with the measurement
+      recorded in the code so nobody reaches for the API again.
+- [x] **DTX IS A RECEIVER PREFERENCE, so BOTH sides must ask.** `usedtx=1` in our SDP
+      tells the PEER to use DTX when sending to us; our code runs on both ends, so tuning
+      the offer AND the answer is what turns it on in both directions. Verified on a real
+      loopback: both peers' outbound codec reads
+      `maxaveragebitrate=32000;minptime=10;usedtx=1;useinbandfec=1`, with `a=ptime:20` in
+      both local descriptions.
+- [x] **MEASURED EFFECT ON REAL CALLS: audio packets 750 → 443 and 749 → 432** over the
+      same 12-second window, with **playout energy essentially unchanged** (4.062 → 4.053
+      and 3.617 → 3.779) — fewer packets for the same audible audio, which is less radio
+      time, less battery and less encoder work. Said honestly: DTX and the pinned 20ms
+      ptime landed together, so the ~42% is their COMBINED effect and is not attributed to
+      either alone. RTT unchanged at 1ms, `audioBothWays` true.
+- [x] **VIDEO IS UNAFFECTED, which is the regression that mattered**: 606/606 and 459/459
+      video packets before and after, frames 222→223 and 295→295 (noise), and the audio
+      profile is IDENTICAL on a video call — the doc is explicit that audio is the same in
+      both modes, and a `wantVideo` condition reaching the tuner is forbidden by test.
+- [x] **IT FAILS TOWARD THE UNTOUCHED ORIGINAL, and that is the whole safety argument**:
+      this sits on the offer AND answer of EVERY call, so a regex that misfires breaks
+      calling outright. No recognisable Opus fmtp ⇒ the SDP is returned BYTE-IDENTICAL;
+      anything thrown ⇒ the original. Verified against garbage SDP, empty SDP, null,
+      undefined, a PCMU-only m-line, and an SDP that already carries its own `usedtx` and
+      `ptime` (left alone — theirs, not ours). **IDEMPOTENT**, because ICE restart and the
+      consent upgrade both re-run it.
+- [x] **ONE FUNNEL.** There were THREE `setLocalDescription` sites (offer, answer,
+      ICE-restart offer) and three is three chances to forget — including whichever is
+      added next. `setLocalTuned` is now the only caller, asserted by counting
+      `.setLocalDescription(` in the whole file at exactly ONE.
+- [x] **11 of 11 tripwires verified by MUTATION** off a confirmed-GREEN baseline from a
+      byte-exact backup, source byte-identical afterwards.
+- [x] **THREE SURVIVED FIRST TIME, AND TWO SHARED ONE CAUSE THAT INDICTS MY TEST DESIGN**:
+      eight of the thirteen tests drive a RE-DECLARED COPY of the function (a source pin
+      cannot answer "does garbage SDP come back byte-identical"), so a source-only change
+      reaches none of them — the copy is trustworthy ONLY while the parity pin is
+      COMPLETE, and mine enumerated a few lines, letting "ptime no longer added" and "FEC
+      dropped" both survive. **THE PIN TOOK THREE ATTEMPTS AND EACH FAILURE TAUGHT
+      SOMETHING**: enumerating lines was incomplete; comparing the statement SET failed on
+      CORRECT source because the shipped ptime replacement spans three lines; and
+      comparing `String(fn)` to the source ALSO failed on correct source, because that is
+      the TRANSPILED runtime form with types erased by esbuild and can never be
+      byte-compared against TypeScript. It now reads BOTH texts from disk and compares
+      them whitespace-free. The third survivor was a BAD MUTATION of mine — it inserted
+      the banned `.dtx =` as a COMMENT, which the comment-stripped source correctly does
+      not flag; re-run as real code, it bit.
+- [x] **THE FOUR DOCS' PUBLIC IPs CONTRADICT EACH OTHER AND THE REPO, and nothing breaks**:
+      the mediasoup doc's table says 13.235.222.153 / 13.200.190.17, its own architecture
+      diagram forty lines later says 13.201.44.153 / 13.203.219.67, and
+      `voip-node/README.md` records 13.207.213.126 / 13.203.36.154 — three pairs for the
+      same two instances. Instance ids and private IPs agree everywhere, so the nodes'
+      identity is settled. This is harmless precisely because **nothing in the repo
+      hardcodes them**: the agent reads IMDSv2 and publishes to the registry. Flagged
+      rather than resolved by picking one — the runbook table is the only thing affected
+      and it is for humans checking a node by hand.
+- [x] No schema change, no new dependency, no new env var. 4956 tests.
+
+## v2.106.56 — where the video is encoded (2026-07-31)
+
+Owner doc: the phone becomes very hot after 20–30 min of a call, very likely also the
+long-standing "video degrades mid-call" complaint — heat → throttling → the encoder
+starves. Servers were exonerated with measurements earlier; this is the device side.
+
+- [x] **THE AUDIT CHANGED THE SCOPE, AND THREE OF THE FIVE ITEMS WERE ALREADY TRUE.**
+      Measured before touching anything: **single encoding** — the mesh publishes with
+      plain `addTrack` and never supplies `sendEncodings`, so `encodingsPerSender: 1`.
+      The doc's "2–3 simultaneous copies" was a behaviour of the DELETED hosted-SFU
+      client, whose SDK defaults simulcast on. **Voice mode** already opens no camera
+      (v2.106.44 makes the constraint literally `video: false`). **contentHint=motion
+      and degradationPreference=balanced** are both already present and pinned. No
+      brightness forcing exists to remove. Those are reported as confirmed rather than
+      rebuilt, and each is now pinned so it cannot regress.
+- [x] **AND ITS HEADLINE FIX TARGETED A PATH THAT DOES NOT EXIST.** The doc says "all in
+      the mediasoup client path" with `sendTransport.produce({codec: h264})`; there is
+      no mediasoup client — `client/src/lib/` has no such module and nothing imports
+      `mediasoup-client`. **Every call today is the MESH.** So the fix goes where the
+      calls are: `setCodecPreferences` on the video transceiver. Same decision one
+      layer up when the cutover lands.
+- [x] **THE DEFECT IS REAL AND LIVE, and the mechanism is sharper than the doc states.**
+      Nothing pins a codec anywhere, so the stack default applies — and MEASURED in
+      this repo's Chromium, a default offer lists **VP8 first**. An answerer normally
+      adopts the OFFERER's order, so an iPhone answering a Chrome desktop encodes VP8
+      **in software** (iPhones have no VP8 hardware encoder), while H.264 goes to
+      VideoToolbox and is nearly free. That asymmetry is why the heat was situational
+      rather than constant.
+- [x] **APPLIED ON BOTH SIDES**, and the answerer half is the one that matters: pinning
+      only our own offers would leave exactly the Chrome→iPhone case that burns the
+      phone. `preferHardwareVideoCodec` runs in `createPeer` and again before
+      `createAnswer`.
+- [x] **IT REORDERS AND NEVER RESTRICTS, and that is measured rather than argued.** A
+      list containing only H.264 fails to negotiate video at all against a peer that
+      has none — a dead tile instead of a warm phone, which is worse than the bug.
+      Proven on a real peer connection with VP9 standing in for H.264 (this build has
+      **0 H.264 variants**, so H.264 itself cannot be moved here): reordering gives
+      `VP9, VP8, AV1, …` with every codec kept, while the RESTRICTING version gives
+      **`["VP9"]` alone**. Baseline + `packetization-mode=1` (`42e01f`) ranks first
+      among the H.264 variants, because that is what iPhone hardware encodes — a
+      high-profile entry first could land the phone back in software.
+- [x] **A BUILD WITH NO H.264 IS A NO-OP, not a throw and not an empty list.**
+      `setCodecPreferences([])` RESETS preferences and a list missing required entries
+      raises `InvalidModificationError`, so the absent case returns before touching any
+      transceiver — measured: order unchanged, nothing thrown.
+- [x] **THE APP BACKGROUND WAS PAINTING BEHIND EVERY CALL, and this is the one with a
+      number attached.** `RelayBackground`'s rAF gated only on `document.hidden` and
+      reduced motion; it is mounted by the app SHELL and the call UI is a fixed overlay
+      over it, so a full-screen animated scene kept compositing at 30fps behind a live
+      call, entirely invisible. **DRIVEN against the real engine: 204,073 canvas fill
+      operations in 1.5s (~136k/s) → 0 while the call flag is set → 204,073 again after
+      it clears**, so it genuinely resumes rather than dying (the loop is re-armed
+      BEFORE the gate — returning first is the v2.99.67 bug, which here would mean the
+      background never comes back).
+- [x] **THE FLAG IS OWNED BY THE ONE SCREEN SWITCHER.** Paired to `enterCallUI` and a
+      teardown instead, the two could drift and either leak it — freezing the
+      background for the session — or miss a path and keep painting. In `show()` it
+      cannot mean anything but which screen is active, and it covers the PRE-CONNECT
+      dial card too, which is equally full-screen. `destroy()` clears it as well,
+      because `<html>` outlives the engine.
+- [x] **THE TWO SIGNALS THAT PROVE THE FIX NOW REACH THE READOUT.** `framesPerSecond`
+      was already captured; `encoderImplementation` and `qualityLimitationReason` — the
+      actual pass/fail signals — were not. Both are standard `outbound-rtp` fields, so
+      they read identically on the mesh and under mediasoup. **`isSoftwareEncoder`
+      matches the SOFTWARE names, not the hardware ones**, deliberately: the hardware
+      list is open-ended and vendor-specific, so an unrecognised value would read as
+      software and cry wolf on a healthy call.
+- [x] **A CPU-LIMITED SENDER IS NOW A POOR CALL, and software encoding alone is NOT.**
+      Thermal throttling degrades the picture at 1ms RTT with zero loss, so every
+      network threshold says the call is fine while the person watches it fall apart —
+      that is why it earns its own verdict. Software encoding is a warning about heat
+      over TIME, not a statement about this instant, and a desktop encoding VP8 in
+      software is perfectly healthy.
+- [x] **VIDEO-ONLY GUARD ON THE READ**: a voice `outbound-rtp` reports no encoder and no
+      limitation, so folding it in would blank a real video reading — the shape of a
+      bug that presents as "the telemetry does not work" on exactly the calls that have
+      video.
+- [x] **17 of 17 tripwires verified by MUTATION** off a confirmed-GREEN baseline from
+      byte-exact backups, all three sources byte-identical afterwards.
+- [x] **TWO SURVIVED, both real gaps in my own tests, and the first is a trap this repo
+      has recorded before**: `CODE.slice(CODE.indexOf(x))` with `x` ABSENT is
+      `slice(-1)` — the last character of the file, non-empty — so my "the offerer
+      applies it" pin passed with the call deleted. The v2.99.78 negative-index trap,
+      reproduced in the test written to catch it. The second: the audio-leg case built
+      an audio entry carrying NO fields, so the `if (impl)` guard covered for the
+      missing kind check and deleting it changed nothing; the entry now carries values
+      and the guard is load-bearing. Both fixed and re-verified.
+- [x] **A PRE-EXISTING PIN WENT STALE, the fixed-slice fragility again**: `v2971Hold`
+      sliced a FIXED 400 characters from `destroy() {` and required `stopHoldMusic()`
+      inside it, so a comment added above the target broke it while saying nothing
+      about the property. Re-bounded by the function's own end, with a non-empty
+      assertion, and re-verified to bite.
+- [x] **NOT VERIFIED ON A PHONE, said plainly.** There is no iPhone here and no WebKit
+      build, so the one measurement that would settle it — `encoderImplementation`
+      flipping software → hardware on a real handset — is the owner's own verification
+      step and remains undone. What is proven: the reorder moves the SDP, the no-H264
+      path is safe, the background stops, and the two fields flow end to end.
+- [x] No schema change, no new dependency, no new env var. 4943 tests.
+
+## v2.106.55 — the last SFU branch, in the store app (2026-07-31)
+
+Owner, quoting my own paragraph about not having done it back at me, prefixed with "Fix t":
+`mobile/native` still carried the retired SFU. Two corrections I owe are recorded here rather
+than glossed, because one of my stated reasons for not doing it was simply wrong.
+
+- [x] **CORRECTION 1: A ROOT TEST DOES COVER `mobile/native`.** I told the owner it was "a
+      separate package no test or typecheck here covers". `client/src/lib/nativeRewrite.test.ts`
+      has covered it for releases — it reads those files off disk and asserts against them, which
+      is why five of its assertions had to move in this commit. Saying a directory is unguarded
+      when it is guarded is how a change lands there unnoticed.
+- [x] **CORRECTION 2: `@livekit/react-native` HAD TO STAY, AND MY FIRST DRAFT DELETED IT.**
+      Its name says SFU and it is not one: `LiveKitReactNative.setup()` (called from
+      `MainApplication.kt`) configures `WebRTCModuleOptions` — the options of
+      `@livekit/react-native-webrtc`, i.e. the binding **the MESH is built on**. It sets hardware
+      acoustic echo cancellation and noise suppression, the video encoder/decoder factories, and
+      `enableMediaProjectionService`, **without which screen share sends BLACK FRAMES**. Removing
+      it would have cost every mesh call its hardware audio processing, broken screen share, and
+      failed the Kotlin compile on an unresolved import. So "remove completely" cannot be
+      literally satisfied in that directory: only `livekit-client`, the actual SFU client, goes.
+      Both survivors now carry that reason in the engine header AND in the test, because a future
+      reader deleting them by name is the obvious next mistake.
+- [x] **WHAT WENT**: `AudioSession`, the room/token/watchdog refs, `armLkWatchdog` + `joinLivekit`,
+      the `livekit-token` case, five watchdog call sites, three `if (!livekitEnabled.current)`
+      gates, both screen-share SFU branches, the camera-enable branch, the mic/cam publication
+      toggles, and the two wire fields — 174 deletions across four files. `aloneInCall` collapses
+      to `peers.current.size === 0`, and the cap becomes a plain `6` matching the web's exported
+      `ROOM_MAX`, with the reason in place: a MEASUREMENT, since on the mesh each phone runs N−1
+      encoders and N−1 decoders.
+- [x] **RECORDING WENT TOO, AND THAT IS THE SAME DELETION RATHER THAN SCOPE CREEP.** It was the
+      hosted SFU's egress service in its entirety — `server/recording.ts` said so in its own
+      header — so v2.106.53 deleted the server half. What was left on native was a Record chip
+      driven by `m.recording` on the registered ack, a field the server no longer sends: the chip
+      could never appear, its taps would reach a server with no handler, and any future truthy
+      `recording` field would surface a control that silently does nothing — the class this repo
+      keeps removing. Gone from the engine, the API surface, the wire type and the overlay
+      (● REC badge included).
+- [x] **FIVE STALE COMMENTS CORRECTED, and they were load-bearing prose rather than decoration**:
+      each explained a live rule by REFERENCE to the SFU ("on SFU there's no mesh peer left to
+      trigger the auto-end"), so left alone they would have justified real code with a transport
+      that no longer exists. The `peer-hold` one now states the actual mechanism — a hold FREEZES
+      media and keeps the peer connection, so a silent peer must not read as "remote left".
+- [x] **VERIFIED BY DIFFERENTIAL TYPECHECK, said plainly because it is weaker than a build**:
+      `mobile/native` has no `node_modules` here, so `tsc` cannot resolve its imports. What is
+      proven is that the error SET is unchanged — the same 4 pre-existing errors, same messages,
+      before and after — so this introduced none and fixed none. A dangling empty `else` from one
+      gate conversion was caught exactly this way (TS1128, which also masked the other three).
+      **Nobody has built the APK.**
+- [x] **9 of 9 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+      backups, the mutator aborting unless its target occurs exactly once, all four sources
+      byte-identical afterwards — including the SFU capture call reinstated, the `Track.Source`
+      namespace reinstated, `livekit-client` re-added, the Android initialiser removed,
+      `setup(this)` removed, the recording verbs reinstated and the ● REC chip reinstated.
+- [x] **ONE SURVIVED AND IT WAS A REAL GAP IN MY OWN TEST**, the pin-the-name-not-the-use class:
+      `toContain("getDisplayMedia")` survived deleting the awaited CALL, because the identifier
+      also occurs in the local type declaration and in the `!md.getDisplayMedia` support guard —
+      so it pinned that the engine MENTIONS capture while share had become a no-op, and with the
+      SFU branch gone that is the only capture path there is. Now pinned on the call.
+- [x] **TWO MUTATION NEEDLES OF MINE WERE WRONG AND ABORTED AT 0 OCCURRENCES** rather than
+      recording a false survivor (a guessed function name, and a dependency version I had not
+      read), and both bit once corrected.
+- [x] No schema change, one dependency removed, no new env var. 4918 tests.
+
 ## v2.106.54 — adding a media node becomes an infrastructure step (2026-07-31)
 
 Owner doc: when nodes are added later, the app must use them with **no code change and no
@@ -17175,3 +18247,308 @@ One additive nullable column, one additive index, no new dependency, no new env 
       account skipping `choose` straight to the passcode and calling loginWithPin; the Business toggle
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
+
+## v2.106.72 — the deploy would have selected ZERO of the eight nodes, and started nothing on them anyway (2026-08-01)
+
+Owner, uploading `scale-voip-nodes.sh` and `claudecodenodeintegration.md`: *"Have you done this"*.
+
+**THE ANSWER TO THE QUESTION IS NO, AND THE ANSWER IS NOT THE INTERESTING PART.** The
+integration doc is not built — the client transport does not exist (`mediasoup` is in no root
+manifest and `grep -rn "from ['\"]mediasoup" client/src/` returns nothing), and `relay.ts:2108`
+says in its own words *"IT CANNOT FIRE TODAY"*. `scale-voip-nodes.sh` is infra's by its own
+header (*"executed by infra, NOT Claude Code"*) and has already done its job. What checking the
+repo against the doc turned up is worse than "not started": **the deploy path we shipped would
+have matched none of the eight nodes, and if it had, every service would have stayed dormant.**
+
+**SIX CONTRACT MISMATCHES, EACH OF WHICH FAILS SILENTLY.** The fleet is now eight nodes
+(`relay-voip-a`, `-b`, `-3` … `-8`, four per AZ), provisioned by infra with
+`relay-voip-agent.service` ALREADY ENABLED and held dormant by
+`ConditionPathExists=/opt/relay-voip/agent/index.js`. That makes four values a contract with
+machines that already exist, and the repo had all four wrong:
+
+1. **THE TAG FILTER MATCHED NOTHING.** `aws-ops.yml` filtered `Values=relay-voip` — an EXACT
+   match — against a fleet whose every member is `relay-voip-<something>`. The action would
+   have printed *"no running instance tagged Name=relay-voip"* over eight healthy boxes and
+   read exactly like an untagged fleet. Now `Values=relay-voip,relay-voip-*`; the safety
+   property is untouched, because `relay-voip-*` cannot match `relay-app`, and the bare name
+   stays listed so a node tagged the old way is not orphaned.
+2. **THE ENTRYPOINT.** We installed `/opt/relay-voip/agent.mjs`; the condition watches
+   `/opt/relay-voip/agent/index.js`. **This is the one that fails most quietly** — systemd
+   reports an unmet condition as a clean "condition failed", so an enabled unit sits inactive
+   forever, indistinguishable from one nobody started. `voip-node/agent.mjs` is now
+   `voip-node/index.js` (`"type": "module"` already made a `.js` file ESM, so the rename is
+   cosmetic to Node) and the deploy extracts into `agent/` rather than one level up.
+3. **THE UNIT NAME.** We installed `relay-voip.service` beside the enabled
+   `relay-voip-agent.service` — two units, and the wrong one running is two agents contending
+   for one media port range. The script now RESOLVES which name a node carries and writes
+   there, preferring the provisioned one.
+4. **THE ENV PATH.** We read `/etc/relay-voip/env`; the nodes carry `/etc/relay-voip/agent.env`.
+   The deploy would have reported MISSING and declined to start — the failure being *correct*
+   is what makes it insidious, because the log looks like an operator step was skipped.
+5. **THE USER.** `User=relay` and `chown -R relay:relay` against a node whose service user is
+   `relayvoip`. The user is resolved now (`relayvoip` preferred, `relay` accepted) and a node
+   with neither REFUSES rather than chowning to nothing.
+6. **`VOIP_NODE_SECRET` IS ABSENT FROM THE PROVISIONED `agent.env`, AND THE AGENT THROWS
+   WITHOUT IT.** `main()` opens `if (!SECRET) throw` — correctly, since an unsigned internal API
+   is reachable by anything with VPC access to 4443 — so all eight nodes would have crash-looped
+   every 2s with the real reason buried in journald under a green deploy. The script now checks
+   for the KEY NAME (`grep -q`, so no matched line is ever echoed; **a name is not a value**) and
+   turns that loop into one legible line naming the file and the `openssl rand -hex 32` to put
+   in it.
+
+**THE PRE-BUILT WORKER IS REUSED, VERSION-CHECKED.** Infra compiled mediasoup 3.19.3 at
+`/opt/relay-voip/node_modules`, and Node finds it by walking up from
+`/opt/relay-voip/agent/index.js` unaided — so the deploy searches both roots and skips the
+install when a usable worker is already there, which is what keeps ~2 minutes per node × 8 from
+running past the SSM window. **It is reused ONLY at the version we pin**: the pins are exact
+precisely because the worker is a host-specific binary, so adopting a mismatched one would
+surface as a single node behaving differently in a call with nothing anywhere saying why. A
+mismatch falls through to a real install.
+
+**TWO NAMING DISAGREEMENTS THAT ARE HARMLESS BY COINCIDENCE, recorded rather than left to be
+discovered**: the provisioned env spells the signaling port `SIGNAL_PORT` where the agent reads
+`VOIP_API_PORT`, and sets `MEDIASOUP_WORKERS=2` where the agent derives it from `os.cpus()`.
+Both land on the same value on a c6i.large, so nothing breaks — they agree by luck rather than
+by contract, which is worth not relying on.
+
+**THE ORDERING GUARANTEES THAT ALREADY EXISTED ARE UNTOUCHED**: dry run by default, payload
+checksummed before the extract, `node --check` on every module before any restart, the worker
+binary verified on the reuse path as well as after an install, the verdict read from the
+printed `VOIP_EXIT=` marker on EVERY invocation rather than the SSM status, one node at a time
+with `--max-errors 0`, and the env file never written by the script.
+
+**18 of 18 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once and treating a changed test
+TOTAL as a failure; all five sources byte-identical afterwards. No survivors and no aborts —
+including the exact tag filter reinstated, the entrypoint pointed back at `agent.mjs`, the unit
+installed under a hardcoded name, the secret gate dropped, the version mismatch adopted, and
+the agent's own `throw` softened to a warning.
+
+**TWO OF MY OWN ASSERTIONS WERE WRONG ABOUT THE CODE, each caught by failing on CORRECT
+source.** One forbade `VOIP_NODE_SECRET=` followed by anything but a placeholder — and the
+script's own grep pattern `'^[[:space:]]*VOIP_NODE_SECRET=..*'` is exactly that shape, so the
+clever regex flagged the check it was written to permit; it now ENUMERATES the occurrences and
+requires each to be one of the two legitimate ones. **The other is THE PROSE TRAP FOR THE
+EIGHTEENTH TIME**: widening the "no `-d` test on the package directory" sweep made it match the
+script's own comment QUOTING `[ ! -d node_modules/mediasoup ]` to explain why it is gone. It
+runs on comment-stripped source now, with a companion assertion proving the prose really does
+still carry the string so the strip cannot hide a defect.
+
+**SAID PLAINLY: NOTHING HAS BEEN DEPLOYED.** There are no AWS credentials and no route to the
+fleet from here, so no node has been written to and no agent started. What is now true is that
+`voip-deploy` can SELECT the eight nodes and would land files where the enabled unit is
+actually watching — which is the doc's own step 1, and the thing that was impossible an hour
+ago. Steps 2 onward stay flag-guarded with mesh as the default, per the doc's *"Calls currently
+run on the P2P mesh and are working well — protect that."*
+
+No schema change, no new dependency, no new env var. 5195 tests.
+
+## v2.106.71 — the staged APNs config is reachable, and a 400 no longer deregisters (2026-08-01)
+
+The owner re-uploaded `relaypushbackendconfig.md` and asked *"Have you done this?"*.
+The file is **byte-identical** to the one v2.106.69 answered (`diff` is empty), so the
+answer is yes — but checking it CLAUSE BY CLAUSE against the source, rather than against
+my own notes, found **two more gaps**. Both are the same shape as the FCM defect that
+release fixed.
+
+**1. A FLEET CONFIGURED LITERALLY TO THE DOC'S OWN TABLE COULD NOT RING AN iPHONE.**
+The table's "Env" row lists exactly two variables — `APNS_KEY_ID` and `APNS_TEAM_ID` —
+and names **no topic variable and no bundle id**, while stating the topic as a fixed
+value (`apns-topic: com.app.relaymobile.voip`) in its own send section. `apnsVoipConfig()`
+returns null without a topic, so such a fleet had APNs unconfigured, no iPhone rang, and
+the admin Push Doctor honestly reported "not configured" over a credential the doc
+records as **staged and proven on a physical handset**. The table likewise names no
+variable for the key file it locates at `/home/relay/apns-key.p8`.
+
+Both now fall back to the owner's staged values — **as a LAST resort, never an
+override**. Every variable is read first, so any deployment that configures itself is
+byte-identical; the fallback only rescues the case that would otherwise be silent, and
+an unreadable path falls THROUGH rather than failing shut (the reasoning v2.106.69
+recorded for `GOOGLE_APPLICATION_CREDENTIALS`). The topic value is independently
+corroborated: the certificate the owner sent carries `UID=com.app.relaymobile.voip`.
+
+**2. A 400 WAS SELF-DEREGISTERING — THE v2.106.69 FCM DEFECT, STILL LIVE ON APNs.**
+The gate was `status === 410 || /BadDeviceToken|Unregistered/`. Apple documents
+`BadDeviceToken` as *"verify that the request contains a valid token **and that the
+token matches the environment**"* — so a perfectly live token answers 400 whenever
+`APNS_ENV` disagrees with the build that registered it, and the old rule **deleted it**.
+One environment mismatch would have wiped every iPhone registration in the fleet,
+permanently, on the first push after a deploy, with those handsets never ringing again
+and nothing saying why. `DeviceTokenNotForTopic` is the same shape for a topic mismatch
+— which the new topic fallback can itself produce, so the two fixes had to land together.
+
+**The owner's own doc says only "prune on APNs 410 / FCM UNREGISTERED"**, so the code
+was more aggressive than the spec it implements. Now 410 (and the `Unregistered` reason
+it carries) prunes; every other failure is KEPT and logged loudly, naming the likely
+cause. The asymmetry decides it, as it did for FCM: a stale token costs one wasted
+request per call, a wrongly-pruned live token costs that user every call.
+
+**7 of 7 tripwires verified by MUTATION** off a confirmed-GREEN baseline from a
+byte-exact backup, the mutator aborting unless its target occurs exactly once, source
+byte-identical afterwards — including the topic fallback removed, the fallback made to
+OVERRIDE the environment in both directions, the staged path repointed, the original
+`BadDeviceToken` prune reinstated verbatim, and the warning silenced.
+
+**ONE SURVIVED THE FIRST RUN AND IT WAS A REAL GAP IN MY OWN TEST**: the `.p8` case sets
+`APNS_P8_KEY` explicitly and therefore never reaches the fallback, so deleting it changed
+nothing. Said plainly, that property **cannot be told apart behaviourally here** — the
+staged path does not exist in this sandbox and a test has no business creating it — so it
+is a source pin, and the honest reason is recorded in the test.
+
+**AND THE PROSE TRAP FIRED FOR THE SEVENTEENTH TIME**, in the assertion written to catch
+this very regression: the comment explaining the fix contains the word `BadDeviceToken`
+that the sweep forbids, so it failed on correct source until it ran on `codeOnly`.
+
+**ONE PRE-EXISTING PIN REWRITTEN TO THE PROPERTY**: it asserted that key + keyId + teamId
+with no topic env reads as UNCONFIGURED — i.e. it froze exactly the defect — while the
+rule it stands for (each credential half is required) is separately pinned one test below
+and still green.
+
+**SAID PLAINLY: still not verified on a handset.** There is no iPhone here and APNs is
+unreachable from this sandbox. What is proven is that a fleet holding the doc's staged
+credentials can now see them, and that a misconfiguration can no longer destroy a live
+registration. No schema change, no new dependency, no new env var. 5183 tests.
+
+## v2.106.70 — search by name **or** number, in every box (2026-08-01)
+
+The owner, twice: *"any type of box you can search either by name … or by pin number …
+anywhere and the entire system by these two methods"*. v2.99.96 built the shared rule and
+put it on Contacts, History and the group-call picker. An audit of the rest of the app
+found **three genuine gaps and one non-gap**, and reporting the non-gap as a gap would
+have wasted the owner's time as much as missing a real one.
+
+**1. THE MESSAGES THREAD SEARCH NEVER SAW THE NAME YOU SAVED.** It matched
+`t.peerDisplayName` — the LIVE identity name, whatever that person calls themselves — so
+somebody stored in your own contacts as "Dad" could not be found by typing "Dad". The
+single most likely word a person types matched nothing. Fixed by adding the saved name as
+an **extra FIELD rather than a replacement**, because both are legitimate readings of the
+same keystrokes: replacing the live one would make a person unfindable by the name they
+chose for themselves.
+
+**2. THE ADMIN PANEL COULD NOT FIND `777-777`.** `adminFindIdentities` tested
+`/^\d{6}$/` against the **RAW** query, so the grouping this app itself RENDERS — and
+therefore the exact form an admin reads off the screen and types back — fell through to a
+`LIKE` over email and display name, which cannot match a number either. Refusing the
+app's own format back is the app arguing with itself.
+
+**3. THE FORWARD PICKER HAD NO SEARCH BOX AT ALL** — a scrolling list of every
+conversation you have.
+
+**4. NOT A GAP, and recorded in the test file so it is not "fixed" later.** The
+new-message and group-member pickers use `suggestContacts`, whose NAME matching is
+word-start only rather than infix. That is a **decision**: v2.99.93 records that a one- or
+two-letter infix matches most of a contact list and is indistinguishable from no filter,
+and v2.99.96 then kept infix in `matchQuery` *because* adopting the suggestion rule there
+would REGRESS the main lists. The two differ on purpose — and they already AGREE on the
+number half, which is what the owner asked about, because both import the same primitives.
+
+**THE NUMBER RULE MOVED TO `shared/searchNumber.ts`, and the reason is the class this
+repo keeps paying for.** The obvious fix for (2) was a second `/^\d{6}$/`-shaped check on
+the server. A second copy of one rule is exactly what bit at v2.99.71 (`turn-check.mjs`
+vs `iceServers()`, which would have reported two live relays permanently DOWN) and
+v2.105.11 (the client token classifier vs the server's, which deregistered devices). Here
+a divergence would mean the admin panel and every other search box disagreeing about
+whether `777 777` is a number — invisible until somebody cannot find a user they can see
+on screen. `client/src/app/searchMatch.ts` now RE-EXPORTS `digitsOf`/`isNumberQuery`, so
+every existing import is unchanged and there is exactly ONE definition; the test asserts
+`suggestIsNumberQuery === isNumberQuery`, i.e. the pickers reach the same function object
+rather than a lookalike.
+
+**`pinFromQuery` REQUIRES EXACTLY SIX DIGITS, deliberately.** A prefix search is a
+different operation — the suggestion pickers do that on purpose — and an admin looking
+somebody up by number means THAT number, not the first person whose number starts with it.
+
+**`useSavedNames` IS ONE HOOK WITH TWO CONSUMERS**, because two copies of the map is how
+the thread list and the Forward picker come to disagree about what a conversation is
+called. It **costs no request**: `RelayEngine` already runs `contacts.list` app-wide, so
+this resolves to the same react-query cache key.
+
+**THE FORWARD PICKER'S EMPTY STATE TELLS THE TWO CASES APART.** "No other conversations
+yet" is a false claim about somebody's own inbox the moment a filter is what emptied it —
+the v2.106.25 defect. An EMPTY search returns the whole list rather than nothing (failing
+the other way makes the picker useless until you type), and the query is cleared when the
+dialog closes, or the next forward opens filtered by something nobody typed for it.
+
+`client/src/app/searchEverywhere.test.ts` (14), the number rule driven BEHAVIOURALLY
+because whether `777-777` finds 777777 is exactly what a source assertion cannot answer.
+**12 of 12 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once and treating a changed
+test TOTAL as a failure, all five sources byte-identical afterwards — including the raw
+six-digit test reinstated verbatim, the saved name dropped from the thread search, the
+memo's dep removed, the search box deleted, an empty search returning nothing, the clear
+removed, the empty state made single-case, and a LOOKALIKE number rule given to the
+suggestion pickers.
+
+**FIVE OF MY OWN NEEDLES WERE WRONG ABOUT THE SOURCE and the harness ABORTED on each
+rather than recording a false survivor** — which is what that check is for; re-anchored
+against the real text, all five bit.
+
+**FOUR PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, and each had frozen a literal this
+release legitimately moves: `groupIdentity.test.ts` froze the exact one-line
+`matchQuery(threadSearch, [t.peerDisplayName, t.peerNumber, t.title, t.groupNumber])`, so
+it broke the moment a fifth field joined while saying nothing about the rule it stands for
+(a group is findable by its own 6-digit id); `searchEnhancements.test.ts` bounded that
+same call at a fixed `{0,120}` characters, which one added field plus its reason
+overflowed — now bounded by the call's own closing bracket so it cannot go stale again;
+`groupsSection.test.ts` froze the exact dep LIST, so a legitimate fifth dep broke it (now
+the deps it must CONTAIN); and `deliveryReceipts.test.ts` froze the picker's one-line
+filter and its exact empty-state sentence, i.e. it forbade the search box — now the
+property plus a new assertion that the empty state is two-case.
+
+No schema change, no new dependency, no new env var. 5178 tests.
+
+## v2.106.69 — the push backend, configured to the credentials that were already staged (2026-08-01)
+
+Owner: *"Did you activate the new nod structure? [uploaded `relaypushbackendconfig.md`] Configure it."*
+The doc reports both credential pipes **staged and proven on production** — a real VoIP push rendered
+full-screen CallKit on a physical iPhone, and the FCM OAuth mint answered the project. Diffing it
+against the code found four real gaps.
+
+- [x] **FCM was NOT configured on the fleet.** The service account is staged as
+      `GOOGLE_APPLICATION_CREDENTIALS=/home/relay/fcm-sa.json`; `server/fcm.ts` read only
+      `FIREBASE_SERVICE_ACCOUNT_JSON`. So `fcmConfig()` returned null, every Android push was
+      skipped, and the admin Push Doctor said "Firebase is NOT configured" over a credential that
+      was sitting right there and working. Now either variable, in either shape (inline JSON or a
+      path — the SHAPE decides, as `readPem` already does for `APNS_P8_KEY`), with the legacy name
+      tried first so every working deployment is byte-identical and an unreadable first value
+      falling THROUGH rather than failing shut.
+- [x] `FCM_PROJECT_ID` honoured as a **cross-check, never an override** — the token is minted by the
+      service account and valid only for its own project, so the JSON wins and a mismatch warns once.
+- [x] **A 400 no longer prunes the token.** FCM answers 400 INVALID_ARGUMENT for a malformed
+      MESSAGE as readily as a malformed token, so one bad payload of ours would have deregistered
+      every Android handset in the fleet in parallel — the v2.105.13 shape. Prune on 404/UNREGISTERED,
+      and on a 400 only when the response names the registration token.
+- [x] **One envelope for both platforms** (`server/callPushPayload.ts`): the spec's
+      `{type, callId, roomId, mode, callerName, callerAvatar, ts}`, composed in one place. Every
+      value a string (a non-string is the 400 above, i.e. a pruned registration). `callId` IS the
+      room id, which is what makes cancel correct by construction. Legacy `kind`/`callerPin`/`video`
+      kept alongside, because the shell already on the owner's iPhone reads them.
+- [x] **FCM stopped dropping the call block** — an Android ring arrived with no room, so the shell
+      could render a full-screen ring and then had nothing to join.
+- [x] **`call_cancel` exists.** A pushed callee has no socket for the websocket `ring-cancel`, so
+      their handset rang out its full 45s expiry after the caller gave up. `PendingRing.pushed`
+      records how a ring was delivered; the cancel fires from `cancelPendingRings` via
+      `reg.onCancelRingPush` — on the registry, not a parameter, so none of the three call sites can
+      forget it.
+- [x] The ring carries `callerAvatar`, resolved best-effort with its own catch.
+- [x] **Web client:** `relay:native` CustomEvent accepted beside the shipped
+      `postMessage`/`SET_PUSH_TOKEN` contract, through one admit path; new
+      `client/src/lib/nativeCallBridge.ts` for `callAnswered`/`callDeclined`/`callEndedNative`, the
+      `?nativeCall=…&action=answer` cold start, and `window.RelayNative.postMessage({webCallEnded})`
+      fired from the engine's own `hangUp` funnel.
+- [x] **The armed native answer is bounded** (`nativeAnswerMatches`, pure): 70s and a room match,
+      both load-bearing — an arm that never expired would silently answer the next call to arrive.
+
+25 of 25 tripwires mutation-verified; the one survivor was the negative-index trap in an ordering
+test, now asserting both indices exist first. Three pre-existing pins rewritten to the property
+(one frozen object literal, two fixed-length `hangUp` slices).
+
+**NOT verified on a handset** — no iPhone, no Android, and APNs/FCM unreachable from this sandbox.
+
+### Still open after this release
+- [ ] Verify a real ring end to end: iPhone with the app killed → CallKit; the first `kind='fcm'`
+      row → Android. Both need a device.
+- [ ] **mediasoup is NOT activated**: there is no client-side mediasoup adapter at all
+      (`grep -rn mediasoup client/src/` returns comments only), so no call can use it whatever the
+      server selects. The registry, the node agent, the pool and `planDialTransport` all exist and
+      are wired; the cutover is the client transport.

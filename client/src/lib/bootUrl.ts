@@ -141,3 +141,29 @@ export function consumeDialIntent(): string | null {
     return null;
   }
 }
+
+/**
+ * THE NATIVE COLD-START CALL INTENT (2026-08-01).
+ *
+ * The app was killed, a VoIP push woke it, the person tapped Answer on the OS call
+ * screen, and the shell opened the WebView at
+ * `?nativeCall=<callId>&mode=<m>&action=answer`. There is no page yet to dispatch a
+ * `relay:native` event at, so the intent rides the URL — and it must be read HERE,
+ * from the boot capture, for the same reason `?to=` is: a lazily-loaded route module
+ * cannot tell an arrival from an in-app navigation.
+ *
+ * READ ONCE AND CONSUMED. A `nativeCall` left in the address bar must not re-answer
+ * a finished call on every later navigation — which is the shape of the M48 defect,
+ * and the reason `bootDialTarget` had to become per-navigation in v2.99.49.
+ *
+ * The intent is captured at module scope so it reflects the URL the DOCUMENT booted
+ * with even after the app rewrites the address bar.
+ */
+let nativeCallIntentRaw: string | null = hasWindow ? window.location.search : null;
+
+/** Read-and-clear the raw boot query for a native call intent. */
+export function consumeNativeCallSearch(): string | null {
+  const v = nativeCallIntentRaw;
+  nativeCallIntentRaw = null;
+  return v;
+}

@@ -1461,14 +1461,20 @@ jobs:
           #
           # Every other action here targets `tag:Name=relay-app` and carries
           # MEDIA_NODE_GUARD to skip a media node that happens to be in the set. This one is
-          # the mirror image: it targets `tag:Name=relay-voip`, so it can never select an app
-          # box, because an app box does not carry that tag. The remote script's own guard is
+          # the mirror image: it targets the `relay-voip` tag family, so it can never select
+          # an app box, because an app box does not carry it. The remote script's own guard is
           # belt and braces for a MIS-TAG, and it refuses LOUDLY rather than skipping.
+          #
+          # BOTH SPELLINGS, AND THE GLOB IS THE ONE THAT MATTERS. The fleet is named
+          # relay-voip-a, relay-voip-b, relay-voip-3 … relay-voip-8 — so an EXACT
+          # `Values=relay-voip` filter, which is what this was until v2.106.72, matches NONE
+          # of them and the action reports "no running instance" over eight healthy nodes.
+          # `relay-voip-*` cannot match `relay-app`, so widening it costs no safety.
           IIDS=$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=relay-voip" "Name=instance-state-name,Values=running" \
+            --filters "Name=tag:Name,Values=relay-voip,relay-voip-*" "Name=instance-state-name,Values=running" \
             --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null)
           if [ -z "$IIDS" ] || [ "$IIDS" = "None" ]; then
-            echo "::error::no running instance tagged Name=relay-voip."
+            echo "::error::no running instance tagged Name=relay-voip or relay-voip-*."
             echo ""
             echo "The media nodes exist but are not tagged — the one owner-side step v2.106.33"
             echo "named. Tag them and re-run; nothing here guesses at an instance id, because a"
@@ -1476,13 +1482,14 @@ jobs:
             echo ""
             echo "  aws ec2 create-tags --region $AWS_REGION \\"
             echo "    --resources i-xxxxxxxxxxxx i-yyyyyyyyyyyy \\"
-            echo "    --tags Key=Name,Value=relay-voip"
+            echo "    --tags Key=Name,Value=relay-voip-a"
             echo ""
             echo "Tagging is also what makes them readable in \`verify\` and what stops aws-ops"
             echo "reporting a media node as part of the app fleet."
             exit 1
           fi
           echo "Media nodes: $IIDS"
+          echo "count: $(echo $IIDS | wc -w)"
           # The payload is a tarball of voip-node/ WITHOUT node_modules, base64'd on the
           # runner and decoded on the instance — the same discipline every free-text input
           # here uses, and it means the nodes need no S3 read permission of their own.

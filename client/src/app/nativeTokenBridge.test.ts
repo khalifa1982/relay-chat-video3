@@ -24,6 +24,7 @@ import {
   tokenKind,
   resolveKind,
   mountNativeTokenBridge,
+  acceptNativeEventDetail,
 } from "./nativeTokenBridge";
 import { classifyNativeToken } from "../../../server/expoPush";
 
@@ -382,5 +383,65 @@ describe("the server stores and delivers it", () => {
     const pkg = fs.readFileSync(path.resolve(__dirname, "..", "..", "..", "package.json"), "utf8");
     expect(pkg).not.toMatch(/"firebase"/);
     expect(pkg).not.toMatch(/"expo-server-sdk"/);
+  });
+});
+
+/**
+ * THE SECOND ENVELOPE (2026-08-01) — `relay:native`, per the owner's push spec.
+ *
+ * Accepted ALONGSIDE the `postMessage`/`SET_PUSH_TOKEN` contract above, never
+ * instead of it: the shell already on the owner's iPhone posts the old shape and
+ * is the only handset whose ring has been proven end to end, so replacing the
+ * contract would silence the one device that works.
+ */
+describe("acceptNativeEventDetail — the relay:native envelope", () => {
+  const HEX = "a".repeat(64);
+
+  it("accepts the spec's detail", () => {
+    expect(acceptNativeEventDetail({ type: "pushToken", kind: "apns-voip", token: HEX })).toEqual({
+      token: HEX,
+      voip: true,
+    });
+    expect(
+      acceptNativeEventDetail({ type: "pushToken", kind: "fcm", token: "abc:APA91b" + "x".repeat(40) }),
+    ).toEqual({ token: "abc:APA91b" + "x".repeat(40), voip: false });
+  });
+
+  it("only `apns-voip` declares PushKit — every other kind is a hint the shape overrides", () => {
+    /* The shape decides everything except this one bit, which no shape can answer:
+       iOS issues two indistinguishable hex tokens, the PushKit one and the alert
+       one (v2.105.13). */
+    expect(acceptNativeEventDetail({ type: "pushToken", kind: "apns", token: HEX })?.voip).toBe(false);
+    expect(acceptNativeEventDetail({ type: "pushToken", token: HEX })?.voip).toBe(false);
+  });
+
+  it("refuses anything that is not a token announcement", () => {
+    for (const d of [
+      null,
+      "pushToken",
+      { type: "pushToken" }, // no token
+      { type: "pushToken", token: "short" },
+      { type: "SET_PUSH_TOKEN", token: HEX }, // the OTHER envelope's type
+      { type: "callAnswered", callId: "r1" }, // the call bridge's message
+      { token: HEX }, // no type
+    ]) {
+      expect(acceptNativeEventDetail(d), JSON.stringify(d)).toBeNull();
+    }
+  });
+
+  it("agrees with the postMessage envelope about what a token IS", () => {
+    /* Two admit paths that disagree about the shape rule is how one transport
+       registers a token the other would refuse — the class this repo keeps
+       re-learning (v2.99.50, v2.99.71). */
+    for (const token of [HEX, "ExponentPushToken[abcdefghijklmnop]", "abc:APA91b" + "y".repeat(40)]) {
+      const viaEvent = acceptNativeEventDetail({ type: "pushToken", token });
+      const viaPost = acceptTokenMessage(
+        { origin: "", data: { type: "SET_PUSH_TOKEN", token } },
+        "https://x",
+        undefined,
+      );
+      expect(!!viaEvent, token).toBe(!!viaPost);
+      expect(viaEvent?.token).toBe(viaPost?.token);
+    }
   });
 });

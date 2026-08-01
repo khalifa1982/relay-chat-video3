@@ -67,8 +67,11 @@ function GroupsDots({ className, strokeWidth = 2 }: { className?: string; stroke
  *
  * FIVE tabs since the redesign — Calls · History · Messages · Groups · Contacts, with
  * Groups between Messages and Contacts exactly as the board places it. Groups is the
- * Messages page filtered to group threads (see `MessagesPage`'s `only` prop), not a
- * second thread list.
+ * Messages page narrowed to group threads (see `MessagesPage`'s `only` prop), not a
+ * second thread list — and since v2.106.64 the narrowing runs BOTH ways: Messages is
+ * DMs and Notes, Groups is groups plus the group-call section, per the owner. So the
+ * two tabs partition the thread list rather than one containing the other, which is why
+ * each carries its own unread count.
  *
  * Each tab still carries its OWN hue (`color` + darker `shade`). That is no longer what
  * the DARK theme uses — there the active tab is the cycling accent (`--rb`), per the
@@ -385,11 +388,29 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
   // long gone by the time such a recipient opens the app.
   useDeliveryReceipts(threads.data, me?.id ?? null);
 
-  const unreadTotal = useMemo(
-    () =>
-      (threads.data ?? []).reduce((acc, t) => acc + (t.unreadCount ?? 0), 0),
-    [threads.data]
-  );
+  /**
+   * v2.106.64 — the count is SPLIT the way the tabs are.
+   *
+   * Groups left the Messages tab (owner: *"from the messages section, remove the group
+   * message and just keep it in the group section"*), and a single total renders only on
+   * the Messages tab — so without this a group message would light a badge on a tab that
+   * no longer contains it, and tapping it would find nothing. That is the silent-no-op
+   * class this repo keeps removing, and it is the half of the restructure that is easy to
+   * forget because nothing fails.
+   *
+   * `unreadTotal` is KEPT and still counts everything, because the "while you were away"
+   * card is about the account rather than about one tab.
+   */
+  const { unreadTotal, unreadDirect, unreadGroups } = useMemo(() => {
+    let direct = 0;
+    let groups = 0;
+    for (const t of threads.data ?? []) {
+      const n = t.unreadCount ?? 0;
+      if (t.kind === "group") groups += n;
+      else direct += n;
+    }
+    return { unreadTotal: direct + groups, unreadDirect: direct, unreadGroups: groups };
+  }, [threads.data]);
   // The most recent conversation with unread messages — powers the "while you
   // were away" landing card's messages row (v2.99.12). Group threads use their
   // title; 1:1 threads the peer's display name (falling back to the number).
@@ -402,7 +423,11 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
     const top = withUnread[0];
     if (!top) return null;
     const name = top.title || top.peerDisplayName || top.peerNumber || "New message";
-    return { name, at: top.lastMessageAt! };
+    // v2.106.64 — the card ROUTES to the tab that holds it. With groups out of Messages,
+    // a hardcoded `/app/messages` would open a list the named thread is not in, which is
+    // worse than not offering the row at all.
+    const href = top.kind === "group" ? "/app/groups" : "/app/messages";
+    return { name, at: top.lastMessageAt!, href };
   }, [threads.data]);
 
   // Unseen-status dot (v2.96): a contact posted a story I haven't seen —
@@ -535,7 +560,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
   };
   const openMessagesFromToast = () => {
     dismissAway();
-    navigate("/app/messages");
+    navigate(latestUnread?.href ?? "/app/messages");
   };
 
   if (!me) return null;
@@ -609,7 +634,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
               pendingDevices={pendingDevices}
               pendingDetail={pendingDetail}
               onOpenHistory={() => navigate("/app/history?filter=missed")}
-              onOpenMessages={() => navigate("/app/messages")}
+              onOpenMessages={() => navigate(latestUnread?.href ?? "/app/messages")}
               onOpenDevices={() => navigate("/app/profile#devices")}
               onApproveDevice={approveDevice}
               onDeclineDevice={declineDevice}
@@ -702,16 +727,23 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
                     title="New stories"
                   />
                 )}
-                {tab.key === "messages" && unreadTotal > 0 && (
-                  <span
-                    className={
-                      "relay-blink inline-flex min-w-5 h-5 px-1.5 rounded-full text-xs items-center justify-center font-bold " +
-                      (accentNav ? "rbadge-accent" : "bg-primary text-primary-foreground")
-                    }
-                  >
-                    {unreadTotal > 99 ? "99+" : unreadTotal}
-                  </span>
-                )}
+                {/* v2.106.64 — each tab counts what it CONTAINS. A total here would light
+                    the Messages badge for a group message the Messages tab no longer
+                    holds. */}
+                {(tab.key === "messages" || tab.key === "groups") &&
+                  (tab.key === "messages" ? unreadDirect : unreadGroups) > 0 && (
+                    <span
+                      className={
+                        "relay-blink inline-flex min-w-5 h-5 px-1.5 rounded-full text-xs items-center justify-center font-bold " +
+                        (accentNav ? "rbadge-accent" : "bg-primary text-primary-foreground")
+                      }
+                    >
+                      {(() => {
+                        const n = tab.key === "messages" ? unreadDirect : unreadGroups;
+                        return n > 99 ? "99+" : n;
+                      })()}
+                    </span>
+                  )}
                 {tab.key === "history" && missedCount > 0 && (
                   <span className="relay-blink inline-flex min-w-5 h-5 px-1.5 rounded-full bg-destructive text-white text-xs items-center justify-center font-bold">
                     {missedCount > 99 ? "99+" : missedCount}
@@ -850,7 +882,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
               pendingDevices={pendingDevices}
               pendingDetail={pendingDetail}
               onOpenHistory={() => navigate("/app/history?filter=missed")}
-              onOpenMessages={() => navigate("/app/messages")}
+              onOpenMessages={() => navigate(latestUnread?.href ?? "/app/messages")}
               onOpenDevices={() => navigate("/app/profile#devices")}
               onApproveDevice={approveDevice}
               onDeclineDevice={declineDevice}
@@ -1095,20 +1127,30 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
                         count (unread)". History is already red; this is the one that
                         moves. On-accent text is the board's `#04211a`, not white — the
                         accent hues are bright, so white-on-accent is the unreadable
-                        direction. There is deliberately NO badge on Groups: the Messages
-                        list still contains every group thread (the board's own 1c does),
-                        so its count is the complete one and a second partial count beside
-                        it would be two numbers for one fact. */}
-                    {tab.key === "messages" && unreadTotal > 0 && (
-                      <span
-                        className={
-                          "relay-blink absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full text-[10px] items-center justify-center font-bold ring-2 ring-card " +
-                          (accentNav ? "rbadge-accent" : "bg-primary text-primary-foreground")
-                        }
-                      >
-                        {unreadTotal > 99 ? "99+" : unreadTotal}
-                      </span>
-                    )}
+                        direction.
+
+                        v2.106.64 — GROUPS NOW CARRIES ITS OWN COUNT. It deliberately did
+                        not, and the recorded reason was that "the Messages list still
+                        contains every group thread, so its count is the complete one and a
+                        second partial count beside it would be two numbers for one fact".
+                        That reason stopped being true the moment groups left Messages
+                        (the owner's own ask), and the two counts are now DISJOINT rather
+                        than partial — so each tab states the number for what it holds,
+                        which is one fact each rather than two for one. */}
+                    {(tab.key === "messages" || tab.key === "groups") &&
+                      (tab.key === "messages" ? unreadDirect : unreadGroups) > 0 && (
+                        <span
+                          className={
+                            "relay-blink absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full text-[10px] items-center justify-center font-bold ring-2 ring-card " +
+                            (accentNav ? "rbadge-accent" : "bg-primary text-primary-foreground")
+                          }
+                        >
+                          {(() => {
+                            const n = tab.key === "messages" ? unreadDirect : unreadGroups;
+                            return n > 99 ? "99+" : n;
+                          })()}
+                        </span>
+                      )}
                     {tab.key === "history" && missedCount > 0 && (
                       <span className="relay-blink absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-destructive text-white text-[10px] items-center justify-center font-bold ring-2 ring-card">
                         {missedCount > 99 ? "99+" : missedCount}

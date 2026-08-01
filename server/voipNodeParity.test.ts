@@ -167,7 +167,7 @@ describe("the agent's packaging keeps mediasoup out of the app", () => {
   it("the record module is importable WITHOUT starting mediasoup", () => {
     /* v2.99.71 recorded this trap too: importing `turn-check.mjs` ran a health check and
        called `process.exit(0)`, killing the test runner. The record shape therefore lives
-       apart from `agent.mjs`, which does start workers and listen on a port — and the
+       apart from `index.js`, which does start workers and listen on a port — and the
        parity test above is only possible because of that split.
 
        Asserted on CODE, not on the file's text: `record.mjs`'s own header explains why it
@@ -181,7 +181,7 @@ describe("the agent's packaging keeps mediasoup out of the app", () => {
     // that phrase, in prose. If this ever stops being true the guard above went weak.
     expect(readFileSync("voip-node/record.mjs", "utf8")).toMatch(/process\.exit/);
     // …and the agent, which does all of that, is a separate file.
-    const agent = codeOnly(readFileSync("voip-node/agent.mjs", "utf8"));
+    const agent = codeOnly(readFileSync("voip-node/index.js", "utf8"));
     expect(agent).toMatch(/from "mediasoup"/);
     expect(agent).toMatch(/from "\.\/record\.mjs"/);
   });

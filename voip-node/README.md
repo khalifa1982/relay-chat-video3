@@ -53,20 +53,51 @@ Test fixtures deliberately use RFC 5737 documentation ranges (192.0.2.0/24, 198.
 rather than these addresses, so an infrastructure change can never require a test edit — and
 so no routable production address sits in a public repository.
 
-An Elastic IP per node is still worth having — it makes the address survive a stop/start and
-lets a DNS name point at it — and is blocked on an EIP quota increase (request
-`26f4f2b67b7544c8b0f9b65529ba6ce6A3fUyxSF`). Nothing depends on it, because self-reporting
-is correct either way.
+## The fleet is EIGHT nodes, and the install layout is not ours to choose
+
+As of 2026-08-01 infra runs **eight** identical media nodes (c6i.large, 2 mediasoup workers
+each, four per AZ) named `relay-voip-a`, `relay-voip-b`, `relay-voip-3` … `relay-voip-8`, each
+with a stable Elastic IP. They are provisioned by infra's own scale-out script, which installs
+`relay-voip-agent.service` **already enabled** and holds it dormant with
+`ConditionPathExists=/opt/relay-voip/agent/index.js`.
+
+That makes four values a **contract with machines that already exist**:
+
+| | value | what a mismatch does |
+|---|---|---|
+| unit | `relay-voip-agent.service` | a second unit beside the enabled one — two agents, one port range |
+| entry | `/opt/relay-voip/agent/index.js` | the condition is never met; systemd reports "condition failed" and the unit sits inactive **forever** |
+| env | `/etc/relay-voip/agent.env` | the deploy reports MISSING and declines to start |
+| user | `relayvoip` | `chown` fails, `ExecStart` fails |
+
+**Every one of them fails SILENTLY**, which is why `server/voipDeploy.test.ts` pins all four
+against this repo's own unit file and deploy script rather than leaving them to review. Until
+v2.106.72 the repo had all four wrong — and the tag filter was an EXACT `relay-voip`, which
+matches none of the eight names, so `voip-deploy` reported "no running instance" over a healthy
+fleet. The legacy spellings are still accepted where accepting them is free.
+
+Two things the provisioned `agent.env` does **not** carry and one that it does:
+
+- **`VOIP_NODE_SECRET` is absent and is REQUIRED** — the agent's `main()` throws without it,
+  because the internal API is HMAC-signed. Add one line per node (`openssl rand -hex 32`, the
+  same value as the app fleet's) or every node crash-loops every 2s with the reason buried in
+  journald. The deploy checks for the KEY NAME (never a value) and turns that loop into one line.
+- `SIGNAL_PORT=4443` is spelled `VOIP_API_PORT` here and `MEDIASOUP_WORKERS=2` is derived from
+  `os.cpus()`. The values coincide on a c6i.large, so nothing breaks — but they agree by luck,
+  not by contract, and that is worth not relying on.
+- mediasoup 3.19.3 **is already compiled** at `/opt/relay-voip/node_modules`. Node finds it by
+  walking up from `/opt/relay-voip/agent/index.js`, so the deploy reuses it (version-checked
+  against our pin) instead of spending ~2 minutes per node × 8 recompiling past the SSM window.
 
 ## What is here
 
-- **`agent.mjs`** — one mediasoup worker per core, a router per room, WebRTC transports
+- **`index.js`** — the agent, and the filename is a CONTRACT (see below): one mediasoup worker per core, a router per room, WebRTC transports
   announcing this node's public IP, an HMAC-authenticated JSON API on `VOIP_API_PORT`
   (VPC-internal only), an `audioLevelObserver` per room, and a heartbeat into the registry.
 - **`record.mjs`** — just the registry record shape. Deliberately importable and
   side-effect-free so the parity test can drive it; **keep the `mediasoup` import out of
   this file.**
-- **`relay-voip.service`** — the systemd unit.
+- **`relay-voip-agent.service`** — the systemd unit.
 
 The app half is `server/voipRegistry.ts` (node selection, freshness, transport precedence)
 with `server/voipRegistry.test.ts` and `server/voipNodeParity.test.ts`.
@@ -161,17 +192,19 @@ Actions → AWS ops (your-chat.io) → Run workflow
   action:     voip-deploy
   voip_apply: false           ← run this FIRST. Reports each node's current state — service
                                  status, the installed agent's checksum, the mediasoup version,
-                                 whether /etc/relay-voip/env is there — and writes nothing.
+                                 whether /etc/relay-voip/agent.env is there and names
+                                 VOIP_NODE_SECRET — and writes nothing.
   voip_apply: true            ← then this. One node at a time.
 ```
 
-It targets `tag:Name=relay-voip`, which is what makes it structurally unable to touch an app box —
+It targets `tag:Name=relay-voip,relay-voip-*`, which is what makes it structurally unable to touch an
+app box —
 so the nodes must be tagged first (see above), and with no matches it fails loudly with the
 `create-tags` command rather than reporting success over nothing. Before restarting anything it
 verifies the payload's checksum and `node --check`s every module, and afterwards it proves the unit
 came back rather than assuming it did.
 
-**It never writes `/etc/relay-voip/env`** — `VOIP_NODE_SECRET` and `REDIS_URL` are real secrets and
+**It never writes `/etc/relay-voip/agent.env`** — `VOIP_NODE_SECRET` and `REDIS_URL` are real secrets and
 a `workflow_dispatch` input is visible in run metadata, so those stay a human step (below). With the
 file missing it installs the files, leaves the service stopped, and says so.
 
@@ -184,35 +217,35 @@ with mediasoup 3.19.3 installed and its worker compiled, so an update is the `.m
 restart.
 
 ```bash
-# 1. copy agent.mjs + record.mjs + package.json into /opt/relay-voip
+# 1. copy index.js + record.mjs + sign.mjs + package.json into /opt/relay-voip/agent
 #    (from the repo, or via SSM send-command — NOT from the app release tar)
 #    INCLUDING pnpm-lock.yaml, and install with --frozen-lockfile: the versions are pinned
 #    exactly and a plain install on a box without the lockfile silently resolves newer ones
 
 # 2. first time only: the env file with the secrets
-sudo install -d -m 0750 -o root -g relay /etc/relay-voip
-sudo tee /etc/relay-voip/env >/dev/null <<'EOF'
+sudo install -d -m 0750 -o root -g relayvoip /etc/relay-voip
+sudo tee /etc/relay-voip/agent.env >/dev/null <<'EOF'
 VOIP_NODE_SECRET=<same value as the app fleet's VOIP_NODE_SECRET>
 REDIS_URL=redis://<the same ElastiCache endpoint the app uses>:6379
 EOF
-sudo chmod 0640 /etc/relay-voip/env
-sudo chown root:relay /etc/relay-voip/env
+sudo chmod 0640 /etc/relay-voip/agent.env
+sudo chown root:relayvoip /etc/relay-voip/agent.env
 
 # 3. the unit
-sudo cp /opt/relay-voip/relay-voip.service /etc/systemd/system/
+sudo cp /opt/relay-voip/agent/relay-voip-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now relay-voip
+sudo systemctl enable --now relay-voip-agent
 ```
 
 `VOIP_NODE_SECRET` and `REDIS_URL` are real secrets. They belong in
-`/etc/relay-voip/env` — never in this repo, never in a `workflow_dispatch` input (inputs are
+`/etc/relay-voip/agent.env` — never in this repo, never in a `workflow_dispatch` input (inputs are
 visible in run metadata).
 
 ## Verify
 
 ```bash
 # the agent is up and knows its own address
-systemctl status relay-voip --no-pager
+systemctl status relay-voip-agent --no-pager
 journalctl -u relay-voip -n 40 --no-pager
 
 # it registered (run from an app instance, which can reach Redis)

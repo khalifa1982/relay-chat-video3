@@ -142,13 +142,20 @@ describe("Messages.tsx — the sticky day header's structure", () => {
     expect(Number(z![1])).toBeLessThan(20);
   });
 
-  it("the pill is OPAQUE, because it now overlaps scrolling content", () => {
-    // While the pill sat in the flow, `bg-muted/70` was invisible as a defect.
-    // The moment it pins, bubbles pass behind it — and a translucent pill with
-    // text sliding through it is unreadable.
-    const hdr = CODE.slice(CODE.indexOf("sticky top-0"), CODE.indexOf("sticky top-0") + 400);
-    expect(hdr).toMatch(/bg-muted\b/);
-    expect(hdr).not.toMatch(/bg-muted\/\d/);
+  it("the pill is OPAQUE, because it overlaps scrolling content", () => {
+    /* While the pill sat in the flow, `bg-muted/70` was invisible as a defect. The moment it
+       pins, bubbles pass behind it — and a translucent pill with text sliding through it is
+       unreadable.
+
+       REWRITTEN (v2.106.62): this froze `bg-muted`. Board 3c draws no pill at all, and the way
+       to have both is a backing that MATCHES the scroller's own surface — invisible against it,
+       still occluding — so the token moved to `bg-background md:bg-card`. Opacity is the rule;
+       which opaque token carries it is not. */
+    const at = CODE.indexOf("sticky top-0");
+    const hdr = CODE.slice(at, at + 700);
+    expect(hdr, "an opaque surface token").toMatch(/bg-(?:muted|background|card|popover)\b/);
+    expect(hdr, "never alpha-modified").not.toMatch(/bg-(?:muted|background|card|popover)\/\d/);
+    expect(hdr, "and never fully transparent").not.toMatch(/bg-transparent/);
   });
 
   it("exactly ONE day header is mounted", () => {

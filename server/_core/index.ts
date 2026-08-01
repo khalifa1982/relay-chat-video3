@@ -473,6 +473,14 @@ async function startServer() {
             callerPin: info.callerPin,
             roomId: info.roomId,
             video: info.video,
+            // The spec's `callerAvatar`. BEST-EFFORT and separately caught: this
+            // is decoration on a call screen that falls back to initials, so it
+            // may never be the reason a ring does not go out. Not a disclosure
+            // change — an avatar has always been served to any signed-in caller
+            // and already renders on the in-app ring card (v2.99.20).
+            callerAvatar: await getIdentityByNumber(info.callerPin)
+              .then(c => c?.avatarUrl ?? null)
+              .catch(() => null),
           },
         });
       } catch {
@@ -489,6 +497,50 @@ async function startServer() {
       const line = await getPartyLineByNumber(pin);
       if (line) return { partyLine: true as const, title: line.title };
       return "identity" as const;
+    },
+    (info) => {
+      // onCancelRingPush: the caller hung up before this callee answered, and this
+      // callee's ring was delivered by PUSH — so there is no socket for the
+      // websocket `ring-cancel` beside it to reach, and without this their handset
+      // rings for the full 45s expiry after the caller has already given up. On
+      // iOS that is a CallKit screen somebody answers into a call that ended.
+      //
+      // FIRE AND FORGET. The relay calls this from the hang-up path, which is
+      // synchronous and must not wait on a DB read plus two HTTP round trips; a
+      // failure here costs a stale ring, where a thrown error would cost the
+      // hang-up itself.
+      //
+      // Through `sendPushToIdentity` like the ring, for the same reason: it is the
+      // one place the user's master push switch is enforced and the only place
+      // that knows every transport. `kind` stays "incoming-call" so the cancel
+      // reaches EXACTLY the transports the ring did — the APNs VoIP branch is
+      // gated on that kind, and a cancel that took a different route could arrive
+      // at a device the ring never reached, or miss the one it did. The `type`
+      // inside the payload is what makes it a cancel.
+      void (async () => {
+        try {
+          const callee = await getIdentityByNumber(info.calleePin);
+          if (!callee) return;
+          await sendPushToIdentity(callee.id, {
+            kind: "incoming-call",
+            title: "Call ended",
+            body: "",
+            tag: "relay-call",
+            url: "/app/dialer",
+            call: {
+              type: "call_cancel",
+              // A cancel names the call to stop and nothing else — see
+              // `buildCallCancel` for why it carries no caller identity.
+              callerName: "",
+              callerPin: "",
+              roomId: info.roomId,
+              video: false,
+            },
+          });
+        } catch {
+          /* a stale ring is the acceptable failure; a thrown hang-up is not */
+        }
+      })();
     }
   );
   // Version endpoint for the client's auto-update checker. Returns the version

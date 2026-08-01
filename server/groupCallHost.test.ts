@@ -476,7 +476,13 @@ describe("#113 — the client, and the missing precondition it fills", () => {
     );
     expect(dial.length).toBeGreaterThan(400);
     expect((dial.match(/opts\?\.seed/g) ?? []).length).toBe(1);
-    expect(dial).toMatch(/sendWS\(\{ type: "invite", to: first, video: camOn, \.\.\.\(opts\?\.seed \? \{ seed: opts\.seed \} : \{\}\) \}\)/);
+    /* THE PROPERTY, not the literal line: the seed is spread CONDITIONALLY onto the
+       invite addressed at `first` — the one that creates the room. Pinning the whole
+       one-line `sendWS({...})` froze the message's field list, so it broke the moment
+       v2.106.59 added `parties` beside it while saying nothing about the rule. */
+    const firstInvite = dial.slice(dial.indexOf('type: "invite", to: first'));
+    expect(firstInvite.length).toBeGreaterThan(60);
+    expect(firstInvite.slice(0, 300)).toMatch(/\.\.\.\(opts\?\.seed \? \{ seed: opts\.seed \} : \{\}\)/);
     // The add-person path (a room that already exists) sends no seed.
     const addPath = dial.slice(dial.indexOf("if (alreadyInRoom)"), dial.indexOf("} else {"));
     expect(addPath).not.toMatch(/seed/);

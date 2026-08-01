@@ -261,12 +261,26 @@ describe("the board's bar and pill recipes live in CSS, once", () => {
 });
 
 describe("badges follow the board", () => {
-  it("History is red, Messages is the accent, and Groups has NONE", () => {
-    // The Messages list still contains every group thread, so its count is the complete
-    // one; a second partial count on Groups would be two numbers for one fact.
+  it("History is red, and Messages and Groups each count what they CONTAIN", () => {
+    /* v2.106.64 — this used to require Groups to carry NO badge, and its recorded reason
+       was that "the Messages list still contains every group thread, so its count is the
+       complete one". That reason stopped being true the moment groups left Messages (the
+       owner's ask), so the pin was forbidding the fix while saying nothing about the rule
+       it stood for.
+
+       The rule is that a tab's badge counts the threads that tab HOLDS. With the two
+       lists disjoint, a single total on Messages would light a badge for a group message
+       the Messages tab no longer contains — you tap it and find nothing, which is the
+       silent-no-op class. Asserted as the two counts being DERIVED and disjoint rather
+       than as either literal. */
     expect(SHELL_CODE).toMatch(/tab\.key === "history" && missedCount > 0/);
-    expect(SHELL_CODE).toMatch(/tab\.key === "messages" && unreadTotal > 0/);
-    expect(SHELL_CODE).not.toMatch(/tab\.key === "groups" &&/);
+    // One derivation, two disjoint buckets — never two independent reduces that can drift.
+    expect(SHELL_CODE).toMatch(/unreadTotal:\s*direct \+ groups/);
+    expect(SHELL_CODE).toMatch(/t\.kind === "group"\) groups \+= n/);
+    // Both tabs read the split, and NEITHER renders the whole-account total.
+    const badgeSites = SHELL_CODE.match(/tab\.key === "messages" \? unreadDirect : unreadGroups/g) ?? [];
+    expect(badgeSites.length).toBe(4); // 2 navs × (gate + value)
+    expect(SHELL_CODE).not.toMatch(/tab\.key === "messages" && unreadTotal > 0/);
     // The accent badge goes through the utility, never an inline colour.
     expect((SHELL_CODE.match(/rbadge-accent/g) ?? []).length).toBe(2);
   });
@@ -312,13 +326,22 @@ describe("/app/groups routes to the Messages page, narrowed", () => {
 });
 
 describe("the narrowing is applied to the INPUT, not by picking categories", () => {
-  it("scopedThreads is its own memo filtering on kind", () => {
+  it("scopedThreads is its own memo, and the scope PARTITIONS on kind", () => {
+    /* v2.106.64 — the else-arm was `all`, i.e. Messages contained everything including
+       groups. The owner asked for the split ("from the messages section, remove the group
+       message and just keep it in the group section"), so both arms filter now — and the
+       PROPERTY is that the two arms are complements, so no thread can be in both tabs or
+       in neither. Pinned as the complement rather than as either literal. */
     const fn = MESSAGES_CODE.slice(
       MESSAGES_CODE.indexOf("const scopedThreads = useMemo("),
       MESSAGES_CODE.indexOf("const threadCategories = useMemo("),
     );
     expect(fn.length).toBeGreaterThan(60);
-    expect(fn).toMatch(/only === "groups" \? all\.filter\(\(t\) => t\.kind === "group"\) : all/);
+    expect(fn).toMatch(/only === "groups"/);
+    expect(fn).toMatch(/all\.filter\(\(t\) => t\.kind === "group"\)/);
+    expect(fn).toMatch(/all\.filter\(\(t\) => t\.kind !== "group"\)/);
+    // The scope is still taken on the INPUT (the reason this memo exists at all), so a
+    // kind-agnostic section like Archived cannot leak the other tab's threads.
     expect(fn).toMatch(/\[threads\.data, only\]/);
   });
 
@@ -375,7 +398,14 @@ describe("in-page navigation returns to the tab it came from", () => {
     // the bottom bar's active tab changes under a tap that only meant "open this
     // conversation". Seven call sites across three components.
     expect(MESSAGES_CODE).not.toMatch(/setLocation\((`|")\/app\/messages/);
-    expect((MESSAGES_CODE.match(/setLocation\(`\$\{basePath\}\?c=/g) ?? []).length).toBe(4);
+    /* v2.106.65 — 4 became 3. Creating a GROUP is the one navigation that must NOT keep
+       the current tab: the sheet's Direct/Group toggle is reachable from Messages, so a
+       `basePath` there landed the user on `/app/messages?c=<groupId>` — a group
+       conversation on a tab whose list, since v2.106.64, cannot contain it. The
+       destination genuinely is a groups-tab object, so that ONE site names the tab and the
+       rule is asserted as "every OTHER conversation navigation keeps its tab". */
+    expect((MESSAGES_CODE.match(/setLocation\(`\$\{basePath\}\?c=/g) ?? []).length).toBe(3);
+    expect((MESSAGES_CODE.match(/setLocation\(`\/app\/groups\?c=/g) ?? []).length).toBe(1);
     expect((MESSAGES_CODE.match(/setLocation\(basePath\)/g) ?? []).length).toBe(3);
   });
 
