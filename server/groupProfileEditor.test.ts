@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen } from "./testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -115,8 +116,16 @@ describe("one avatar picker, with the save sink injected", () => {
     expect(AVATAR).toMatch(/removeLabel = "your photo"/);
     // Anchored on the prop boundary: an unanchored /title="…"/ is a SUBSTRING of
     // `data-title="…"`, so renaming the prop used to pass (caught by mutation).
-    expect(SHEET).toMatch(/(?:^|\s)title="Choose a group photo"/m);
-    expect(SHEET).toMatch(/(?:^|\s)removeLabel="the group photo"/m);
+    /* REPOINTED THROUGH `copyOnScreen` (#156): both strings moved into `dict/groups.ts`,
+       so the prop is now `title={t("groups.choosePhoto")}`. The property is unchanged —
+       this sheet passes GROUP wording rather than inheriting the picker's "your photo" —
+       and asking it this way is strictly stronger, because reaching the dictionary also
+       proves an Arabic half exists. The prop BOUNDARY is still pinned separately below,
+       which is what the old anchoring was for. */
+    expect(copyOnScreen(SHEET, "Choose a group photo")).toBe(true);
+    expect(copyOnScreen(SHEET, "the group photo")).toBe(true);
+    expect(SHEET).toMatch(/(?:^|\s)title=\{t\("groups\./m);
+    expect(SHEET).toMatch(/(?:^|\s)removeLabel=\{t\("groups\./m);
   });
 });
 
@@ -184,7 +193,7 @@ describe("the sheet itself", () => {
     // 3 and failed — the prose trap, for the eleventh time in this repo.
     expect((codeOnly(SHEET).match(/dir="ltr"/g) || []).length).toBeGreaterThanOrEqual(numberSites);
     // A group created before v2.102.0 has none, and says so rather than showing a gap.
-    expect(SHEET).toMatch(/no ID/);
+    expect(copyOnScreen(SHEET, "no ID")).toBe(true);
   });
 
   it("a broken group photo falls back to the glyph, not the browser's icon", () => {

@@ -10,6 +10,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { codeOnly } from "./testing/codeOnly";
+import { expandCopy } from "./testing/copyOnScreen";
 import {
   findMentions,
   mentions,
@@ -470,7 +471,6 @@ describe("green means ONLINE, and only online", () => {
     const DEBT = new Set([
       "client/src/app/InviteCard.tsx",
       "client/src/app/LiveStats.tsx",
-      "client/src/app/MatrixReveal.tsx",
       "client/src/app/MissedCalls.tsx",
       "client/src/app/OnboardingGate.tsx",
       "client/src/app/RelayEngine.tsx",
@@ -503,7 +503,14 @@ describe("green means ONLINE, and only online", () => {
          presence green: text ABOUT the misuse satisfying a search FOR it. That is the
          prose trap this repo has now hit sixteen times, here inside the guard written to
          catch the very thing the comment describes. */
-      const src = codeOnly(read(f));
+      /* AND `expandCopy`'d (#156): the evidence that a green is EARNED is usually the
+         WORD beside it ("3 online"), and the Arabic sweep moved those words into the
+         dictionary — so the element the rule inspects went from saying "online" to
+         saying `t("groups.onlineCount")`. Without this, a correctly-earned green reads
+         as a violation, which is a guard crying wolf on correct code. `expandCopy`
+         rewrites each key to its English half before the rule looks, exactly as
+         `systemAlerts` does for its own copy rules (v2.106.85). */
+      const src = expandCopy(codeOnly(read(f)));
       const all = src.split("\n");
       const hits = all.map((l, i) => ({ l, i })).filter(({ l }) => GREEN.test(l));
       for (const { l, i } of hits) {

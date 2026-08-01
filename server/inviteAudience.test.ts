@@ -14,6 +14,7 @@
  *      other by adding or dropping a segment.
  * ────────────────────────────────────────────────────────────────────────── */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { copyOnScreen } from "./testing/copyOnScreen";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -348,7 +349,11 @@ describe("v2.105.23 — the screens say the requirement instead of refusing a li
       sheet.indexOf("function InviteLinkSection"),
       sheet.indexOf("export function GroupInfoSheet"),
     );
-    expect(sec).toMatch(/Create another link/);
+    /* `copyOnScreen` searches the WHOLE file by design, so it cannot answer "inside this
+       section" — which is the point of the slice. Asked as both: the control is in the
+       section (by its key), and the words reach the screen. */
+    expect(sec).toMatch(/groups\.createAnother/);
+    expect(copyOnScreen(sheet, "Create another link")).toBe(true);
     expect(sec).toMatch(/role="radiogroup"/);
     /* THE PICKED VALUE MUST REACH THE MINT. Without this the picker is decoration: every
      * link would be minted `all` whatever the admin selected, and nothing on screen would

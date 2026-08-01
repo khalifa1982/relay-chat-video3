@@ -18,6 +18,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { copyOnScreen } from "./testing/copyOnScreen";
 import fs from "fs";
 import path from "path";
 import { codeOnly } from "./testing/codeOnly";
@@ -333,26 +334,46 @@ describe("the sheet offers only what the server would allow", () => {
 
   it("removal is confirmed, and the copy says the messages stay", () => {
     // That their messages survive is the part somebody would assume the opposite of.
-    expect(SHEET).toMatch(/Remove \{removing\.name\} from this group\?/);
-    expect(SHEET).toMatch(/Messages\s*\n?\s*they already sent stay/);
+    /* REPOINTED FOR #156. The name is INTERPOLATED, so the sentence reaches the
+       dictionary as a `{name}` placeholder — which is why the question is asked in two
+       halves: the copy is present (`copyOnScreen`), and the confirmation still names the
+       member rather than saying "this member". */
+    expect(copyOnScreen(SHEET, "from this group?")).toBe(true);
+    expect(SHEET).toMatch(/name: removing\.name/);
+    expect(copyOnScreen(SHEET, "they already sent stay")).toBe(true);
 
     // THE BUTTON MUST ROUTE THROUGH THE CONFIRMATION, not merely coexist with it.
     // ADDED after a mutation SURVIVED: pointing the Remove button straight at
     // `removeMember.mutate` left the confirm markup in the file — so the assertions above
     // still passed while the confirmation had become unreachable dead code. That is the
     // pin-the-declaration-not-the-use class, and this is the assertion that catches it.
-    const btn = SHEET.slice(
-      SHEET.indexOf("{iAmAdmin && !m.isCreator && !m.isMe && ("),
-      SHEET.indexOf("Remove\n                      </button>"),
-    );
+    /* BOTH ANCHORS ARE ASSERTED TO EXIST BEFORE SLICING. The end anchor used to be the
+       button's own English text; localisation turned it into a key, `indexOf` answered
+       -1, and `slice(start, -1)` silently ran to the END OF THE FILE — so the slice
+       swallowed the confirmation dialog, which legitimately DOES call the mutation, and
+       the "must not write directly" assertion failed on correct source. That is the
+       negative-index trap (v2.99.78, v2.106.56, v2.106.65) inside the very pin written
+       to catch a real gap. Re-anchored on the element's own closing tag, which no copy
+       change can move. */
+    const btnStart = SHEET.indexOf("{iAmAdmin && !m.isCreator && !m.isMe && (");
+    expect(btnStart, "the row-button gate moved").toBeGreaterThan(-1);
+    const btnEnd = SHEET.indexOf("</button>", btnStart);
+    expect(btnEnd, "the row button lost its closing tag").toBeGreaterThan(btnStart);
+    const btn = SHEET.slice(btnStart, btnEnd);
     expect(btn.length).toBeGreaterThan(120);
-    expect(btn).toMatch(/onClick=\{\(\) => setRemoving\(\{ id: m\.id/);
+    /* WHITESPACE-TOLERANT (#156): this froze the call on ONE line, and giving the
+       fallback name a translation key made prettier wrap it. The property is only that
+       the row button OPENS the confirmation by setting `removing` — never the formatting
+       of the arguments. */
+    expect(btn.replace(/\s+/g, " ")).toMatch(/onClick=\{\(\) => setRemoving\(\{ id: m\.id/);
     expect(btn, "the row button must not write directly").not.toMatch(/removeMember\.mutate/);
     // …and exactly one place performs the write: the confirmation's own button.
     expect((SHEET.match(/removeMember\.mutate\(/g) || []).length).toBe(1);
   });
 
   it("the add field says what a new member will and will not see", () => {
-    expect(SHEET).toMatch(/They'll see messages from when they join, not the history before it/);
+    expect(
+      copyOnScreen(SHEET, "They'll see messages from when they join, not the history before it"),
+    ).toBe(true);
   });
 });

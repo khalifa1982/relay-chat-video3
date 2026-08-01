@@ -19,6 +19,7 @@
  * browser two releases ago.
  */
 import { describe, expect, it } from "vitest";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 import { readFileSync } from "node:fs";
 import { codeOnly } from "../../../server/testing/codeOnly";
 
@@ -137,13 +138,13 @@ describe("a failed group read does not look like losing your adminship", () => {
   });
 
   it("it says the controls are hidden rather than letting them vanish silently", () => {
-    expect(code).toMatch(/controls are hidden/i);
-    expect(code).toMatch(/nothing has changed/i);
+    expect(copyOnScreen(code, "controls are hidden")).toBe(true);
+    expect(copyOnScreen(code, "nothing has changed")).toBe(true);
   });
 
   it("in flight it says loading rather than asserting an empty group", () => {
     // A group with no members in it is a claim; "loading" is not.
-    expect(code).toMatch(/Loading members/);
+    expect(copyOnScreen(code, "Loading members")).toBe(true);
   });
 });
 

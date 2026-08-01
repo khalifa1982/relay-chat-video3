@@ -1075,7 +1075,7 @@ body.relay-app-lock {
    one repainting property the reference uses (`filter: blur` on the digits) is
    applied as a STATE, not animated between frames.
    ============================================================================ */
-.prv-root {
+.relay-v2.prv-root {
   position: fixed;
   inset: 0;
   z-index: 60;
@@ -1090,7 +1090,7 @@ body.relay-app-lock {
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   cursor: pointer;
 }
-.prv-stack {
+.relay-v2 .prv-stack {
   position: relative;
   /* ABOVE the canvas structurally rather than by DOM order: `RelayBackground` is
      `position: fixed; z-index: 0`, and a positioned element at z-index 0 paints in the
@@ -1105,9 +1105,9 @@ body.relay-app-lock {
 }
 
 /* Wordmark */
-.prv-brand { display: flex; flex-direction: column; align-items: center; gap: 5px; }
-.prv-brand-row { display: flex; align-items: center; gap: 10px; }
-.prv-dot {
+.relay-v2 .prv-brand { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.relay-v2 .prv-brand-row { display: flex; align-items: center; gap: 10px; }
+.relay-v2 .prv-dot {
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--rb, #35e0b4);
   box-shadow: 0 0 12px rgba(var(--rb-rgb, 53, 224, 180), 0.8);
@@ -1122,14 +1122,14 @@ body.relay-app-lock {
   26% { transform: scale(1.18); }
   38% { transform: scale(1); }
 }
-.prv-name { font-size: 15px; font-weight: 800; letter-spacing: 0.32em; color: oklch(0.95 0.003 260); }
-.prv-status {
+.relay-v2 .prv-name { font-size: 15px; font-weight: 800; letter-spacing: 0.32em; color: oklch(0.95 0.003 260); }
+.relay-v2 .prv-status {
   font-size: 9px; font-weight: 700; letter-spacing: 0.4em;
   color: oklch(0.76 0.16 145); padding-inline-start: 19px;
 }
 
 /* Glass card — the .rglass recipe */
-.prv-card {
+.relay-v2 .prv-card {
   width: 100%;
   box-sizing: border-box;
   background-color: oklch(0.18 0.007 248);
@@ -1139,9 +1139,9 @@ body.relay-app-lock {
   padding: 22px 24px 24px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 24px 70px rgba(0, 0, 0, 0.55);
 }
-.prv-head { display: flex; justify-content: space-between; align-items: center; padding: 0 6px 18px; }
-.prv-label { font-size: 10px; font-weight: 500; letter-spacing: 0.35em; color: oklch(0.68 0.008 250); }
-.prv-chip {
+.relay-v2 .prv-head { display: flex; justify-content: space-between; align-items: center; padding: 0 6px 18px; }
+.relay-v2 .prv-label { font-size: 10px; font-weight: 500; letter-spacing: 0.35em; color: oklch(0.68 0.008 250); }
+.relay-v2 .prv-chip {
   font-size: 9px; font-weight: 700; letter-spacing: 0.3em; padding: 5px 10px; border-radius: 999px;
   background: rgba(var(--rb-rgb, 53, 224, 180), 0.14);
   border: 1px solid rgba(var(--rb-rgb, 53, 224, 180), 0.4);
@@ -1149,7 +1149,7 @@ body.relay-app-lock {
 }
 
 /* Capsule */
-.prv-capsule {
+.relay-v2 .prv-capsule {
   position: relative;
   height: clamp(68px, 17vw, 94px);
   border-radius: 999px;
@@ -1163,7 +1163,7 @@ body.relay-app-lock {
    purpose: the orb docks on the right of the capsule and the light travels across
    the digits, which is a physical direction rather than a reading order, so it must
    NOT mirror in Arabic (the digits themselves are always LTR). */
-.prv-beam {
+.relay-v2 .prv-beam {
   position: absolute; top: 0; bottom: 0; left: 5%; right: 64px;
   transform-origin: 100% 50%;
   clip-path: polygon(0 14%, 100% 42%, 100% 58%, 0 86%);
@@ -1178,7 +1178,7 @@ body.relay-app-lock {
   opacity: 0;
   transition: opacity 0.2s ease;
 }
-.prv-beam.core {
+.relay-v2 .prv-beam.core {
   left: 8%;
   clip-path: polygon(0 40%, 100% 47%, 100% 53%, 0 60%);
   filter: blur(4px);
@@ -1188,56 +1188,56 @@ body.relay-app-lock {
     color-mix(in oklab, var(--rb, #35e0b4) 70%, white) 100%
   );
 }
-.prv-capsule.flash .prv-beam {
+.relay-v2 .prv-capsule.flash .prv-beam {
   transform: scaleX(1); opacity: 1;
   transition: transform 0.4s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.25s ease;
 }
 /* The owner's "light reduces slowly" requirement — the digits stay fully lit. */
-.prv-capsule.hold .prv-beam { transform: scaleX(1); opacity: 0; transition: opacity 2.2s ease-out; }
+.relay-v2 .prv-capsule.hold .prv-beam { transform: scaleX(1); opacity: 0; transition: opacity 2.2s ease-out; }
 
 /* Digit row: 3 · dash · 3 */
-.prv-digits {
+.relay-v2 .prv-digits {
   position: absolute; top: 0; bottom: 0;
   left: clamp(18px, 4.5%, 30px); right: clamp(82px, 20vw, 112px);
   display: flex; align-items: stretch;
   direction: ltr; /* a number never reorders, whatever the app language is */
 }
-.prv-slot { flex: 1; display: grid; place-items: center; }
-.prv-dotslot {
+.relay-v2 .prv-slot { flex: 1; display: grid; place-items: center; }
+.relay-v2 .prv-dotslot {
   grid-area: 1/1; width: 7px; height: 7px; border-radius: 50%;
   background: oklch(0.38 0.008 250); transition: opacity 0.22s ease;
 }
-.prv-digit {
+.relay-v2 .prv-digit {
   grid-area: 1/1; font-weight: 700; font-size: clamp(28px, 7.5vw, 42px); line-height: 1;
   color: oklch(0.45 0.02 250); opacity: 0; transform: scale(0.8);
   transition: opacity 0.22s ease, transform 0.3s cubic-bezier(0.23, 1, 0.32, 1),
     color 0.25s ease, text-shadow 0.4s ease, filter 0.2s ease;
 }
-.prv-capsule.lit .prv-dotslot { opacity: 0; }
-.prv-capsule.lit .prv-digit { opacity: 1; transform: scale(1); }
-.prv-slot.scrambling .prv-digit { filter: blur(1.5px); }
-.prv-slot.set .prv-digit {
+.relay-v2 .prv-capsule.lit .prv-dotslot { opacity: 0; }
+.relay-v2 .prv-capsule.lit .prv-digit { opacity: 1; transform: scale(1); }
+.relay-v2 .prv-slot.scrambling .prv-digit { filter: blur(1.5px); }
+.relay-v2 .prv-slot.set .prv-digit {
   color: var(--rb, #35e0b4); filter: none;
   text-shadow: 0 0 16px rgba(var(--rb-rgb, 53, 224, 180), 0.55),
     0 0 40px rgba(var(--rb-rgb, 53, 224, 180), 0.25);
 }
-.prv-dash-wrap { width: 14px; align-self: center; display: grid; place-items: center; }
-.prv-dash {
+.relay-v2 .prv-dash-wrap { width: 14px; align-self: center; display: grid; place-items: center; }
+.relay-v2 .prv-dash {
   width: 11px; height: 3px; border-radius: 2px; background: oklch(0.38 0.008 250);
   transition: background 0.5s ease, box-shadow 0.5s ease;
 }
-.prv-capsule.lit .prv-dash {
+.relay-v2 .prv-capsule.lit .prv-dash {
   background: rgba(var(--rb-rgb, 53, 224, 180), 0.75);
   box-shadow: 0 0 10px rgba(var(--rb-rgb, 53, 224, 180), 0.25);
 }
 
 /* Orb socket + orb */
-.prv-socket {
+.relay-v2 .prv-socket {
   position: absolute; top: 9px; bottom: 9px; right: 9px; aspect-ratio: 1/1; border-radius: 50%;
   background: rgba(2, 4, 5, 0.9);
   box-shadow: inset 0 4px 9px rgba(0, 0, 0, 0.95), inset 0 -1px 0 rgba(255, 255, 255, 0.07);
 }
-.prv-orb {
+.relay-v2 .prv-orb {
   position: absolute; top: 13px; bottom: 13px; right: 13px; aspect-ratio: 1/1; border-radius: 50%;
   background: radial-gradient(
     circle at 35% 28%,
@@ -1250,14 +1250,14 @@ body.relay-app-lock {
     0 0 38px rgba(var(--rb-rgb, 53, 224, 180), 0.25);
   transition: transform 0.6s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.3s ease, box-shadow 1.5s ease;
 }
-.prv-capsule.charge .prv-orb,
-.prv-capsule.flash .prv-orb,
-.prv-capsule.hold .prv-orb { opacity: 1; transform: scale(1) translateY(0); }
-.prv-capsule.flash .prv-orb {
+.relay-v2 .prv-capsule.charge .prv-orb,
+.relay-v2 .prv-capsule.flash .prv-orb,
+.relay-v2 .prv-capsule.hold .prv-orb { opacity: 1; transform: scale(1) translateY(0); }
+.relay-v2 .prv-capsule.flash .prv-orb {
   box-shadow: 0 0 36px rgba(var(--rb-rgb, 53, 224, 180), 0.55),
     0 0 80px rgba(var(--rb-rgb, 53, 224, 180), 0.25);
 }
-.prv-orb::after {
+.relay-v2 .prv-orb::after {
   content: ""; position: absolute; inset: 0; border-radius: 50%;
   background: radial-gradient(circle at 33% 26%, rgba(255, 255, 255, 0.5), transparent 48%);
 }
@@ -1269,10 +1269,10 @@ body.relay-app-lock {
   50% { filter: brightness(1.45) saturate(1.2); }
 }
 
-.prv-caption {
+.relay-v2 .prv-caption {
   text-align: center; padding-top: 16px; margin: 0;
   font-size: 11px; letter-spacing: 0.06em; color: oklch(0.68 0.008 250);
   opacity: 0; transform: translateY(4px);
   transition: opacity 0.8s ease 0.3s, transform 0.8s cubic-bezier(0.23, 1, 0.32, 1) 0.3s;
 }
-.prv-caption.show { opacity: 1; transform: translateY(0); }
+.relay-v2 .prv-caption.show { opacity: 1; transform: translateY(0); }

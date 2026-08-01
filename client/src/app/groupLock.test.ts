@@ -11,6 +11,7 @@
  * rather than copied.
  * ────────────────────────────────────────────────────────────────────────── */
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 import fs from "fs";
 import path from "path";
 import { codeOnly } from "../../../server/testing/codeOnly";
@@ -557,7 +558,7 @@ describe("the lock control is offered to any MEMBER, not just an admin", () => {
     // breaks and a literal-space pattern would go stale on a change that alters
     // nothing anybody reads.
     const flat = SHEET.replace(/\s+/g, " ");
-    expect(flat).toMatch(/not a permission/);
-    expect(flat).toMatch(/other devices still show them/);
+    expect(copyOnScreen(SHEET, "not a permission")).toBe(true);
+    expect(copyOnScreen(SHEET, "other devices still show them")).toBe(true);
   });
 });

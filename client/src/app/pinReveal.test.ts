@@ -147,11 +147,36 @@ describe("it never hardcodes the accent", () => {
     expect(block).not.toMatch(/(?<!var\(--rb, )#35e0b4/);
   });
 
-  it("scopes every rule to .prv-, so it cannot reach the rest of the app", () => {
+  it("scopes every rule TWICE over, so it cannot reach the rest of the app", () => {
+    /* Both scopings, because they close different holes and this block has to satisfy
+       the same house rule as every other one in this stylesheet:
+
+         1. Rooted in `.relay-v2` — the app's own class, which the landing page and the
+            docs page do not carry. `relayAccentVars` sweeps for this across the whole
+            token layer, and a first attempt at this feature skipped it (the rules were
+            written bare) and was caught by that guard rather than by this file.
+         2. Every class it targets is `prv-`, exclusive to this component — so nothing
+            else can select these elements however the markup is nested.
+
+       The root rule is `.relay-v2.prv-root` (the element carries both) and its
+       descendants take the ancestor form. */
     const block = CSS.slice(CSS.indexOf("PIN REVEAL (#162)"));
-    const selectors = [...block.matchAll(/^\.([a-z][\w-]*)/gm)].map((m) => m[1]);
+    const selectors = [...block.matchAll(/^\.[\w.-]+(?: \.[\w.-]+)*/gm)].map((m) => m[0]);
     expect(selectors.length).toBeGreaterThan(10);
-    for (const s of selectors) expect(s, s).toMatch(/^prv-/);
+    for (const sel of selectors) {
+      expect(sel, sel).toMatch(/^\.relay-v2(?![\w-])/);
+      /* Per COMPOUND, not per class: a state modifier like `.prv-beam.core` or
+         `.prv-slot.set` cannot select anything foreign, because the compound as a whole
+         still requires the `prv-` class. What must never appear is a compound carrying
+         NEITHER — `.relay-v2 .core` would match any `.core` in the app. */
+      for (const part of sel.split(" ")) {
+        const classes = part.match(/\.[\w-]+/g) ?? [];
+        expect(
+          classes.some((c) => c === ".relay-v2" || c.startsWith(".prv-")),
+          `${sel} → "${part}" is scoped by neither .relay-v2 nor a .prv- class`,
+        ).toBe(true);
+      }
+    }
   });
 
   it("its keyframes are namespaced and gated on reduced motion", () => {

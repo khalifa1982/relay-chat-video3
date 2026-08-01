@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { copyOnScreen, keysForEnglish, whyCopyMissing } from "./testing/copyOnScreen";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -139,14 +140,25 @@ describe("v2.99.11 — the offline card offers BOTH a voice message and a writte
   const vm = read("client/src/app/VoicemailPrompt.tsx");
 
   it("names the reason honestly for an offline callee", () => {
-    expect(vm).toMatch(/if \(reason === "server-error:offline"\) return "They're offline right now\.";/);
+    /* REPOINTED FOR LOCALISATION (the Arabic sweep) AND NOT WEAKENED. This froze the
+       exact source line, so it forbade the sentence ever moving into the dictionary
+       while saying nothing about the property it stands for: an offline callee is told
+       they are offline, rather than being given one of the other two reasons.
+
+       Both halves of that are still asserted, and the pair is stronger than the line it
+       replaces — `keysForEnglish` reads the DICTIONARY, so it also proves an Arabic half
+       exists (`Entry` requires both), which a source regex could never do. */
+    expect(vm).toMatch(/if \(reason === "server-error:offline"\) return "voicemail\.reasonOffline";/);
+    expect(keysForEnglish("They're offline right now.")).toContain("voicemail.reasonOffline");
   });
 
   it("has a text composer that drops a written message into the DM thread", () => {
     expect(vm).toMatch(/async function sendText\(\)/);
     expect(vm).toMatch(/openThread\.mutateAsync\(\{ number: info\.pin \}\)/);
     expect(vm).toMatch(/sendMessage\.mutateAsync\(\{ conversationId: thread\.conversationId, kind: "text", body \}\)/);
-    // …alongside the existing voice-message path.
-    expect(vm).toMatch(/Leave a voice message/);
+    // …alongside the existing voice-message path. `copyOnScreen` rather than the literal
+    // (the Arabic sweep moved it into the dictionary): same property, and satisfied only
+    // if those exact words still reach the card.
+    expect(copyOnScreen(vm, "Leave a voice message"), whyCopyMissing(vm, "Leave a voice message")).toBe(true);
   });
 });
