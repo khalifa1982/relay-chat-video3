@@ -33,6 +33,14 @@ import {
   notifyNativeCallEnded,
   type NativeAnswerArm,
 } from "./nativeCallBridge";
+import {
+  hasNativeAudioShell,
+  mountNativeAudioBridge,
+  requestNativeAudioRoute,
+  ROUTE_TO_WIRE,
+  wireToEngineRoute,
+  type EngineRouteId,
+} from "./nativeAudioRoute";
 
 interface IceConfig {
   iceServers: Array<{ urls: string; username?: string; credential?: string }>;
@@ -1880,10 +1888,19 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     const menu = $("audioMenu");
     if (!menu) return;
     const bt = await headsetPresent();
-    // Which route carries audio right now: the loudspeaker force when on;
-    // otherwise the OS default — which follows a connected headset, else the
-    // earpiece (the documented Android/iOS WebRTC default while a mic is live).
-    const current = loudspeakerOn ? "loud" : bt ? "bt" : "ear";
+    // Which route carries audio right now.
+    //
+    // In a NATIVE SHELL the OS owns the route and tells us via `audioRouteChanged`,
+    // so `nativeRoute` is the only honest answer — deriving it from `loudspeakerOn`
+    // there would report the state of a WebAudio force we deliberately never
+    // applied. Until the shell has said anything we have nothing to claim, so it
+    // falls through to the same reading a plain browser uses.
+    //
+    // In a plain browser: the loudspeaker force when on; otherwise the OS default,
+    // which follows a connected headset, else the earpiece (the documented
+    // Android/iOS WebRTC default while a mic is live).
+    const current: EngineRouteId =
+      (hasNativeAudioShell() ? nativeRoute : null) ?? (loudspeakerOn ? "loud" : bt ? "bt" : "ear");
     menu.innerHTML =
       mobileAudioRow("loud", "🔊", "Loudspeaker", "Hands-free — hear the call out loud", current === "loud") +
       mobileAudioRow("ear", "📞", "Earpiece", "Private — hold the phone to your ear", current === "ear") +
@@ -1891,8 +1908,26 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         bt ? "Route the call to your connected device" : "No Bluetooth device detected — connect one and it takes over",
         current === "bt", !bt);
   }
+  /**
+   * The route the NATIVE SHELL last confirmed, or null if it has not spoken.
+   *
+   * Written ONLY from `audioRouteChanged` — never from a tap — which is what makes
+   * the highlighted button a report rather than a hope. See nativeAudioRoute.ts.
+   */
+  let nativeRoute: EngineRouteId | null = null;
   async function setMobileRoute(route: string) {
     closeAudioMenu();
+    // ── NATIVE SHELL: ask, do not act ───────────────────────────────────────
+    // The OS owns the route inside a shell and no web API can move it, so the tap
+    // becomes a REQUEST and the button waits for `audioRouteChanged`. Checked
+    // FIRST, before every web mechanism below, because running the WebAudio force
+    // here would fight whatever the shell is about to set — and it is checked on
+    // the injected object, so a plain browser never takes this path.
+    if (hasNativeAudioShell()) {
+      const wire = ROUTE_TO_WIRE[route as EngineRouteId] ?? "earpiece";
+      requestNativeAudioRoute(wire);
+      return;
+    }
     if (route === "loud") {
       // Native Android app: real OS speakerphone. Web: the WebAudio force.
       if (isNativeAndroid() && (await nativeSetSpeaker(true))) {
@@ -6605,6 +6640,27 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   ($("heldMerge") as HTMLElement | null)?.addEventListener("click", mergeCall);
   ($("micBtn") as HTMLElement | null)?.addEventListener("click", toggleMic);
   ($("camBtn") as HTMLElement | null)?.addEventListener("click", toggleCam);
+  // NATIVE → WEB audio events. Mounted unconditionally: in a plain browser nothing
+  // ever dispatches `relay:native`, so this is one idle listener rather than a
+  // capability check that would have to be re-run if a shell injected itself late.
+  const unmountNativeAudio = mountNativeAudioBridge(e => {
+    if (e.type === "audioRouteChanged") {
+      nativeRoute = wireToEngineRoute(e.route);
+      // `loudspeakerOn` is what the button's highlight and the menu's own reading
+      // key on, so it is kept in step with the shell's answer — WITHOUT running
+      // loudspeakerEnable/Disable, which would apply the WebAudio force this path
+      // exists to avoid. The flag records what the OS reports; the force stays off.
+      loudspeakerOn = nativeRoute === "loud";
+      updateAudioBtn();
+      if ($("audioMenu")?.classList.contains("open")) void renderMobileAudioMenu();
+      return;
+    }
+    // The system call screen's own mute button. `setMic` rather than `toggleMic`,
+    // because the shell reports a STATE, not an edge: two "muted: true" events in
+    // a row (a re-post on foreground, say) must leave the mic muted, and a toggle
+    // would unmute on the second.
+    setMic(!e.muted);
+  });
   ($("chatBtn") as HTMLElement | null)?.addEventListener("click", toggleChat);
   ($("chatClose") as HTMLElement | null)?.addEventListener("click", toggleChat);
   ($("addBtn") as HTMLElement | null)?.addEventListener("click", openAddPad);
@@ -6906,6 +6962,9 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       // next session, and release the loudspeaker context.
       if (rejoinWatchT) { clearTimeout(rejoinWatchT); rejoinWatchT = null; }
       roomCap = null; cancelRecreate(); // Round 11 B — same reason as in hangUp
+      // The shell's audio listener is on `window`, which outlives this engine — the
+      // same reason the in-call flag is cleared above.
+      try { unmountNativeAudio(); } catch { /* */ }
       try { loudspeakerDisable(); loudspeakerCtx?.close?.(); } catch { /* */ }
       if (reconnectT) { clearTimeout(reconnectT); reconnectT = null; }
       if (timerInt) { clearInterval(timerInt); timerInt = null; }

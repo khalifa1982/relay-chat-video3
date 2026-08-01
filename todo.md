@@ -18248,6 +18248,159 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.76 — the route buttons stop trying and start asking (2026-08-01)
+
+The owner re-uploaded `relaypushbackendconfig.md` a fourth time. The diff against the
+previous revision is exactly **one new clause**, item 4: the in-call speaker / earpiece /
+Bluetooth buttons must NOT switch audio via web APIs — *"impossible inside the native
+shells"* — but send `RelayNative.postMessage({type:'setAudioRoute',route})`, keep current
+behaviour in plain browsers, and listen on `relay:native` for
+`{type:'audioRouteChanged',route}` and `{type:'callMuted',muted}`.
+
+**The doc is right about the mechanism, which is why this REPLACES rather than adds.**
+`setSinkId` is a desktop output picker that enumerates nothing on a phone — v2.99.4 found
+that menu opening EMPTY there — so what the app has instead is a WebAudio re-route forcing
+the media path onto the loudspeaker, a workaround that only ever worked because a browser
+tab has no other idea about routing. Inside a shell the OS owns the route, so that force is
+at best a no-op and at worst fights whatever the shell just set.
+
+**THE SHELL IS AUTHORITATIVE, AND THAT ONE DECISION SETTLES THE UI.** The tap sends a
+REQUEST; the button state follows the ANSWER, never the tap. That is deliberately not the
+friendlier-looking design: highlighting optimistically would mean a tap the OS refused (a
+Bluetooth device that dropped, a route the phone will not take) leaves the app claiming an
+output the call is not using — the class of lie this repo keeps removing. An unchanged
+button over an unchanged route is TRUE.
+
+**The corollary is stated rather than hidden**: a shell build that does not yet handle
+`setAudioRoute` will show a button that does nothing when tapped. That is accurate rather
+than broken, because in such a shell nothing else in the page can move the route either.
+
+**Plain browsers are byte-identical.** That is the whole compatibility contract, and it is
+why the shell test is a capability check on the injected object
+(`typeof RelayNative.postMessage === "function"`) rather than a user-agent sniff — a UA
+sniff would claim a shell for every Android browser and route every tap into nothing.
+
+**One table, both directions derived.** The engine's internal ids (`loud`/`ear`/`bt`, woven
+through the menu markup since v2.99.4) map to the spec's wire names in `ROUTE_TO_WIRE`, and
+the reverse is COMPUTED from it. Two hand-written maps is how you tap Bluetooth, the shell
+confirms `bluetooth`, and a lookup that spelled it differently lights nothing — v2.99.71's
+TURN checker and v2.105.11's token classifier for the third time.
+
+**`normalizeNativeRoute` fails closed, and which way it fails is the point.** An
+unrecognised value yields null and the event is dropped rather than defaulting — and
+`speaker` is the specifically harmful default, because a garbled event would put a call
+somebody is holding to their ear onto the loudspeaker in public. Same reasoning as
+`normalizeMode` defaulting to voice in the call bridge.
+
+**`muted` must be a real boolean.** The string `"false"` is truthy; coercing it would mute
+somebody's microphone mid-sentence on an event trying to say the opposite. The value comes
+from a separate binary, so its type is not this side's to assume.
+
+**The mute sets STATE, never toggles** (`setMic(!e.muted)`). The shell reports a state
+rather than an edge, and the shells re-post on foreground, so two `muted: true` events in a
+row are a real sequence that a toggle would answer by UNMUTING.
+
+**And it deliberately does not dedupe**, unlike the call bridge beside it on the same
+channel. That one dedupes per (type, callId) so a foreground re-post cannot answer a call
+twice; route events legitimately repeat — a headset connecting, dropping and reconnecting
+sends bluetooth → earpiece → bluetooth, and swallowing the third would strand the button on
+the wrong route. Its own listener for the same reason (the token bridge already has one, so
+a third is the established pattern).
+
+### The shell has TWO names for the one operation
+
+**The finding worth the most here, and it came from reading the OTHER END rather than the
+spec.** `main` carries the Expo shell and the owner shipped its half in the same hours
+("Round 24: iOS audio session §3.5 compliance + route switching + mute sync + RelayNative
+handler"), so the contract could be checked against a real implementation instead of a
+document. The two platforms disagree:
+
+| | web → native | native → web |
+|---|---|---|
+| **iOS** `plugins/with-ios-voip-callkit.js` | `setAudioRoute` | `audioRouteChanged`, `callMuted` |
+| **Android** `components/relay-webview.tsx` + `lib/call-messages.ts` | **`audio-route`** | *(none)* |
+
+The route VALUES agree everywhere (`speaker`/`earpiece`/`bluetooth`); only the envelope's
+`type` differs. **Sending the spec's name alone — which is all the doc asks for — means every
+Android tap reaches a parser that answers `{type:"unknown"}` and a `default: break`**:
+nothing happens, silently, on one whole platform. That is v2.99.71's TURN checker and
+v2.105.11's token classifier a fourth time.
+
+The shell is not ours to edit, so **the web satisfies both names**. Safe BY CONSTRUCTION
+rather than by timing: the two handlers live on different platforms and each has a hard
+inert default for the name it does not know (iOS logs `unknown message type`, Android
+breaks), so no shell can ever act twice. Each envelope is posted independently so one
+throwing cannot cost the other its delivery. When the shell unifies, one line goes.
+
+**The rest of the contract was verified and matches exactly**, including the one detail that
+would have broken it silently: iOS emits `muted:\(muted)` **unquoted**, so it lands as a JS
+boolean and the strict `typeof === "boolean"` guard accepts it. Had they quoted it, that
+guard would correctly have DROPPED it.
+
+**Two shell-side gaps are flagged rather than worked around.** Android emits no
+`audioRouteChanged` and no `callMuted` at all — its `relay:native` injections are
+`pushToken`, `callAnswered`, `callDeclined` — so on Android the route button will not light,
+and a system-screen mute will not reach the mic, until the shell adds them. A timeout-based
+guess ("assume it worked after N ms") was considered and REJECTED: it would become permanent
+and would fight iOS whenever a confirmation was slow.
+
+**16 of 16 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+backups, both sources byte-identical afterwards — the shell branch deleted, a tap writing
+the confirmed route optimistically, the mute toggling, an unknown route defaulting to
+speaker, `muted` truthy-checked, the shell check accepting a bare object, either wire name
+sent alone, one name misspelled, the payload key renamed, one throwing envelope aborting the
+loop, the reverse map hand-written, the bridge deduping, the teardown made inert.
+
+**One survived the first run and it was a real gap in my own test** — the
+pin-the-position-not-the-property class. The ordering assertion compared INDICES
+(`request < webForce`), which stays true when the branch's `return` is deleted: the shell
+request would fire and the WebAudio force would then run and fight it, with every assertion
+green. The return is now pinned as the property, and it bites.
+
+**Three drafts of the one-writer pin failed on CORRECT source**, each teaching something
+about matching TypeScript with a regex: the `let` declaration matched, then the
+`=== "loud"` comparison matched, then the optional type-annotation branch ran `[^=]+` clean
+across a ternary and swallowed an unrelated statement. It is line-anchored now, because an
+assignment to a plain local is a line that STARTS with it.
+
+**Not verified in a shell, said plainly**: there is no Expo build here and the module is
+driven against a stand-in window. What is proven is that the envelope is the spec's, that a
+plain browser never takes the path, and that no malformed event can move the route or the
+microphone — not that a real handset switches to its earpiece.
+
+New `client/src/lib/nativeAudioRoute.ts` + `client/src/lib/nativeAudioRoute.test.ts` (27).
+
+### Also in this release, measured in production: the media fleet is 8 of 8
+
+The v2.106.75 gate was applied. The two nodes that crash-looped on the first attempt came
+up, each printing the diagnosis verbatim on exactly those two and nowhere else:
+
+```
+dependency does NOT resolve from the agent: ioredis — the install is required
+installer: corepack pnpm
++ ioredis 5.4.1   + mediasoup 3.19.3   Done in 1.7s using pnpm v10.4.1
+```
+
+| instance | AZ | before | after | announcing |
+|---|---|---|---|---|
+| i-0dce71f5056f73ce6 | ap-south-1b | failed | **active** | 13.203.36.154 |
+| i-062022390e558ce74 | ap-south-1a | failed | **active** | 13.207.213.126 |
+| i-0b6c043f4e9dc3c90 | — | active | active | 3.6.85.52 |
+| i-0b4c7f23a086134eb | — | active | active | 13.207.218.57 |
+| i-0ae0d7bf628202994 | — | active | active | 13.233.62.62 |
+| i-09574fccbff912150 | — | active | active | 13.206.168.251 |
+| i-07224dbec1d23c36f | ap-south-1a | active | active | 15.252.23.92 |
+| i-06ef2da49a8490df1 | ap-south-1a | active | active | 3.111.211.28 |
+
+**The `packageManager` pin was load-bearing**: every node reports `pnpm: MISSING`, so
+corepack was the only path, and without the pin the install would have stopped mid-deploy
+asking which version to use — on exactly the two nodes that needed it.
+
+**8/8 `VOIP_EXIT=0`, zero non-zero markers.** Each node reports two mediasoup workers,
+WebRtcServers on 40000-40001, and the HMAC-gated internal API on `:4443`.
+
+No schema change, no new dependency, no new env var. 5244 tests.
+
 ## v2.106.75 — the reuse gate proved the expensive dependency and not the cheap one (2026-08-01)
 
 The first real apply ran on all eight media nodes. **Six came up; two did not**, and the
