@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Phone, Video, MessageSquare, ArrowRight, User2, PhoneCall, Users } from "lucide-react";
 import { InviteCard, type InvitePartyLine, type InvitePerson } from "./InviteCard";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { useIdentity } from "./useIdentity";
 import { AuthPanel } from "./AuthPanel";
 import { GuestRestore } from "./GuestRestore";
 import { LiveStats } from "./LiveStats";
-import { MatrixReveal } from "./MatrixReveal";
+import { PinReveal } from "./PinReveal";
 import { LoginScreen } from "./LoginScreen";
 import { useLocale } from "./i18n";
 
@@ -75,10 +75,38 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
     { enabled: !!callTarget && !me && !loading, retry: false, refetchInterval: 10_000 }
   );
 
-  // Guest ID-reveal ("matrix" animation) state — plays after a standard guest
-  // picks a name, holding the gate on screen while the session is minted.
+  /* THE PIN REVEAL (#162). Owner: *"there is a login area (as a guest or member). Once
+     you pass this, before you go to the dashboard screen, there is a PIN number page."*
+     — so it must fire for BOTH kinds of entry, and for the call-link join card too.
+
+     IT IS ARMED BY THE SIGNED-OUT → SIGNED-IN TRANSITION, not by a callback from each
+     entry surface, and that is the load-bearing decision: there are three ways in today
+     (guest name, email sign-in, the `/i/<pin>` join card) across two components, and a
+     fourth added later would have to remember to call it. The transition is one funnel
+     every one of them passes through by construction.
+
+     IT CANNOT FIRE ON AN ORDINARY RELOAD, which is the thing that would make it
+     maddening: `loading` is react-query's `isLoading`, true only on a FIRST fetch with
+     no data, so a reload of the dashboard goes loading → identity and never passes
+     through the `!loading && !me` state this arms on. Reaching that state means the
+     login screen was actually rendered. */
+  const sawSignedOut = useRef(false);
   const [revealing, setRevealing] = useState(false);
-  const [revealNumber, setRevealNumber] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!loading && !me) {
+      sawSignedOut.current = true;
+      return;
+    }
+    if (me && sawSignedOut.current) {
+      sawSignedOut.current = false;
+      /* A CALL-LINK JOIN IS DELIBERATELY EXEMPT. The owner's rule for that path is
+         older and narrower — *"land directly in the call"* (v2.94.5) — and it is
+         still right: somebody who tapped a link to reach a person is not on their way
+         to the dashboard, so a screen between them and the ring would be in the way. */
+      if (!callTarget) setRevealing(true);
+    }
+  }, [loading, me, callTarget]);
 
   if (loading) {
     return (
@@ -88,17 +116,12 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
     );
   }
 
-  // The matrix reveal must outlast the moment `me` flips truthy (startGuest
-  // invalidates whoami on success), so it's checked BEFORE the identity gate —
-  // it stays until its own onDone, then children render underneath.
-  if (revealing) {
-    return (
-      <MatrixReveal
-        number={revealNumber}
-        name={name}
-        onDone={() => setRevealing(false)}
-      />
-    );
+  /* Checked BEFORE the identity gate, so it outlasts the moment `me` flips truthy and
+     the dashboard never flashes underneath it. A number we cannot show falls STRAIGHT
+     through to the app rather than holding anybody on a screen with nothing on it —
+     this sits between a person and their inbox and must never be why they cannot get in. */
+  if (revealing && me?.number) {
+    return <PinReveal pin={me.number} onDone={() => setRevealing(false)} />;
   }
 
   if (me) return <>{children}</>;
@@ -107,16 +130,13 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) return;
-    // Standard guest entry plays the ID-reveal; a call-link join skips it and
-    // goes straight into the dial (owner: "land directly in the call").
-    if (!callTarget) setRevealing(true);
-    try {
-      const res = await startGuest(trimmed);
-      if (!callTarget) setRevealNumber(res?.number ?? null);
-    } catch {
-      // Error surfaces via startGuestError; drop the reveal so the form shows it.
-      setRevealing(false);
-    }
+    /* The reveal is NOT armed here. `startGuest` mints the identity and invalidates
+       whoami, so the signed-out → signed-in effect above arms it from the one funnel
+       every entry path shares — and a failure needs no undoing, because a failed
+       startGuest never produces an identity for that transition to fire on. */
+    await startGuest(trimmed).catch(() => {
+      // Surfaces via startGuestError; the form stays up.
+    });
   }
 
   function onEmailSubmit(e: FormEvent) {

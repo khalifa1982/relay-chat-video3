@@ -22,6 +22,7 @@ import {
 export function RelayBackground({
   business = false,
   light = false,
+  warpKey = 0,
 }: {
   business?: boolean;
   /**
@@ -34,6 +35,16 @@ export function RelayBackground({
    * knows which surface it is; this component only knows how to paint.
    */
   light?: boolean;
+  /**
+   * Bump to fire ONE hyperspace jump (#162, owner: *"as you move from the login area to
+   * this page … it comes super speedily like flying in space"*).
+   *
+   * A PROP rather than an imperative ref, matching `business` directly above: the trigger
+   * is then declarative, the handle stays private to this component, and a caller cannot
+   * hold a stale handle across the rebuild that a theme switch performs. Any change to a
+   * truthy value jumps; 0 never does, so every existing mount is byte-identical.
+   */
+  warpKey?: number;
 }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const handle = useRef<RelayBackgroundHandle | null>(null);
@@ -57,6 +68,14 @@ export function RelayBackground({
   useEffect(() => {
     handle.current?.setBusiness(business);
   }, [business]);
+
+  /* Declared AFTER the init effect on purpose: effects run in declaration order, so a
+     mount that arrives already carrying a warpKey has its handle by the time this runs.
+     The engine's own `warp` is a no-op under reduced motion — the effect IS the motion —
+     so there is nothing to gate here. */
+  useEffect(() => {
+    if (warpKey) handle.current?.warp();
+  }, [warpKey]);
 
   return (
     <>

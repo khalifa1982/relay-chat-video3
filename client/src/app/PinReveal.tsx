@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { RelayBackground } from "./RelayBackground";
 
 /**
  * THE PIN REVEAL (#162) — `design_handoff_pin_reveal/`.
@@ -103,6 +104,27 @@ export function PinReveal({
   const doneRef = useRef(onDone);
   doneRef.current = onDone;
 
+  /* THE TWO JUMPS THE OWNER ASKED FOR. 1 on mount ("it comes super speedily like flying
+     in space"), 2 on the way out ("it will move again rapidly to the next page"). */
+  const [warpKey, setWarpKey] = useState(1);
+
+  /* Leaving is IDEMPOTENT and holds the screen for the jump. A tap during the exit must
+     not fire a second `onDone`, and calling it straight away would destroy this canvas
+     before the warp it just started could paint — so the jump IS the transition rather
+     than something that plays underneath a screen already gone. Under reduced motion
+     there is no jump and no wait, the same rule the engine applies to itself. */
+  const leaving = useRef(false);
+  const leave = useCallback(() => {
+    if (leaving.current) return;
+    leaving.current = true;
+    if (calm) {
+      doneRef.current();
+      return;
+    }
+    setWarpKey((k) => k + 1);
+    setTimeout(() => doneRef.current(), PIN_REVEAL_TIMING.warpMs);
+  }, [calm]);
+
   // ── the animation ────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (calm || !ok) return;
@@ -147,26 +169,32 @@ export function PinReveal({
        motion path (which shows the number instantly) and the animated path would give the
        viewer wildly different amounts of time to actually read it. */
     const from = calm ? 0 : pinRevealTotalMs();
-    const t = setTimeout(() => doneRef.current(), from + PIN_REVEAL_TIMING.autoAdvanceMs);
+    const t = setTimeout(() => leave(), from + PIN_REVEAL_TIMING.autoAdvanceMs);
     return () => clearTimeout(t);
-  }, [ok, calm]);
+  }, [ok, calm, leave]);
 
   const lit = phase === "flash" || phase === "hold";
 
   return (
     <div
-      className="prv-root"
+      className="prv-root dark relay-v2"
       /* TAP TO SKIP. The 10s wait is the owner's, but somebody who has read their number
          must not be held on a screen with nothing left to do — and a full-screen surface
          with no exit is the shape people report as frozen. */
-      onClick={() => doneRef.current()}
+      onClick={() => leave()}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") doneRef.current();
+        if (e.key === "Enter" || e.key === " ") leave();
       }}
       aria-label="Your RELAY number — continue to the app"
     >
+      {/* The reveal owns its OWN canvas, because at this point the login screen has
+          unmounted and the shell has not mounted — exactly one is ever live (the rule
+          AppShell states for itself). Dark unconditionally: every colour the handoff
+          fixes is a dark-surface value, so this screen does not follow the theme. */}
+      <RelayBackground warpKey={warpKey} />
+
       <div className="prv-stack">
         <div className="prv-brand">
           <div className="prv-brand-row">
