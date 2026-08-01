@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
 
 /**
  * v2.99.7 — new-device login approval, CLIENT wiring (source pins; jsdom isn't
@@ -46,7 +47,15 @@ describe("notification center + Profile devices approval UI", () => {
     const bell = read("client/src/app/MissedCalls.tsx");
     expect(bell).toMatch(/pendingDevices/);
     expect(bell).toMatch(/const total = missedCount \+ unreadCount \+ pendingDevices/);
-    expect(bell).toMatch(/new device.*waiting/);
+    /* REPOINTED THROUGH `copyOnScreen` (#159): `/new device.*waiting/` matched the
+       English literal, which the Arabic sweep moved into `dict/alerts.ts`. The
+       property is that the row SAYS how many sign-ins are waiting — asserted for
+       both halves of the count, since Arabic forces a one/many split the English
+       `device{s}` suffix used to fake, and a pin on only one of them would let the
+       other silently go missing. */
+    for (const line of ["new device waiting", "new devices waiting"]) {
+      expect(copyOnScreen(bell, line), whyCopyMissing(bell, line)).toBe(true);
+    }
     const shell = read("client/src/app/AppShell.tsx");
     expect(shell).toMatch(/trpc\.otpAuth\.pendingSessions\.useQuery/);
     expect(shell).toMatch(/onOpenDevices=\{\(\) => navigate\("\/app\/profile#devices"\)\}/);

@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 import {
   LOGIN_METHODS,
   describeLogin,
@@ -307,9 +308,18 @@ describe("what the owner actually sees", () => {
     expect(BELL).toMatch(/pendingDevices === 1 && pendingDetail \?/);
     expect(BELL).toMatch(/\{pendingDetail\.label\}/);
     expect(BELL).toMatch(/\{pendingDetail\.detail\}/);
-    expect(BELL).toMatch(/new Date\(pendingDetail\.createdAt\)\.toLocaleString\(\)/);
-    // …and falls back to the old count line otherwise, rather than rendering blanks.
-    expect(BELL).toMatch(/Approve or decline the sign-in/);
+    /* REWRITTEN TO THE PROPERTY (#159). This froze the EMPTY argument list, and the
+       Arabic sweep gives the formatter the app's locale — so as written it required
+       the stamp to be rendered in the BROWSER's language on a screen that has just
+       been switched to Arabic. The property is that the row shows `createdAt` as a
+       localised date-and-time (not a raw epoch, and not date-only). */
+    expect(BELL).toMatch(/new Date\(pendingDetail\.createdAt\)\.toLocaleString\(/);
+    /* …and falls back to the old count line otherwise, rather than rendering blanks.
+       REPOINTED THROUGH `copyOnScreen`: the literal moved into `dict/alerts.ts`, and
+       matching the KEY instead would freeze an implementation detail while saying
+       nothing about the words. */
+    const fallback = "Approve or decline the sign-in";
+    expect(copyOnScreen(BELL, fallback), whyCopyMissing(BELL, fallback)).toBe(true);
   });
 
   it("the detail prop is OPTIONAL, so a caller that has not fetched it degrades", () => {

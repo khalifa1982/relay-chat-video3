@@ -13,6 +13,7 @@ import { Loader2, PhoneOff, UserPlus, Minimize2, Maximize2, Scan, GripHorizontal
 // it's several hundred KB that only matters once a signed-in user is inside
 // /app, so it must not sit in the entry chunk the keypad paints from.
 import type { RelayHandle, RelayPhase } from "@/lib/relayClient";
+import { useT } from "./i18n";
 import { isNativeAndroid, nativeEnsureNotifPermission, nativeGetPushToken } from "@/lib/nativeBridge";
 import { VoicemailPrompt, type FailedDialInfo } from "./VoicemailPrompt";
 import { trpc } from "@/lib/trpc";
@@ -65,8 +66,24 @@ export const useRelayEngine = () => useContext(RelayEngineContext);
  * (so it persists across tab navigation) and renders the engine's fullscreen
  * call/ring overlay above the app chrome. The Dialer drives it via
  * `useRelayEngine()`.
+ *
+ * ── LANGUAGE: THIS FILE IS TRANSLATED, THE ENGINE BELOW IT IS NOT ────────────────
+ * Everything React renders here goes through `useT()` (`dict/engine.ts`). The engine
+ * ITSELF — `lib/relayClient.ts` driving `lib/relayAssets.ts`'s markup — writes raw DOM
+ * from plain functions, so it can call no hook and reaches no dictionary: the in-call
+ * control bar's labels, the ring card, the dial-status line and the in-call chat are
+ * still English in Arabic. That is stated rather than implied, because the seam is
+ * invisible from the screen — the user sees one call surface with two owners.
+ *
+ * ── DIRECTION: WHAT IS LOGICAL HERE AND WHAT IS DELIBERATELY PHYSICAL ────────────
+ * Reading-order spacing is logical (`ms-`, `-start-`). Three things stay physical on
+ * purpose and each says so in place: the two CENTRING pairs (`left-1/2` +
+ * `-translate-x-1/2`, and `inset-x-0` + `mx-auto`), which are direction-independent
+ * and would push the wrong way if "corrected"; and the mini window's `right`/`bottom`
+ * anchor, whose drag clamp is arithmetic in physical pixels.
  */
 export function RelayEngineProvider({ children }: { children: ReactNode }) {
+  const t = useT();
   // Read the identity directly (no heartbeat side effect — that's owned by
   // AppShell's useIdentity); we only need name + number to auto-register.
   const whoami = trpc.identity.whoami.useQuery(undefined, { staleTime: 30_000 });
@@ -125,8 +142,11 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     if (phase !== "in-call") { setPeopleCount(1); return; }
     const read = () => setPeopleCount((handleRef.current?.getRoster().length ?? 0) + 1);
     read();
-    const t = setInterval(read, 3000);
-    return () => clearInterval(t);
+    // Named `poll`, not `t`: `t` is the translator in this component's scope, and a
+    // timer handle shadowing it is how a later edit here gets a `Timeout` where it
+    // expected a function. Removing the shadow beats aliasing around it (v2.106.85).
+    const poll = setInterval(read, 3000);
+    return () => clearInterval(poll);
   }, [phase]);
 
   // Incoming-ring "quick reply": the engine calls back with (callerPin, text)
@@ -383,6 +403,13 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
 
   // The mini box geometry — applied inline (beats the base `.relay-root{inset:0}`
   // rule without needing !important, since inline styles win over class rules).
+  //
+  // DELIBERATELY PHYSICAL (`right`/`left`), not `insetInlineEnd`. This is a floating
+  // window the user drags anywhere, so its resting corner is a physical screen
+  // position rather than a reading-order statement — and the clamp above is
+  // arithmetic written FOR a right anchor: `x` runs from 0 (at the right edge)
+  // down to `-(vw - 120)`. Flip the anchor without flipping that arithmetic and the
+  // box can be dragged straight off the screen in Arabic and never dragged back.
   const miniBoxStyle: React.CSSProperties = {
     position: "fixed",
     inset: "auto",
@@ -454,26 +481,36 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
           "relay-root relay-embedded " +
           (fitContain ? "relay-fit " : "") +
           (!active
-            ? "absolute -left-[10000px] top-0 size-px overflow-hidden pointer-events-none opacity-0"
+            /* `-start-`, NOT `-left-`, and this one is a correctness fix rather than
+               tidiness. The scrollable overflow region never extends past a scroll
+               container's INLINE-START edge, so parking the idle host off that edge
+               costs nothing — but `left` is the inline-START edge only in LTR. In
+               Arabic `left` is the inline-END side, where 10,000px of an off-screen
+               box IS reachable, i.e. a horizontal scrollbar on every screen the
+               provider renders on. The logical form is byte-identical in English and
+               parks off the correct edge in Arabic. */
+            ? "absolute -start-[10000px] top-0 size-px overflow-hidden pointer-events-none opacity-0"
             : minimized
               ? "relay-minimized"
               : "fixed inset-0 z-40")
         }
         data-relay-engine-root="true"
       />
-      {/* Fullscreen in-call controls (v2.99.8): a Minimize + Fit cluster
-          top-left (the engine owns the rest of the chrome). Hidden while
+      {/* Fullscreen in-call controls (v2.99.8): a Minimize + Fit cluster centred
+          along the top edge (the engine owns the rest of the chrome). Hidden while
           minimized (the mini box has its own controls) and pre-connect. */}
       {phase === "in-call" && !minimized ? (
+        /* `left-1/2` + `-translate-x-1/2` is CENTRING, which is direction-independent
+           — the logical `start-1/2` would push this cluster off-centre in Arabic. */
         <div className="fixed top-3 left-1/2 z-[70] flex -translate-x-1/2 gap-2">
           <button
             type="button"
             onClick={() => setMinimized(true)}
             className="inline-flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-2 text-xs font-semibold text-white shadow-lg backdrop-blur-md hover:bg-black/75 active:scale-95 transition-transform"
-            aria-label="Minimize the call to a floating window"
-            title="Minimize — keep the call in a small window while you use the app"
+            aria-label={t("engine.minimizeLabel")}
+            title={t("engine.minimizeHint")}
           >
-            <Minimize2 className="size-4" /> Minimize
+            <Minimize2 className="size-4" /> {t("engine.minimize")}
           </button>
           <button
             type="button"
@@ -482,10 +519,10 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
               "inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold shadow-lg backdrop-blur-md active:scale-95 transition-transform " +
               (fitContain ? "bg-[color:var(--relay-online,#06d6a0)] text-black" : "bg-black/60 text-white hover:bg-black/75")
             }
-            aria-label="Fit the whole video on screen"
-            title={fitContain ? "Fit: showing the whole frame (tap for fill)" : "Fit screen — show the whole video, no cropping"}
+            aria-label={t("engine.fitLabel")}
+            title={fitContain ? t("engine.fitOnHint") : t("engine.fitOffHint")}
           >
-            <Scan className="size-4" /> Fit
+            <Scan className="size-4" /> {t("engine.fit")}
           </button>
         </div>
       ) : null}
@@ -504,13 +541,15 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
             <span className="flex items-center gap-1 text-xs font-semibold">
               <Users className="size-3.5" /> {peopleCount}
             </span>
-            <span className="ml-auto flex items-center gap-1">
+            {/* `ms-auto`: this pins the two controls to the row's TRAILING edge, which
+                is reading-order and must swap sides in Arabic. */}
+            <span className="ms-auto flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => setMinimized(false)}
                 className="grid size-7 place-items-center rounded-lg bg-white/10 hover:bg-white/20 active:scale-95 transition-transform"
-                aria-label="Maximize the call back to full screen"
-                title="Maximize"
+                aria-label={t("engine.maximizeLabel")}
+                title={t("engine.maximize")}
               >
                 <Maximize2 className="size-4" />
               </button>
@@ -518,8 +557,8 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
                 type="button"
                 onClick={() => handleRef.current?.hangup()}
                 className="grid size-7 place-items-center rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 active:scale-95 transition-transform"
-                aria-label="End the call"
-                title="End call"
+                aria-label={t("engine.endCall")}
+                title={t("engine.endCall")}
               >
                 <PhoneOff className="size-4" />
               </button>
@@ -559,14 +598,12 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
         <div
           className="fixed inset-0 z-[80] flex flex-col items-center justify-center gap-6 bg-black/80 px-6 text-center backdrop-blur-md"
           role="alertdialog"
-          aria-label="Reconnecting to your call"
+          aria-label={t("engine.reconnectingLabel")}
         >
           <div className="flex flex-col items-center gap-3">
             <Loader2 className="size-10 animate-spin text-[color:var(--relay-online,#06d6a0)]" />
-            <div className="text-lg font-semibold text-white">Reconnecting to your call…</div>
-            <div className="max-w-xs text-sm text-white/70">
-              You were in an active call. We&apos;re rejoining you automatically.
-            </div>
+            <div className="text-lg font-semibold text-white">{t("engine.reconnecting")}</div>
+            <div className="max-w-xs text-sm text-white/70">{t("engine.reconnectingBody")}</div>
           </div>
           <button
             type="button"
@@ -577,7 +614,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
             className="inline-flex items-center gap-2 rounded-full bg-destructive px-5 py-2.5 text-sm font-semibold text-destructive-foreground shadow-lg hover:bg-destructive/90 outline-none focus-visible:ring-destructive/30 dark:focus-visible:ring-destructive/50 focus-visible:ring-[3px]"
           >
             <PhoneOff className="size-4" />
-            Exit the call
+            {t("engine.exitCall")}
           </button>
         </div>
       ) : null}
@@ -585,16 +622,20 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
           was in this call and wants back in (from their History → Join). */}
       {knockReq ? (
         <div
+          /* `inset-x-0` + `mx-auto` is SYMMETRIC centring — both physical insets are 0,
+             so it reads identically in either direction and needs no logical form. */
           className="fixed inset-x-0 top-4 z-[85] mx-auto flex w-[min(360px,92vw)] items-center gap-3 rounded-2xl border border-amber-400/40 bg-card/95 p-3 shadow-2xl backdrop-blur-md"
           role="alertdialog"
-          aria-label="Someone wants to rejoin the call"
+          aria-label={t("engine.knockLabel")}
         >
           <span className="grid size-10 shrink-0 place-items-center rounded-full bg-amber-400/15 text-amber-500 font-bold">
             {(knockReq.name || "?").slice(0, 2).toUpperCase()}
           </span>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold">{knockReq.name || "Someone"}</div>
-            <div className="text-xs text-muted-foreground">wants to rejoin the call</div>
+            <div className="truncate text-sm font-semibold">
+              {knockReq.name || t("engine.knockSomeone")}
+            </div>
+            <div className="text-xs text-muted-foreground">{t("engine.knockWants")}</div>
           </div>
           <div className="flex shrink-0 gap-2">
             <button
@@ -602,14 +643,14 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
               onClick={() => { handleRef.current?.approveKnock(knockReq.roomId, knockReq.pin); setKnockReq(null); }}
               className="rounded-lg bg-[color:var(--relay-online,#06d6a0)] px-3 py-1.5 text-xs font-semibold text-black active:scale-95 transition-transform"
             >
-              Approve
+              {t("engine.approve")}
             </button>
             <button
               type="button"
               onClick={() => { handleRef.current?.denyKnock(knockReq.roomId, knockReq.pin); setKnockReq(null); }}
               className="rounded-lg bg-muted px-3 py-1.5 text-xs font-semibold text-foreground active:scale-95 transition-transform"
             >
-              Decline
+              {t("engine.decline")}
             </button>
           </div>
         </div>
@@ -625,6 +666,16 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
  * peer who isn't in your contacts yet. It disappears once everyone on the
  * call is saved. The roster comes from the engine's read-only `getRoster()`
  * snapshot, polled every few seconds (peers can join/leave mid-call).
+ *
+ * IT IS NOT MOUNTED — v2.99.82 removed the mount at the owner's request ("just put it
+ * one place. Under the name of each user"), and two existing tests assert the element
+ * is absent (`callTileIdentity`, `peerIdentityBatch`). Its `aria-label`/`title` are
+ * therefore the ONE place in this file still holding English literals, and that is a
+ * decision rather than an oversight: the strings reach no screen, so translating them
+ * would publish dictionary keys whose only reader is dead code — while breaking a pin
+ * that freezes the exact template literal. `engineLocale.test.ts` exempts this function
+ * BY NAME and asserts the exemption is EARNED by re-checking that it is still unmounted,
+ * so if it is ever mounted again the sweep goes red and the strings get translated then.
  */
 function InCallSaveContacts({
   handleRef,

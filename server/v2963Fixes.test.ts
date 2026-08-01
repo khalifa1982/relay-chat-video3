@@ -29,7 +29,17 @@ describe("notification panel fits the screen (v2.96.3)", () => {
     // and desktop must open rightward from a LEFT anchor.
     expect(MISSED).toMatch(/max-md:fixed/);
     expect(MISSED).toMatch(/max-md:inset-x-\d/); // clamped to the viewport, both sides
-    expect(MISSED).toMatch(/md:absolute md:left-0/); // desktop opens rightward
+    /* REWRITTEN TO THE PROPERTY (#159). This froze the PHYSICAL spelling `md:left-0`,
+       so it forbade the RTL sweep while saying nothing about the rule it stands for —
+       that on desktop the panel hangs off the bell's LEADING edge and opens away from
+       it. `md:start-0` is that same anchor expressed logically, which keeps it true in
+       Arabic instead of opening back across the button. Both spellings are accepted
+       here so the pin describes the anchor rather than the writing system; what it
+       still forbids is the trailing-edge anchor that caused the bug. */
+    expect(MISSED).toMatch(/md:absolute md:(?:start|left)-0/);
+    expect(MISSED, "the panel must not hang off the TRAILING edge again").not.toMatch(
+      /md:(?:end|right)-0/,
+    );
     // The old right-anchored absolute panel (ran off-screen) must be gone.
     expect(MISSED).not.toMatch(/absolute right-0 mt-2 w-64/);
   });
