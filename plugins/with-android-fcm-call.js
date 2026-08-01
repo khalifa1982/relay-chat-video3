@@ -553,7 +553,29 @@ function withAndroidFcmCall(config) {
     return cfg;
   });
 
-  // Step 2: Write Kotlin source files and copy ringtone to res/raw
+  // Step 2: Add firebase-messaging dependency to build.gradle
+  config = withDangerousMod(config, [
+    "android",
+    async (cfg) => {
+      const projectRoot = cfg.modRequest.projectRoot;
+      const androidDir = path.join(projectRoot, "android");
+      const buildGradlePath = path.join(androidDir, "app", "build.gradle");
+      let buildGradle = fs.readFileSync(buildGradlePath, "utf8");
+
+      // Add firebase-messaging dependency if not already present
+      if (!buildGradle.includes("firebase-messaging")) {
+        buildGradle = buildGradle.replace(
+          /dependencies\s*\{/,
+          `dependencies {\n    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))\n    implementation("com.google.firebase:firebase-messaging")`
+        );
+        fs.writeFileSync(buildGradlePath, buildGradle);
+      }
+
+      return cfg;
+    },
+  ]);
+
+  // Step 3: Write Kotlin source files and copy ringtone to res/raw
   config = withDangerousMod(config, [
     "android",
     async (cfg) => {
