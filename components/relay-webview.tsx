@@ -25,6 +25,11 @@ import { useCallSession } from "@/hooks/use-call-session";
 import { useCallNotifications } from "@/hooks/use-call-notifications";
 import { useBackgroundPresence } from "@/hooks/use-background-presence";
 import { usePushToken } from "@/hooks/use-push-token";
+import {
+  setVoipWebViewRef,
+  onVoipWebViewReady,
+  handleWebCallEnded,
+} from "@/lib/voip-call-manager";
 
 // Palette aligned to the live RELAY web app (oklch(0.12 0.008 245) background
 // ~ #050608) so the native shell's splash/error chrome blends seamlessly with
@@ -53,6 +58,11 @@ const REACQUIRE_CAMERA_JS =
  */
 export function RelayWebView() {
   const webViewRef = useRef<WebView>(null);
+
+  // Register WebView ref with VoIP call manager for JS injection
+  useEffect(() => {
+    setVoipWebViewRef(webViewRef);
+  }, []);
   // `loading` only controls the FIRST-load splash overlay. Subsequent in-app
   // (SPA) navigations must never re-show a full-screen overlay, otherwise the
   // spinner can get stuck covering an already-rendered page.
@@ -215,6 +225,12 @@ export function RelayWebView() {
         case "online":
           setOnline(msg.online);
           break;
+        case "webCallEnded":
+          // Web page ended the call — report to CallKit so system UI closes
+          if (Platform.OS === "ios" && msg.callId) {
+            handleWebCallEnded(msg.callId);
+          }
+          break;
         default:
           break;
       }
@@ -268,6 +284,8 @@ export function RelayWebView() {
         onLoadEnd={() => {
           finishFirstLoad();
           sendPushToken();
+          // Notify VoIP manager that WebView is ready for injection
+          if (Platform.OS === "ios") onVoipWebViewReady();
         }}
         onError={handleError}
         onHttpError={() => {}}

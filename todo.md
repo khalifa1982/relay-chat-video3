@@ -203,3 +203,15 @@
 - [x] Double protection: BuildStatusRow also returns null internally on iOS
 - [x] No BETA badge, no build number, no refresh button visible on iOS
 - [x] tsc clean + 65 tests pass
+
+## Round 22 — iOS VoIP Push (PushKit) + CallKit Integration
+
+- [x] Create Expo config plugin (plugins/with-ios-voip-callkit.js) to add PushKit/CallKit frameworks, VoIP entitlement, and AppDelegate modifications for prebuild
+- [x] Create lib/voip-call-manager.ts — central JS module for VoIP push token handling, CallKeep setup, incoming call reporting, answer/decline/end actions
+- [x] Update hooks/use-push-token.ts — on iOS use PushKit VoIP token (apns-voip kind) via CustomEvent relay:native bridge instead of Expo Notifications device token
+- [x] Update components/relay-webview.tsx — add RelayNative message handler for web→native call end signaling, handle callAnswered/callDeclined injection
+- [x] Update app/_layout.tsx — initialize CallKeep and VoIP push listeners at app root level (before WebView mounts)
+- [x] Update app.config.ts — register the new iOS config plugin
+- [x] Ensure iOS incoming calls use CallKit (full-screen ring) while Android keeps existing local notification approach
+- [x] Handle didLoadWithEvents for calls answered/declined before JS bridge is ready
+- [x] tsc clean + tests pass

@@ -3,6 +3,11 @@ import { AppState, type AppStateStatus, Platform } from "react-native";
 import * as Notifications from "expo-notifications";
 import type { WebView } from "react-native-webview";
 
+// On iOS, VoIP push token is handled by the voip-call-manager module
+// (PushKit → native AppDelegate → JS bridge → WebView CustomEvent).
+// This hook still handles the regular APNs device token for Android (FCM)
+// and as a fallback for non-VoIP notifications on iOS.
+
 /**
  * Manages the native device push token (FCM on Android, APNs on iOS) and
  * injects it into the WebView so the web app can register it with its server

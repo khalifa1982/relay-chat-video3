@@ -206,6 +206,9 @@ export function useCallNotifications(callbacks?: {
 
   const showIncomingCall = useCallback(
     async (caller?: string) => {
+      // On iOS, CallKit handles the incoming call UI natively via PushKit.
+      // Skip the local notification + ringtone path to avoid duplicate alerts.
+      if (Platform.OS === "ios") return;
       await startRingtone();
       try {
         await Notifications.scheduleNotificationAsync({
@@ -213,7 +216,7 @@ export function useCallNotifications(callbacks?: {
           content: {
             title: "Incoming RELAY call",
             body: caller ? `${caller} is calling…` : "Someone is calling you",
-            sound: Platform.OS === "ios" ? "ringtone.wav" : undefined,
+            sound: undefined,
             priority: Notifications.AndroidNotificationPriority.MAX,
             sticky: true,
             categoryIdentifier: CALL_CATEGORY_ID,
@@ -223,9 +226,6 @@ export function useCallNotifications(callbacks?: {
             },
             ...(Platform.OS === "android"
               ? { channelId: CALL_CHANNEL_ID }
-              : {}),
-            ...(Platform.OS === "ios"
-              ? { interruptionLevel: "timeSensitive" as const }
               : {}),
           },
           trigger: null,
@@ -238,6 +238,8 @@ export function useCallNotifications(callbacks?: {
   );
 
   const dismissIncomingCall = useCallback(async () => {
+    // On iOS, CallKit handles call dismissal natively.
+    if (Platform.OS === "ios") return;
     stopRingtone();
     try {
       await Notifications.dismissNotificationAsync(CALL_NOTIFICATION_ID);
