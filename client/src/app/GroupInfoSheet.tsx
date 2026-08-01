@@ -1147,7 +1147,17 @@ export function GroupInfoSheet({
             </div>
           )}
           {!save.isPending && save.isSuccess && (
-            <div className="flex items-center gap-1.5 border-t border-white/[0.07] px-4 py-2.5 text-[11px] text-[color:var(--relay-green-text)]">
+            /* v2.106.66 — EMERALD, NOT THE PRESENCE TOKEN. This read
+               `--relay-green-text`, which in this app means ONLINE (and, by a recorded
+               exemption, a RELAY number) — and it collided in the worst possible place:
+               this same sheet draws a presence LED on every member's disc, so one colour
+               carried two meanings in one view. It is also a divergence from the app's own
+               save vocabulary — Profile's "Saved" pill has been emerald since v2.99.89 —
+               so matching it removes a second colour rather than inventing one.
+               Found by the derived file sweep in `mentions.test.ts`; the hand-kept list it
+               replaced never read this file, which is how it reached an eighth
+               occurrence. */
+            <div className="flex items-center gap-1.5 border-t border-white/[0.07] px-4 py-2.5 text-[11px] text-emerald-400">
               <Check className="size-3.5" /> Saved
             </div>
           )}

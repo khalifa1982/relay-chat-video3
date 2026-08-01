@@ -89,6 +89,7 @@ import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
 import { formatLastSeen } from "@shared/profileFields";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { GroupCallScreen, PartyLinesSection } from "./GroupCallScreen";
+import { AvatarPicker } from "@/app/AvatarPicker";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { videoRecorderSupported } from "@/lib/videoNote";
 import { VideoRecordSheet } from "@/app/VideoRecordSheet";
@@ -765,7 +766,7 @@ export default function MessagesPage({
                                   const st = groupStatus.get(t.conversationId);
                                   const ring = st?.hasAny
                                     ? st.hasUnseen
-                                      ? "bg-gradient-to-tr from-[#06d6a0] via-[#0ea5e9] to-[#8b5cf6]"
+                                      ? "rstoryring" // v2.106.66 — the ONE recipe, not a copy
                                       : "bg-border"
                                     : "";
                                   const disc = t.groupAvatarUrl ? (
@@ -4861,6 +4862,14 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
   const contactsQ = trpc.contacts.list.useQuery(undefined, { enabled: open, staleTime: 30_000 });
   // group-builder state
   const [groupTitle, setGroupTitle] = useState("");
+  /* v2.106.66 — the group's photo, chosen BEFORE the group exists. The owner reported that
+     picking one did nothing, and it never could: this sheet had no picker at all, and the
+     server's `createGroup` schema accepted only a title and members. The url is held here
+     and sent with the create — `AvatarPicker` uploads into the CALLER's own storage
+     namespace, which is exactly what the server's ownership gate requires, so a photo can
+     legitimately be chosen before there is any conversation to attach it to. */
+  const [groupAvatar, setGroupAvatar] = useState<string | null>(null);
+  const [groupAvatarOpen, setGroupAvatarOpen] = useState(false);
   const [groupNumbers, setGroupNumbers] = useState<string[]>([]);
   const [groupInput, setGroupInput] = useState("");
 
@@ -4871,6 +4880,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
     setMode(defaultMode);
     setNumber("");
     setGroupTitle("");
+    setGroupAvatar(null);
     setGroupNumbers([]);
     setGroupInput("");
   }
@@ -5078,6 +5088,26 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
               </>
             ) : (
               <>
+                <div className="mb-4 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setGroupAvatarOpen(true)}
+                    aria-label={groupAvatar ? "Change the group photo" : "Choose a group photo"}
+                    className="relative grid size-[52px] shrink-0 place-items-center overflow-hidden rounded-[14px] border border-border bg-muted/40 transition hover:border-primary/50"
+                  >
+                    {groupAvatar ? (
+                      <img src={groupAvatar} alt="" className="size-full object-cover" />
+                    ) : (
+                      <Users className="size-6 text-[#a78bfa]" />
+                    )}
+                    <span className="absolute -bottom-0.5 -end-0.5 grid size-5 place-items-center rounded-full bg-background">
+                      <Plus className="size-3.5 text-primary" />
+                    </span>
+                  </button>
+                  <p className="text-xs text-muted-foreground">
+                    {groupAvatar ? "Group photo set." : "Add a group photo (optional)."}
+                  </p>
+                </div>
                 <label className="mb-2 block font-mono text-[10px] uppercase tracking-[.2em] text-muted-foreground">
                   Group name
                 </label>
@@ -5160,7 +5190,13 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                 )}
                 <Button
                   className="w-full mt-4"
-                  onClick={() => createGroup.mutate({ title: groupTitle.trim(), numbers: groupNumbers })}
+                  onClick={() =>
+                    createGroup.mutate({
+                      title: groupTitle.trim(),
+                      numbers: groupNumbers,
+                      avatarUrl: groupAvatar,
+                    })
+                  }
                   disabled={pending || groupTitle.trim().length === 0 || groupNumbers.length === 0}
                 >
                   <Users className="size-4 mr-1.5" />
@@ -5181,6 +5217,19 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
           </div>
         </div>
       )}
+      {/* ONE picker component, an injected sink (v2.102.1). There is no conversation yet,
+          so `onSave` only holds the url — the write happens with the create. A second
+          picker would be a second copy of the upload pipeline, the emoji renderer, the
+          animated-GIF path, the 4 MB cap and the mime check, which is the duplicate
+          v2.99.89 found and removed. */}
+      <AvatarPicker
+        open={groupAvatarOpen}
+        onClose={() => setGroupAvatarOpen(false)}
+        displayName={groupTitle || "Group"}
+        title="Choose a group photo"
+        removeLabel="the group photo"
+        onSave={async (url) => setGroupAvatar(url)}
+      />
     </>
   );
 }

@@ -160,7 +160,13 @@ export function StatusStrip() {
             <StatusAvatar name="You" url={myGroup?.subject.avatarUrl ?? null} ring={myGroup ? "seen" : "none"} />
             <span
               onClick={(e) => { e.stopPropagation(); setComposerOpen(true); }}
-              className="absolute -bottom-0.5 -right-0.5 grid size-5 place-items-center rounded-full bg-[color:var(--relay-online,#06d6a0)] text-[#04201b] ring-2 ring-background"
+              /* v2.106.66 — the ACCENT, per board 1c (`background:var(--rb)`, glyph
+                 `#04211a`). It was the PRESENCE GREEN, which in this app means ONLINE and
+                 nothing else — the seventh time that colour has been spent on something
+                 that is not presence, and the first the standing guard could not catch,
+                 because the guard read only `Messages.tsx` and its allow-list matched
+                 inside the token NAME. Both halves are fixed in `mentions.test.ts`. */
+              className="rcta absolute -bottom-0.5 -right-0.5 grid size-[17px] place-items-center rounded-full ring-[2.5px] ring-background"
             >
               <Plus className="size-3.5" strokeWidth={3} />
             </span>
@@ -239,7 +245,7 @@ function StatusAvatar({
 }) {
   const ringStyle =
     ring === "unseen"
-      ? "bg-gradient-to-tr from-[#06d6a0] via-[#0ea5e9] to-[#8b5cf6]"
+      ? "rstoryring" // v2.106.66 — the ONE recipe (index.css), not a third copy of it
       : ring === "seen"
         ? "bg-border"
         : "bg-transparent";

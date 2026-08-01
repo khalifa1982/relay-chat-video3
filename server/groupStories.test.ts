@@ -446,14 +446,50 @@ describe("v2.105.6 — the ring, and the composer", () => {
     return out;
   })();
 
-  it("the group ring uses the SAME vocabulary as PeerAvatar's", () => {
-    // Gradient = unseen, subtle = seen, absent = no story. One shape must not
-    // acquire a second meaning.
-    // BOUNDED by the branch that follows it, not by a character count — the
-    // fixed-slice fragility this repo has been bitten by five times.
-    expect(ring).toMatch(/from-\[#06d6a0\] via-\[#0ea5e9\] to-\[#8b5cf6\]/);
-    expect(ring).toMatch(/: "bg-border"/);
-    expect(ring).toMatch(/: "";/);
+  it("the group ring uses the SAME vocabulary as PeerAvatar's — and the same RECIPE", () => {
+    /* Gradient = unseen, subtle = seen, absent = no story. One shape must not acquire a
+       second meaning.
+       BOUNDED by the branch that follows it, not by a character count — the fixed-slice
+       fragility this repo has been bitten by five times.
+
+       v2.106.66 REWROTE THIS TO THE PROPERTY. It used to assert the literal
+       `from-[#06d6a0] via-[#0ea5e9] to-[#8b5cf6]` — a hand-rolled COPY of `.rstoryring`,
+       carrying that recipe's light-theme values and nothing else. So the pin froze one
+       implementation of a rule whose own stated point is that the ring means ONE thing
+       everywhere: in DARK, `.rstoryring` is the cycling accent, and the copy was not, so
+       a group's "unseen" ring drew a different colour from a person's on the very same
+       screen. Freezing the copy is what made that divergence mandatory.
+       The three STATES are what matter, and they are asserted below; which hue paints
+       "unseen" is the shared class's business. */
+    expect(ring).toMatch(/\? "rstoryring"/); // unseen — the ONE recipe
+    expect(ring).toMatch(/: "bg-border"/); // seen — subtle
+    expect(ring).toMatch(/: "";/); // no story — absent
+    // …and never a private copy of the recipe, which is exactly what this replaced.
+    expect(ring).not.toMatch(/#06d6a0/);
+    expect(ring).not.toMatch(/linear-gradient/);
+  });
+
+  it("every surface that draws the ring reaches for the same class", () => {
+    /* The rule is "unseen looks like unseen wherever you are". That is a property of the
+       SET of surfaces, not of any one of them, so it cannot be pinned inside a single
+       file — a second copy added next door would keep every per-file assertion green
+       while breaking the only thing the ring is for. The story strip, the person avatar
+       and the group row are the three places it renders. */
+    for (const [name, src] of [
+      ["the thread row (groups)", MSG],
+      ["PeerAvatar (people, everywhere)", OVERLAYS],
+      ["the stories strip", STATUS],
+    ] as const) {
+      expect(src, `${name} must use the shared ring recipe`).toMatch(/"rstoryring"/);
+      expect(src, `${name} must not hand-roll a copy of it`).not.toMatch(
+        /from-\[#06d6a0\] via-\[#0ea5e9\] to-\[#8b5cf6\]/,
+      );
+    }
+    // The recipe really exists, and really branches on theme — without the dark arm the
+    // consolidation would be a rename rather than a fix.
+    const CSS = R("client/src/index.css");
+    expect(CSS).toMatch(/\.relay-v2 \.rstoryring \{[^}]*#06d6a0/);
+    expect(CSS).toMatch(/\.dark\.relay-v2 \.rstoryring \{[^}]*var\(--rb\)/);
   });
 
   it("a group with NO story is a plain disc, not a focusable no-op", () => {

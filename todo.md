@@ -11278,6 +11278,106 @@ No schema change, no new dependency, no new env var, no server change. 2765 test
       thread list must stop showing a locked group's preview or the lock leaks what it covers.
 - [x] No code change. One new document.
 
+## v2.106.66 — a group can be born with its photo, and the green guard was self-allowing (2026-08-01)
+
+Owner, verbatim: *"there is a problem with the avatar of the group when you created you select
+avatar by default, it comes with default avatar, but if you select another avatar doesn't
+appear."*
+
+- [x] **THEY WERE RIGHT, AND IT WAS NEVER A UI BUG.** `createGroup`'s input schema accepted ONLY
+      `title` and `numbers` — and a plain `z.object` **STRIPS** unknown keys rather than rejecting
+      them, so a client sending an avatar got a clean success and a group born with a NULL photo.
+      Nothing anywhere said no. The column has existed since v2.102.0; `createGroupConversation`
+      simply never wrote it, so EVERY group started with the purple glyph whatever was picked.
+- [x] `avatarUrl` is now accepted, gated, forwarded and written — four hops, each pinned, because
+      the defect is a SILENT DROP and a break in any one link reproduces it exactly.
+- [x] **THE LAUNDERING GATE IS ONE FUNCTION WITH TWO CALLERS.** It was inline in `setGroupProfile`;
+      the moment `createGroup` also took an avatar that became a rule with two homes, which is how
+      the second one comes to be written without it. `assertOwnedAvatarUrl` uses `lastIndexOf`
+      because the ABSOLUTE form must be gated too — the storage proxy matches the key as a SUFFIX
+      (v2.99.26/H5) — and runs BEFORE any member resolution or write.
+- [x] `mobile/native`'s `createGroup` takes the optional field too: the widening is server-side, so
+      without it the native app would be the one place a group still cannot be born with a photo.
+- [x] **VERIFIED BY DRIVING THE REAL BUNDLE, 6/6** (`scratchpad/avatar-verify.mjs`): open the sheet,
+      pick a character through the REAL `AvatarPicker`, name the group, tap a contact suggestion,
+      Create — and read the outgoing request. It carries
+      `avatarUrl: "/manus-storage/relay-chat/99/…_status_emoji.png"`, in the caller's own namespace
+      so the server gate accepts it. Zero page errors.
+- [x] **FOUR HARNESS BUGS OF MY OWN, each reported rather than counted as a product failure**: the
+      picker's `aria-label` FLIPS to "Change the group photo" once set, so reading the stale one
+      reported a FAIL on correct code; tRPC BATCHES, so the body is `{"0":{"json":{…}}}` and
+      unwrapping only `.json` read undefined across three checks; the member field resolves against
+      CONTACTS, so with an empty stub there was no suggestion to tap and Create stayed disabled; and
+      my own `/api/relay/**` stub answered the EventSource as JSON, whose MIME abort I was counting
+      as a page error.
+
+### The green guard was self-allowing, half-blind, and its list was hand-kept
+
+- [x] **`/\bonline\b/.test("var(--relay-online)")` is `true`.** The allow-list was tested against the
+      raw element, so every `--relay-online` hit allowed ITSELF and only `--relay-green-text` was ever
+      constrained. Fixed by testing the RENDERED text with the token names stripped.
+- [x] **AN ELEMENT SAYS IT IS ABOUT PRESENCE IN ITS WORDS *OR* IN ITS CONDITION.** `p.isOnline &&
+      !p.idle ? green : muted` is a presence statement with no prose in it; a text-only allow-list
+      flagged four such sites and every one was correct.
+- [x] **THE TWO GREEN TOKENS DO NOT CARRY THE SAME LICENCE.** `--relay-online` is the LED hue and
+      means ONLINE, full stop. `--relay-green-text` additionally means a 6-digit RELAY NUMBER (the
+      top bar since v2.99.86, a contact's number since v2.106.43) — a recorded decision, so it is
+      exempted BY NAME and narrowly. Painting a number with the LED hue stays a violation.
+- [x] **THE WINDOW LOOKS BOTH WAYS.** A dot's evidence can be its parent's ATTRIBUTE: the Contacts
+      ONLINE section renders a bare count (v2.99.97) and carries the meaning in a `title` one line
+      above the LED. Forward-only, the widened guard flagged that correct element.
+- [x] **THE `className={…}}` STRIP WAS OVER-EATING.** Its non-greedy multi-line form ran to the next
+      `}}`, swallowing the `p.isOnline` that made a PeerOverlays element legitimate. Removed — it was
+      redundant, since stripping the token name is what stops the self-allow.
+- [x] **THE PROSE TRAP, for the sixteenth time, INSIDE the guard for the thing the comment
+      describes**: a comment recording why the waveform moved OFF the presence green satisfied a
+      search FOR the misuse. Now `codeOnly`, with a companion pair proving the strip does real work.
+- [x] **THE FILE LIST IS DERIVED, NOT HAND-KEPT** — and that is why there was a seventh occurrence:
+      the old sweep read `Messages.tsx` alone, so `Status.tsx` (the stories strip, on that very
+      screen) was outside it and held a `+` badge in the presence green. Now the client tree is
+      walked for the tokens.
+- [x] **AND DERIVING IT IMMEDIATELY FOUND AN EIGHTH, in a file nothing had ever read**:
+      `GroupInfoSheet.tsx` painted "Saved ✓" with `--relay-green-text` — green meaning SUCCESS — in
+      the one sheet that ALSO draws a presence LED on every member's disc. One colour, two meanings,
+      one view. It is `emerald-400` now, matching Profile's own save pill (v2.99.89), so this removes
+      a colour rather than inventing one.
+- [x] **THE REST IS ENUMERATED AS DEBT, honestly rather than overclaimed**: 35 uses across 14 files —
+      CTA fills, links, a spinner, toggle states, the History PIN, a "Party line" chip. Each needs
+      the same per-site judgement the two fixed ones got, which is a design pass and not a
+      find-and-replace. So the list may SHRINK freely and may never GROW: a file not on it must be
+      clean, so a NEW misuse anywhere else is red immediately, and every entry must still really
+      offend or the exemption is stale.
+
+### The ring pin froze one implementation of a rule about consistency
+
+- [x] `groupStories.test.ts` asserted the literal `from-[#06d6a0] via-[#0ea5e9] to-[#8b5cf6]` — a
+      hand-rolled COPY of `.rstoryring` carrying that recipe's LIGHT values and nothing else. In
+      DARK, `.rstoryring` is the cycling accent and the copy was not, so a group's "unseen" ring drew
+      a different colour from a person's on the same screen. Freezing the copy made that divergence
+      mandatory, under a comment reading *"one shape must not acquire a second meaning"*.
+- [x] Rewritten to the property: three distinct STATES (gradient/subtle/absent), the shared recipe,
+      no private copy — plus a new sweep that all three surfaces (thread row, `PeerAvatar`, stories
+      strip) reach for the same class, which is a property of the SET and cannot be pinned in one
+      file.
+
+### Verification
+
+- [x] **19 of 19 tripwires verified by MUTATION** off a confirmed-GREEN baseline from byte-exact
+      backups, the mutator aborting unless its target occurs exactly once; all eight sources
+      byte-identical afterwards.
+- [x] **THE FIRST RUN CAME BACK 9/14 AND FOUR SURVIVORS WERE REAL GAPS IN MY OWN TESTS** — all one
+      class: the avatar could be gated, and the ORDERING of the gate pinned, while the value was
+      thrown away at three separate layers with every assertion green. Reported, then pinned hop by
+      hop and re-verified.
+- [x] A fifth survivor was the debt branch swallowing every file rather than the listed ones; it only
+      creates a defect COMBINED with a new misuse, so the decision is now a named `mustBeClean(f)`
+      asserted directly, and the mutation bites.
+- [x] **TWO STALE END ANCHORS FOUND BY A GUARD I ADDED IN THE SAME COMMIT**: `openThread` sits BEFORE
+      `createGroup` and `addMember` does not follow `setGroupProfile`, so both slices had been
+      running to end-of-file — the unbounded-slice fragility, live. The end anchor must now EXIST and
+      FOLLOW its start.
+- [x] `pnpm verify` green: 285 files, 5102 tests. No schema change, no new dependency, no new env var.
+
 ## v2.106.65 — the composer's Send is permanent, and my own six-digit sweep was largely vacuous (2026-08-01)
 
 Owner, two composer items: *"on the attachment inside the chat on the plus button add the

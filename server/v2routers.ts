@@ -1773,6 +1773,29 @@ export const v2ContactsRouter = router({
 
 /* ── messages router ──────────────────────────────────────────── */
 
+/**
+ * AVATAR LAUNDERING (v2.98.4/F2, and v2.99.26/H5 for the absolute form): a storage key must
+ * be in the CALLER's own namespace, or a group could be pointed at a stranger's private
+ * attachment and the proxy would serve it to everyone in that group.
+ *
+ * ONE function, two callers (v2.106.66). It was inline in `setGroupProfile`, and the moment
+ * `createGroup` also accepted an avatar that became a rule with two homes — which is exactly
+ * how the second one comes to be written without it. `lastIndexOf` rather than a prefix test
+ * because the ABSOLUTE form (`https://host/manus-storage/<key>`) must be gated too: the
+ * storage proxy matches the key as a SUFFIX, so an absolute URL naming a stranger's key
+ * resolves through it just as a relative one does (H5).
+ */
+function assertOwnedAvatarUrl(avatarUrl: string | null | undefined, identityId: number): void {
+  if (!avatarUrl) return;
+  const marker = "/manus-storage/";
+  const at = avatarUrl.lastIndexOf(marker);
+  if (at < 0) return; // a data: URL or an external CDN never resolves through our proxy
+  const key = avatarUrl.slice(at + marker.length);
+  if (!keyInOwnerNamespace(key, identityId)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "That image isn't yours to use." });
+  }
+}
+
 export const v2MessagesRouter = router({
   threads: publicProcedure.query(async ({ ctx }) => {
     const me = requireIdentity(ctx);
@@ -2023,19 +2046,7 @@ export const v2MessagesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
-      // AVATAR LAUNDERING (v2.98.4/F2, and v2.99.26/H5 for the absolute form): a
-      // storage key must be in the CALLER's own namespace, or a group could be
-      // pointed at a stranger's private attachment and the proxy would serve it.
-      if (input.avatarUrl) {
-        const marker = "/manus-storage/";
-        const at = input.avatarUrl.lastIndexOf(marker);
-        if (at >= 0) {
-          const key = input.avatarUrl.slice(at + marker.length);
-          if (!keyInOwnerNamespace(key, me.id)) {
-            throw new TRPCError({ code: "FORBIDDEN", message: "That image isn't yours to use." });
-          }
-        }
-      }
+      assertOwnedAvatarUrl(input.avatarUrl, me.id);
       const res = await setGroupProfile(input.conversationId, me.id, {
         title: input.title,
         avatarUrl: input.avatarUrl,
@@ -2164,6 +2175,13 @@ export const v2MessagesRouter = router({
       z.object({
         title: z.string().trim().min(1).max(128),
         numbers: z.array(NumberSchema).min(1).max(19), // + creator = 20 cap
+        // v2.106.66 — the owner's report: *"there is a problem with the avatar of the
+        // group when you created you select avatar by default, it comes with default
+        // avatar, but if you select another avatar doesn't appear."* They were right, and
+        // it was never a UI bug: this schema accepted ONLY title and numbers, and a plain
+        // `z.object` STRIPS unknown keys rather than rejecting them — so a client sending
+        // an avatar got a silent success and a group born with a NULL photo.
+        avatarUrl: z.string().max(1024).nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2173,6 +2191,10 @@ export const v2MessagesRouter = router({
       // Gate it on the shared per-IP directory bucket (honors RELAY_RATELIMIT_OFF).
       directoryGate(ctx);
       const me = requireIdentity(ctx);
+      // The SAME gate `setGroupProfile` carries. Accepting an avatar here without it would
+      // let a brand-new group be pointed at a stranger's private attachment, which the
+      // storage proxy would then serve to every member.
+      assertOwnedAvatarUrl(input.avatarUrl, me.id);
       const unique = Array.from(new Set(input.numbers)).filter((n) => n !== me.number);
       const resolved = await getIdentitiesByNumbers(unique);
       // SECURITY: a target who has blocked the creator must not be forcibly
@@ -2195,6 +2217,7 @@ export const v2MessagesRouter = router({
         creatorId: me.id,
         memberIds: members.map((m) => m.id),
         title: input.title,
+        avatarUrl: input.avatarUrl ?? null,
       });
       // Push a hint so every member's thread list refreshes.
       try {

@@ -3559,6 +3559,18 @@ export async function createGroupConversation(input: {
   creatorId: number;
   memberIds: number[];
   title: string;
+  /**
+   * v2.106.66 — a group can be born with its photo. It could not before: this function took
+   * no avatar and the INSERT never wrote the column, so EVERY group started with a NULL
+   * `avatarUrl` and the purple glyph, whatever the creator picked. Optional, so every
+   * pre-existing caller is byte-identical. The column itself has existed since v2.102.0,
+   * so there is no migration.
+   *
+   * The laundering gate lives at the ROUTER (`assertOwnedAvatarUrl`), which is where the
+   * caller's identity is known — this function is trusted-caller by construction, exactly
+   * as `setGroupProfile` is.
+   */
+  avatarUrl?: string | null;
 }) {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
@@ -3586,6 +3598,7 @@ export async function createGroupConversation(input: {
         kind: "group",
         title: input.title.slice(0, 128),
         number,
+        avatarUrl: input.avatarUrl ?? null,
         ownerIdentityId: input.creatorId,
       });
       // mysql2 returns the new row id as insertId on the result header.

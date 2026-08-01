@@ -7,8 +7,8 @@
  * you a matcher exists and cannot tell you it refuses a stray at-sign.
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { resolve, join } from "node:path";
 import { codeOnly } from "./testing/codeOnly";
 import {
   findMentions,
@@ -19,6 +19,21 @@ import {
 } from "@shared/mentions";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
+
+/** Every `.tsx` under `client/src` whose SOURCE mentions the pattern, repo-relative. */
+function clientFilesUsing(re: RegExp): string[] {
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    for (const e of readdirSync(resolve(process.cwd(), rel), { withFileTypes: true })) {
+      const p = join(rel, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith(".tsx") && re.test(readFileSync(resolve(process.cwd(), p), "utf8")))
+        out.push(p);
+    }
+  };
+  walk("client/src");
+  return out.sort();
+}
 
 const ROSTER = [
   { id: 1, name: "Ali" },
@@ -355,25 +370,199 @@ describe("green means ONLINE, and only online", () => {
        so the guard read as covering the rule while covering half of it. A pinned
        thread is not an online thread; the marker is muted now, deliberately not
        the accent, because the accent means UNREAD in that same row. */
-    const ALLOWED = [/typing…/, /\bonline\b/, /online now/];
+    /* v2.106.66 — THE GUARD WAS SELF-ALLOWING, AND HALF-BLIND. Found by the design audit,
+       verified here: `/\bonline\b/` matches inside the TOKEN NAME —
+       `/\bonline\b/.test("var(--relay-online)")` is `true` — so every `--relay-online` hit
+       allowed ITSELF and only `--relay-green-text` was ever constrained. And `UI` is
+       `Messages.tsx` alone, so `Status.tsx` — which renders the stories strip on that very
+       screen — was outside the sweep entirely. It duly held a `+` badge filled with the
+       presence green, the seventh occurrence of a rule this file exists to enforce.
+
+       Both halves are fixed: the allow-list is tested against the RENDERED TEXT with class
+       and style attributes stripped, and the sweep reads every client source. */
+    /* `typing` is allowed WITH OR WITHOUT the ellipsis. The pattern was `/typing…/`, and
+       the thread ROW's literal is a bare `typing` followed by three animated dots — so the
+       first run of the de-self-allowed guard flagged perfectly correct code. (The old
+       assertion had passed off the header's and TypingLine's occurrences elsewhere in the
+       file, which is the same accident one layer along.) Typing is DELIBERATELY allowed:
+       it implies online — you cannot type from an offline client — it occupies the presence
+       slot in the same row, and it is a STRONGER presence statement rather than a different
+       kind of fact, so green is carrying its one meaning there. */
+    /* AN ELEMENT SAYS IT IS ABOUT PRESENCE IN ONE OF TWO WAYS — in its WORDS, or in its
+       CONDITION. `p.isOnline && !p.idle ? green : muted` is a presence statement with no
+       prose in it at all, and a text-only allow-list flags it: the first run of this
+       sweep flagged four such sites and every one of them was correct. */
+    const PRESENCE = [/\btyping\b/, /\bonline\b/, /online now/, /\bisOnline\b/];
+
+    /* THE TWO GREEN TOKENS DO NOT CARRY THE SAME LICENCE, which is why this is a pair of
+       rules rather than one flat list. `--relay-online` is the LED hue and means ONLINE,
+       full stop. `--relay-green-text` is the AA-measured sibling v2.99.86 added because
+       the LED hue fails contrast as small text — and the app has a SECOND, deliberate
+       meaning for it: a 6-digit RELAY NUMBER (the top bar since v2.99.86, a contact's
+       number since v2.106.43). That is a recorded decision, so it is EXEMPTED BY NAME and
+       narrowly: only the text token, only where a number is what renders. Painting a
+       number with the LED hue stays a violation — it would both fail AA and put a
+       presence hue on a fact that is not presence. */
+    const NUMBER = /\.number\b|formatPin\(/;
+    const LED = /relay-online/;
     const GREEN = /relay-online|relay-green-text/;
-    /* THE WINDOW IS THE ELEMENT, NOT THE LINE, and widening the token set is what exposed
-       that: a per-LINE sweep asked whether the className and the word sit on the same
-       source line, which for multi-line JSX they do not — the group header's perfectly
-       correct `{membersOnline} online` lives one line below its own class, and the first
-       run of the widened guard failed on it. A line is not the unit this rule is about. */
-    const all = UI.split("\n");
-    const hits = all
-      .map((l, i) => ({ l, i }))
-      .filter(({ l }) => GREEN.test(l));
-    expect(hits.length, "the sweep must not be vacuous").toBeGreaterThan(0);
-    for (const { l, i } of hits) {
-      const el = all.slice(i, i + 3).join(" ");
-      expect(
-        ALLOWED.some((re) => re.test(el)),
-        `presence green used for something that is not presence:\n  ${l.trim()}`
-      ).toBe(true);
+
+    /** The element with the TOKEN NAMES removed — i.e. what a person READS. */
+    function renderedText(el: string): string {
+      /* ONLY the token names. The first version also stripped `className={…}}` and its
+         string cousins, which was redundant — removing `--relay-online` is what stops the
+         allow-list matching itself — and actively harmful: the non-greedy multi-line form
+         ate as far as the next `}}`, swallowing the `p.isOnline` that made a PeerOverlays
+         element legitimate, so a correct site was flagged for a reason having nothing to
+         do with the rule. */
+      return el.replace(/--relay-[a-z-]+/g, " ");
     }
+
+    /** True when a green use is about presence, or is the named number exemption. */
+    function greenIsEarned(line: string, element: string): boolean {
+      const el = renderedText(element);
+      if (PRESENCE.some((re) => re.test(el))) return true;
+      return !LED.test(line) && NUMBER.test(el);
+    }
+
+    /* THE LIST IS DERIVED, NOT HAND-KEPT, and that is the whole reason there was a seventh
+       occurrence: the old sweep read `Messages.tsx` alone, so `Status.tsx` — which renders
+       the stories strip on that very screen — was outside it and duly held a `+` badge
+       filled with the presence green. A hand-written list is a list somebody forgets to
+       add the next file to, and the omission is invisible: the sweep still passes, still
+       reports a non-zero count, and simply never looks. So the files are DISCOVERED by
+       walking the client tree for the tokens, and the enumeration below only records what
+       must be there — a file that stops offending drops out on its own, and one that
+       starts is picked up without anybody remembering. */
+    const FILES = clientFilesUsing(GREEN);
+    /* The three files that legitimately draw presence must be IN it — a derived list that
+       quietly discovered nothing would pass while proving nothing. `Status.tsx` is
+       deliberately NOT among them: this release took the last green out of it, so
+       requiring it here would be requiring a violation to exist. It gets the opposite
+       assertion instead, below. */
+    for (const must of [
+      "client/src/pages/app/Messages.tsx",
+      "client/src/pages/app/Contacts.tsx",
+      "client/src/app/PeerOverlays.tsx",
+    ]) {
+      expect(FILES, `${must} must be in the sweep`).toContain(must);
+    }
+    /* THE SEVENTH OCCURRENCE, pinned shut. The stories strip's `+` badge was filled with
+       the presence green — on the very screen this guard was written for, in a file the
+       old sweep did not read. It is the accent now, so the file holds no green at all. */
+    expect(FILES).not.toContain("client/src/pages/app/Status.tsx");
+
+    /* ═══ THE DEBT LIST, and it is a bigger finding than the release that produced it ═══
+       Deriving the file list turned a guard that read ONE file into one that reads the
+       client tree, and what it found is that the presence green has been serving as a
+       general-purpose accent app-wide: 35 uses across 14 files — CTA fills, links, a
+       spinner, toggle states, the History PIN, a "Party line" chip. Reported honestly
+       rather than overclaimed: this release fixed the two that COLLIDE inside a screen
+       that also draws presence (the stories strip's badge, and GroupInfoSheet's "Saved"
+       beside member LEDs), and the rest each need the same per-site judgement those two
+       got — is this a CTA (`.rcta`), a link (`text-primary`), a state, or genuinely
+       presence — which is a design pass, not a find-and-replace.
+
+       So it is ENUMERATED, exactly as v2.106.31 enumerated the raw-accent-as-text debt.
+       The list may SHRINK freely and may never GROW: a file not on it must be clean, so
+       a NEW misuse anywhere else is red immediately. And every entry must still really
+       offend — an exemption left behind after a fix is how a guard rots into a comment. */
+    const DEBT = new Set([
+      "client/src/app/InviteCard.tsx",
+      "client/src/app/LiveStats.tsx",
+      "client/src/app/MatrixReveal.tsx",
+      "client/src/app/MissedCalls.tsx",
+      "client/src/app/OnboardingGate.tsx",
+      "client/src/app/RelayEngine.tsx",
+      "client/src/app/TopBar.tsx",
+      "client/src/lib/linkify.tsx",
+      "client/src/pages/app/Admin.tsx",
+      "client/src/pages/app/Dialer.tsx",
+      "client/src/pages/app/History.tsx",
+      "client/src/pages/app/Join.tsx",
+      "client/src/pages/app/Profile.tsx",
+      "client/src/pages/app/ProfileHubSections.tsx",
+    ]);
+    /** A file not on the debt list must be clean. Named, so the branch below cannot be
+     *  replaced by a constant that swallows every file — the mutation that found this. */
+    const mustBeClean = (f: string) => !DEBT.has(f);
+    expect(mustBeClean("client/src/app/PasscodeGate.tsx")).toBe(true); // clean ⇒ enforced
+    expect(mustBeClean("client/src/pages/app/Profile.tsx")).toBe(false); // on the list
+    const stillOffends = new Set<string>();
+    let swept = 0;
+    for (const f of FILES) {
+      /* COMMENT-STRIPPED, and that is not tidiness — this file's own prose EXPLAINS the
+         rule, so it necessarily names the token it forbids. The first run of the widened
+         sweep flagged a comment recording why the voice-note waveform moved OFF the
+         presence green: text ABOUT the misuse satisfying a search FOR it. That is the
+         prose trap this repo has now hit sixteen times, here inside the guard written to
+         catch the very thing the comment describes. */
+      const src = codeOnly(read(f));
+      const all = src.split("\n");
+      const hits = all.map((l, i) => ({ l, i })).filter(({ l }) => GREEN.test(l));
+      for (const { l, i } of hits) {
+        swept++;
+        /* THE WINDOW IS THE ELEMENT, NOT THE LINE: a per-line sweep asks whether the class
+           and the word sit on one source line, which for multi-line JSX they do not — the
+           group header's correct `{membersOnline} online` lives a line below its own
+           class, and the first run of the widened guard failed on it.
+
+           IT LOOKS BOTH WAYS, and that is measured rather than symmetry for its own sake.
+           A dot's evidence can be its parent's ATTRIBUTE, which precedes it: the Contacts
+           ONLINE section deliberately renders a bare count (v2.99.97 — its own heading
+           already says "Online", so the word would read "Online … 3 online") and carries
+           the meaning in the wrapper's `title` one line above the LED. Forward-only, the
+           widened guard flagged that correct element. The forward reach is 5 because the
+           contact row's number renders four lines below its own class (`dir="ltr"` and
+           the opening bracket sit between them). */
+        const element = all.slice(Math.max(0, i - 2), i + 5).join(" ");
+        if (greenIsEarned(l, element)) continue;
+        if (!mustBeClean(f)) {
+          stillOffends.add(f);
+          continue;
+        }
+        expect(
+          false,
+          `presence green used for something that is not presence:\n  ${f}\n  ${l.trim()}\n` +
+            `  (fix it, or add the file to DEBT with a reason — never silently)`,
+        ).toBe(true);
+      }
+    }
+    expect(swept, "the sweep must not be vacuous").toBeGreaterThan(0);
+
+    /* NO ENTRY MAY GO STALE. A file left on the list after its last misuse is fixed is an
+       exemption nobody is watching, and the next real misuse there would be invisible —
+       which is exactly how this rule reached a seventh and eighth occurrence. */
+    for (const f of DEBT) {
+      expect(stillOffends.has(f), `${f} is CLEAN now — take it off DEBT`).toBe(true);
+    }
+
+    /* IT STILL BITES — proven on constructed elements rather than assumed, because a
+       sweep that has been widened four times to stop flagging correct code is exactly
+       the kind that ends up flagging nothing at all. */
+    const led = 'className="bg-[color:var(--relay-online)]"';
+    const txt = 'className="text-[color:var(--relay-green-text)]"';
+    expect(greenIsEarned(led, `${led} Pinned`)).toBe(false); // the 7th occurrence
+    expect(greenIsEarned(txt, `${txt} Unread`)).toBe(false);
+    expect(greenIsEarned(led, `${led} {c.number}`)).toBe(false); // LED may NOT be a number
+    expect(greenIsEarned(txt, `${txt} {c.number}`)).toBe(true); // the named exemption
+    expect(greenIsEarned(led, `p.isOnline ? ${led} : muted`)).toBe(true);
+    expect(greenIsEarned(led, `${led} 3 online`)).toBe(true);
+
+    /* The comment strip is doing REAL work rather than hiding a defect: the raw file
+       genuinely carries prose naming the token, and the stripped form genuinely does
+       not. Without this pair, `codeOnly` silently becoming a no-op — or the comment
+       being deleted — would leave the sweep looking guarded while proving less. */
+    const rawMessages = read("client/src/pages/app/Messages.tsx");
+    expect(rawMessages).toMatch(/painted with `--relay-online`/);
+    expect(codeOnly(rawMessages)).not.toMatch(/painted with `--relay-online`/);
+
+    // …and the strip really is stripping: with the token name left in, the old guard's
+    // allow-list matched itself, which is why it caught nothing.
+    expect(/\bonline\b/.test("var(--relay-online)")).toBe(true);
+    expect(/\bonline\b/.test(renderedText("bg-[color:var(--relay-online)]"))).toBe(
+      false,
+    );
   });
 
   it("the recording DOT stays red, because red-means-recording does not collide", () => {

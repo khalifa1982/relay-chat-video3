@@ -219,23 +219,90 @@ describe("editing a group", () => {
   });
 
   it("the avatar is namespace-gated, so a group cannot point at a stranger's media", () => {
-    // v2.98.4/F2 and v2.99.26/H5 — the absolute-URL form is what H5 closed, so the
-    // key is taken after the LAST marker rather than tested as a prefix.
-    const proc = ROUTERS.slice(
-      ROUTERS.indexOf("  setGroupProfile: publicProcedure"),
-      ROUTERS.indexOf("  createGroup: publicProcedure"),
+    /* v2.98.4/F2 and v2.99.26/H5 — the absolute-URL form is what H5 closed, so the key is
+       taken after the LAST marker rather than tested as a prefix.
+
+       v2.106.66 — this froze the gate's INLINE body inside `setGroupProfile`, so it broke
+       the moment the rule was extracted, while saying nothing about the property. And the
+       extraction is the point: `createGroup` now accepts an avatar too, and a rule with two
+       homes is exactly how the second one comes to be written without it. Pinned as the
+       property — ONE gate, correct in itself, applied by EVERY procedure that accepts an
+       avatar, before the write. */
+    const fn = ROUTERS.slice(
+      ROUTERS.indexOf("function assertOwnedAvatarUrl("),
+      ROUTERS.indexOf("export const v2MessagesRouter"),
     );
-    expect(proc.length).toBeGreaterThan(500);
-    expect(proc).toMatch(/lastIndexOf\(marker\)/);
-    expect(proc).toMatch(/keyInOwnerNamespace\(key, me\.id\)/);
-    const gate = proc.indexOf("keyInOwnerNamespace");
-    const write = proc.indexOf("await setGroupProfile(");
-    expect(gate).toBeLessThan(write);
-    // …and the branch is REACHABLE. `if (false) {` left every assertion above green
-    // while the gate could never run — the same text-versus-path gap that let a
-    // moved allocation survive, so the CONDITION is pinned too.
-    expect(proc).toMatch(/if \(input\.avatarUrl\) \{/);
-    expect(codeOnly(proc)).not.toMatch(/if \((?:false|0)\)/);
+    expect(fn.length).toBeGreaterThan(200);
+    expect(fn).toMatch(/lastIndexOf\(marker\)/);
+    expect(fn).toMatch(/keyInOwnerNamespace\(key, identityId\)/);
+    // A falsy url returns EARLY rather than being treated as a key, and a url with no
+    // marker (a data: URL, an external CDN) is left alone — it never resolves through
+    // our proxy, so gating it would refuse a legitimate avatar.
+    expect(fn).toMatch(/if \(!avatarUrl\) return;/);
+    expect(fn).toMatch(/if \(at < 0\) return;/);
+    expect(codeOnly(fn)).not.toMatch(/if \((?:false|0)\)/);
+
+    // EVERY procedure that takes an avatar applies it, and applies it BEFORE the write.
+    for (const [proc, endAnchor, write] of [
+      ["  setGroupProfile: publicProcedure", "  setGroupRole: publicProcedure", "await setGroupProfile("],
+      ["  createGroup: publicProcedure", "  conversationInfo: publicProcedure", "await createGroupConversation("],
+    ] as const) {
+      const start = ROUTERS.indexOf(proc);
+      expect(start, proc).toBeGreaterThan(-1);
+      /* The end anchor must EXIST and must FOLLOW the start. A missing one used to fall
+         back to end-of-file, so the slice silently swallowed every later procedure — the
+         unbounded-slice fragility this repo has been bitten by repeatedly, and it was live
+         here: `openThread` sits BEFORE `createGroup`, so that arm was reading to EOF. */
+      const end = ROUTERS.indexOf(endAnchor, start);
+      expect(end, `${proc}: end anchor must follow it`).toBeGreaterThan(start);
+      const body = ROUTERS.slice(start, end);
+      expect(body, `${proc} accepts an avatar`).toMatch(/avatarUrl: z\.string\(\)/);
+      const gate = body.indexOf("assertOwnedAvatarUrl(");
+      expect(gate, `${proc} must apply the gate`).toBeGreaterThan(-1);
+      const at = body.indexOf(write);
+      expect(at, `${proc}: write anchor`).toBeGreaterThan(-1);
+      expect(gate, `${proc}: gate before the write`).toBeLessThan(at);
+    }
+  });
+
+  it("the picked avatar SURVIVES every hop, which is the bug that was reported", () => {
+    /* Owner, verbatim: *"there is a problem with the avatar of the group when you created
+       you select avatar by default, it comes with default avatar, but if you select
+       another avatar doesn't appear."*
+
+       THE DEFECT WAS A SILENT DROP, not a broken control, and that is why it needs its own
+       pin: a plain `z.object` STRIPS unknown keys rather than rejecting them, so a client
+       sending an avatar got a clean success and a group born with a NULL photo. Nothing
+       anywhere said no.
+
+       Written after the mutation run, which found this gap in my own tests: gating the
+       avatar and ORDERING the gate were both pinned, and the value could still be thrown
+       away at THREE separate layers with every assertion green — the router dropping it
+       before the helper, the helper dropping it before the INSERT, or the sheet never
+       sending it. Each is indistinguishable from the original report. So the chain is
+       asserted hop by hop rather than end to end, because a break in any single link
+       reproduces the bug exactly. */
+    // 1. the sheet mounts a picker, and its choice is held in state
+    expect(MESSAGES).toMatch(/<AvatarPicker/);
+    expect(MESSAGES).toMatch(/onSave=\{async \(url\) => setGroupAvatar\(url\)\}/);
+    // 2. …and that state reaches the mutation, rather than the picker being decoration
+    expect(MESSAGES).toMatch(/createGroup\.mutate\(\{[\s\S]{0,200}?avatarUrl: groupAvatar,/);
+    // 3. the router forwards it to the helper (dropping it here IS the reported bug)
+    const cgAt = ROUTERS.indexOf("  createGroup: publicProcedure");
+    const proc = ROUTERS.slice(cgAt, ROUTERS.indexOf("  conversationInfo: publicProcedure", cgAt));
+    expect(proc.length).toBeGreaterThan(400);
+    expect(proc).toMatch(/createGroupConversation\(\{[\s\S]{0,300}?avatarUrl: input\.avatarUrl \?\? null,/);
+    // 4. …and the helper actually writes the column
+    const fn = V2DB.slice(
+      V2DB.indexOf("export async function createGroupConversation("),
+      V2DB.indexOf("export async function", V2DB.indexOf("export async function createGroupConversation(") + 10),
+    );
+    expect(fn.length).toBeGreaterThan(400);
+    expect(fn).toMatch(/avatarUrl\?: string \| null;/); // optional ⇒ old callers unchanged
+    expect(fn).toMatch(/avatarUrl: input\.avatarUrl \?\? null,/);
+    // `?? null` and never `|| null`: they agree for every value the schema admits, but the
+    // nullish form is the one that cannot swallow a future falsy-but-meaningful value.
+    expect(fn).not.toMatch(/avatarUrl: input\.avatarUrl \|\| null/);
   });
 
   it("every refusal is NAMED, because each needs a different next step", () => {
