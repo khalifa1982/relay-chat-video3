@@ -20,7 +20,7 @@ export function MessagePopups() {
   const popups = useMessagePopups();
   if (popups.length === 0) return null;
   return (
-    <div className="fixed z-[80] bottom-24 right-3 md:bottom-4 flex flex-col gap-2 w-[min(92vw,340px)] pointer-events-none">
+    <div className="fixed z-[80] bottom-24 end-3 md:bottom-4 flex flex-col gap-2 w-[min(92vw,340px)] pointer-events-none">
       {popups.map((p) => (
         <div key={p.id} className="pointer-events-auto">
           <PopupCard popup={p} />
@@ -79,7 +79,7 @@ function PopupCard({ popup }: { popup: MessagePopup }) {
       <button
         type="button"
         onClick={() => setMinimized(false)}
-        className="ml-auto flex items-center gap-2 rounded-full bg-primary px-3 py-2 text-primary-foreground shadow-lg active:scale-95 transition"
+        className="ms-auto flex items-center gap-2 rounded-full bg-primary px-3 py-2 text-primary-foreground shadow-lg active:scale-95 transition"
       >
         <MessageSquare className="size-4" />
         <span className="max-w-[160px] truncate text-sm font-medium">{name}</span>

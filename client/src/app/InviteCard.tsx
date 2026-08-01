@@ -196,7 +196,7 @@ export function InviteCard({
             background={isLine ? lineThumbGradient(line.number) : undefined}
           />
           {!isLine && person?.isOnline && (
-            <span className="absolute bottom-0.5 right-0.5 size-3.5 rounded-full border-2 border-[#0b0f14] bg-[color:var(--relay-online,#06d6a0)]" />
+            <span className="absolute bottom-0.5 end-0.5 size-3.5 rounded-full border-2 border-[#0b0f14] bg-[color:var(--relay-online,#06d6a0)]" />
           )}
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-lg font-semibold leading-tight">

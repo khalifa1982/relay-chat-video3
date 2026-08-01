@@ -99,12 +99,17 @@ describe("UI/UX improvements", () => {
     expect(HISTORY).toMatch(/\bsize-11\b/);
   });
 
-  it("the Contacts search field has a leading search icon", () => {
-    // Tolerate trailing utility classes (the redesign added pointer-events-none
-    // so the icon never intercepts a tap on the field).
+  it("the Contacts search field has a leading search icon, on its LEADING side", () => {
+    /* `start-3`, not `left-3` (#156): the glyph marks where the text BEGINS, so in Arabic
+       it belongs on the right — and the field's own `ps-10` clears it, so the two have to
+       mirror TOGETHER. Converting only the padding would leave a gap on one side and the
+       text running under the icon on the other, which is why both are asserted here.
+       Trailing utility classes are tolerated (the redesign added `pointer-events-none` so
+       the icon never intercepts a tap on the field). */
     expect(CONTACTS).toMatch(
-      /<Search className="absolute left-3 top-1\/2 -translate-y-1\/2 size-4 text-muted-foreground[^"]*" \/>\s*\n\s*<Input\s*\n\s*placeholder=\{t\("contacts\.search"\)\}/,
+      /<Search className="absolute start-3 top-1\/2 -translate-y-1\/2 size-4 text-muted-foreground[^"]*" \/>\s*\n\s*<Input\s*\n\s*placeholder=\{t\("contacts\.search"\)\}/,
     );
+    expect(CONTACTS).toMatch(/className="h-11 ps-10 rounded-xl bg-secondary\/60"/);
   });
 
   it("the empty Contacts state uses the shared Empty component with a CTA", () => {

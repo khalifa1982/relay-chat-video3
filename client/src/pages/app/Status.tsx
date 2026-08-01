@@ -10,7 +10,7 @@ import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 import { AUDIENCE_OPTIONS, audienceOption } from "@/app/statusAudience";
 import { EmojiPicker } from "@/app/EmojiPicker";
 import { REACTION_QUICK } from "@/lib/emojiCatalog";
-import { useT } from "@/app/i18n";
+import { useT, useLocale } from "@/app/i18n";
 
 /**
  * Rich user status (v2.95) — WhatsApp/story-style ephemeral updates: text,
@@ -203,7 +203,7 @@ export function StatusStrip() {
         ))}
 
         {others.length === 0 && !myGroup && (
-          <span className="text-xs text-muted-foreground/80 pl-1">
+          <span className="text-xs text-muted-foreground/80 ps-1">
             Share a photo, video, or a line — visible for 24h to your contacts.
           </span>
         )}
@@ -466,7 +466,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
               <button
                 type="button"
                 onClick={() => setBgIndex((i) => (i + 1) % BG_OPTIONS.length)}
-                className="absolute bottom-2 right-2 rounded-full bg-black/30 px-2.5 py-1 text-[11px] font-medium text-white"
+                className="absolute bottom-2 end-2 rounded-full bg-black/30 px-2.5 py-1 text-[11px] font-medium text-white"
               >
                 Color
               </button>
@@ -646,6 +646,13 @@ export function StatusViewer({
   chain?: boolean;
 }) {
   const t = useT();
+  /* PREV/NEXT MIRROR, and the GLYPH has to mirror with the position or the arrow points
+     the wrong way at the side it sits on. In Arabic "next" is to the LEFT — a reel is
+     read in the page's own direction, so a fixed ChevronRight-on-the-right would send
+     somebody backwards through a story every time they meant to go on. */
+  const { rtl } = useLocale();
+  const PrevIcon = rtl ? ChevronRight : ChevronLeft;
+  const NextIcon = rtl ? ChevronLeft : ChevronRight;
   const [gi, setGi] = useState(startIndex);
   const [ii, setIi] = useState(0);
   const [progress, setProgress] = useState(0); // 0..1 of current item
@@ -857,12 +864,12 @@ export function StatusViewer({
             While the reply band is open the FIRST tap closes it instead of
             navigating, so tapping away dismisses the composer rather than
             skipping the story you were about to reply to (v2.99.80). */}
-        <button type="button" aria-label={t("status.previous")} onClick={() => { if (replyOpen) { setReplyOpen(false); return; } if (Date.now() - pressStartRef.current < HOLD_MS) prev(); }} className="absolute inset-y-0 left-0 w-1/3" />
-        <button type="button" aria-label={t("status.next")} onClick={() => { if (replyOpen) { setReplyOpen(false); return; } if (Date.now() - pressStartRef.current < HOLD_MS) next(); }} className="absolute inset-y-0 right-0 w-1/3" />
+        <button type="button" aria-label={t("status.previous")} onClick={() => { if (replyOpen) { setReplyOpen(false); return; } if (Date.now() - pressStartRef.current < HOLD_MS) prev(); }} className="absolute inset-y-0 start-0 w-1/3" />
+        <button type="button" aria-label={t("status.next")} onClick={() => { if (replyOpen) { setReplyOpen(false); return; } if (Date.now() - pressStartRef.current < HOLD_MS) next(); }} className="absolute inset-y-0 end-0 w-1/3" />
         {/* desktop chevrons — these bypass the HOLD check, so they need the same
             reply guard or a stray click would advance mid-compose. */}
-        <button type="button" onClick={() => { if (replyOpen) { setReplyOpen(false); return; } prev(); }} className="absolute left-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/40 p-2 md:block"><ChevronLeft className="size-5" /></button>
-        <button type="button" onClick={() => { if (replyOpen) { setReplyOpen(false); return; } next(); }} className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/40 p-2 md:block"><ChevronRight className="size-5" /></button>
+        <button type="button" onClick={() => { if (replyOpen) { setReplyOpen(false); return; } prev(); }} className="absolute start-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/40 p-2 md:block"><PrevIcon className="size-5" /></button>
+        <button type="button" onClick={() => { if (replyOpen) { setReplyOpen(false); return; } next(); }} className="absolute end-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-black/40 p-2 md:block"><NextIcon className="size-5" /></button>
       </div>
 
       {/* caption */}
