@@ -215,3 +215,15 @@
 - [x] Ensure iOS incoming calls use CallKit (full-screen ring) while Android keeps existing local notification approach
 - [x] Handle didLoadWithEvents for calls answered/declined before JS bridge is ready
 - [x] tsc clean + tests pass
+
+## Round 23 — Android FCM Data Push + Full-Screen Incoming Call
+
+- [x] Create Expo config plugin (plugins/with-android-fcm-call.js) for native Android FCM service that handles data-only pushes even when app is killed
+- [x] Implement native FirebaseMessagingService that fires full-screen incoming call notification on incoming_call and cancels on call_cancel
+- [x] Implement full-screen IncomingCallActivity with Answer/Decline buttons, lock-screen support, ringtone, and 60s auto-timeout
+- [x] Wire Answer action to launch MainActivity with nativeCall/mode/action params (cold start) or inject CustomEvent (warm start)
+- [x] Wire Decline action to inject callDeclined event and dismiss notification
+- [x] Handle webCallEnded from WebView via RelayNative JavascriptInterface to clear ongoing notification
+- [x] Inject FCM token into WebView via relay:native CustomEvent on page load
+- [x] Add OEM autostart/background permission hint for Xiaomi/Oppo/Vivo devices
+- [x] tsc clean + tests pass

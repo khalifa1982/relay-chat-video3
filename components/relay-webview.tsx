@@ -30,6 +30,7 @@ import {
   onVoipWebViewReady,
   handleWebCallEnded,
 } from "@/lib/voip-call-manager";
+import { useAndroidCallIntent } from "@/hooks/use-android-call-intent";
 
 // Palette aligned to the live RELAY web app (oklch(0.12 0.008 245) background
 // ~ #050608) so the native shell's splash/error chrome blends seamlessly with
@@ -126,6 +127,12 @@ export function RelayWebView() {
   // Firebase push token: get the native device token and inject it into the
   // WebView so the web app can register it with its server for push delivery.
   const { onWebViewLoadEnd: sendPushToken } = usePushToken(webViewRef);
+
+  // Track when WebView is ready (first load complete) for Android call intents
+  const [webViewReady, setWebViewReady] = useState(false);
+
+  // Android native call intent handling (cold start answer/decline from native FCM service)
+  useAndroidCallIntent(webViewRef, webViewReady);
 
   // Online presence: keep RELAY reachable in the background so calls ring even
   // when minimized. The injected script reports whether the user is signed in;
@@ -284,6 +291,7 @@ export function RelayWebView() {
         onLoadEnd={() => {
           finishFirstLoad();
           sendPushToken();
+          setWebViewReady(true);
           // Notify VoIP manager that WebView is ready for injection
           if (Platform.OS === "ios") onVoipWebViewReady();
         }}

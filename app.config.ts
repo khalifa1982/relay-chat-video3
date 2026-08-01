@@ -173,6 +173,8 @@ const config: ExpoConfig = {
     ],
     // Local plugin: enable Android picture-in-picture for active calls.
     "./plugins/with-android-pip.js",
+    // Local plugin: native Android FCM service for incoming call ringing when app is killed.
+    "./plugins/with-android-fcm-call.js",
     // Local plugin: iOS VoIP Push (PushKit) + CallKit for incoming call ringing.
     "./plugins/with-ios-voip-callkit.js",
   ],
