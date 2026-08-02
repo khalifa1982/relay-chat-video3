@@ -115,7 +115,12 @@ describe("RelayEngine's call chrome is translated", () => {
   });
 
   it("the provider reaches the translator, and no local shadows it", () => {
-    expect(CODE).toMatch(/import \{ useT \} from "\.\/i18n"/);
+    /* The PROPERTY is that the component imports the translator from the app's own
+       i18n module — not the exact shape of the import clause. The original froze
+       `{ useT }` alone, so it broke when the engine wiring legitimately needed
+       `type TKey` beside it for the boundary cast, while saying nothing about
+       whether the translator is reached at all. */
+    expect(CODE).toMatch(/import \{[^}]*\buseT\b[^}]*\} from "\.\/i18n"/);
     expect(LIVE).toMatch(/const t = useT\(\);/);
     /* A `const t = setInterval(...)` in an effect would shadow the translator and hand a
        later edit a Timeout where it expected a function. The repo's precedent is to

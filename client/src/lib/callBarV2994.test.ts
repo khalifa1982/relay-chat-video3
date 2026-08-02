@@ -30,8 +30,15 @@ describe("control bar: labeled colored chips (v2.99.4)", () => {
     }
   });
   it("mic label swaps Mute/Unmute and camera swaps Cam off/Cam on via the .off class", () => {
-    expect(RELAY_MARKUP).toMatch(/<span class="lbl-on">Mute<\/span><span class="lbl-off">Unmute<\/span>/);
-    expect(RELAY_MARKUP).toMatch(/<span class="lbl-on">Cam off<\/span><span class="lbl-off">Cam on<\/span>/);
+    /* The property is that the two labels are ADJACENT and carry the swapping
+       classes — not that the tags have no other attributes. Both now carry a
+       `data-i18n` key so the bar can speak Arabic. */
+    expect(RELAY_MARKUP).toMatch(
+      /<span class="lbl-on"[^>]*>Mute<\/span><span class="lbl-off"[^>]*>Unmute<\/span>/,
+    );
+    expect(RELAY_MARKUP).toMatch(
+      /<span class="lbl-on"[^>]*>Cam off<\/span><span class="lbl-off"[^>]*>Cam on<\/span>/,
+    );
     expect(RELAY_CSS).toMatch(/\.ctrl \.lbl-off\{display:none\}/);
     expect(RELAY_CSS).toMatch(/\.ctrl\.off \.lbl-on\{display:none\}/);
     expect(RELAY_CSS).toMatch(/\.ctrl\.off \.lbl-off\{display:inline\}/);

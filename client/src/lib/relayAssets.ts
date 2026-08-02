@@ -21,7 +21,7 @@ export const RELAY_MARKUP = `
   <section id="register" class="relay-screen active">
     <div class="reg-card">
       <div class="relay-brand"><span class="dot"></span>RELAY</div>
-      <p class="tag">Pick a name, get a number, dial anyone.<br>Voice &middot; video &middot; chat &mdash; straight in the browser.</p>
+      <p class="tag" data-i18n="calls.pickNameGetNumber">Pick a name, get a number, dial anyone.<br>Voice &middot; video &middot; chat &mdash; straight in the browser.</p>
       <div class="relay-field">
         <label data-i18n="calls.displayName">Display name</label>
         <input id="nameInput" maxlength="20" placeholder="e.g. Khalifa" autocomplete="off">
@@ -61,7 +61,7 @@ export const RELAY_MARKUP = `
       </div>
       <div class="directory">
         <h3><span class="live-dot"></span> Recent calls</h3>
-        <div id="dirList"><p class="empty-dir">People you call will appear here for quick redial.<br><br>To connect with someone: send them your number, or type theirs on the keypad and hit Call.</p></div>
+        <div id="dirList"><p class="empty-dir" data-i18n="calls.recentsEmpty">People you call will appear here for quick redial.<br><br>To connect with someone: send them your number, or type theirs on the keypad and hit Call.</p></div>
         <div class="share-box">
           <div class="t"><span class="live-dot"></span> Invite link</div>
           <div class="url" id="shareUrl" title="Click to copy">&mdash;</div>
@@ -84,7 +84,7 @@ export const RELAY_MARKUP = `
              tier is then one write in the engine rather than a markup change. -->
         <span class="hchip-who" id="callWho"></span>
         <span class="hchip-role" id="callWhoRole" style="display:none"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1l2.6 2.5 3.6-.4 1 3.5 3.2 1.8-1.5 3.3 1.5 3.3-3.2 1.8-1 3.5-3.6-.4L12 23l-2.6-2.6-3.6.4-1-3.5-3.2-1.8 1.5-3.3-1.5-3.3 3.2-1.8 1-3.5 3.6.4z"/></svg></span>
-        <span id="callRoomLbl">In call</span>
+        <span id="callRoomLbl" data-i18n="calls.inCall">In call</span>
         <div class="timer" id="timer">00:00</div>
         <!-- STATIC because it is STATICALLY TRUE: every WebRTC media path is
              DTLS-SRTP by specification, so this is a property of the transport
@@ -185,13 +185,13 @@ export const RELAY_MARKUP = `
       </div>
       <div class="grid" id="videoGrid"></div>
       <div class="chat" id="chatPanel">
-        <div class="chat-head"><span class="chat-title">Chat</span><button class="chat-close-btn" id="chatClose" aria-label="Close chat" title="Close chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+        <div class="chat-head"><span class="chat-title">Chat</span><button class="chat-close-btn" id="chatClose" aria-label="Close chat" data-i18n-aria="calls.closeChat" title="Close chat" data-i18n-title="calls.closeChat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
         <div class="chat-log" id="chatLog"></div>
         <!-- Emoji palette (v2.99.4): built by JS on first open; sits between the
              log and the composer so the input never loses its position. -->
         <div class="chat-emojis" id="chatEmojis"></div>
         <div class="chat-input">
-          <button type="button" class="chat-emoji-btn" id="chatEmojiBtn" title="Emoji" aria-label="Insert emoji"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c.9 1.2 2.1 1.9 3.5 1.9s2.6-.7 3.5-1.9"/><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none"/></svg></button>
+          <button type="button" class="chat-emoji-btn" id="chatEmojiBtn" title="Emoji" aria-label="Insert emoji" data-i18n-aria="calls.insertEmoji"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c.9 1.2 2.1 1.9 3.5 1.9s2.6-.7 3.5-1.9"/><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none"/></svg></button>
           <input id="chatField" placeholder="Message everyone&hellip;" data-i18n-placeholder="calls.messageEveryone" maxlength="500">
           <button id="chatSend">&uarr;</button>
         </div>
@@ -328,7 +328,7 @@ export const RELAY_MARKUP = `
       <div class="av" id="ringAv">?</div>
       <img class="ring-av-img" id="ringAvImg" alt="" style="display:none">
     </div>
-    <div class="who"><span id="ringWho">Someone</span><span class="ring-verified" id="ringVerified" style="display:none" title="Verified account"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.7l2.6 2.5 3.6-.5 1.1 3.4 3.2 1.7-1.3 3.2 1.3 3.2-3.2 1.7-1.1 3.4-3.6-.5-2.6 2.5-2.6-2.5-3.6.5-1.1-3.4-3.2-1.7L2.8 12 1.5 8.8l3.2-1.7 1.1-3.4 3.6.5z"/><path d="M10.7 15.3l-2.9-2.9 1.3-1.3 1.6 1.6 4.6-4.6 1.3 1.3z" fill="#04201B"/></svg><i class="ring-role-txt" id="ringRoleTxt"></i></span><span class="ring-flag" id="ringFlag"></span></div>
+    <div class="who"><span id="ringWho">Someone</span><span class="ring-verified" id="ringVerified" style="display:none" title="Verified account" data-i18n-title="calls.tipVerified"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.7l2.6 2.5 3.6-.5 1.1 3.4 3.2 1.7-1.3 3.2 1.3 3.2-3.2 1.7-1.1 3.4-3.6-.5-2.6 2.5-2.6-2.5-3.6.5-1.1-3.4-3.2-1.7L2.8 12 1.5 8.8l3.2-1.7 1.1-3.4 3.6.5z"/><path d="M10.7 15.3l-2.9-2.9 1.3-1.3 1.6 1.6 4.6-4.6 1.3 1.3z" fill="#04201B"/></svg><i class="ring-role-txt" id="ringRoleTxt"></i></span><span class="ring-flag" id="ringFlag"></span></div>
     <div class="ring-pin" id="ringPin"></div>
     <div class="ring-presence" id="ringPresence"></div>
     <div class="sub" id="ringSub" data-i18n="calls.isCallingYou">is calling you&hellip;</div>
@@ -367,8 +367,8 @@ export const RELAY_MARKUP = `
       <button type="button" class="qr-opt" data-msg="Can't talk right now — text me." data-i18n-msg="calls.quickCantTalkMsg" data-i18n="calls.quickCantTalk">Can't talk right now — text me</button>
       <button type="button" class="qr-opt" data-msg="On my way." data-i18n-msg="calls.quickOnMyWayMsg" data-i18n="calls.quickOnMyWay">On my way</button>
       <div class="custom-reply">
-        <input id="customReplyInput" maxlength="300" placeholder="Or type your own&hellip;">
-        <button id="customReplySend" type="button" aria-label="Send the message and decline the call">&uarr;</button>
+        <input id="customReplyInput" maxlength="300" placeholder="Or type your own&hellip;" data-i18n-placeholder="calls.customReplyPlaceholder">
+        <button id="customReplySend" type="button" aria-label="Send the message and decline the call" data-i18n-aria="calls.quickSendAria">&uarr;</button>
       </div>
     </div>
   </div>

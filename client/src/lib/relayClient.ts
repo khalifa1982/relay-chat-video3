@@ -3167,7 +3167,14 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
      the applier reads a `data-i18n` KEY off the DOM, and this sentence has the
      name interpolated into it, so nothing in the DOM records which key produced it.
      `setEngineTranslator` calls this. */
-  engineRelabel = updateOnHoldState;
+  engineRelabel = () => {
+    updateOnHoldState();
+    /* Re-render the staged status in the new language. Ordering matters and is
+       already correct: RelayEngine's language effect runs `applyEngineLabels`
+       FIRST — which resets #callRoomLbl to the idle "In call" default — and only
+       then hands the engine its new translator, so the live status wins. */
+    if (inCall || outgoingDial) setCallStatus(callStatus, lastStatusOverride);
+  };
 
   function updateOnHoldState() {
     const held = inCall && !callIsGroup && peersHoldingUs.size > 0;
@@ -4945,10 +4952,25 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     live: "Connected",
     reconnecting: "Reconnecting…",
   };
+  /* The English above stays as the FALLBACK — a call whose status reads "Connected"
+     is merely untranslated, while one reading `calls.statusLive` is broken. */
+  const STATUS_KEY: Record<CallStatus, string> = {
+    calling: "calls.statusCalling",
+    ringing: "calls.statusRinging",
+    connecting: "calls.statusConnecting",
+    encrypting: "calls.statusEncrypting",
+    live: "calls.statusLive",
+    reconnecting: "calls.statusReconnecting",
+  };
+  /* Remembered so a language change can re-render the CURRENT status. An override
+     is a caller-supplied sentence (a peer's name, a failure reason) and is left
+     exactly as given — translating it is that caller's job, not this one's. */
+  let lastStatusOverride: string | undefined;
   const ALL_ST_CLASSES = ["st-calling", "st-ringing", "st-connecting", "st-encrypting", "st-live", "st-reconnecting"];
   function setCallStatus(s: CallStatus, labelOverride?: string) {
     callStatus = s;
-    const text = labelOverride ?? STATUS_LABEL[s];
+    lastStatusOverride = labelOverride;
+    const text = labelOverride ?? T(STATUS_KEY[s], STATUS_LABEL[s]);
     const lbl = $("callRoomLbl");
     if (lbl) lbl.textContent = text;
     const ct = $("call")?.querySelector(".call-head .ct");
