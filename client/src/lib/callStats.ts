@@ -69,6 +69,16 @@ export interface StatEntry {
   protocol?: string;
   codecId?: string;
   mimeType?: string;
+  /* THE PLAYOUT PAIR (v2.107.10). `totalAudioEnergy` is the energy of the audio
+     samples the receiver actually RENDERED, and `totalSamplesDuration` how much
+     of it there was — so packets arriving while energy stays at exactly 0 is
+     "received and never heard", which is a completely different fault from
+     "never arrived" and is invisible in every other counter here. v2.106.51 was
+     precisely that: ~508 audio packets a side, zero energy, silence. The two are
+     read TOGETHER because alone they cannot separate a broken playout path
+     (nothing rendered at all) from a muted far side (rendered, all zeroes). */
+  totalAudioEnergy?: number;
+  totalSamplesDuration?: number;
 }
 
 /**
@@ -97,6 +107,69 @@ export function entriesOf(report: { forEach: (cb: (v: unknown) => void) => void 
 }
 
 export type MediaPath = "relay" | "direct" | "unknown";
+
+/**
+ * What happened to the audio we were SENT (v2.107.10).
+ *
+ *   - `ok`          — packets arrived and carried sound. Nothing to say.
+ *   - `not-playing` — packets arrived, and NOTHING was rendered (`totalSamplesDuration`
+ *                     is exactly 0). This is a bug on our side of the wire and is
+ *                     the v2.106.51 signature verbatim: the transport is fine and
+ *                     the person hears silence.
+ *   - `no-sound`    — packets arrived and were rendered, and every sample was zero.
+ *                     Overwhelmingly the far side being muted or in a silent room,
+ *                     so it is NOT called a fault. Also the honest answer when the
+ *                     UA reports no sample duration at all, because there the two
+ *                     causes cannot be told apart and claiming either would be a
+ *                     guess.
+ *   - `unknown`     — too little evidence yet, or the UA reports no energy.
+ *
+ * Keeping `no-sound` and `not-playing` separate is the whole value: they need
+ * different next steps, and a single "no audio" state would send somebody to
+ * inspect a transport that is working perfectly.
+ */
+export type AudioInboundState = "ok" | "no-sound" | "not-playing" | "unknown";
+
+export interface AudioInbound {
+  /** Audio RTP packets received across every leg. */
+  packets: number;
+  /** Summed `totalAudioEnergy`. Null when no leg reported it. */
+  energy: number | null;
+  /** Summed `totalSamplesDuration`, seconds. Null when no leg reported it. */
+  playoutSec: number | null;
+  state: AudioInboundState;
+}
+
+/**
+ * How many inbound audio packets make the verdict trustworthy.
+ *
+ * ~50 packets a second, so this is about three seconds of call. Higher than the
+ * loss floor on purpose: a call one second old can legitimately have received
+ * audio that has not been rendered yet, and reporting "not playing" there would
+ * make every healthy call accuse itself for its first moments.
+ */
+export const AUDIO_MIN_PACKETS = 150;
+
+/**
+ * Decide the state from the three counters. Exported because it is the one piece
+ * of judgement here and it must be drivable directly — every branch is a distinct
+ * claim about somebody's call.
+ */
+export function audioInboundState(
+  packets: number,
+  energy: number | null,
+  playoutSec: number | null,
+): AudioInboundState {
+  if (packets < AUDIO_MIN_PACKETS) return "unknown";
+  // No energy figure at all ⇒ nothing to judge. Silence is not evidence.
+  if (energy === null) return "unknown";
+  if (energy > 0) return "ok";
+  /* Energy is zero with real packets behind it. WHICH failure it is turns on
+     whether anything was rendered — and an unreported duration cannot answer
+     that, so it degrades to the weaker, non-accusatory claim. */
+  if (playoutSec !== null && playoutSec <= 0) return "not-playing";
+  return "no-sound";
+}
 
 export interface CallStats {
   /** Round trip to the far end, ms. Null when no succeeded candidate pair reported one. */
@@ -194,6 +267,18 @@ export interface CallStats {
    * cpu-limited leg is a cpu-limited call.
    */
   limitedBy: string | null;
+  /**
+   * Evidence that the audio we were sent was actually HEARD (v2.107.10).
+   *
+   * Null when no leg reported an inbound audio stream at all — never a
+   * zero-filled record, because "no audio stream" and "an audio stream that
+   * delivered nothing" are different findings and one must not read as the other.
+   *
+   * This is the counter that separates a transport failure from a playout
+   * failure, and its absence is why an audio outage had to be argued from coturn
+   * logs rather than from the app.
+   */
+  audioIn: AudioInbound | null;
 }
 
 /** Byte counters plus the moment they were read, so the next call can difference them. */
@@ -261,6 +346,10 @@ export function summarizeStats(
   let bytesSent = 0;
   let bytesReceived = 0;
   let legs = 0;
+  let sawAudioIn = false;
+  let audioInPackets = 0;
+  let audioInEnergy: number | null = null;
+  let audioInPlayoutSec: number | null = null;
 
   for (const report of reports) {
     legs++;
@@ -319,6 +408,21 @@ export function summarizeStats(
         const h = num(e.frameHeight);
         if (w && h && (!down || w * h > down.w * down.h)) {
           down = { w, h, fps: num(e.framesPerSecond) };
+        }
+        /* THE AUDIO PLAYOUT EVIDENCE. Attributed on an EXPLICIT kind only: a UA
+           that reports neither `kind` nor `mediaType` leaves `audioIn` null and
+           this makes no claim, which is right — guessing "it must be audio
+           because it has no frame size" would put a video leg's counters behind
+           a sentence about somebody's microphone. Summed across legs, because
+           the question ("is any audio reaching this person") is about the call
+           rather than about one peer. */
+        if (e.kind === "audio" || e.mediaType === "audio") {
+          sawAudioIn = true;
+          audioInPackets += num(e.packetsReceived) ?? 0;
+          const en = num(e.totalAudioEnergy);
+          if (en !== null) audioInEnergy = (audioInEnergy ?? 0) + en;
+          const sec = num(e.totalSamplesDuration);
+          if (sec !== null) audioInPlayoutSec = (audioInPlayoutSec ?? 0) + sec;
         }
       }
 
@@ -426,6 +530,14 @@ export function summarizeStats(
       encoder,
       encoderSoftware: encoder === null ? null : isSoftwareEncoder(encoder),
       limitedBy,
+      audioIn: sawAudioIn
+        ? {
+            packets: audioInPackets,
+            energy: audioInEnergy,
+            playoutSec: audioInPlayoutSec,
+            state: audioInboundState(audioInPackets, audioInEnergy, audioInPlayoutSec),
+          }
+        : null,
     },
     sample,
   };
@@ -485,6 +597,14 @@ export function formatCallStats(s: CallStats): string {
      was captured and invisible until v2.106.58. */
   if (s.encoderSoftware === true) parts.push("sw encode");
   if (s.limitedBy) parts.push(`${s.limitedBy} limited`);
+  /* THE PLAYOUT DIAGNOSIS, IN WORDS (v2.107.10) — and it belongs on LINE 1, with
+     the verdicts, rather than on the detail line with the raw counters: "the
+     audio is arriving and you cannot hear it" is a statement about how the call
+     is GOING, and it is the single most useful sentence this readout can produce.
+     Only the definite case is worded. `no-sound` is left to the detail line
+     because it is usually a muted peer, and a readout that accuses the app every
+     time somebody mutes is one nobody trusts on the day it is right. */
+  if (s.audioIn?.state === "not-playing") parts.push("audio not playing out");
   return parts.length ? parts.join(" · ") : "measuring…";
 }
 
@@ -512,6 +632,17 @@ export function formatCallDetail(s: CallStats): string {
   if (s.codecAudio) parts.push(`↑${s.codecAudio}`);
   if (s.codecVideo) parts.push(`↑${s.codecVideo}`);
   if (s.encoder) parts.push(`enc ${s.encoder}`);
+  /* THE RAW AUDIO EVIDENCE, always when there is an inbound audio stream — not
+     only when something looks wrong. That is deliberate: the point of a number is
+     that it can be compared, and "what does this read on a call that WORKS" is
+     exactly the question an outage makes unanswerable if the figure only appears
+     during one. ↓ is the receive glyph line 1 already uses. */
+  if (s.audioIn) {
+    const a = s.audioIn;
+    const energy = a.energy === null ? "?" : a.energy.toFixed(2);
+    parts.push(`↓aud ${a.packets}pkt/${energy}e`);
+    if (a.state === "no-sound") parts.push("silent (muted?)");
+  }
   /* WORST LEG, and only when it differs from the pooled figure — on a 1:1 call they
      are the same number by construction, so showing both would be noise on the
      overwhelmingly common case. */
@@ -540,6 +671,11 @@ export function callStatsVerdict(s: CallStats): "relay" | "poor" | "ok" {
      not a statement about this instant, and a desktop encoding VP8 in software is
      perfectly healthy. */
   if (s.limitedBy === "cpu") return "poor";
+  /* AUDIO THAT ARRIVED AND WAS NEVER RENDERED IS THE WORST CALL THERE IS, and
+     every network threshold below says it is fine — v2.106.51 read 1ms RTT, zero
+     loss and total silence. `no-sound` is deliberately NOT poor: that is what a
+     muted peer looks like. */
+  if (s.audioIn?.state === "not-playing") return "poor";
   if ((s.rttMs ?? 0) > 300) return "poor";
   if ((s.lossPct ?? 0) > 5) return "poor";
   /* AND THE WORST SINGLE LEG, because the pooled ratio above dilutes: on a 5-way

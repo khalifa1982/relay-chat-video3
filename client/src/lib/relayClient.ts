@@ -90,6 +90,7 @@ import {
   wireToEngineRoute,
   type EngineRouteId,
 } from "./nativeAudioRoute";
+import { usableIceServers } from "./iceGuard";
 
 interface IceConfig {
   iceServers: Array<{ urls: string; username?: string; credential?: string }>;
@@ -110,12 +111,31 @@ interface IceConfig {
  *   - bundlePolicy "max-bundle": one transport for audio+video → a single ICE
  *     check list instead of one per m-line.
  *   - rtcpMuxPolicy "require": RTCP shares the RTP port (half the candidates).
+ *
+ * AND IT IS THE ONE PLACE A CREDENTIAL-LESS TURN ENTRY CAN BE STOPPED (v2.107.10).
+ * A TURN server with no username/credential does not throw — it is accepted,
+ * gathers nothing, and the call quietly has no relay path. Every caller that
+ * swaps in fresh servers comes through here, so filtering the entry out makes
+ * that outcome unreachable by construction rather than by remembering to check.
+ * `usableIceServers` only ever drops an entry it can positively identify as TURN,
+ * so STUN and anything unparseable pass through untouched.
  */
 function buildIceConfig(
   servers: IceConfig["iceServers"]
 ): IceConfig {
+  const { kept, dropped } = usableIceServers(servers);
+  if (dropped.length) {
+    /* console.warn rather than diag(): this function is module scope, and the
+       severity is right — it should never happen, and when it does the operator
+       needs the URL rather than a line in a rolling in-memory buffer. */
+    console.warn(
+      "[relay] dropped " + dropped.length + " TURN entr" +
+        (dropped.length === 1 ? "y" : "ies") + " with no credentials: " +
+        dropped.map(d => d.urls).join(", "),
+    );
+  }
   return {
-    iceServers: servers,
+    iceServers: kept,
     iceCandidatePoolSize: 4,
     bundlePolicy: "max-bundle",
     rtcpMuxPolicy: "require",
@@ -179,6 +199,11 @@ interface Msg {
   hostPin?: string | null;
   flag?: string;
   members?: Array<{ pin: string; name: string; device?: string; flag?: string; role?: string }>;
+  /** Room-entry acks (#170): the participant cap the SERVER will enforce for
+   *  this room, INCLUDING us. Optional — absent from every build before
+   *  v2.107.9 and for the whole of a rolling deploy — in which case the client
+   *  keeps its own mesh default rather than guessing at a bigger number. */
+  maxParty?: number;
   iceServers?: IceConfig["iceServers"];
   data?: { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
   message?: string;
@@ -526,7 +551,75 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // the number the user was shown when they chose who to call. A party built past the
   // cap half-connects and reads as our bug.
   const MESH_MAX = 6;
-  function transportMax(): number { return MESH_MAX; }
+
+  /* ── THE TRANSPORT SEAM (#170) ────────────────────────────────────────────
+   * Which transport is carrying THIS call's media, and therefore who counts as
+   * a remote participant.
+   *
+   * WHY THIS EXISTS AT ALL. Every "how many other people are on this call"
+   * question in this file used to read `peers`, the MESH peer-connection map —
+   * which is the right answer only while the media is a mesh. Under mediasoup
+   * there are no mesh peers: participants are consumers on a node, so `peers`
+   * is empty for a live six-party call, `aloneInCall()` answers "alone", and
+   * every teardown gate hanging off it fires mid-call. That is a call-dropper
+   * rather than a tidiness problem, which is why the seam lands BEFORE any call
+   * is allowed onto a node.
+   *
+   * NOTHING SETS THIS TO "mediasoup" YET, and the reason is worth recording,
+   * because the obvious source is wrong: `RoomMeta.voip` on the server records
+   * which node a room was ASSIGNED to, and an assignment is not the same claim
+   * as "this call's media is on that node". The pool is live and rooms already
+   * carry assignments while every one of them still runs the mesh, so deriving
+   * the transport from the assignment would flip live mesh calls onto the
+   * roster branch below and change their teardown behaviour today. The flag
+   * moves when the media does, in the increment that actually produces to a
+   * node.
+   * ──────────────────────────────────────────────────────────────────────── */
+  type CallTransport = "mesh" | "mediasoup";
+  let callTransport: CallTransport = "mesh";
+  /**
+   * Signaling membership: pin → display name, for everybody in the room EXCEPT
+   * us. Maintained from the server's own room-entry acks and `peer-joined` /
+   * `peer-left`, so it is true whatever is carrying the media.
+   *
+   * It deliberately does NOT replace `peers` on the mesh. The two legitimately
+   * differ — the ICE-failure paths remove a peer whose media died while the
+   * server still lists them as a room member — and letting the roster decide
+   * there would change how a working transport tears a dead call down. Mesh
+   * keeps counting `peers`; only mediasoup reads this.
+   */
+  const sigRoster = new Map<string, string>();
+  /**
+   * The participant cap the SERVER will actually enforce for this room, from
+   * the room-entry ack (`maxParty`). Defaults to the mesh number, so a server
+   * that does not send it — every build before this one, and the whole of a
+   * rolling deploy — behaves exactly as before.
+   *
+   * Read from the ack rather than mirrored client-side ON PURPOSE: the cap is
+   * whoever REFUSES the join, and a second copy of the arithmetic here is how
+   * the picker comes to offer a party the accept then bounces with `full`.
+   */
+  let roomPartyMax = MESH_MAX;
+  /**
+   * Everyone else on this call, whatever transport is carrying it.
+   *
+   * ONE function rather than a count and a list: two implementations of "who is
+   * on the call" is exactly how a teardown gate and a roster come to disagree
+   * about whether anybody is there.
+   */
+  function remoteParticipants(): Array<{ pin: string; name: string }> {
+    if (callTransport === "mesh") {
+      return Object.keys(peers).map(pin => ({ pin, name: peers[pin].name || "Guest" }));
+    }
+    return Array.from(sigRoster, ([pin, name]) => ({ pin, name: name || "Guest" }));
+  }
+  function remoteParticipantCount(): number { return remoteParticipants().length; }
+  function transportMax(): number { return roomPartyMax; }
+  /** Replace the roster with the room's own member list (room-entry acks). */
+  function setRoomRoster(members?: Array<{ pin: string; name?: string }>) {
+    sigRoster.clear();
+    (members || []).forEach(mem => { if (mem.pin) sigRoster.set(mem.pin, mem.name || "Guest"); });
+  }
   // Has ANYONE joined this call yet? False while an outgoing dial is still RINGING.
   // Set by acceptInvite/createPeer (any evidence a second party is in the call);
   // reset by hangUp. It exists because a media-establishment timer must never tear
@@ -1184,8 +1277,13 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   // True when we're in a call but no remote party is present yet — used to
   // decide whether a `rejected`/`busy`/error should tear the call down, so that
   // a declined add-invite in a group call doesn't kill the whole call.
+  //
+  // Through the transport seam (#170), because this is the single most
+  // dangerous mesh-map read in the file: it gates the 1:1 auto-end, the
+  // fatal-error teardown and the group-dial bootstrap, so answering it from an
+  // empty `peers` on a live mediasoup call would end the call.
   function aloneInCall(): boolean {
-    return Object.keys(peers).length === 0;
+    return remoteParticipantCount() === 0;
   }
 
   // True when we're in a PARKED room — a group call or a party line (server
@@ -1224,6 +1322,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       }
       case "room":
         roomId = m.roomId || null;
+        // This ack answers our own invite, and the server only ever sends it
+        // when it CREATED the room (`ensureDialRoom`'s `if (!me.roomId)`), so
+        // it carries no member list and the room begins with nobody else in it.
+        recordRoomMembers(m);
         // M37 (v2.99.47): this ack answers OUR OWN invite, so this room is the
         // one our dial created — the single place a pending video offer may be
         // bound. Every other way of entering a room deliberately leaves it
@@ -1295,6 +1397,12 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         const goneP = m.pin!;
         peersHoldingUs.delete(goneP);
         updateOnHoldState();
+        // The roster is dropped HERE and not inside `removePeer`, because that
+        // function is also the mesh's media-failure teardown (a wedged ICE
+        // connection, a quiet rebuild) — cases where the person is still very
+        // much a member of the room. `peer-left` is the server's authoritative
+        // "they are gone", which is the only thing membership may follow.
+        sigRoster.delete(goneP);
         removePeer(goneP);
         break;
       }
@@ -3487,8 +3595,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     inCall = true;
     videoApproved = true; // resuming an established call — consent already settled
     enterCallUI("In call");
-    recordMemberDevices(m.members);
-    recordMemberRoles(m.members);
+    recordRoomMembers(m);
     captureSelfRole(m);
     // The resumed peers are FROZEN in `peers` (moved there by swapCall) — thaw each
     // so media flows and tiles re-appear. Any member the server lists that we DON'T
@@ -3507,6 +3614,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   // in mergeCall; this reconciles anyone the server moved that we lack).
   function onMerged(m: Msg) {
     if (m.roomId) roomId = m.roomId;
+    recordRoomMembers(m);
     (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
     heldRoomId = null; heldLabel = null;
     updateHeldBar();
@@ -3765,8 +3873,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       onCalleeAnswered();
       if (!m.members || m.members.length === 0) markEstablished();
     }
-    recordMemberDevices(m.members);
-    recordMemberRoles(m.members);
+    recordRoomMembers(m);
     captureSelfRole(m);
     // Apply the fresh, per-peer TURN/STUN credentials the server minted for
     // this room BEFORE building any peer connections, so every RTCPeerConnection
@@ -3813,8 +3920,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     inCall = true;
     videoApproved = true; // resuming an established call — consent already settled
     enterCallUI("In call");
-    recordMemberDevices(m.members);
-    recordMemberRoles(m.members);
+    recordRoomMembers(m);
     captureSelfRole(m);
     // Restore the mic/cam state the user had BEFORE the reload (default = both on,
     // so we only need to flip OFF the ones that were off).
@@ -3829,6 +3935,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     (m.members || []).forEach(mem => { if (!peers[mem.pin]) callPeer(mem.pin, mem.name); });
   }
   function onPeerJoined(m: Msg) {
+    // Signaling membership FIRST, and unconditionally: the early return below
+    // skips a peer we already have a mesh connection for, and the roster must
+    // not inherit that mesh-shaped exit (#170).
+    if (m.pin) sigRoster.set(m.pin, m.name || "Guest");
     if (m.pin && m.device) { peerDevices[m.pin] = m.device; setTileDevice("tile-" + m.pin, m.device); }
     if (m.pin && m.flag) { peerFlags[m.pin] = m.flag; setTileFlag("tile-" + m.pin, m.flag); }
     if (m.pin && m.role) { peerRoles[m.pin] = m.role as string; setTileRole("tile-" + m.pin, m.role as string); }
@@ -4033,6 +4143,30 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       if (mem.role) { peerRoles[mem.pin] = mem.role; setTileRole("tile-" + mem.pin, mem.role); }
       else { delete peerRoles[mem.pin]; setTileRole("tile-" + mem.pin, null); }
     });
+  }
+  /**
+   * EVERYTHING a room-entry ack tells us about who is in the room — devices,
+   * flags, roles, the transport-independent roster (#170) and the cap the
+   * server will enforce.
+   *
+   * ONE funnel because there are FIVE ways into a room (`room`, `joined`,
+   * `rejoin`, `resumed`, `merged`) and each was calling its own subset: three
+   * called the device and role recorders, `merged` called neither — so a member
+   * the server moved into a merged call arrived with no device chip and no role
+   * badge. That is the shape a sixth entry path inherits by accident, so the
+   * roster and the cap are not given the chance to be the next thing forgotten.
+   */
+  function recordRoomMembers(m: Msg) {
+    recordMemberDevices(m.members);
+    recordMemberRoles(m.members);
+    // REPLACE rather than merge: each of these acks means "you are now in THIS
+    // room", and its list is that room's membership. Merging would carry a
+    // member of the room we just left into the one we just entered — which is
+    // precisely what a swap, a merge and a resume do.
+    setRoomRoster(m.members);
+    if (typeof m.maxParty === "number" && Number.isFinite(m.maxParty) && m.maxParty >= 2) {
+      roomPartyMax = Math.floor(m.maxParty);
+    }
   }
   function captureSelfRole(m: Msg) {
     if (m.selfRole !== undefined) myRole = m.selfRole ?? null;
@@ -4352,10 +4486,19 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
          ("add these three fields to the call debug logging"), and the log is what
          survives being copied out of a session. Logged only when it CHANGES, or a
          2s poller would bury every other line in the diag buffer. */
-      const sig = `${stats.encoder ?? "-"}|${stats.limitedBy ?? "-"}|${stats.up?.fps ?? "-"}`;
+      const sig = `${stats.encoder ?? "-"}|${stats.limitedBy ?? "-"}|${stats.up?.fps ?? "-"}|${stats.audioIn?.state ?? "-"}`;
       if (sig !== qualLastSig) {
         qualLastSig = sig;
         diag(`enc=${stats.encoder ?? "none"} limited=${stats.limitedBy ?? "none"} fps=${stats.up?.fps ?? "-"}`);
+        /* THE AUDIO LINE IS SEPARATE, and it is the one worth having in a copied
+           log: the counters name WHY a call was silent, which no other line here
+           can. Only on a change, or a 2s poller buries the buffer. */
+        if (stats.audioIn) {
+          diag(
+            `audio-in ${stats.audioIn.state} pkt=${stats.audioIn.packets} ` +
+              `energy=${stats.audioIn.energy ?? "-"} playoutSec=${stats.audioIn.playoutSec ?? "-"}`,
+          );
+        }
       }
     } catch { /* the readout is decoration — never let it disturb a call */ }
   }
@@ -6829,7 +6972,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     if (peers[pin]) { toast("Already in the call.", true); return; }
     // The ONE cap, so this can never disagree with what the group picker showed.
     const cap = transportMax();
-    const n = Object.keys(peers).length;
+    // Through the seam (#170): on mediasoup there are no mesh peers, so reading
+    // the peer map here would report an empty call and let the party be pushed
+    // past the cap the server is about to refuse at.
+    const n = remoteParticipantCount();
     if (n >= cap - 1) { toast(`Call is full (${cap} people max).`, true); return; }
     addInviting = true;
     // Already in a call: the mode is whatever this call is in, so adding a
@@ -6901,6 +7047,13 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       if (peers[id].el) peers[id].el!.remove();
     }
     for (const id in peers) delete peers[id];
+    // #170 — the seam is PER CALL, beside the peer map it stands in for: a
+    // roster left behind would make the next call's `aloneInCall()` answer for
+    // the last one's members, and a cap left raised would let the next call be
+    // over-filled before its own room ack lands.
+    sigRoster.clear();
+    callTransport = "mesh";
+    roomPartyMax = MESH_MAX;
     pendingGroupInvites = [];
     for (const k in peerDevices) delete peerDevices[k];
     for (const k in peerFlags) delete peerFlags[k];
@@ -7271,14 +7424,13 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     maxParticipants() { return transportMax(); },
     setOnStateChange(cb) { onPhaseChange = cb; },
     getRoster() {
-      // Read-only snapshot of who's on the call RIGHT NOW (both transports) —
-      // drives the host's in-call "save to contacts" chip (v2.96). Never
-      // mutates engine state.
-      const out: Array<{ pin: string; name: string }> = [];
-      for (const id in peers) {
-        if (/^\d{6}$/.test(id)) out.push({ pin: id, name: peers[id].name || "Guest" });
-      }
-      return out;
+      // Read-only snapshot of who's on the call RIGHT NOW — drives the host's
+      // in-call "save to contacts" chip (v2.96). Never mutates engine state.
+      //
+      // Through the seam (#170). Its own comment already claimed "both
+      // transports" while it read the MESH peer map alone, so on mediasoup the
+      // chip would have offered nobody to save.
+      return remoteParticipants().filter(p => /^\d{6}$/.test(p.pin));
     },
     getPin() { return me.pin; },
     setPreferredPin(pin) {

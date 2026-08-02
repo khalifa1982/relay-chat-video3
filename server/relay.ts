@@ -735,7 +735,7 @@ function admitToRoom(reg: RelayRegistry, pin: string, roomId: string): void {
   const room = reg.rooms.get(roomId);
   const meta = reg.roomMeta.get(roomId);
   if (!joiner || !room || !meta) return;
-  const cap = ROOM_MAX;
+  const cap = roomPartyCap();
   if (room.size >= cap && !room.has(pin)) {
     safeSend(joiner.socket, { type: "knock-result", to: "", ok: false, reason: "full" });
     return;
@@ -816,9 +816,36 @@ function wireCount(v: unknown): number | null {
   return n > 0 ? n : null;
 }
 
+/**
+ * The five frames that put a client IN a room. Each one must carry the cap
+ * (#170) — see `safeSend`.
+ */
+const ROOM_ENTRY_ACKS = new Set(["room", "joined", "rejoin", "resumed", "merged"]);
+
 function safeSend(socket: RelaySocket, obj: unknown) {
   try {
-    socket.send(obj);
+    /* #170 — STAMP THE CAP HERE, not at the twelve emitters.
+     *
+     * A client cannot be trusted to carry its own copy of the participant cap
+     * (that is what let the picker and the server disagree), so every frame
+     * that puts somebody in a room has to state it. There are TWELVE such
+     * emitters across five frame types, and this release exists because the
+     * client's own five room-entry handlers had each grown a different subset
+     * of the bookkeeping — a per-emitter stamp is the same trap on the other
+     * side of the wire, and the thirteenth emitter would simply not have one.
+     *
+     * A layering smudge, and taken deliberately: `safeSend` is the ONE place
+     * every frame leaves through, so "every room-entry ack announces the cap"
+     * becomes a property that can be asserted rather than a convention that
+     * has to be remembered. Non-destructive — the caller's literal is never
+     * mutated — and every other frame type is passed through untouched.
+     */
+    const t = (obj as { type?: unknown } | null)?.type;
+    socket.send(
+      typeof t === "string" && ROOM_ENTRY_ACKS.has(t)
+        ? { ...(obj as Record<string, unknown>), maxParty: roomPartyCap() }
+        : obj,
+    );
   } catch {
     /* ignore broken pipe */
   }
@@ -1018,6 +1045,28 @@ export function iceServers(userId: string, ttlSecOverride?: number): IceServer[]
  * from rather than a second copy of the arithmetic.
  * ────────────────────────────────────────────────────────────────────────── */
 export const ROOM_MAX = 6;
+
+/**
+ * THE CAP THIS SERVER WILL ACTUALLY REFUSE AT, and the number it announces.
+ *
+ * ONE function because the two must be the same thing (#170): the four
+ * enforcement sites below and the `maxParty` stamped on every room-entry ack
+ * now read it, so the client can never offer a party the accept then bounces
+ * with `full`. Before this, the client carried its own copy of the number and
+ * the announcement did not exist at all.
+ *
+ * IT IS DELIBERATELY NOT TRANSPORT-AWARE YET, even though `transportCap()` in
+ * voipRegistry.ts holds a higher number for mediasoup and `RoomMeta.voip`
+ * records which node a room was assigned to. An assignment is not the same
+ * claim as "this call's media is on that node": rooms already carry
+ * assignments while every one of them still runs the MESH, so returning 10 for
+ * an assigned room would let ten people onto a mesh call — ~45 peer
+ * connections, which is the load v2.99.84 measured and the reason the cap is 6.
+ * This is where the transport-aware number goes when the media actually moves.
+ */
+export function roomPartyCap(): number {
+  return ROOM_MAX;
+}
 
 /**
  * THE DEVICE THAT PLACES OR ANSWERS A CALL BECOMES THE NUMBER'S PRIMARY.
@@ -1719,7 +1768,7 @@ function joinPartyLine(
     leaveRoom(reg, callerPin);
   }
   const existing = reg.rooms.get(rid);
-  const cap = ROOM_MAX;
+  const cap = roomPartyCap();
   if (existing && existing.size >= cap) {
     safeSend(socket, { type: "error", code: "full", message: `Call is full (${cap} max).` });
     return;
@@ -2455,9 +2504,9 @@ export function handleMessage(
         }
         ensureDialRoom();
         const room = reg.rooms.get(me.roomId!);
-        // 10-way only on the SFU; the mesh fallback stays capped at 6 (a 10-way
-        // mesh is ~45 peer connections — far too heavy for the fallback path).
-        const inviteCap = ROOM_MAX;
+        // The ONE cap (#170) — the same function the room acks announce, so the
+        // client's picker can never offer a party this then refuses.
+        const inviteCap = roomPartyCap();
         if (room && room.size >= inviteCap) {
           safeSend(callerSocket, {
             type: "error",
@@ -2598,8 +2647,8 @@ export function handleMessage(
         });
         break;
       }
-      // 10-way only on the SFU; the mesh fallback stays capped at 6.
-      const acceptCap = ROOM_MAX;
+      // The ONE cap (#170), as at the invite above.
+      const acceptCap = roomPartyCap();
       if (room.size >= acceptCap) {
         safeSend(conn.socket, {
           type: "error",

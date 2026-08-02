@@ -1366,9 +1366,15 @@ describe("relay — the SFU is retired: nothing mints a media-server token", () 
        trap this repo has paid for repeatedly. */
     const code = codeOnly(SRC);
     expect(code).not.toMatch(/\? 10 : 6/);
-    // Every cap read goes through the constant.
+    /* #170 rewrote this from "count the readers of ROOM_MAX" (1 declaration +
+       >=4 enforcement sites) to the property it stood for, which the seam makes
+       STRICTER rather than looser: the constant now has exactly ONE reader —
+       `roomPartyCap()` — and every refusal AND the cap announced to the client
+       go through that. Counting raw readers would have forbidden the accessor
+       while saying nothing about whether the announcement matches. */
     const caps = code.match(/\bROOM_MAX\b/g) || [];
-    expect(caps.length).toBeGreaterThanOrEqual(5); // 1 declaration + >=4 readers
+    expect(caps.length).toBe(2); // the declaration + roomPartyCap's return
+    expect(code).toMatch(/export function roomPartyCap\(\): number \{\s*return ROOM_MAX;\s*\}/);
   });
 });
 
