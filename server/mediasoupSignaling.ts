@@ -109,6 +109,23 @@ export function mediasoupConfigured(): boolean {
 }
 
 /**
+ * The parts of a node this module needs — and naming them is the two-plane rule made
+ * explicit rather than left to a comment.
+ *
+ * Signaling reaches a node over its PRIVATE address; `publicIp` is what a client is told to
+ * send media to and has no business being reachable from here. `instanceId` is the health
+ * ledger's key. Nothing else about a node — its load, its cores, its freshness — can change
+ * where a signed op is sent, so nothing else is accepted.
+ *
+ * A full `VoipNode` satisfies this, so every existing caller is unchanged; what it also
+ * admits is a room's recorded `VoipAssignment`, which is the only thing a live call has (the
+ * node it was placed on may have left the pool since, and the call must still be able to talk
+ * to it — see `assignmentStillValid`, which asks about LIVENESS rather than eligibility for
+ * exactly this reason).
+ */
+export type NodeAddress = Pick<VoipNode, "instanceId" | "privateIp">;
+
+/**
  * The URL for one node's internal API.
  *
  * Built from the node's own self-reported private address, so it follows an instance
@@ -118,7 +135,7 @@ export function mediasoupConfigured(): boolean {
  * a certificate per node whose IP changes, for a link that carries no user content (SDP
  * and RTP parameters, never media and never a credential).
  */
-export function nodeApiUrl(node: VoipNode, port = VOIP_API_PORT): string {
+export function nodeApiUrl(node: NodeAddress, port = VOIP_API_PORT): string {
   return `http://${node.privateIp}:${port}/`;
 }
 
@@ -131,7 +148,7 @@ export function nodeApiUrl(node: VoipNode, port = VOIP_API_PORT): string {
  * the node correctly refuses. Sign what you send.
  */
 export async function callNode<T = unknown>(
-  node: VoipNode,
+  node: NodeAddress,
   op: NodeOp,
   payload: Record<string, unknown>,
   opts: {
@@ -340,7 +357,7 @@ export function resetNodeHealth(store: NodeHealthStore = defaultHealth): void {
  * that changes the fleet's routing as a side effect of looking at it is its own bug.
  */
 export async function callNodeTracked<T = unknown>(
-  node: VoipNode,
+  node: NodeAddress,
   op: NodeOp,
   payload: Record<string, unknown>,
   opts: Parameters<typeof callNode>[3] & { store?: NodeHealthStore } = {},

@@ -24,6 +24,17 @@ import type { Request, Response, Express } from "express";
 import { createRateLimiter, clientIpOf } from "./rateLimit";
 import { createContext } from "./_core/context";
 import { planDialTransport } from "./voipPool";
+import type { VoipAssignment } from "./voipRegistry";
+import {
+  authorizeClientOp,
+  forgetMember,
+  forgetRoom,
+  otherProducersFor,
+  recordOpResult,
+  sessionFor,
+  type SessionStore,
+} from "./mediasoupRoom";
+import { callNodeTracked } from "./mediasoupSignaling";
 
 /**
  * M40: per-CALLER-pin budget for dials to a number with no live connection —
@@ -258,6 +269,28 @@ export interface RoomMeta {
    * nobody recorded.
    */
   video?: boolean;
+  /**
+   * #129 — the mediasoup node this room was PLACED on, or absent for a mesh room.
+   *
+   * THE ROOM IS THE ONLY THING THAT CAN REMEMBER THIS. `planDialTransport` chooses a node
+   * once, synchronously, at the invite that creates the room; every later op for this call —
+   * a joiner's handshake, a producer, a consumer — has to reach THAT node and no other,
+   * because a room's routers live on one host and media must arrive at the host holding them.
+   * Re-planning per op would spread one call across nodes, which is not a degraded call but a
+   * broken one. So the choice is recorded here and read, never recomputed.
+   *
+   * ABSENT MEANS MESH, and that is the only safe reading: a room hydrated from a record
+   * written before this field existed carries none, and a rolling deploy serves both bundles
+   * for about a minute — long enough for real calls. Reading a missing assignment as anything
+   * but mesh would hand such a room to a node that has never heard of it.
+   *
+   * Carries the PRIVATE address as well as the public one, because the two planes are
+   * different: signaling posts to the private one, the public one is what a client is told to
+   * send media to. An assignment holding only the public address would leave the next
+   * signaling caller nothing else to reach the node by — and it would be used, because it
+   * would be the only address there.
+   */
+  voip?: VoipAssignment;
 }
 
 /**
@@ -537,9 +570,29 @@ function seedCohostOnJoin(reg: RelayRegistry, roomId: string, pin: string): void
 }
 
 /** Fully tear down a room (abandoned, or last member explicitly left). */
+/**
+ * #129 — who owns which mediasoup id, per room. See `server/mediasoupRoom.ts` for why the app
+ * has to be the ownership authority at all (the node records no owner for anything, so an
+ * unowned `produce` is caller-ID spoofing inside a live call).
+ *
+ * Module-level rather than on the registry, deliberately: it holds no call state and no
+ * identity, only ids the node minted, so it must never be persisted or hydrated — a room
+ * recovered by a new leader has no node-side transports to own. Both funnels below clear it.
+ */
+const voipSessions: SessionStore = new Map();
+
+/** Test seam only — the store is process-lifetime state and a suite must not inherit it. */
+export function _resetVoipSessionsForTests(): void {
+  voipSessions.clear();
+}
+
 function reapRoom(reg: RelayRegistry, roomId: string) {
   touchBusyState(); // busy-line + party-line-count mirror (v2.91)
   markRoomDirty(roomId); // the snapshot will be null ⇒ a fenced DEL
+  /* Drop the whole ownership ledger with the room. Placed in reapRoom because its own comment
+     above states the property this relies on — "reapRoom is the single teardown path" — so no
+     future exit can leak a room's ids by forgetting to. */
+  forgetRoom(voipSessions, roomId);
   const t = reg.roomReapT.get(roomId);
   if (t) { clearTimeout(t); reg.roomReapT.delete(roomId); }
   // Conference history: if this room was a REAL call (answered, ≥2 participants
@@ -1362,6 +1415,11 @@ export function leaveRoom(reg: RelayRegistry, pin: string) {
     // Keeping it would leave the map naming people who left, and a later reader
     // would print a join time for somebody who is not in the room.
     reg.roomMeta.get(roomId)?.joinedAt?.delete(pin);
+    /* #129 — their mediasoup ids stop authorizing ops the instant they are out of the room.
+       This drops the APP's record only; the node has `closeRoom` and no per-participant close,
+       so the node-side transport lingers until the room itself goes. That is bounded by the
+       room's life and is stated as a limitation in `mediasoupRoom.ts` rather than glossed. */
+    forgetMember(voipSessions.get(roomId), pin);
     room.forEach(p => {
       const o = reg.clients.get(p);
       if (o) safeSend(o.socket, { type: "peer-left", pin });
@@ -1418,6 +1476,9 @@ export function snapshotRoom(reg: RelayRegistry, roomId: string): PersistedRoom 
     accepted: meta.accepted,
     // #116 — omitted when unknown, so a party line and a pre-feature room
     // serialize exactly as before.
+    /* #129 — the node assignment goes with the room. Spread CONDITIONALLY so a mesh room's
+       record is byte-identical to what every older instance writes and reads. */
+    ...(meta.voip ? { voip: meta.voip } : {}),
     ...(typeof meta.video === "boolean" ? { video: meta.video } : {}),
     roster: Array.from(meta.roster.entries()),
   };
@@ -1472,6 +1533,10 @@ export function applyHydratedRooms(reg: RelayRegistry, rooms: readonly Persisted
       // #109 — omitted when the record carried no stamps at all, so a pre-feature
       // record hydrates byte-identically to before.
       ...(joined.size ? { joinedAt: joined } : {}),
+      /* Already validated by `isPersistedRoom` — a malformed assignment dropped the whole
+         record before it reached here, which is what stops a garbage address authorizing ops
+         against a node that does not exist. */
+      ...(rec.voip ? { voip: rec.voip } : {}),
       ...(typeof rec.video === "boolean" ? { video: rec.video } : {}),
       hydratedAt: Date.now(),
     });
@@ -2167,6 +2232,13 @@ export function handleMessage(
               // VoIP push already read. Recorded here because the room is the only
               // thing that survives to the end of the call.
               video: wantVideo,
+              /* #129 — the node this call was PLACED on, from the plan computed above.
+                 Recorded rather than recomputed: `planDialTransport` reads a snapshot that
+                 the refresh timer replaces every few seconds, so asking again later can
+                 legitimately answer a DIFFERENT node — and a call whose ops went to two
+                 nodes is not degraded, it is broken, because the routers live on one host.
+                 Undefined on the mesh, which is what every reader treats as "no node". */
+              ...(dialPlan.voip ? { voip: dialPlan.voip } : {}),
             });
             safeSend(callerSocket, { type: "room", roomId: rid, selfRole: "host", hostPin: callerPin, cap: mintRoomCap(rid, callerPin, "host") });
           }
@@ -3271,6 +3343,153 @@ export function handleMessage(
         default:
           break;
       }
+      break;
+    }
+
+    /**
+     * #129 — THE mediasoup OP TUNNEL. One funnel, and that is the whole shape of it.
+     *
+     * mediasoup has no client↔server channel of its own. The deleted hosted SFU did — its SDK
+     * carried a WebSocket straight to the media server, so the app only had to hand over a
+     * token — and that is exactly why a token-shaped seam would be the wrong seam here: every
+     * one of a participant's ops has to travel through us.
+     *
+     * ONE CASE RATHER THAN ONE PER OP. Six-plus ops each needing room authorization, id
+     * ownership, correlation and a reply to the RIGHT socket is precisely the shape the house
+     * rule forbids spreading across call sites, and v2.106.48 is the recorded proof: a token
+     * addressed to the number instead of the socket reached a different device, and the call
+     * carried nothing while every other frame looked fine. So the socket is `conn.socket`,
+     * once, here.
+     *
+     * FAILS OPEN INTO A REFUSAL, NEVER A THROW. This is the call path.
+     */
+    case "voip": {
+      const seq = typeof (msg as { seq?: unknown }).seq === "number" ? (msg as { seq: number }).seq : null;
+      /* CORRELATION IS THE CLIENT'S OWN `seq`, echoed back untouched. The tunnel is one
+         request/response pair over a channel that delivers frames out of order under retry,
+         so without it a client cannot tell which `createTransport` a reply belongs to — and
+         with two transports in flight (send + recv, which the handshake requires) that is not
+         hypothetical. It is opaque to us: never read, never used as a key, so a client that
+         reuses one only confuses itself. */
+      const deny = (reason: string) => {
+        safeSend(conn.socket, { type: "voip-error", seq, reason });
+      };
+
+      /* CAPTURED, NOT RE-READ. `handleMessage` already returned for an unregistered
+         connection long before the switch, so this is non-null here — but the async
+         continuation below loses that narrowing, because `conn.pin` is a mutable property and
+         a closure could run after it changed. Capturing the value is therefore load-bearing
+         rather than a type workaround: it is the pin the op was authorized FOR, and re-reading
+         it after the await would let a channel takeover mid-op record ids under a new number.
+         A redundant `if (!selfPin)` guard is deliberately absent — two individually-removable
+         checks for one rule is dead weight that reads as load-bearing (v2.105.17). */
+      const selfPin = conn.pin;
+      /* THE ROOM COMES FROM THE REGISTRY, NEVER THE MESSAGE. Room ids are relayed to every
+         participant, so a client-named room is the hole M45 closed on `accept`. There is
+         deliberately no `msg.roomId` read anywhere in this case. */
+      const rid = reg.pinRoom.get(selfPin) ?? null;
+      const meta = rid ? reg.roomMeta.get(rid) : undefined;
+      const room = rid ? reg.rooms.get(rid) : undefined;
+
+      const str = (k: string) => {
+        const v = (msg as Record<string, unknown>)[k];
+        return typeof v === "string" && v ? v : null;
+      };
+
+      const verdict = authorizeClientOp({
+        op: (msg as { op?: unknown }).op,
+        roomId: rid,
+        pin: selfPin,
+        hasAssignment: !!meta?.voip,
+        isMember: !!room?.has(selfPin),
+        session: rid ? voipSessions.get(rid) : undefined,
+        transportId: str("transportId"),
+        consumerId: str("consumerId"),
+        producerId: str("producerId"),
+      });
+      if (!verdict.allow) {
+        deny(verdict.reason);
+        break;
+      }
+
+      const assignment = meta!.voip!;
+      const roomId = rid!;
+      /* The payload is the client's, MINUS anything that would let it aim the op somewhere
+         else: `roomId` is ours (the node keys every id by it, so a client-supplied one would
+         reach into another call on the same node) and `op`/`seq` are envelope. Everything
+         else — rtpCapabilities, dtlsParameters, rtpParameters — is opaque mediasoup data we
+         have no business validating and could not validate correctly if we tried. */
+      const { op: _op, seq: _seq, roomId: _rid, type: _t, ...rest } = msg as Record<string, unknown>;
+      void _op; void _seq; void _rid; void _t;
+
+      void (async () => {
+        try {
+          const res = await callNodeTracked<Record<string, unknown>>(
+            { instanceId: assignment.instanceId, privateIp: assignment.privateIp },
+            verdict.op,
+            { ...rest, roomId },
+          );
+          if (!res.ok) {
+            deny(res.reason);
+            return;
+          }
+          /* RE-CHECK AFTER THE AWAIT — the same discipline as the offline dial resolver. The
+             member may have left, or the room been reaped, while the node answered; recording
+             their ids then would resurrect ownership for a room nobody is in, and the reply
+             would land on a socket now serving a different call. */
+          if (reg.pinRoom.get(selfPin) !== roomId) return;
+
+          const rec = recordOpResult(sessionFor(voipSessions, roomId), selfPin, verdict.op, res.data);
+          safeSend(conn.socket, { type: "voip-result", seq, op: verdict.op, data: res.data });
+
+          /* THE EVENT CHANNEL THE NODE DOES NOT HAVE, and it turns out not to be needed: the
+             agent is request/response only, with no push at all — but the APP is the one that
+             called `produce`, so at this instant it already knows a new producer exists and
+             tells the room's other members directly. Strictly better than a poll, and the
+             poll was not available anyway. */
+          if (rec.newProducer) {
+            const others = reg.rooms.get(roomId);
+            others?.forEach((p) => {
+              if (p === selfPin) return;
+              const o = reg.clients.get(p);
+              if (o) {
+                safeSend(o.socket, {
+                  type: "voip-producer",
+                  pin: selfPin,
+                  producerId: rec.newProducer!.id,
+                  kind: rec.newProducer!.kind,
+                });
+              }
+            });
+          }
+        } catch {
+          /* A tunnel op must never reject into the handler: this runs detached from the
+             signaling dispatch, so an unhandled rejection here would be a process-level event
+             for what is one recoverable request. The client sees a refusal and retries. */
+          deny("node-error");
+        }
+      })();
+      break;
+    }
+
+    /**
+     * #129 — what a joiner has to consume. Answered from the app's own ledger, because the
+     * node cannot answer it: it records no owner, so "who is producing in this room" does not
+     * exist on that side. Same authorization as the tunnel; the reply names other people's
+     * producer ids, which is what consuming requires and is scoped to this room's members.
+     */
+    case "voip-producers": {
+      const selfPin = conn.pin;
+      const rid = reg.pinRoom.get(selfPin) ?? null;
+      const meta = rid ? reg.roomMeta.get(rid) : undefined;
+      if (!rid || !reg.rooms.get(rid)?.has(selfPin) || !meta?.voip) {
+        safeSend(conn.socket, { type: "voip-error", seq: null, reason: rid ? "no-assignment" : "not-in-room" });
+        break;
+      }
+      safeSend(conn.socket, {
+        type: "voip-producers",
+        producers: otherProducersFor(voipSessions.get(rid), selfPin),
+      });
       break;
     }
 

@@ -1,5 +1,136 @@
 # Project TODO
 
+## v2.107.5 — mediasoup increment 1: the room remembers its node, and one funnel carries ops to it
+
+Owner: *"Ok start mediasoup client seam"*, plus the capacity requirement in the same breath —
+*"you have 8 or 10 nods for voice and video to split the load for calls between the users and
+all of nods are linked so you will have big buffer to have atless 500 to 1000 calls at the
+same time."*
+
+**THE SCOPE MOVED, AND THE READER EVIDENCE IS WHY.** The ask names a client seam; a seam inside
+`relayClient.ts` is not the first brick, and building it now would have built the WRONG one. The
+verbatim finding from the reconstruction of the deleted transport:
+
+> The seam cannot be validated by the mesh path staying green. A LiveKit-shaped seam (branch on
+> a flag, hand the client a token) is *not sufficient* for mediasoup — the missing pieces are a
+> signalling tunnel, an event channel and a registry, none of them inside `relayClient.ts`. A
+> seam designed against the deleted diff's shape would be the wrong seam, and nothing in this
+> release would reveal that.
+
+The reason is concrete: **the hosted SFU's SDK carried its own WebSocket straight to the media
+server**, so the app only had to hand over a token. mediasoup has no client↔server channel at
+all — every op travels through us. So there was nothing for a client seam to talk to, and a
+token-shaped seam would have looked finished and been inert.
+
+**THE FINDING THAT MAKES THIS MORE THAN A PROXY.** The node agent keys everything by
+`(roomId, transportId / producerId / consumerId)` and **records no owner for any of them** —
+`HANDLERS.produce` takes a transportId and produces on it, full stop. So a bare relay of client
+ops is an impersonation primitive:
+
+- `produce` naming another participant's `transportId` publishes media the room attributes to
+  **them**. That is caller-ID spoofing inside a live call.
+- `setConsumerLayers` naming their `consumerId` downgrades the video **they** are receiving.
+- `connectTransport` naming their `transportId` completes a DTLS handshake against a transport
+  they are mid-way through establishing.
+
+The node cannot refuse any of it, because it does not know who anybody is. **Therefore the app
+must be the ownership authority, and every op that names an id is an authorization decision
+rather than a hop.** New `server/mediasoupRoom.ts` is that ledger plus the pure decision reading
+it — the `signalDisposition` shape, drivable with no socket, node or room, because "can this
+participant act on that transport" is exactly what a source pin cannot answer.
+
+**THE CLOSED SET, AND WHAT IS MISSING FROM IT IS THE ARGUMENT.** `closeRoom` would let one
+participant end everybody's call; `state` is fleet diagnostics; `stats` enumerates every
+transport in the room; `loudest` is room-wide and the app owns active-speaker exactly as it does
+on the mesh, so handing it over would put two answers on one screen.
+
+**THE MISSING EVENT CHANNEL DISSOLVED RATHER THAN BEING BUILT.** The agent is request/response
+only — no node→app push at all — so "who is producing" is unanswerable on that side. It does not
+need to be: **the app is the caller of every `produce`**, so at that instant it already knows and
+tells the room's other members directly. Strictly better than the poll it replaces, and the poll
+was not available anyway.
+
+**ORDER IS LOAD-BEARING IN THE REFUSAL.** Membership is decided BEFORE the assignment, so a
+member of a mesh room learns `no-assignment` while a non-member learns `not-in-room` whatever the
+room's transport. Reversed, the refusal would tell a stranger which rooms are on a node — a
+per-room existence oracle over ids that are relayed to participants. "Belongs to somebody else"
+and "does not exist" likewise answer **identically**, or the tunnel becomes a probe for which
+transport ids are live.
+
+**ONE FUNNEL, AND v2.106.48 IS THE RECORDED PROOF.** Six-plus ops each needing room
+authorization, id ownership, correlation and a reply to the *right* socket is precisely the shape
+the house rule forbids spreading across call sites — that release's bug was a token addressed to
+the number instead of the socket, which reached a different device while every other frame looked
+fine. So the socket is `conn.socket`, once, in one case; asserted by counting `callNodeTracked`
+at exactly one call site.
+
+**THE ROOM COMES FROM THE REGISTRY, NEVER THE WIRE** (the M45 rule): room ids are relayed to
+every participant, so a client-named room would reach into somebody else's call on the same node.
+`RoomMeta.voip` records the assignment `relay.ts` was **computing and discarding** — recorded
+rather than recomputed, because the pool snapshot refreshes every few seconds so asking again can
+legitimately answer a *different* node, and a call whose ops went to two nodes is broken rather
+than degraded. `PersistedRoom.voip` carries it through a leader change, optional + validated with
+the **existing** `isVoipAssignment` (two definitions of "is this a real assignment" is how a
+record accepted on write comes to be refused on read), and a malformed value drops the WHOLE
+record — it feeds the live registry.
+
+**`NodeAddress` NARROWS THE SIGNALING SIGNATURE TO THE TWO PLANES.** `callNode`/`callNodeTracked`
+took a whole `VoipNode`; they now take `Pick<VoipNode, "instanceId" | "privateIp">`. Strictly more
+permissive, so every caller is unchanged — and it makes the rule structural rather than a comment:
+signaling reaches a node over its PRIVATE address, `publicIp` is what a client is told to send
+media to, and nothing else about a node can change where a signed op is sent. It is also what lets
+a live call talk to a node that has since left the pool, which is the only thing it *has*.
+
+**TWO CORRECTIONS TO MY OWN WORK, both caught by running rather than reading.** An in-case
+`if (!selfPin)` guard was **unreachable dead code** — `handleMessage` already returns for a
+pin-less connection ahead of every case — and two individually-removable checks for one rule is
+dead weight that reads as load-bearing (v2.105.17); the value is still *captured*, which is
+load-bearing for a different reason (the async continuation loses the narrowing, and re-reading
+after the await would let a channel takeover record ids under a new number). The silent drop is
+also **stronger** than the error reply I first wrote, since a refusal distinguishes "unregistered"
+from "not in that room" — asserted so the tunnel is not later given its own weaker version. And a
+structure pin counted `callNodeTracked\(`, which matches nothing against `callNodeTracked<…>(` —
+a count of 0 read as a failure on correct code.
+
+**12 of 12 tripwires verified by MUTATION** off a confirmed-green baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once and treating a changed test
+total as a harness failure; all three sources byte-identical afterwards. Including the ownership
+check removed (7 failures), the roomId taken off the wire, `closeRoom` made client-callable, the
+refusal order swapped, both lifecycle funnels stopped forgetting, the fan-out reaching the
+producer, a mesh room made to carry a `voip` key, and the persisted validator dropped.
+
+**MESH BEHAVIOUR PROVEN UNCHANGED, not asserted.** Zero client change, so it is byte-identical by
+construction there — but the server changed, so it was re-driven through the real UI against the
+rebuilt bundle and compared to the pre-change baselines: **voice 25/25, video 25/25, a 3-party
+group call 36/36**, including the `totalAudioEnergy` invariant that catches v2.106.51 (packets
+arriving and nothing played out). The 3-party drive is what covers `leaveRoom`'s new call.
+
+**CAPACITY, MEASURED FROM SOURCE AGAINST THE OWNER'S TARGET, and it is a real gap.**
+`NODE_MAX_ROUTERS = 40` is a hard EXCLUSION, so 40 × 8 nodes = **320 concurrent rooms — below the
+500–1000 asked for.** The configuration would start refusing before the hardware was troubled, and
+v2.106.59 makes an all-saturated pool *refuse* group calls outright, so the ceiling is
+user-visible. **Deliberately not raised on a guess**: v2.106.54 chose 40 and recorded that a node
+past its limit "degrades for everybody already on it". It needs a load test, not an edit.
+**Nodes are linked for SELECTION, not for MEDIA** — verified, there is no `PipeTransport` anywhere
+in `voip-node/` or `server/`, so a room lives entirely on one node and load splits *across* calls,
+never *within* one, which is what the owner described wanting.
+
+**WHAT IS STILL NOT BUILT, named rather than implied**: the client adapter (`mediasoup-client`,
+the handshake, produce/consume wiring) and the `relayClient.ts` seam it needs. The reader map is
+kept in task #129 so it is not re-derived — and the important part is that the leak is **not** in
+the 26 RTC-touching functions but in the 20 that branched on transport and touch no RTC at all
+(`transportMax`, `aloneInCall`, hold/swap/merge, the four room-entry acks, `enterReconnecting`,
+`setCam`, `addToCall`, `onOffline`/`onOnline`). A "wrap `RTCPeerConnection`" seam misses every one
+of them. Also still missing node-side: no per-participant teardown (`closeRoom` and nothing else,
+so a leaver's transport lingers until the room closes — stated as a limitation in the module
+rather than glossed), and no camera-off op, so a mute would be client-side-only until one exists.
+
+**Nothing here can fire in production yet**: with no `REDIS_URL` the pool is empty, so
+`dialPlan.voip` is null, no room carries an assignment, and every tunnel op is refused
+`no-assignment`. It goes live with the fleet, not with this deploy.
+
+`server/mediasoupRoom.ts` + `server/mediasoupTunnel.test.ts` (43). 6273 tests.
+
 ## v2.107.4 — the last three measured gaps to the design board, and two items declined with a reason
 
 Owner: *"Do the changes quick and finish all chapters."*
