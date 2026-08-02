@@ -43,8 +43,16 @@ function withRelayAndroidCall(config) {
     activity.$["android:resizeableActivity"] = "true";
 
     // --- Lock-screen call UI ---
-    activity.$["android:showWhenLocked"] = "true";
-    activity.$["android:turnScreenOn"] = "true";
+    // NOT set here. As a manifest attribute it is permanent: the whole
+    // authenticated app, every conversation in it, would display over the lock
+    // screen whenever anything brought MainActivity to the front — including a
+    // tap on an ordinary message notification, which is reachable by anyone
+    // holding the locked handset. It is now set at runtime for the duration of a
+    // call and cleared when the call ends (RelayCallWindow, in
+    // with-android-fcm-call.js). IncomingCallActivity keeps the attributes,
+    // because it IS only Answer and Decline.
+    delete activity.$["android:showWhenLocked"];
+    delete activity.$["android:turnScreenOn"];
 
     const existing = (activity.$["android:configChanges"] || "")
       .split("|")

@@ -453,6 +453,11 @@ class IncomingCallActivity : AppCompatActivity() {
         stopRinging()
         dismissNotification()
 
+        // MainActivity is about to become the call UI, and on a locked phone it
+        // has to be visible without an unlock. Scoped to the call — see
+        // RelayCallWindow for why this is not a manifest attribute.
+        RelayCallWindow.markCallActive()
+
         // Launch MainActivity with deep link URL so Expo Linking can read it
         val uri = Uri.parse("relay://call?nativeCall=\${callId}&mode=\${mode}&action=answer")
         val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
@@ -466,6 +471,11 @@ class IncomingCallActivity : AppCompatActivity() {
     private fun declineCall() {
         stopRinging()
         dismissNotification()
+
+        // A decline is not a call: MainActivity must not come up over the lock
+        // screen. Cleared rather than merely not-set, in case an earlier call
+        // left the flag on.
+        RelayCallWindow.clear(this)
 
         // Launch MainActivity with deep link URL for decline
         val uri = Uri.parse("relay://call?nativeCall=\${callId}&mode=\${mode}&action=decline")
@@ -524,6 +534,8 @@ class CallActionReceiver : BroadcastReceiver() {
 
         when (intent.action) {
             RelayCallFcmService.ACTION_ANSWER -> {
+                // Let MainActivity show over the lock screen for this call only.
+                RelayCallWindow.markCallActive()
                 // Launch via deep link so Expo Linking can read the call params
                 val uri = android.net.Uri.parse("relay://call?nativeCall=\${callId}&mode=\${mode}&action=answer")
                 val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
@@ -533,6 +545,7 @@ class CallActionReceiver : BroadcastReceiver() {
                 context.startActivity(launchIntent)
             }
             RelayCallFcmService.ACTION_DECLINE -> {
+                RelayCallWindow.clear(null)
                 // Launch via deep link for decline
                 val uri = android.net.Uri.parse("relay://call?nativeCall=\${callId}&mode=\${mode}&action=decline")
                 val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
@@ -738,6 +751,7 @@ class RelayAudioRouter(private val context: Context) {
 
 const RELAY_NATIVE_INTERFACE = `package ${PACKAGE}
 
+import android.app.Activity
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Handler
@@ -794,6 +808,9 @@ class RelayNativeInterface(
             context.getSharedPreferences("relay_push", Context.MODE_PRIVATE)
                 .edit().putString("ringing_call_id", "").apply()
 
+            // The call is over, so stop showing the app over the lock screen.
+            RelayCallWindow.clear(context as? Activity)
+
             // Deactivate audio routing
             audioRouter.deactivate()
         }
@@ -822,6 +839,73 @@ class RelayNativeInterface(
 `;
 
 // ─── NEW: RelayWebViewSetup.kt — Helper to attach interface to WebView ─────
+
+const RELAY_CALL_WINDOW = `package ${PACKAGE}
+
+import android.app.Activity
+import android.os.Build
+import android.util.Log
+import android.view.WindowManager
+
+/**
+ * Shows MainActivity over the lock screen ONLY while a call is live.
+ *
+ * MainActivity used to carry android:showWhenLocked / android:turnScreenOn in
+ * the manifest, which is permanent: the entire authenticated app — every
+ * conversation in it — would display over the lock screen whenever anything
+ * brought it to the front, including a tap on an ordinary message notification.
+ * A locked phone stopped meaning anything.
+ *
+ * The attributes are needed for one thing only: answering a call from the lock
+ * screen, where IncomingCallActivity (which is legitimately always
+ * showWhenLocked, being nothing but Answer and Decline) hands over to
+ * MainActivity for the call itself. So the window flag is set when we hand over
+ * and cleared when the call ends.
+ *
+ * State is a process-wide flag rather than an Activity field because the two are
+ * set from different places: the handover happens in an Activity or a
+ * BroadcastReceiver that is about to die, and MainActivity may not exist yet.
+ * onResume re-applies it — window flags do not survive Activity recreation.
+ */
+object RelayCallWindow {
+    private const val TAG = "RelayCallWindow"
+
+    @Volatile
+    private var callActive = false
+
+    /** Called on the handover to MainActivity, before it may even exist. */
+    fun markCallActive() {
+        callActive = true
+    }
+
+    /** Called when the call ends, from wherever learns that first. */
+    fun clear(activity: Activity?) {
+        callActive = false
+        apply(activity)
+    }
+
+    /** Re-assert the current state on an Activity — safe to call repeatedly. */
+    fun apply(activity: Activity?) {
+        val a = activity ?: return
+        val on = callActive
+        a.runOnUiThread {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    a.setShowWhenLocked(on)
+                    a.setTurnScreenOn(on)
+                } else {
+                    @Suppress("DEPRECATION")
+                    val flags = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                    if (on) a.window.addFlags(flags) else a.window.clearFlags(flags)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not apply lock-screen flags", e)
+            }
+        }
+    }
+}
+`;
 
 const RELAY_WEBVIEW_SETUP = `package ${PACKAGE}
 
@@ -1029,6 +1113,10 @@ function withAndroidFcmCall(config) {
         RELAY_NATIVE_INTERFACE
       );
       fs.writeFileSync(
+        path.join(packageDir, "RelayCallWindow.kt"),
+        RELAY_CALL_WINDOW
+      );
+      fs.writeFileSync(
         path.join(packageDir, "RelayWebViewSetup.kt"),
         RELAY_WEBVIEW_SETUP
       );
@@ -1055,15 +1143,20 @@ function withAndroidFcmCall(config) {
       // Add import after the last import statement
       content = content.replace(
         /(import [^\n]+\n)(?!import)/,
-        `$1import ${PACKAGE}.RelayWebViewSetup\n`
+        `$1import ${PACKAGE}.RelayWebViewSetup\nimport ${PACKAGE}.RelayCallWindow\n`
       );
 
-      // Add onResume override to call attachToWebView
-      // Find the class body opening
+      // Add onResume override to call attachToWebView.
+      //
+      // RelayCallWindow.apply re-asserts the show-over-lock-screen flag, which
+      // MainActivity no longer carries permanently in the manifest. Window flags
+      // do not survive Activity recreation, and the flag is usually set from
+      // IncomingCallActivity before MainActivity exists at all — so onResume is
+      // the only place that reliably sees both.
       if (!content.includes("onResume")) {
         content = content.replace(
           /class MainActivity[^{]*\{/,
-          `$&\n    override fun onResume() {\n        super.onResume()\n        RelayWebViewSetup.attachToWebView(this)\n    }\n`
+          `$&\n    override fun onResume() {\n        super.onResume()\n        RelayCallWindow.apply(this)\n        RelayWebViewSetup.attachToWebView(this)\n    }\n`
         );
       }
     }
