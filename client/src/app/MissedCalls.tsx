@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { PhoneMissed, X, Bell, BellOff, MessageSquare, Clock, ChevronRight, ShieldQuestion } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useLocale, type Locale, type TKey } from "@/app/i18n";
+import { loginDetailLine } from "@/app/loginOriginCopy";
 
 /** The translator's shape, so the pure helpers below need no React and stay drivable
  *  from a test with a stub. Same contract as `inviteMessage.ts`'s `Translate`. */
@@ -320,7 +321,17 @@ export function NotificationBell({
    * rather than only a count. Optional, so a caller that has not fetched them —
    * or a pre-release client — degrades to the count line it showed before.
    */
-  pendingDetail?: { sid: string; label: string; detail: string | null; createdAt: number } | null;
+  pendingDetail?: {
+    sid: string;
+    label: string;
+    detail: string | null;
+    /* `place` + `method` so the line can be recomposed with a TRANSLATED method;
+       `detail` stays as the server's pre-composed English for a payload that
+       carries no method (an older server, mid-rolling-deploy). */
+    place?: string | null;
+    method?: string | null;
+    createdAt: number;
+  } | null;
   onOpenHistory: () => void;
   onOpenMessages: () => void;
   onOpenDevices?: () => void;
@@ -495,12 +506,15 @@ export function NotificationBell({
                         <span className="block text-sm font-medium">
                           {t("alerts.newDeviceSignIn")}
                         </span>
+                        {/* The DEVICE label is still the server's English — see the
+                            note in `dict/alerts.ts`. The line below it is the one
+                            that was whole-phrase English and is now recomposed. */}
                         <span className="block truncate text-xs text-muted-foreground">
                           {inlineApprove.detail.label}
                         </span>
-                        {inlineApprove.detail.detail && (
+                        {loginDetailLine(inlineApprove.detail, t) && (
                           <span className="block truncate text-xs text-muted-foreground">
-                            {inlineApprove.detail.detail}
+                            {loginDetailLine(inlineApprove.detail, t)}
                           </span>
                         )}
                         <span className="block text-[11px] text-muted-foreground">
@@ -570,9 +584,9 @@ export function NotificationBell({
                           <span className="block truncate text-xs text-muted-foreground">
                             {pendingDetail.label}
                           </span>
-                          {pendingDetail.detail && (
+                          {loginDetailLine(pendingDetail, t) && (
                             <span className="block truncate text-xs text-muted-foreground">
-                              {pendingDetail.detail}
+                              {loginDetailLine(pendingDetail, t)}
                             </span>
                           )}
                           <span className="block text-[11px] text-muted-foreground">

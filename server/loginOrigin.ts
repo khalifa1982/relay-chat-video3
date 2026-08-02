@@ -35,7 +35,21 @@ export function normalizeLoginMethod(v: unknown): LoginMethod | null {
     : null;
 }
 
-/** How the sign-in is described to the person who owns the account. */
+/**
+ * How the sign-in is described to the person who owns the account — IN ENGLISH.
+ *
+ * THE CLIENT SHOULD PREFER THE RAW `method` AND ITS OWN KEY. This composes a
+ * finished English phrase, and the notification centre and the Devices list both
+ * used to render it verbatim, so an Arabic screen read "Dubai, AE · Email code".
+ * `pendingSessionWire` now also sends the enum itself, and the two surfaces select
+ * `alerts.loginMethod*` from it; this stays for the wire's back-compat during a
+ * rolling deploy — an older bundle receiving a payload with no `method` field must
+ * still have something to show — and as the fallback when the value is unknown.
+ *
+ * The rest of `describeLogin` is deliberately NOT translated: a city name comes
+ * from a geo service as it is written there, an ISO country code is the same in
+ * every language, and an IP is digits. The method was the only English in it.
+ */
 export function loginMethodLabel(v: unknown): string | null {
   switch (normalizeLoginMethod(v)) {
     case "code":

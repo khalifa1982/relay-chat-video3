@@ -34,6 +34,22 @@ const read = (p: string) => readFileSync(resolve(ROOT, p), "utf8");
 const RAW = read("client/src/app/MissedCalls.tsx");
 const SRC = codeOnly(RAW);
 
+/* `loginOriginCopy.ts` is a SECOND renderer of `alerts.*` — the sign-in detail line,
+   which BOTH this screen and Profile → Devices show, so its wording lives in one
+   place rather than in two that can drift (v2.107.0). Read here rather than
+   exempted, so its keys are genuinely covered. */
+const RENDERERS = SRC + "\n" + codeOnly(read("client/src/app/loginOriginCopy.ts"));
+
+/* Reached through `METHOD_KEY[method]` — a key chosen at RUNTIME from an enum the
+   server sends, which no static reader can follow. Named rather than tolerated by a
+   count, and pinned at the selector below so the exemption cannot become a hiding
+   place for a key nothing returns. */
+const INDIRECT_ALERT_KEYS = new Set([
+  "alerts.loginMethodCode",
+  "alerts.loginMethodPin",
+  "alerts.loginMethodRegister",
+]);
+
 const entries = Object.entries(ALERTS) as [string, { en: string; ar: string }][];
 
 /** The body of a top-level `function name(` … `)` declaration, sliced to the closing
@@ -178,7 +194,7 @@ describe("the alerts dictionary and the screen agree", () => {
     /* v2.106.91's rule, applied locally so the failure names THIS screen rather than
        surfacing as one line in the app-wide sweep. An unread key is worse than a
        missing one: somebody counting keys concludes the screen is translated. */
-    const dead = entries.map(([k]) => k).filter((k) => !SRC.includes(k));
+    const dead = entries.map(([k]) => k).filter((k) => !RENDERERS.includes(k));
     expect(dead, `no reader for:\n${dead.join("\n")}`).toEqual([]);
   });
 
@@ -195,10 +211,23 @@ describe("the alerts dictionary and the screen agree", () => {
        survive localisation. A screen written that way cannot have its copy pinned at
        all, which is a guard silently lost rather than a bug. So the branch goes
        OUTSIDE the call. */
-    const direct = new Set([...SRC.matchAll(/\bt\(\s*"(alerts\.[A-Za-z0-9]+)"/g)].map((m) => m[1]));
-    const indirect = entries.map(([k]) => k).filter((k) => !direct.has(k));
+    const direct = new Set(
+      [...RENDERERS.matchAll(/\bt\(\s*"(alerts\.[A-Za-z0-9]+)"/g)].map((m) => m[1]),
+    );
+    const indirect = entries
+      .map(([k]) => k)
+      .filter((k) => !direct.has(k) && !INDIRECT_ALERT_KEYS.has(k));
     expect(indirect, `reached only indirectly — hoist the branch out of t():\n${indirect.join("\n")}`)
       .toEqual([]);
+
+    /* The exemption is EARNED: each named key must be what the map returns for a real
+       method, so one that stopped being selected goes red here instead of sitting in
+       the list looking covered. */
+    const COPY = read("client/src/app/loginOriginCopy.ts");
+    for (const k of INDIRECT_ALERT_KEYS) {
+      expect(k in ALERTS, `${k} must exist to be exempted`).toBe(true);
+      expect(COPY, `${k} is not selected by loginMethodKey`).toContain(`"${k}"`);
+    }
   });
 
   it("every Arabic half really is Arabic, not the English copied across", () => {

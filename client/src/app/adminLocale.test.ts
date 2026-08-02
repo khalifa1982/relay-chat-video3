@@ -109,8 +109,10 @@ function userFacingLiterals(src: string): string[] {
  */
 const ALLOWED = new Set([
   // A format example for an ASCII-only field, in an input that is already `dir="ltr"`.
-  // Translating it would demonstrate an address shape nobody can type.
-  'placeholder="them@example.com"',
+  // Translating it would demonstrate an address shape nobody can type — so the local
+  // part is LANGUAGE-NEUTRAL instead ("name", not "them"), which is what makes the
+  // exemption honest rather than an English word sitting on an Arabic screen.
+  'placeholder="name@example.com"',
   // A six-digit example. It must stay Western digits (a RELAY number is read aloud and
   // typed back), and `pinInput.test.ts` recognises this box BY this placeholder.
   'placeholder="777777"',

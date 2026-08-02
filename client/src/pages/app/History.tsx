@@ -38,7 +38,7 @@ import type { IdentityRole } from "@/app/VerifiedBadge";
 import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
-import { presenceDot } from "@/app/presenceDot";
+import { presenceDot, type PresenceDotState } from "@/app/presenceDot";
 import { useT, translate, type TKey } from "@/app/i18n";
 import { matchQuery } from "@/app/searchMatch";
 // #117 — the paging primitives, kept pure so the ordering and de-duplication can be
@@ -1234,22 +1234,31 @@ function RoundAction({
  * A missing verdict renders NOTHING — no flicker and no wrong claim — which is why
  * the prop is the whole snapshot rather than a boolean that has to default somehow.
  */
+/** History's own tooltip per presence state — exhaustive over the union, so adding a
+ *  fifth state is a compile error here rather than a row that silently reads
+ *  "Offline". */
+const HISTORY_PRESENCE_TITLE: Record<PresenceDotState, TKey> = {
+  inCall: "history.presence.onCall",
+  online: "history.presence.online",
+  away: "history.presence.away",
+  offline: "history.presence.offline",
+};
+
 function PresenceLed({ p }: { p: PresenceSnapshot | undefined }) {
   const t = useT();
   if (!p) return null;
   const dot = presenceDot(p);
   return (
     <span
-      aria-label={dot.label}
-      title={
-        dot.label === "On a call"
-          ? t("history.presence.onCall")
-          : dot.label === "Online"
-            ? t("history.presence.online")
-            : dot.label === "Away"
-              ? t("history.presence.away")
-              : t("history.presence.offline")
-      }
+      aria-label={t(dot.labelKey)}
+      /* SWITCHED ON THE STATE, NEVER ON THE ENGLISH LABEL. This used to compare
+         `dot.label` against "On a call" / "Online" / "Away" — which worked only for
+         as long as nobody edited those four words, and would have fallen silently
+         through to the "offline" branch the moment somebody did, with every test
+         still green. The tooltips are History's OWN wording (they name the
+         CONSEQUENCE — "calling will page their phone" — rather than the state), so
+         the mapping stays here; what moved is what it keys on. */
+      title={t(HISTORY_PRESENCE_TITLE[dot.state])}
       // `-end-0.5` so the LED sits on the disc's TRAILING corner in both
       // directions — the same logical edge GroupInfoSheet and GroupCallScreen use
       // for the identical affordance. It must flip together with DirectionBadge's

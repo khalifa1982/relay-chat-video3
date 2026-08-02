@@ -21,6 +21,7 @@ import path from "node:path";
 import { effectiveStatus } from "@shared/profileFields";
 import { presenceNeedsNotification, type PresenceLite } from "./v2db";
 import { presenceDot } from "../client/src/app/presenceDot";
+import { DICT } from "../client/src/app/i18n";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -228,28 +229,71 @@ describe("effectiveStatus maps idle onto the EXISTING away", () => {
 });
 
 describe("one LED rule for every dot", () => {
+  /* The English half of the key, so these assertions still pin the VOCABULARY —
+     "Away" is not "Offline" — while going through the dictionary, which also proves
+     an Arabic half exists. Strictly stronger than the literal it replaces. */
+  const en = (k: keyof typeof DICT) => DICT[k].en;
+
   it("idle is the online green FADED, with no glow", () => {
     // Not a new hue: amber already means "on a call" here and "Do Not Disturb" in
     // the top bar, and a third meaning would make colour stop carrying information.
     // The glow is what makes green read as "active right now", so idle loses it.
     const d = presenceDot({ isOnline: true, idle: true });
-    expect(d.label).toBe("Away");
+    expect(en(d.labelKey)).toBe("Away");
+    expect(d.state).toBe("away");
     expect(d.glow).toBe("");
     expect(d.live).toBe(true);
     expect(d.color).toContain("--relay-online");
 
     const on = presenceDot({ isOnline: true });
-    expect(on.label).toBe("Online");
+    expect(en(on.labelKey)).toBe("Online");
+    expect(on.state).toBe("online");
     expect(on.glow).not.toBe("");
   });
 
   it("on a call outranks everything, and offline is grey not red", () => {
-    expect(presenceDot({ isOnline: true, idle: true, inCall: true }).label).toBe("On a call");
-    expect(presenceDot({ isOnline: false, inCall: true }).label).toBe("On a call");
+    expect(en(presenceDot({ isOnline: true, idle: true, inCall: true }).labelKey)).toBe("On a call");
+    expect(en(presenceDot({ isOnline: false, inCall: true }).labelKey)).toBe("On a call");
     const off = presenceDot({ isOnline: false });
-    expect(off.label).toBe("Offline");
+    expect(en(off.labelKey)).toBe("Offline");
+    expect(off.state).toBe("offline");
     expect(off.live).toBe(false);
     expect(off.color).not.toMatch(/red|#ef4444|#f87171/);
+  });
+
+  it("the four states are FOUR words, in both languages", () => {
+    /* The vocabulary is the whole point of the rule, and collapsing two states onto
+       one word would undo it silently in whichever language the edit missed. Asserted
+       per language, because a translator who reuses one Arabic word for "Away" and
+       "Offline" produces a screen that is wrong only for Arabic readers. */
+    const keys = (["inCall", "offline", "away", "online"] as const).map(
+      (s) =>
+        presenceDot(
+          s === "inCall"
+            ? { inCall: true }
+            : s === "offline"
+              ? { isOnline: false }
+              : s === "away"
+                ? { isOnline: true, idle: true }
+                : { isOnline: true },
+        ).labelKey,
+    );
+    expect(new Set(keys).size, "two states share a key").toBe(4);
+    for (const half of ["en", "ar"] as const) {
+      const words = keys.map((k) => DICT[k][half]);
+      expect(new Set(words).size, `two states share one ${half} word: ${words.join(" / ")}`).toBe(4);
+    }
+  });
+
+  it("presenceDot returns NO finished label — only a key", () => {
+    /* THE PROPERTY THIS RELEASE EXISTS FOR. Seven surfaces put this into an
+       `aria-label`, so a `label: string` beside the key would be re-adopted by the
+       next one and a screen reader on an Arabic phone would hear English again. A
+       sweep cannot catch it — the offender is an expression, not a literal — so the
+       English being UNAVAILABLE is what makes the fix hold. */
+    const SRC = read("client/src/app/presenceDot.ts");
+    expect(SRC).not.toMatch(/^\s*label\??:\s*string/m);
+    expect(SRC).not.toMatch(/\blabel:\s*"/);
   });
 
   it("every screen that draws a dot reads the shared rule", () => {

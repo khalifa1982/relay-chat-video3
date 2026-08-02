@@ -39,6 +39,10 @@ const CODE = codeOnly(SRC);
 
 /** The part of the file that actually renders — see exemption (2) in the header. */
 const DEAD_AT = CODE.indexOf("function InCallSaveContacts");
+/* EVERYTHING BEFORE THE DEAD COMPONENT. That is only the same thing as "everything
+   live" while the dead component is LAST in the file — a structural assumption this
+   slice made silently, so a component appended after it would have been exempt with
+   nothing saying so. Pinned in the slice-reality test below. */
 const LIVE = CODE.slice(0, DEAD_AT);
 /** Just the JSX, so TypeScript generics (`useState<Array<…>>`) cannot be read as text. */
 const JSX = LIVE.slice(
@@ -51,20 +55,80 @@ const JSX = LIVE.slice(
  * from the dictionary: JSX text nodes, the attributes screen readers and tooltips
  * surface, and the imperative shouts.
  *
- * The text-node pattern refuses `{` and `}` inside the run, which is what confines a
- * match to one JSX text node — an expression, a CSS template or a nested element all
- * contain braces or angle brackets and end the run.
+ * FIVE BLIND SPOTS WERE CLOSED IN v2.107.0, each proven by planting the shape and
+ * watching the old sweep pass it. None was a live defect — the region really is
+ * clean — but a sweep with holes is worse than no sweep, because it reports safety
+ * for the shapes it cannot see, and the next string added is as likely to take one
+ * of these forms as the ones it caught:
+ *
+ *   1. A TEMPLATE-LITERAL attribute: `aria-label={`Mute ${name}`}`.
+ *   2. Text mixed with an expression: `>Muted {n} people<`. The run used to refuse
+ *      braces outright, so a text node containing ANY expression was skipped whole
+ *      rather than having its English half read — which is the common shape.
+ *   3. A single-quoted attribute.
+ *   4. `toast.success(…)` / `.error(…)` — only the bare `toast(` call was matched,
+ *      and every real call site in this codebase uses a method.
+ *   5. A string literal standing alone in a text position: `>{"Reconnecting"}<`.
+ *
+ * The text run now ALLOWS braces and strips the expressions out of it before asking
+ * whether English is left, which is what makes (2) and (5) visible while still
+ * confining a match to one node: `<` and `>` end the run, so a nested element or a
+ * CSS template cannot be swallowed.
  */
+/**
+ * Drop every `{…}` expression from a JSX text run, INNERMOST FIRST until stable.
+ *
+ * One pass is not enough and getting that wrong was caught by this file's own
+ * "and the translated forms still pass" case: `{t("k", { n })}` has a nested brace,
+ * so a single `\{[^{}]*\}` strips only the inner `{ n }` and leaves the outer
+ * expression looking like text — which would flag correct, translated code.
+ */
+function stripBraces(run: string): string {
+  let prev = "";
+  let cur = run;
+  while (cur !== prev) {
+    prev = cur;
+    cur = cur.replace(/\{[^{}]*\}/g, "");
+  }
+  return cur.trim();
+}
+
 function userVisibleLiterals(jsx: string, rest = ""): string[] {
   const out: string[] = [];
-  for (const m of jsx.matchAll(/>\s*([^<>{}]*?[A-Za-z]{2}[^<>{}]*?)\s*</g)) out.push(m[1].trim());
-  for (const m of (jsx + rest).matchAll(
-    /\b(?:aria-label|title|placeholder|alt)="([^"]*[A-Za-z]{2}[^"]*)"/g,
-  )) {
-    out.push(m[1]);
+  const all = jsx + rest;
+  for (const m of jsx.matchAll(/>\s*([^<>]*?)\s*</g)) {
+    const run = m[1];
+    /* A brace run that is EXACTLY one quoted string is a literal in a text position
+       (blind spot 5); anything else in braces is an expression and is dropped. */
+    for (const lit of run.matchAll(/\{\s*(["'])([^"']*[A-Za-z]{2}[^"']*)\1\s*\}/g)) {
+      out.push(lit[2]);
+    }
+    const bare = stripBraces(run);
+    /* AN UNBALANCED BRACE MEANS THIS IS NOT A TEXT NODE. A multi-line JSX expression
+       — `{cond ? (` … `) : null}` — puts a lone `{` between a `>` and the next `<`,
+       and reading its residue as text flagged five perfectly correct ternaries the
+       first time this widening ran. A guard that cries wolf on correct code is as
+       useless as one that never fires, so a run with a leftover brace is skipped
+       rather than reported; the balanced case is the one that is really text. */
+    if (!/[{}]/.test(bare) && /[A-Za-z]{2}/.test(bare)) out.push(bare);
   }
-  for (const m of (jsx + rest).matchAll(/\b(?:toast|alert|confirm)\(\s*"([^"]*[A-Za-z]{2}[^"]*)"/g)) {
-    out.push(m[1]);
+  for (const m of all.matchAll(
+    /\b(?:aria-label|title|placeholder|alt)=(["'])([^"']*[A-Za-z]{2}[^"']*)\1/g,
+  )) {
+    out.push(m[2]);
+  }
+  /* A template literal in an attribute: the English lives outside the `${…}` holes,
+     so they are stripped and what remains is asked. */
+  for (const m of all.matchAll(
+    /\b(?:aria-label|title|placeholder|alt)=\{`([^`]*)`\}/g,
+  )) {
+    const bare = m[1].replace(/\$\{[^{}]*\}/g, "").trim();
+    if (/[A-Za-z]{2}/.test(bare)) out.push(bare);
+  }
+  for (const m of all.matchAll(
+    /\b(?:toast(?:\.\w+)?|alert|confirm)\(\s*(["'])([^"']*[A-Za-z]{2}[^"']*)\1/g,
+  )) {
+    out.push(m[2]);
   }
   return out.filter((s) => s.length > 0);
 }
@@ -75,6 +139,16 @@ describe("RelayEngine's call chrome is translated", () => {
        empty and every `not.toMatch` in it pass while proving nothing — the collapsed-slice
        trap this repo has recorded more than once. */
     expect(DEAD_AT, "the dead component is still findable").toBeGreaterThan(0);
+    /* `LIVE` is everything BEFORE the dead component, so anything appended AFTER it
+       is silently exempt. That held only because the dead component was last — an
+       assumption the slice never stated. Pinned: nothing may declare a component
+       below it. */
+    const below = CODE.slice(DEAD_AT + "function InCallSaveContacts".length);
+    expect(
+      [...below.matchAll(/^(?:export )?function ([A-Z]\w*)/gm)].map((m) => m[1]),
+      "a component was added BELOW the dead one, where the sweep does not look — " +
+        "move it above InCallSaveContacts, or the slice has to change",
+    ).toEqual([]);
     expect(LIVE.length).toBeGreaterThan(10_000);
     expect(JSX.length).toBeGreaterThan(2_000);
     expect(JSX).toContain("relay-root relay-embedded");
@@ -102,6 +176,33 @@ describe("RelayEngine's call chrome is translated", () => {
     // …and passes the translated forms, so it is not merely "flags everything".
     expect(userVisibleLiterals(`<div>{t("engine.reconnecting")}</div>`)).toEqual([]);
     expect(userVisibleLiterals(`<button aria-label={t("engine.endCall")} />`)).toEqual([]);
+  });
+
+  it("…and bites on the five shapes it used to be blind to", () => {
+    /* One case per closed blind spot, each planted rather than reasoned about. The
+       old sweep returned [] for every one of these. */
+    // 1 — a template-literal attribute
+    expect(userVisibleLiterals("<button aria-label={`Mute ${name}`} />")).toEqual(["Mute"]);
+    // 2 — text mixed with an expression
+    expect(userVisibleLiterals(`<div>Muted {n} people</div>`)).toEqual(["Muted  people"]);
+    // 3 — a single-quoted attribute
+    expect(userVisibleLiterals(`<button title='End the call' />`)).toEqual(["End the call"]);
+    // 4 — toast via a method rather than the bare call
+    expect(userVisibleLiterals(``, `toast.success("Saved to your contacts.")`)).toEqual([
+      "Saved to your contacts.",
+    ]);
+    expect(userVisibleLiterals(``, `toast.error("Could not connect.")`)).toEqual([
+      "Could not connect.",
+    ]);
+    // 5 — a bare string literal in a text position
+    expect(userVisibleLiterals(`<div>{"Reconnecting"}</div>`)).toEqual(["Reconnecting"]);
+
+    /* …and the translated forms of the SAME shapes still pass, so the widening did
+       not turn the sweep into "flags everything" — which would be the other way of
+       making it useless. */
+    expect(userVisibleLiterals("<button aria-label={`${t(\"engine.mute\")}`} />")).toEqual([]);
+    expect(userVisibleLiterals(`<div>{t("engine.muted", { n })}</div>`)).toEqual([]);
+    expect(userVisibleLiterals(``, `toast.success(t("engine.saved"))`)).toEqual([]);
   });
 
   it("the ONE exemption is earned: the untranslated component is still unmounted", () => {

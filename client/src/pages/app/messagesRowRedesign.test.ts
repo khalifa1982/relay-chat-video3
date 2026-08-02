@@ -40,7 +40,11 @@ describe("v2.99.37 — the row is airy: avatar + exactly two text lines", () => 
     // state could not be learnt by some dots and not others. The property this line
     // guards — the row HAS a presence LED with an accessible label — is unchanged.
     expect(ROW).toMatch(/presenceDot\(\{ isOnline: t\.peerIsOnline, idle: t\.peerIdle \}\)/);
-    expect(ROW).toMatch(/aria-label=\{dot\.label\}/);
+    /* The LED is LABELLED — and through the translator, because `presenceDot` now
+       returns a key rather than finished English (v2.107.0). Matching the key
+       expression rather than a literal is the property: the control is labelled,
+       and it is labelled in the reader's language. */
+    expect(ROW).toMatch(/aria-label=\{tr\(dot\.labelKey\)\}/);
   });
   it("the name is the biggest thing in the row (19px) and goes bold when unread", () => {
     expect(ROW).toMatch(/text-\[19px\]/);

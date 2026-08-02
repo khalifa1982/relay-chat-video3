@@ -162,6 +162,16 @@ describe("every user-visible string on the peer surfaces goes through the dictio
       ) as TKey[]),
       "peer.agoNever",
       "peer.agoJustNow",
+      /* The four presence-DOT labels. `presenceDot` returns a KEY rather than a
+         finished label (v2.107.0), and it picks it per branch — so no static reader
+         can follow it and each is named here instead, with the selection driven in
+         `presenceIdle.test.ts`. That indirection is the whole point of the change:
+         seven surfaces put this into an `aria-label`, and returning English meant a
+         screen reader on an Arabic phone heard "Online" on every one of them. */
+      "peer.dotOnCall",
+      "peer.dotOffline",
+      "peer.dotAway",
+      "peer.dotOnline",
     ]);
     /* `presenceCopy.ts` is a SECOND renderer of `peer.*` — the translated "last seen …"
        line the conversation header shows (v2.106.97). It is read here rather than
@@ -179,6 +189,14 @@ describe("every user-visible string on the peer surfaces goes through the dictio
     }
     expect(CODE).toMatch(/PROFILE_STATUS_LABEL_KEY\[meta\.key\]/);
     expect(CODE).toMatch(/t\(guestExpiryKey\(daysLeft\), \{ count: daysLeft \}\)/);
+    /* The dot's four are pinned AT THEIR SELECTOR, which is where the
+       `guestExpiryKey` precedent puts a runtime-chosen key: each must be the
+       `labelKey` of exactly one branch of `presenceDot`, so an exemption cannot
+       become a hiding place for one that stopped being returned. */
+    const DOT = read("client/src/app/presenceDot.ts");
+    for (const k of ["peer.dotOnCall", "peer.dotOffline", "peer.dotAway", "peer.dotOnline"]) {
+      expect(DOT, `${k} is not returned by presenceDot`).toContain(`labelKey: "${k}"`);
+    }
   });
 });
 

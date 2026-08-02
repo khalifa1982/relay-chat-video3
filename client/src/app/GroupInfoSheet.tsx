@@ -131,12 +131,13 @@ function groupInitials(title: string | null): string {
  * whose presence has simply not loaded.
  */
 function MemberDot({ p }: { p?: { isOnline: boolean; idle: boolean; inCall: boolean } }) {
+  const t = useT();
   if (!p) return null;
   const d = presenceDot(p);
   return (
     <span
-      aria-label={d.label}
-      title={d.label}
+      aria-label={t(d.labelKey)}
+      title={t(d.labelKey)}
       className="absolute -bottom-0.5 -end-0.5 size-[11px] rounded-full border-2 border-card"
       style={{ background: d.color, boxShadow: d.glow }}
     />

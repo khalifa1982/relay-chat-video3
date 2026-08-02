@@ -169,6 +169,7 @@ import {
   describeLogin,
   describeLoginPlace,
   loginMethodLabel,
+  normalizeLoginMethod,
   normalizeCity,
   normalizeCountry,
   normalizeLoginIp,
@@ -4045,6 +4046,11 @@ export type PendingSessionWire = {
   detail: string | null;
   place: string | null;
   methodLabel: string | null;
+  /* The METHOD as its enum rather than as a phrase, so the client can pick its own
+     key. `methodLabel` above stays beside it: a client on the previous bundle is
+     still reading that field for the ~60s of a rolling deploy, and dropping it
+     would blank the line for those people rather than translating it. */
+  method: LoginMethod | null;
   ip: string | null;
   country: string | null;
 };
@@ -4066,6 +4072,7 @@ function pendingSessionWire(r: {
     detail: describeLogin({ ...origin, method: r.method }),
     place: describeLoginPlace(origin),
     methodLabel: loginMethodLabel(r.method),
+    method: normalizeLoginMethod(r.method),
     ip: origin.ip,
     country: normalizeCountry(origin.country),
   };

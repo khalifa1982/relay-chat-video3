@@ -117,10 +117,17 @@ describe("every string on the group sheet goes through the translator", () => {
     expect(SRC).toContain("function GroupLockSection");
   });
 
-  it("all three components call useT()", () => {
+  it("every component in the file calls useT()", () => {
     // A component that stopped calling it could not translate anything, and every
     // sweep below would still pass because the literals would be gone too.
-    expect([...SRC.matchAll(/const t = useT\(\);/g)]).toHaveLength(3);
+    //
+    // A COUNT rather than a frozen number: this asserted exactly 3 and went red when
+    // `MemberDot` legitimately gained one (v2.107.0, so its presence LED could label
+    // itself in Arabic), which says nothing about the property. What matters is that
+    // the file HAS components taking a translator and that none of them lost it, so
+    // the floor moves up with the file and a removal still bites.
+    const calls = [...SRC.matchAll(/const t = useT\(\);/g)].length;
+    expect(calls, "a component stopped taking a translator").toBeGreaterThanOrEqual(4);
   });
 
   it("no user-visible ATTRIBUTE carries an English literal", () => {
