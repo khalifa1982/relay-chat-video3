@@ -1,5 +1,16 @@
 # Project TODO
 
+## v2.106.99 — a camera double-tap left the button ON with every sender holding null
+- [x] PROVENANCE: the two source changes are a parallel run's finished #145/#160 work, committed by me because this container is ephemeral and they were complete + green
+- [x] `stopCameraCapture` is async (one `replaceTrack(null)` per peer), so a second tap asked `haveLive` while the track was still alive, skipped the reacquire, and the pending stop took the camera down underneath it
+- [x] The mirror leaves the OS camera light ON — a reacquire in flight when the camera is turned off left the fresh track installed and merely disabled
+- [x] Both fixed by re-reading `camOn` after the await; the abort re-publishes so senders do not keep the null, and never over a live screen share
+- [x] #160's blind spot: the exits ABOVE the removal loop went AROUND the stop, so a throw after `getUserMedia` resolved left a mic nothing could ever release
+- [x] One `finally` rather than a stop per exit — five exits below it, and the next one added inherits the release
+- [x] `Dialer.tsx` prose fixup missed from v2.106.98's pathspec (two references to the renamed `lastSeen.ts`)
+- [x] `mediaEdit.test.ts` (45) commits the test for the `MediaEditSheet` v2.106.98 had to commit without it
+- [ ] Nobody has double-tapped the camera button on a real handset
+
 ## v2.106.98 — dates, numbers and presence follow the APP's language, not the browser's
 - [x] `client/src/app/dateLocale.ts` — one reader; Arabic pins `-u-nu-latn` (Western digits, engine-independent), English pins NOTHING (forcing en-US would move every British/Australian/Indian user's date format)
 - [x] `describePeerPresence` split into `peerPresenceState` + `presenceLabel`; English byte-identical, asserted

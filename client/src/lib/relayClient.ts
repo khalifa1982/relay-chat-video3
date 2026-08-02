@@ -2165,8 +2165,27 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     const genR = mediaGen;
     diag("local " + kind + " track ENDED — attempting reacquire");
     if (kind === "audio") {
+      /* EVERY EXIT AFTER THE ACQUISITION RELEASES THE MIC (#160 follow-up).
+       *
+       * #160 fixed the removal loop below — a track taken OUT of `localStream` is now
+       * stopped rather than merely removed — and left the exits ABOVE it going AROUND the
+       * stop. `if (!at) throw` is the clearest: `getUserMedia` has already resolved, so a
+       * LIVE microphone exists, and throwing there hands it to a `catch` that only raises
+       * a toast. Nothing can ever stop it — it was never installed anywhere, so
+       * `releaseLocalMedia` (which stops `localStream`'s tracks), `hangUp`, `destroy` and
+       * `mediaGen` all miss it. That is a captured microphone for the life of the page,
+       * which is the owner's report exactly.
+       *
+       * A single `finally` rather than a stop at each exit, because the exits are the
+       * thing that keeps growing: there are five below this point, and the next one added
+       * inherits the release instead of having to remember it. `adopted` flips at the ONE
+       * instant the track becomes reachable from `localStream` — after that `fresh` shares
+       * its track with the live stream and stopping it would kill the mic we just
+       * installed, so the flag is the whole correctness of the guard, not bookkeeping. */
+      let fresh: MediaStream | null = null;
+      let adopted = false;
       try {
-        const fresh = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
+        fresh = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
       // v2.99.36: the call may have ended while this recovery was acquiring —
       // installing the stream then would strand a live mic forever.
       if (mediaStale(genR) || !inCall || !localStream) { stopStream(fresh); return; }
@@ -2186,6 +2205,11 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
           try { t.stop(); } catch { /* */ }
         });
         localStream.addTrack(at);
+        /* FROM HERE THE TRACK IS `localStream`'s, so the ordinary release paths reach it
+           and the `finally` below must NOT stop it. Set immediately after the one line
+           that makes that true — a flag set any earlier would leak, any later would kill
+           a live mic. */
+        adopted = true;
         // The filter pipeline's OUTPUT stream carries the audio too — future
         // mesh peers addTrack from processedStream, so leaving the dead track
         // there would hand new joiners a silent mic.
@@ -2204,6 +2228,12 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         toast("Microphone reconnected.");
       } catch {
         toast("Your microphone was lost — check the device, then tap mute/unmute to retry.", true);
+      } finally {
+        /* A microphone this recovery opened and did not hand to `localStream` belongs to
+           nothing, so this is its only possible release. `stop()` is idempotent, which is
+           what lets the named staleness bail above keep its own explicit stop — that line
+           reads at the point of the decision, this one covers every other way out. */
+        if (!adopted) stopStream(fresh);
       }
       return;
     }
@@ -2225,12 +2255,34 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
    * self-preview element's srcObject is cleared too: a <video> holding a
    * reference to a (stopped) capture stream can keep some browsers' indicator
    * on and pins the stream object alive.
+   *
+   * IT OWNS THE MIC's LEVEL-METER GRAPH TOO (#160 follow-up), and that placement is
+   * the fix rather than a tidy-up. `teardownLocalLevelMonitor` was called by hang-up
+   * and by destroy and NOT by the third caller — the backgrounded-while-idle sweep,
+   * which exists precisely because some path left a capture behind. So the one release
+   * written for "something leaked" was the one that left a RUNNING AudioContext holding
+   * a `MediaStreamAudioSourceNode` on the microphone track, plus its 400ms interval,
+   * for the rest of the session. This repo already recorded what that costs when it
+   * closed the loudspeaker context: an open context keeps the iOS audio session
+   * claimed. It also had a second, certain consequence — `ensureLocalLevelMonitor`
+   * opens with `if (localLevelAnalyser) return`, so a stale analyser bound to a stopped
+   * track is never replaced and the mic-level pulse is dead for every later call.
+   *
+   * Here rather than at the three call sites, for the reason `syncMicEnabled` is called
+   * at ensureMedia's single exit: a caller added later inherits it instead of having to
+   * remember it. The mesh speaker monitor and the loudspeaker route stay in `hangUp` /
+   * `destroy` deliberately — they tap REMOTE audio and drive OUTPUT, so they belong to
+   * the CALL's teardown, while this one is a tap on the local capture and belongs to
+   * the local capture's.
    */
   function releaseLocalMedia(reason: string) {
     // Invalidate every in-flight acquisition: anything still awaiting
     // getUserMedia when we release must NOT install its stream afterwards (it
     // would be an orphan no end path can ever stop — a permanently lit camera).
     mediaGen++;
+    // BEFORE the tracks are stopped: disconnect the graph reading them, rather than
+    // leaving a source node briefly pointed at a track being torn down.
+    teardownLocalLevelMonitor();
     if (pipeline) { try { pipeline.destroy(); } catch { /* */ } pipeline = null; }
     if (localStream) {
       try { localStream.getTracks().forEach(t => t.stop()); } catch { /* */ }
@@ -6307,13 +6359,20 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
           audio: false,
         });
       } catch { /* fall through to the flip helper */ }
-      if (!fresh || fresh.getVideoTracks().length === 0) fresh = await acquireFlippedCamera(facingMode);
+      if (!fresh || fresh.getVideoTracks().length === 0) {
+        // Stop the first attempt before overwriting it. A stream that opened but
+        // carried no VIDEO track is still a stream, and dropping the reference is
+        // how a capture ends up with nothing left able to stop it.
+        stopStream(fresh);
+        fresh = await acquireFlippedCamera(facingMode);
+      }
       // v2.99.36: the call may have ended while this re-acquisition was in
       // flight — stop the fresh camera rather than reinstalling it into a dead
       // call (nothing would ever stop it, leaving the camera light on).
       if (mediaStale(genP) || !localStream) { stopStream(fresh); return null; }
       const v = fresh?.getVideoTracks()[0];
-      if (!v) return null;
+      // Same reason: bail out THROUGH the stop, never around it.
+      if (!v) { stopStream(fresh); return null; }
       // Re-arm the death watch on the fresh track (the old watcher died with
       // the old track — a second device loss must stay recoverable).
       v.onended = () => { void recoverDeadLocalTrack("video"); };
@@ -6344,6 +6403,16 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       if (!haveLive) {
         void (async () => {
           const track = await reacquireCameraForPublish();
+          /* TURNED OFF AGAIN WHILE THE CAMERA WAS BEING ACQUIRED (#145 follow-up).
+             `reacquireCameraForPublish` has ALREADY installed the fresh track into
+             `localStream` by the time it returns, and `mediaGen` does not move for a
+             camera toggle (only a full release bumps it) — so without this the track
+             would sit captured with the button reading OFF and `syncCamEnabled`
+             merely DISABLING it: the OS camera light stays on, which is the exact
+             thing stopping the camera exists to prevent. Hand it to the one funnel
+             that releases it rather than stopping it here, so there is still a single
+             place that knows how to take the camera down. */
+          if (!camOn) { if (track) void stopCameraCapture(); return; }
           if (track) {
             /* NOT while a screen share owns the video sender. Since #145 turns the camera
                OFF by STOPPING it, `!haveLive` is now true for the ordinary
@@ -6393,6 +6462,31 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
        published at all, so holding it open buys nothing and costs the indicator. */
     if (!screenSharing) {
       try { await replaceVideoEverywhere(null); } catch { /* */ }
+    }
+    /* TURNED BACK ON WHILE WE WERE DETACHING (#145 follow-up).
+     *
+     * This function is async because it awaits `replaceVideoEverywhere(null)`, which
+     * does one `await sender.replaceTrack(null)` PER PEER — a real window, and a wider
+     * one the bigger the call. A camera button double-tap lands `setCam(true)` inside
+     * it, and that path decides whether to reacquire by asking `haveLive` — which is
+     * still TRUE, because the track we are about to stop has not been stopped yet. So
+     * it skipped the reacquire, this function then stopped the camera underneath it,
+     * and the user was left with the button reading ON, the self tile showing video,
+     * and every sender holding null: the camera button silently doing nothing, with no
+     * way back except toggling twice more.
+     *
+     * `camOn` is the single source of truth for what the user has asked for and it is
+     * written synchronously at the top of `setCam`, so re-reading it here asks exactly
+     * the right question — no epoch counter, and nothing for a second in-flight
+     * transition to invalidate. Re-publish rather than stop; the track was never
+     * stopped and the pipeline was never paused, so the camera is still whole. */
+    if (camOn) {
+      if (!screenSharing) {
+        const back = currentCameraVideoTrack();
+        if (back) { try { await replaceVideoEverywhere(back); } catch { /* */ } }
+      }
+      diag("camera stop aborted — turned back on");
+      return;
     }
     const cam = localStream.getVideoTracks();
     if (!cam.length) return;
@@ -6708,7 +6802,11 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     unprimeAutoPip(); void exitPip(); // leave PiP + stop priming when the call ends
     stopStatsSampler();
     teardownSpeakerMonitor();
-    teardownLocalLevelMonitor();
+    /* The LOCAL level monitor is NOT torn down here any more — `releaseLocalMedia`
+       below owns it, because it is a tap on the local capture and the third release
+       path (the backgrounded-idle sweep) does not come through this function. Two
+       callers would be two chances for one of them to be the one that forgets, which
+       is how the sweep came to leave a live mic graph open in the first place. */
     resetSpeakerView();
     // Clear leftover tiles so an idle/parked grid doesn't keep dead srcObjects.
     const grid = $("videoGrid"); if (grid) grid.innerHTML = "";
@@ -7231,9 +7329,8 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       screenBusy = false;
       // Engine teardown (logout / unmount): free the camera + mic and the filter
       // pipeline through the shared helper (v2.99.36).
-      releaseLocalMedia("engine-destroy");
+      releaseLocalMedia("engine-destroy"); // …which also closes the mic level-meter graph
       teardownSpeakerMonitor();
-      teardownLocalLevelMonitor();
       stopStatsSampler();
       teardownPip();
       if (callResizeObs) { try { callResizeObs.disconnect(); } catch { /* */ } callResizeObs = null; }
