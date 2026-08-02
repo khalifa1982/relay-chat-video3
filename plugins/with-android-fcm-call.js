@@ -193,6 +193,25 @@ class RelayCallFcmService : FirebaseMessagingService() {
 
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(channel)
+
+            // Messages channel — FCM notification-type messages use this
+            val msgChannel = NotificationChannel(
+                "messages",
+                "Messages",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Chat message notifications"
+                setSound(
+                    android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
+                    AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                        .build()
+                )
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 250, 250, 250)
+            }
+            nm.createNotificationChannel(msgChannel)
         }
     }
 }

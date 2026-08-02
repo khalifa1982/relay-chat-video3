@@ -292,3 +292,9 @@
 - [x] Added @react-native-firebase/app + @react-native-firebase/messaging + FirebaseApp.configure()
 - [x] No JS-side changes needed — native plugin injects directly into WebView
 - [x] tsc clean + 65 tests pass
+
+## Round 30 — Android Message Notification Channel
+- [x] Add "messages" NotificationChannel (IMPORTANCE_HIGH, default sound, vibration)
+- [x] FCM notification-type messages with channel_id:"messages" will auto-display by OS
+- [x] No additional app code needed per §4 — OS handles notification display
+- [x] tsc clean + 65 tests pass
