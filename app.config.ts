@@ -165,6 +165,10 @@ const config: ExpoConfig = {
     [
       "expo-build-properties",
       {
+        ios: {
+          useFrameworks: "static",
+          deploymentTarget: "15.0",
+        },
         android: {
           buildArchs: ["armeabi-v7a", "arm64-v8a"],
           minSdkVersion: 24,
