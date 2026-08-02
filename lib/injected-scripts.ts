@@ -287,16 +287,25 @@ export const CALL_WATCH_JS = `(() => {
           // Notify native shell that the call is truly over (mic release trigger)
           try {
             if (window.RelayNative && window.RelayNative.postMessage) {
-              window.RelayNative.postMessage(JSON.stringify({ type: 'callEnded' }));
+              window.RelayNative.postMessage(JSON.stringify({ type: 'callEnded', callId: (window.__relayNativeCallId || '') }));
             } else if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.RelayNative) {
-              window.webkit.messageHandlers.RelayNative.postMessage(JSON.stringify({ type: 'callEnded' }));
+              window.webkit.messageHandlers.RelayNative.postMessage(JSON.stringify({ type: 'callEnded', callId: (window.__relayNativeCallId || '') }));
             }
           } catch (e) {}
           // Also send via ReactNativeWebView for RN-side handling
           try {
             window.ReactNativeWebView &&
               window.ReactNativeWebView.postMessage(
-                JSON.stringify({ type: 'webCallEnded', callId: '' })
+                // The callId the native side told us about when the call was
+                // ANSWERED. It used to send '' unconditionally, and every consumer
+                // rejects or misroutes an empty id — so a CallKit call answered
+                // from a VoIP push was never reported as ended, and it then
+                // blocked later calls. Falls back to '' so the native
+                // endAllCalls() path still fires when we genuinely have no id.
+                JSON.stringify({
+                  type: 'webCallEnded',
+                  callId: (window.__relayNativeCallId || '')
+                })
               );
           } catch (e) {}
         }
@@ -723,6 +732,24 @@ export const RELAY_NATIVE_BRIDGE_JS = `(() => {
   try {
     if (window.__relayNativeBridge) return;
     window.__relayNativeBridge = true;
+
+    // Remember the call id the NATIVE side is tracking, so the call-end signal can
+    // name the call it is ending. Without this the shell sent callId:'' and every
+    // consumer rejected or misrouted it, leaving a CallKit call answered from a
+    // VoIP push never reported as ended — which then blocked later calls.
+    try {
+      window.addEventListener('relay:native', function (e) {
+        try {
+          var d = (e && e.detail) || {};
+          if ((d.type === 'callAnswered' || d.type === 'callIncoming') && d.callId) {
+            window.__relayNativeCallId = String(d.callId);
+          }
+          if (d.type === 'callDeclined' || d.type === 'callEnded') {
+            window.__relayNativeCallId = null;
+          }
+        } catch (err) {}
+      });
+    } catch (e) {}
 
     // Shim: window.RelayNative.postMessage(jsonString)
     // On Android: the native @JavascriptInterface "RelayNative" is already bound

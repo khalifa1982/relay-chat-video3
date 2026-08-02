@@ -166,6 +166,11 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessa
   func setupCallKit() {
     let config = CXProviderConfiguration(localizedName: "RELAY")
     config.supportsVideo = true
+    // Do NOT write RELAY calls into the stock Phone app's Recents. The default is
+    // true, and the caller string comes verbatim from the VoIP push payload — so
+    // every call, spoofed or not, was persisted into the system call history where
+    // the user cannot tell it apart from a real phone call.
+    config.includesCallsInRecents = false
     config.maximumCallsPerCallGroup = 1
     config.maximumCallGroups = 1
     callKitProvider = CXProvider(configuration: config)
@@ -173,7 +178,7 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessa
     callKitController = CXCallController()
 
     // Also setup react-native-callkeep natively so didLoadWithEvents works
-    RNCallKeep.setup(["appName": "RELAY", "supportsVideo": true, "maximumCallGroups": 1, "maximumCallsPerCallGroup": 1] as [String: Any])
+    RNCallKeep.setup(["appName": "RELAY", "supportsVideo": true, "maximumCallGroups": 1, "maximumCallsPerCallGroup": 1, "includesCallsInRecents": false] as [String: Any])
   }
 
   /// Observe AVAudioSession route changes → inject into WebView

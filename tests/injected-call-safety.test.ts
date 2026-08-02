@@ -128,3 +128,41 @@ describe("an incoming-call ring cannot be raised by page text", () => {
     expect(SRC).toMatch(/#ringOverlay\.active #ringWho/);
   });
 });
+
+describe("the call-end signal names the call it is ending", () => {
+  /* Both end-of-call notifications sent `callId: ''` (or no field), and every
+   * consumer rejects or misroutes an empty id — so a CallKit call answered from a
+   * VoIP push was never reported as ended, and it then blocked later calls. */
+
+  it("no emitter hardcodes an empty callId", () => {
+    expect(SRC).not.toMatch(/type: 'webCallEnded', callId: ''/);
+    expect(SRC).not.toMatch(/JSON\.stringify\(\{ type: 'callEnded' \}\)/);
+  });
+
+  it("all three emitters carry the tracked id", () => {
+    const hits = SRC.match(/window\.__relayNativeCallId \|\| ''/g) || [];
+    expect(hits.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("the id is captured when the native side answers, and cleared when it ends", () => {
+    // Otherwise the tracked value is always empty and nothing changes.
+    expect(SRC).toMatch(/d\.type === 'callAnswered'[\s\S]{0,120}__relayNativeCallId = String\(d\.callId\)/);
+    expect(SRC).toMatch(/d\.type === 'callDeclined' \|\| d\.type === 'callEnded'[\s\S]{0,80}__relayNativeCallId = null/);
+  });
+
+  it("still falls back to '' so the native endAllCalls path can fire", () => {
+    expect(SRC).toMatch(/__relayNativeCallId \|\| ''/);
+  });
+});
+
+describe("iOS calls stay out of the system Phone history", () => {
+  const IOS = readFileSync(resolve(__dirname, "..", "plugins/with-ios-voip-callkit.js"), "utf8");
+
+  it("includesCallsInRecents is disabled in both configs", () => {
+    // Defaults to true, and the caller string comes verbatim from the VoIP push —
+    // so every call, spoofed or not, was written into the stock Recents list where
+    // it is indistinguishable from a real phone call.
+    expect(IOS).toMatch(/config\.includesCallsInRecents = false/);
+    expect(IOS).toMatch(/"includesCallsInRecents": false/);
+  });
+});
