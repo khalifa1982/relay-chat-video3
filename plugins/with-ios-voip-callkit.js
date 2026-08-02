@@ -96,6 +96,19 @@ import FirebaseMessaging`;
   private var callIdToUUID: [String: UUID] = [:]
   /// Track whether the current call is video (for audio session mode)
   private var currentCallIsVideo: Bool = false
+
+  // ─── APNs Alert Token (overrides must be in class body, not extension) ────
+  override func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    // Pass APNs token to Firebase Messaging so it can generate an FCM token
+    Messaging.messaging().apnsToken = deviceToken
+    NSLog("[RELAY Alert] APNs device token registered with Firebase Messaging")
+    super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+  }
+
+  override func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+    NSLog("[RELAY Alert] Failed to register for remote notifications: %@", error.localizedDescription)
+    super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
+  }
 `;
 
     if (!contents.includes("voipRegistry")) {
@@ -310,19 +323,8 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessa
     }
   }
 
-  // ─── APNs Alert Token (for message notifications via Firebase Messaging) ────
-  func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-    // Pass APNs token to Firebase Messaging so it can generate an FCM token
-    Messaging.messaging().apnsToken = deviceToken
-    NSLog("[RELAY Alert] APNs device token registered with Firebase Messaging")
-  }
-
-  func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-    NSLog("[RELAY Alert] Failed to register for remote notifications: %@", error.localizedDescription)
-  }
-
   // MessagingDelegate — called when FCM token is available or refreshed
-  public func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+  func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
     guard let fcmToken = fcmToken else { return }
     NSLog("[RELAY Alert] FCM token received: %@", String(fcmToken.prefix(12)) + "...")
     // Inject the alert FCM token into WebView for the web app to register with its server
