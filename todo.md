@@ -7,6 +7,8 @@
 - [x] Both fixed by re-reading `camOn` after the await; the abort re-publishes so senders do not keep the null, and never over a live screen share
 - [x] #160's blind spot: the exits ABOVE the removal loop went AROUND the stop, so a throw after `getUserMedia` resolved left a mic nothing could ever release
 - [x] One `finally` rather than a stop per exit — five exits below it, and the next one added inherits the release
+- [x] `releaseLocalMedia` now tears down the mic's level-meter AudioContext too — `hangUp` and `destroy` did, the backgrounded-while-idle sweep did not, so the one release written for "some path left a capture behind" left a running context holding a source node on the mic track
+- [x] `micTeardownGaps.test.ts` (12) — the test for the mic half, written after the source commit
 - [x] `Dialer.tsx` prose fixup missed from v2.106.98's pathspec (two references to the renamed `lastSeen.ts`)
 - [x] `mediaEdit.test.ts` (45) commits the test for the `MediaEditSheet` v2.106.98 had to commit without it
 - [ ] Nobody has double-tapped the camera button on a real handset
