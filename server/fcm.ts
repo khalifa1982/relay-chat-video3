@@ -218,12 +218,120 @@ export function tokenIsDead(status: number, body: string): boolean {
 }
 
 /**
- * Send a DATA message to each FCM token. Payload values must be strings
- * (FCM data-message contract). Best-effort; never throws.
+ * The OS-DISPLAYED half of a push, supplied only for kinds that want a banner.
+ *
+ * ── WHY THIS IS AN ARGUMENT AND NOT DERIVED FROM `data` (2026-08-02) ─────────
+ * Because getting it wrong is destructive in one specific direction, and the
+ * caller is the only place that can see the whole rule. FCM invokes the app's
+ * `onMessageReceived` for a DATA-ONLY message even when the app is backgrounded
+ * or dead — which is exactly how `RelayFcmService` renders the lock-screen
+ * fullScreenIntent ring (v2.86). Add a `notification` block to that same message
+ * and Android displays it ITSELF and does NOT call `onMessageReceived` while
+ * backgrounded, so the ring silently degrades to an ordinary banner: no
+ * full-screen screen, no ringtone, nothing to answer. A ring must therefore stay
+ * data-only forever, and the decision lives at the fan-out in `webPush.ts` where
+ * `payload.kind` is already the discriminator, with a test pinning it.
+ *
+ * Omitting it is byte-identical to the pre-2026-08-02 payload, so nothing that
+ * works today changes shape.
  */
+export interface FcmDisplay {
+  title: string;
+  body: string;
+  /**
+   * One id per conversation. It is the collapse key on Android AND the
+   * `apns-collapse-id` / `thread-id` on iOS, so ten rapid messages in one thread
+   * replace each other into a single banner instead of stacking ten — the
+   * spec's "a busy group collapses, not spams". Bounded because APNs refuses a
+   * collapse id over 64 bytes and would reject the whole push.
+   */
+  collapseId?: string;
+}
+
+/**
+ * Send a message to each FCM token: a DATA message always, plus the OS-displayed
+ * `notification` / `apns` blocks when `display` is supplied. Data payload values
+ * must be strings (FCM data-message contract). Best-effort; never throws.
+ *
+ * ONE PAYLOAD SERVES BOTH PLATFORMS. FCM v1 fans a single message out to APNs for
+ * an iOS-registered token and to the OS for an Android one, which is why an iPhone
+ * needs no bespoke alert sender here — `server/apnsVoip.ts` stays ring-only, as it
+ * must (a VoIP push carries no `aps.alert`, and Apple penalises non-call use of
+ * PushKit).
+ */
+/**
+ * The FCM v1 `message` object for one token. PURE, and exported for exactly that
+ * reason: the one rule that must never break here — a RING carries no
+ * `notification` block, or Android stops calling `onMessageReceived` while
+ * backgrounded and the lock-screen ring silently becomes a banner — is a property
+ * of this payload, and a source pin on the sender could only assert that some text
+ * appears near some other text. Driving it needs no service account and no network.
+ */
+export function buildFcmMessage(
+  token: string,
+  data: Record<string, string>,
+  display?: FcmDisplay | null
+): Record<string, unknown> {
+  // Bounded to APNs' documented 64-byte ceiling for `apns-collapse-id`, and empty
+  // is dropped rather than sent: an over-long or blank id makes APNs refuse the
+  // WHOLE push, which would turn a cosmetic grouping detail into no notification
+  // at all.
+  const collapse =
+    display?.collapseId && display.collapseId.length <= 64 ? display.collapseId : "";
+  return {
+    token,
+    data,
+    ...(display ? { notification: { title: display.title, body: display.body } } : {}),
+    // A ring's TTL is the SHARED bound, not a literal chosen here: this line
+    // carried a bare "70s" while APNs carried 45, so one event had two lifetimes
+    // and an iPhone reconnecting at t=50s got nothing where an Android rang.
+    // Everything that is not a ring keeps the long TTL — a message or a
+    // missed-call notice is still worth delivering an hour later, which a ring is
+    // not.
+    android: {
+      priority: "HIGH",
+      ttl: data.kind === "incoming-call" ? `${CALL_PUSH_EXPIRY_SECONDS}s` : "3600s",
+      ...(display && collapse ? { collapse_key: collapse } : {}),
+      ...(display
+        ? {
+            // `channel_id` names a channel the shell may not have declared;
+            // Android falls back to the app's default rather than dropping the
+            // notification, so this is safe to send ahead of a shell that adds one.
+            notification: {
+              channel_id: "messages",
+              ...(collapse ? { tag: collapse } : {}),
+            },
+          }
+        : {}),
+    },
+    ...(display
+      ? {
+          apns: {
+            headers: {
+              // `alert` — NEVER `voip`. A VoIP push on the alert topic is both
+              // undeliverable-as-a-banner and grounds for Apple to kill the app;
+              // PushKit is calls only (server/apnsVoip.ts).
+              "apns-push-type": "alert",
+              "apns-priority": "10",
+              ...(collapse ? { "apns-collapse-id": collapse } : {}),
+            },
+            payload: {
+              aps: {
+                alert: { title: display.title, body: display.body },
+                sound: "default",
+                ...(collapse ? { "thread-id": collapse } : {}),
+              },
+            },
+          },
+        }
+      : {}),
+  };
+}
+
 export async function sendFcmData(
   tokens: string[],
-  data: Record<string, string>
+  data: Record<string, string>,
+  display?: FcmDisplay | null
 ): Promise<FcmSendResult> {
   const out: FcmSendResult = { delivered: 0, invalidTokens: [] };
   const sa = fcmConfig();
@@ -237,25 +345,7 @@ export async function sendFcmData(
         const res = await fetch(url, {
           method: "POST",
           headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: {
-              token,
-              data,
-              // A ring's TTL is the SHARED bound, not a literal chosen here: this
-              // line carried a bare "70s" while APNs carried 45, so one event had
-              // two lifetimes and an iPhone reconnecting at t=50s got nothing
-              // where an Android rang. Everything that is not a ring keeps the
-              // long TTL — a message or a missed-call notice is still worth
-              // delivering an hour later, which a ring is not.
-              android: {
-                priority: "HIGH",
-                ttl:
-                  data.kind === "incoming-call"
-                    ? `${CALL_PUSH_EXPIRY_SECONDS}s`
-                    : "3600s",
-              },
-            },
-          }),
+          body: JSON.stringify({ message: buildFcmMessage(token, data, display) }),
         });
         if (res.ok) {
           out.delivered++;

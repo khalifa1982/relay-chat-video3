@@ -1,5 +1,122 @@
 # Project TODO
 
+## v2.107.8 — A MESSAGE FINALLY SHOWS ON THE PHONE, AND THE CALL PUSH MUST NOT COPY IT
+
+The owner uploaded `relaymessagenotifications.md`: a chat message arriving while the
+app is minimised or killed shows nothing on the phone. Audited clause by clause
+against source before changing anything, which is what kept this small.
+
+**MOST OF THE SPEC WAS ALREADY SHIPPED, and saying which is the useful half of the
+audit.** The send-path hook, the offline gate, per-conversation collapse, the 3600s
+TTL (explicitly split from the 70s ring bound), `priority: HIGH`, the multi-device
+fan-out, the `kind` registry (richer than the spec's three — `webpush | fcm | expo |
+apns | apns-voip`), the master push switch, "never push the sender", and "NEVER
+messages over VoIP" all exist and are pinned (v2.99.42 R7 GAP1, v2.105.11,
+v2.105.13). The offline gate is also STRONGER than the spec asks: it uses
+`presenceNeedsNotification`, so a BACKGROUNDED app is pushed too — a live socket
+alone is not enough (v2.99.92).
+
+**FOUR THINGS WERE GENUINELY ABSENT.**
+
+**(1) FCM WAS DATA-ONLY, SO NOTHING DISPLAYED IT.** A data-only message is delivered
+to the app's `FirebaseMessagingService` and displayed by nobody else. RELAY's own
+shell has one (`RelayFcmService` → `showGeneric`), but the shipping Expo shell does
+not — so on that phone the push arrived, was accepted by FCM, and showed nothing.
+That is the reported symptom exactly. A `notification` block is rendered by the OS
+with no app code at all, which is what makes this work on both shells.
+
+**(2) THE RING MUST NOT GET THE SAME TREATMENT, and this is the one line in the
+release that would be destructive to get wrong.** For a message carrying
+`notification`, Android displays it ITSELF and does **not** call
+`onMessageReceived` while backgrounded. The lock-screen ring depends on that
+callback to raise `IncomingCallActivity` (v2.86), so adding the block to a ring
+would silently replace a full-screen CallKit-style screen with an ordinary banner —
+no ringtone, nothing to answer, and the push still reporting delivered. Nothing in
+any log would show it. So the decision lives at the ONE place `payload.kind` is
+already the discriminator, and `buildFcmMessage` was extracted as a PURE function
+so the property is driven rather than pinned by a source match.
+
+**(3) iOS GOT NOTHING, because there was no `apns` block at all.** Added — `alert`
+push type, priority 10, `apns-collapse-id` + `thread-id` so a group stacks into one
+thread. **This needs no bespoke APNs alert sender and no new kind**: an
+iOS-registered FCM token already classifies as `fcm` by shape, so FCM v1 fans one
+payload to both platforms. `server/apnsVoip.ts` stays ring-only, as it must.
+Recorded as a pin rather than left implicit, because the tempting "fix" — trusting a
+declared `alert` kind — would let a RAW APNs hex token be routed to FCM, where it is
+silently undeliverable; `apns-voip` remains the ONE declaration that is trusted,
+because those two tokens are indistinguishable by shape and mislabelling costs only
+the declarer their own ring.
+
+**(4) A GROUP PUSH NAMED THE SENDER, so it said who spoke and never where.** Titled
+by the group now, with the sender leading the body — an unnamed group falls back to
+the sender rather than to nothing, because a banner with no name in it is worse than
+one naming a person who really did send it.
+
+**THE BODY NOW QUOTES THE MESSAGE, WHICH REVERSES A RULE THIS CODE CITED IN ITS OWN
+COMMENT.** v2.99.42 made the push content-free under the owner's rule for the
+sibling EMAIL ("WITHOUT the content"); the spec asks for a ~120-char preview, and a
+later instruction wins. It is written down rather than swapped quietly because it is
+**privacy-visible**: from this release the first line of a message is readable on a
+lock screen by whoever picks the phone up, and it persists in the notification
+centre. **THE EMAIL IS UNCHANGED** and still content-free — an inbox holds the
+disclosure indefinitely, a banner does not. Two channels, two rules, pinned in both
+directions.
+
+**AND ONE EXCEPTION THAT IS CORRECTNESS RATHER THAN CAUTION, which the spec does not
+mention: AN EXPIRING MESSAGE IS NEVER QUOTED.** A view-once message's whole promise
+is that the content stops existing once seen — and a notification OUTLIVES it,
+sitting in the notification centre after the bubble has burned, with nothing left in
+the app to correspond to it. Quoting one would defeat the feature the push is about.
+
+**18 of 18 tripwires verified by MUTATION** off a confirmed-green baseline from
+byte-exact backups, the mutator aborting unless its target occurs exactly once and
+treating a changed test TOTAL as a harness failure; all five sources byte-identical
+afterwards — including a ring given a `notification` block, the display block never
+reaching the sender, `apns-push-type` flipped to `voip`, the collapse-id bound
+removed, a group re-titled by the sender, and the email taught to quote.
+
+**ONE SURVIVED THE FIRST RUN, AND IT WAS THE WORST AVAILABLE GAP IN MY OWN TEST.**
+The assertion was `expect(call).toMatch(/meta:/)` — which `meta: null` satisfies —
+so a mutation making the expiring-message rule **completely inert** passed the whole
+suite: a view-once message's content quoted on a lock screen, outliving its own
+burn, with every test green. Pinning that a KEY appears says nothing about what is
+passed. It requires `meta: input.meta` now, and it bites.
+
+**TWO PRE-EXISTING PINS REWRITTEN, and the first froze exactly what the owner asked
+to change.** `roundsGaps.test.ts` carried *"carries the sender's name but NOT a word
+of the message (owner's rule)"*, requiring the fixed sentence verbatim and forbidding
+`trimmedBody` — right for v2.99.42, and now an assertion that forbids the change
+while saying nothing about the properties that survive. A test that freezes what
+somebody is asking you to change is worse than no test, because it argues back. The
+second froze the voicemail exclusion's exact spelling, which legitimately gained a
+conjunct (skip the conversation-header read when nobody is offline, so an all-online
+conversation costs no extra query).
+
+**TWO OF MY OWN ASSERTIONS WERE WRONG ABOUT THE CODE**, each caught by failing on
+correct source: `messageWaitingHtml` lives in `v2routers.ts` beside its call site,
+not in `email.ts`; and a fixed 900-character slice of `getConversationPushHeader` ran
+into `deleteMessage`, which legitimately uses `.select()` — the recurring fixed-slice
+fragility, now bounded by the function's own end with the slice asserted real first.
+
+**FLAGGED FOR THE OWNER, NOT DECIDED HERE: notification-type makes per-device MUTE
+and DND structurally unenforceable on Android.** Both live in localStorage with a
+Cache Storage mirror the service worker reads, and the OS displays a notification
+message with no app code running. This does not regress anything — the native path
+already ignored mute, because `RelayFcmService` displays unconditionally — but it
+makes it unfixable client-side. Honouring mute for native means moving the decision
+SERVER-SIDE, and `conversation_participants.mutedUntil` has existed unwritten
+precisely because v2.99.42 and v2.103.0 chose per-device on purpose. Two owner
+decisions in genuine tension; theirs to settle.
+
+**NOT VERIFIED ON A HANDSET, said plainly.** There is no phone here and FCM/APNs are
+unreachable from this sandbox, so what is proven is that both platforms now receive a
+displayable payload from one message, that a ring cannot acquire one, and that an
+expiring message is never quoted — not that the owner's next message banners.
+
+`server/messagePush.ts` + `server/messageNotifications.test.ts` (36). No schema
+change, no new dependency, no new env var. 6385 tests.
+
+
 ## v2.107.7 — THE KNEE IS MEASURED, AND IT SAYS THE CAP IS ON THE WRONG THING
 
 The owner's next SFU task, verbatim: *"drive one node to the degradation knee for voice rooms
