@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 
 import type { ApkUpdateStatus } from "@/hooks/use-apk-update";
@@ -14,6 +14,8 @@ interface Props {
   onApply?: () => void;
   /** When true, the update is required: show a full blocking overlay. */
   mandatory?: boolean;
+  /** The failure text from the update hook, shown when status === "error". */
+  error?: string | null;
 }
 
 const COLORS = {
@@ -41,8 +43,32 @@ export function ApkUpdateBanner({
   onDownload,
   onApply,
   mandatory = false,
+  error = null,
 }: Props) {
   const widthAnim = useRef(new Animated.Value(0)).current;
+  /* THE ESCAPE HATCH (security/availability fix).
+   *
+   * `mandatory` comes from an UNAUTHENTICATED manifest field, and this overlay is
+   * full-screen with `pointerEvents="auto"` and no dismiss — so any permanent
+   * failure in the update chain (host unreachable, a hash that keeps
+   * mismatching, Android refusing the install) left the entire app unusable
+   * FOREVER, including the ability to make a call. One bad manifest value bricked
+   * every installation.
+   *
+   * A forced update is still enforced while it can actually succeed: the way out
+   * appears only after an attempt has FAILED, and only after more than one, so a
+   * single transient blip does not hand out a bypass. Dismissal lasts for this
+   * app session — the overlay returns on next launch if the update is still due. */
+  const [failures, setFailures] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+  const wasError = useRef(false);
+
+  useEffect(() => {
+    const isError = status === "error";
+    // Count each TRANSITION into the error state, not every render while in it.
+    if (isError && !wasError.current) setFailures((n) => n + 1);
+    wasError.current = isError;
+  }, [status]);
 
   useEffect(() => {
     Animated.timing(widthAnim, {
@@ -60,6 +86,8 @@ export function ApkUpdateBanner({
   // BuildStatusRow. The banner is now reserved exclusively for MANDATORY
   // updates, where we take over the screen so the user must update to continue.
   if (!mandatory) return null;
+  if (dismissed) return null;
+  const canSkip = status === "error" && failures >= 2;
 
   {
     return (
@@ -115,6 +143,23 @@ export function ApkUpdateBanner({
               </Text>
             </Pressable>
           )}
+          {/* Show WHY it failed — the overlay used to state only that an update
+              was required, so a user stuck behind it had nothing to act on. */}
+          {status === "error" && error ? (
+            <Text style={styles.errorText} numberOfLines={3}>
+              {error}
+            </Text>
+          ) : null}
+          {canSkip ? (
+            <Pressable
+              onPress={() => setDismissed(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Continue without updating"
+              style={({ pressed }) => [styles.skip, pressed && { opacity: 0.7 }]}
+            >
+              <Text style={styles.skipText}>Continue without updating</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
     );
@@ -192,5 +237,24 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontSize: 20,
     fontWeight: "800",
+  },
+  errorText: {
+    marginTop: 10,
+    color: "#ffb4a9",
+    fontSize: 13,
+    textAlign: "center",
+  },
+  skip: {
+    marginTop: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44, // platform minimum touch target
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  skipText: {
+    color: "#cbd5e1",
+    fontSize: 14,
+    textDecorationLine: "underline",
   },
 });

@@ -34,6 +34,7 @@
 import * as FileSystem from "expo-file-system/legacy";
 
 import { Sha256, base64ToBytes } from "./sha256";
+import { verifyTimeoutMsFor } from "./apk-update-config";
 
 // Re-export the pure helpers so existing import sites keep working.
 export { Sha256, base64ToBytes } from "./sha256";
@@ -42,20 +43,10 @@ export { Sha256, base64ToBytes } from "./sha256";
 // finish materially sooner than the previous 2 MiB.
 const CHUNK_BYTES = 4 * 1024 * 1024;
 
-/** Floor for the verification budget, for a small file. */
-const VERIFY_TIMEOUT_MIN_MS = 20_000;
-/** Additional budget per MiB. A flat 10s could not hash a 53 MB APK on any real
- *  device — the check "timed out" essentially always, which is why it had become
- *  decorative. Scaling with size means it normally COMPLETES. */
-const VERIFY_TIMEOUT_PER_MIB_MS = 1_500;
-/** Absolute ceiling so a pathological file cannot hang the update UI. */
-const VERIFY_TIMEOUT_MAX_MS = 180_000;
+// The verification budget lives in apk-update-config.ts with the other pure
+// helpers, so it is unit-testable: this module imports expo-file-system, which
+// cannot be resolved in the node test environment.
 
-export function verifyTimeoutMsFor(sizeBytes: number): number {
-  const mib = Math.max(0, sizeBytes) / (1024 * 1024);
-  const budget = VERIFY_TIMEOUT_MIN_MS + mib * VERIFY_TIMEOUT_PER_MIB_MS;
-  return Math.min(VERIFY_TIMEOUT_MAX_MS, Math.round(budget));
-}
 
 export type VerifyResult = {
   /** Hash matched (true), did not match (false), or was not computed (null). */

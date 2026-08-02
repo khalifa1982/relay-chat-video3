@@ -32,6 +32,7 @@ export default function HomeScreen() {
     installedBuild,
     installedVersionName,
     lastReason,
+    error,
     lastCheckAt,
     pollIntervalMs,
     check,
@@ -85,6 +86,7 @@ export default function HomeScreen() {
             progress={progress}
             versionName={manifest?.versionName}
             mandatory={mandatory}
+            error={error}
             onDownload={startDownload}
             onApply={() => void applyUpdate()}
           />
