@@ -59,7 +59,9 @@ function withVoipAppDelegate(config) {
     const importsToAdd = `import PushKit
 import CallKit
 import WebKit
-import AVFoundation`;
+import AVFoundation
+import FirebaseCore
+import FirebaseMessaging`;
 
     // Insert after the last existing import line
     const importInsertionPoint = contents.lastIndexOf("import ");
@@ -120,6 +122,12 @@ import AVFoundation`;
     setupCallKit()
     setupAudioRouteObserver()
 
+    // RELAY: Register for alert (message) push notifications via Firebase Messaging
+    FirebaseApp.configure()
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+    UIApplication.shared.registerForRemoteNotifications()
+    Messaging.messaging().delegate = self
+
 `;
 
     if (!contents.includes("setupVoIPPush()")) {
@@ -133,7 +141,7 @@ import AVFoundation`;
     const voipExtension = `
 
 // MARK: - RELAY VoIP Push + CallKit Extension
-extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessageHandler {
+extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessageHandler, MessagingDelegate {
 
   // ─── Setup ────────────────────────────────────────────────────────────
   func setupVoIPPush() {
@@ -299,6 +307,28 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessa
       }
     } catch {
       NSLog("[RELAY VoIP] Failed to set audio route '%@': %@", route, error.localizedDescription)
+    }
+  }
+
+  // ─── APNs Alert Token (for message notifications via Firebase Messaging) ────
+  func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    // Pass APNs token to Firebase Messaging so it can generate an FCM token
+    Messaging.messaging().apnsToken = deviceToken
+    NSLog("[RELAY Alert] APNs device token registered with Firebase Messaging")
+  }
+
+  func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+    NSLog("[RELAY Alert] Failed to register for remote notifications: %@", error.localizedDescription)
+  }
+
+  // MessagingDelegate — called when FCM token is available or refreshed
+  public func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+    guard let fcmToken = fcmToken else { return }
+    NSLog("[RELAY Alert] FCM token received: %@", String(fcmToken.prefix(12)) + "...")
+    // Inject the alert FCM token into WebView for the web app to register with its server
+    let js = "window.dispatchEvent(new CustomEvent('relay:native',{detail:{type:'pushToken',kind:'alert',token:'\\(fcmToken)'}}));"
+    DispatchQueue.main.async {
+      self.findWebView()?.evaluateJavaScript(js, completionHandler: nil)
     }
   }
 

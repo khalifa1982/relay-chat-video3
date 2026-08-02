@@ -171,6 +171,9 @@ const config: ExpoConfig = {
         },
       },
     ],
+    // Firebase: core + messaging for alert push tokens (iOS message notifications)
+    "@react-native-firebase/app",
+    "@react-native-firebase/messaging",
     // Local plugin: enable Android picture-in-picture for active calls.
     "./plugins/with-android-pip.js",
     // Local plugin: native Android FCM service for incoming call ringing when app is killed.

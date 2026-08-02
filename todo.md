@@ -280,3 +280,15 @@
 - [x] §3: iOS — handle callEnded message type alongside webCallEnded
 - [x] Verify both callEnded and webCallEnded trigger full teardown on both platforms
 - [x] tsc clean + 65 tests pass
+
+## Round 29 — iOS Message Notifications (§3 from relay-message-notifications.md)
+
+- [x] Add UNUserNotificationCenter.requestAuthorization in AppDelegate didFinishLaunching
+- [x] Add UIApplication.shared.registerForRemoteNotifications()
+- [x] Add didRegisterForRemoteNotificationsWithDeviceToken → Firebase Messaging.apnsToken
+- [x] Add MessagingDelegate: messaging(_:didReceiveRegistrationToken:) → inject FCM token into WebView
+- [x] Send FCM alert token to WebView via relay:native CustomEvent with kind:'alert'
+- [x] Ensure existing VoIP token flow (kind:'apns-voip') is untouched
+- [x] Added @react-native-firebase/app + @react-native-firebase/messaging + FirebaseApp.configure()
+- [x] No JS-side changes needed — native plugin injects directly into WebView
+- [x] tsc clean + 65 tests pass
