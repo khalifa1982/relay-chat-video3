@@ -6,6 +6,20 @@ on:
   # the two-repo split lands, and so PRs targeting the web mainline get CI —
   # `pull_request` workflows are read from the BASE branch, so a PR into a branch
   # that is not listed here queues no checks at all.
+  #
+  # A SECOND WAY TO GET ZERO CHECKS, observed on PR #138 and worth 24 minutes of
+  # somebody's time: push the branch FIRST and open the PR afterwards. The push
+  # itself matches nothing here (a feature branch is deliberately not in the list
+  # above), and opening the PR through the API / App integration did not queue a
+  # run either — `get_status` answered `pending` with `total_count: 0`, i.e. no
+  # check had been *reported*, which is not the same thing as a check failing.
+  # Every run this branch has ever had came from a push made while a PR was
+  # already OPEN, i.e. from `synchronize`.
+  #
+  # So the order matters: open the PR, then push. If a PR is already sitting there
+  # with no checks, one more commit is what starts them — and note that "no checks"
+  # and "checks passed" are indistinguishable if you only look at whether anything
+  # is red. Read the count, not the colour.
   push:
     branches: [main, master, web-app-main]
   pull_request:
