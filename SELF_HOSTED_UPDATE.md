@@ -117,13 +117,36 @@ As of build 9, every published release embeds a SHA-256 of the APK in
 computes this automatically.
 
 On the device, after the APK finishes downloading, the app recomputes the
-file's SHA-256 (streamed in 1 MiB windows so the ~53 MB file never sits fully in
+file's SHA-256 (streamed in 4 MiB windows so the ~53 MB file never sits fully in
 memory) and compares it to the manifest value. If they don't match, the
 download is deleted and the install is refused with a clear error — the app
 never hands a corrupted or tampered file to the Android installer.
 
-This is backward compatible: a manifest with no `sha256` field simply skips the
-check and installs as before, so older releases keep working.
+**`sha256` IS REQUIRED.** A manifest without a valid 64-hex digest is rejected
+outright, and no update is offered. This replaces the previous "a manifest with
+no `sha256` simply skips the check" behaviour, which meant that anyone able to
+rewrite `version.json` — a far smaller asset to tamper with than the APK — could
+disable verification by deleting one key. `publish-release.sh` has always emitted
+the field, so the normal release path is unaffected; a hand-written manifest now
+has to include it.
+
+### What the digest does and does not prove
+
+Worth being precise, because it is easy to over-trust:
+
+- The manifest and the APK are served by the **same host**, so the digest catches
+  a corrupt or partial download. It does not protect against a compromised
+  release host, which could simply publish a matching pair.
+- The real trust anchor is **Android's own signature enforcement**: the package
+  installer refuses an update whose signing certificate differs from the
+  installed app's, and refuses a versionCode downgrade.
+- Hashing 50+ MB in JavaScript is slow, so the check has a time budget that
+  scales with file size. If it cannot finish, the install is still allowed — but
+  the result is reported as UNVERIFIED rather than as a successful check. Once a
+  digest has actually **disagreed**, that allowance is withdrawn: the retry must
+  verify or it will not install.
+- The APK download URL is **pinned** to the compiled-in update origin. A manifest
+  naming any other host is ignored and the built-in URL is used instead.
 
 Manual hash (if you ever publish without the script):
 

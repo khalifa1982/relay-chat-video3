@@ -202,8 +202,19 @@ export function RelayWebView() {
       Linking.openURL(url).catch(() => {});
       return false;
     }
-    // Anything else (custom schemes, etc.) — let the WebView decide.
-    return true;
+    // DEFAULT DENY (audit fix). This used to `return true` — "let the WebView
+    // decide" — which made it the widest hole in the shell: a URL that is not
+    // internal, not mailto/tel/sms and not http(s) was LOADED. That is exactly
+    // `javascript:`, and also `file:`, `content:` and Android's `intent:`. So
+    // tightening isInternalUrl alone would have changed nothing; the fallback
+    // was the vulnerability.
+    //
+    // Refusing is safe here because every legitimate destination is already
+    // handled above: the RELAY site, about:blank, the three native schemes, and
+    // outbound links. Logged rather than silently dropped, so if a real flow
+    // turns out to need a scheme, it is diagnosable instead of just broken.
+    console.warn("[RELAY] refused navigation to an unsupported scheme:", url.slice(0, 80));
+    return false;
   }, []);
 
   // Receive messages from the injected scripts (version, call, ring).

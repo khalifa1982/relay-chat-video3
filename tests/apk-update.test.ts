@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+/** parseManifest now REQUIRES a digest (the owner confirmed the live
+ *  manifest carries one), so fixtures must supply a real 64-hex value. */
+const VALID_SHA = "e482dd5fdbe5eed4c5d3898b1282842013a3bd4af29f672c2d850ceef4e4b046";
+
 import {
   compareVersionNames,
   isMandatoryUpdate,
@@ -20,13 +24,13 @@ describe("parseManifest", () => {
       buildNumber: 5,
       versionName: "1.2.0",
       apkUrl,
-      notes: "Bug fixes",
-    });
+      notes: "Bug fixes", sha256: VALID_SHA });
     expect(m).toEqual({
       buildNumber: 5,
       versionName: "1.2.0",
       apkUrl,
       notes: "Bug fixes",
+      sha256: VALID_SHA,
     });
   });
 
@@ -36,30 +40,29 @@ describe("parseManifest", () => {
     const m = parseManifest({
       buildNumber: 5,
       versionName: "1.2.0",
-      apkUrl: "https://your-chat.io/update/app.apk",
-    });
+      apkUrl: "https://your-chat.io/update/app.apk", sha256: VALID_SHA });
     expect(m).not.toBeNull();
     expect(m?.apkUrl).toBeUndefined();
     expect(m?.buildNumber).toBe(5);
   });
 
   it("accepts numeric strings and floors them", () => {
-    const m = parseManifest({ buildNumber: "7" });
+    const m = parseManifest({ buildNumber: "7", sha256: VALID_SHA });
     expect(m?.buildNumber).toBe(7);
   });
 
   it("rejects invalid / missing build numbers", () => {
-    expect(parseManifest({})).toBeNull();
-    expect(parseManifest({ buildNumber: 0 })).toBeNull();
-    expect(parseManifest({ buildNumber: -3 })).toBeNull();
-    expect(parseManifest({ buildNumber: "abc" })).toBeNull();
+    expect(parseManifest({ sha256: VALID_SHA })).toBeNull();
+    expect(parseManifest({ buildNumber: 0, sha256: VALID_SHA })).toBeNull();
+    expect(parseManifest({ buildNumber: -3, sha256: VALID_SHA })).toBeNull();
+    expect(parseManifest({ buildNumber: "abc", sha256: VALID_SHA })).toBeNull();
     expect(parseManifest(null)).toBeNull();
     expect(parseManifest("nope")).toBeNull();
   });
 });
 
 describe("isUpdateAvailable", () => {
-  const m = (b: number) => parseManifest({ buildNumber: b });
+  const m = (b: number) => parseManifest({ buildNumber: b, sha256: VALID_SHA });
 
   it("is true when server build is higher", () => {
     expect(isUpdateAvailable(1, m(2))).toBe(true);
@@ -99,22 +102,22 @@ describe("compareVersionNames", () => {
 describe("isUpdateAvailable with version names", () => {
   it("detects an update by version name even if buildNumber is equal", () => {
     // Real-world case: 1.0.4 installed, server says 1.0.5, same/lower versionCode.
-    const m = parseManifest({ buildNumber: 4, versionName: "1.0.5" });
+    const m = parseManifest({ buildNumber: 4, versionName: "1.0.5", sha256: VALID_SHA });
     expect(isUpdateAvailable(4, m, "1.0.4")).toBe(true);
   });
 
   it("reports up-to-date when version names match", () => {
-    const m = parseManifest({ buildNumber: 4, versionName: "1.0.5" });
+    const m = parseManifest({ buildNumber: 4, versionName: "1.0.5", sha256: VALID_SHA });
     expect(isUpdateAvailable(4, m, "1.0.5")).toBe(false);
   });
 
   it("does not offer a downgrade by version name", () => {
-    const m = parseManifest({ buildNumber: 9, versionName: "1.0.3" });
+    const m = parseManifest({ buildNumber: 9, versionName: "1.0.3", sha256: VALID_SHA });
     expect(isUpdateAvailable(4, m, "1.0.4")).toBe(false);
   });
 
   it("falls back to buildNumber when version names are absent", () => {
-    const m = parseManifest({ buildNumber: 6 });
+    const m = parseManifest({ buildNumber: 6, sha256: VALID_SHA });
     expect(isUpdateAvailable(4, m)).toBe(true);
   });
 });
@@ -128,7 +131,7 @@ describe("resolveApkUrl", () => {
     // The origin is a build-time decision; the manifest may only pick a file
     // WITHIN it.
     const pinned = `${UPDATE_BASE_URL}/relay-mobile-1.2.3.apk`;
-    expect(resolveApkUrl(parseManifest({ buildNumber: 2, apkUrl: pinned }))).toBe(pinned);
+    expect(resolveApkUrl(parseManifest({ buildNumber: 2, apkUrl: pinned, sha256: VALID_SHA }))).toBe(pinned);
   });
 
   it("ignores an off-origin apkUrl and falls back to the compiled-in one", () => {
@@ -141,14 +144,14 @@ describe("resolveApkUrl", () => {
       "not a url",
     ]) {
       expect(
-        resolveApkUrl(parseManifest({ buildNumber: 2, apkUrl: hostile })),
+        resolveApkUrl(parseManifest({ buildNumber: 2, apkUrl: hostile, sha256: VALID_SHA })),
         hostile,
       ).toBe(UPDATE_APK_URL);
     }
   });
 
   it("falls back to the default APK URL", () => {
-    expect(resolveApkUrl(parseManifest({ buildNumber: 2 }))).toContain("relay-mobile.apk");
+    expect(resolveApkUrl(parseManifest({ buildNumber: 2, sha256: VALID_SHA }))).toContain("relay-mobile.apk");
   });
 });
 
@@ -188,25 +191,25 @@ describe("live GitHub Releases manifest (end-to-end)", () => {
 
 describe("isMandatoryUpdate", () => {
   it("is true only when an update is available AND marked mandatory", () => {
-    const m = parseManifest({ buildNumber: 9, mandatory: true });
+    const m = parseManifest({ buildNumber: 9, mandatory: true, sha256: VALID_SHA });
     expect(isMandatoryUpdate(2, m)).toBe(true);
   });
 
   it("is false when mandatory flag is set but no newer build", () => {
-    const m = parseManifest({ buildNumber: 2, mandatory: true });
+    const m = parseManifest({ buildNumber: 2, mandatory: true, sha256: VALID_SHA });
     expect(isMandatoryUpdate(2, m)).toBe(false);
   });
 
   it("is false when a newer build exists but mandatory flag is absent/false", () => {
-    expect(isMandatoryUpdate(2, parseManifest({ buildNumber: 5 }))).toBe(false);
+    expect(isMandatoryUpdate(2, parseManifest({ buildNumber: 5, sha256: VALID_SHA }))).toBe(false);
     expect(
-      isMandatoryUpdate(2, parseManifest({ buildNumber: 5, mandatory: false })),
+      isMandatoryUpdate(2, parseManifest({ buildNumber: 5, mandatory: false, sha256: VALID_SHA })),
     ).toBe(false);
   });
 
   it("is false when installed build is unknown", () => {
     expect(
-      isMandatoryUpdate(null, parseManifest({ buildNumber: 5, mandatory: true })),
+      isMandatoryUpdate(null, parseManifest({ buildNumber: 5, mandatory: true, sha256: VALID_SHA })),
     ).toBe(false);
   });
 });

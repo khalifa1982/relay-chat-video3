@@ -144,23 +144,21 @@ export function parseManifest(raw: unknown): UpdateManifest | null {
   }
   if (typeof obj.notes === "string") manifest.notes = obj.notes;
   if (typeof obj.mandatory === "boolean") manifest.mandatory = obj.mandatory;
-  // The digest stays OPTIONAL, deliberately, and this is a judgement call worth
-  // recording. Requiring it would close a real gap — an attacker able to edit
-  // only version.json could omit the key and turn verification off — but
-  // SELF_HOSTED_UPDATE.md documents "no sha256 simply skips" as a compatibility
-  // guarantee, and `releases/latest/download/version.json` serves whatever is
-  // live right now. If that manifest predates the hash, requiring one would stop
-  // every installed app from ever seeing an update again, silently. That is a
-  // worse failure than the one it prevents.
+  // A DIGEST IS REQUIRED. It used to be optional, so an attacker able to rewrite
+  // only version.json — a much smaller asset than the APK — could omit one key
+  // and turn verification off entirely.
   //
-  // What IS closed: the absence of a hash can no longer be reported as a
-  // successful verification (see apk-integrity's `verified` flag), and the
-  // download origin is pinned above so a rewritten manifest cannot redirect it.
-  // TO TIGHTEN THIS: once the live manifest is confirmed to carry a digest,
-  // `if (!sha) return null;` here makes it mandatory. scripts/publish-release.sh
-  // already emits one.
+  // This was held back on the first pass because SELF_HOSTED_UPDATE.md documented
+  // "no sha256 simply skips" as a compatibility guarantee, and requiring one would
+  // silently stop every installed app from updating if the LIVE manifest predated
+  // the field. The owner confirmed the live manifest at
+  // relay-app-releases/releases/latest carries a sha256, and
+  // scripts/publish-release.sh has always emitted one, so the guarantee is now
+  // safe to drop. Rejecting the manifest means "no update offered" — never
+  // "update installed unverified".
   const sha = normalizeSha256(obj.sha256);
-  if (sha) manifest.sha256 = sha;
+  if (!sha) return null;
+  manifest.sha256 = sha;
   return manifest;
 }
 

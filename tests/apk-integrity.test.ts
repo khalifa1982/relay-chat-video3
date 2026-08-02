@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 import { Sha256, base64ToBytes } from "../lib/sha256";
 import { normalizeSha256, parseManifest } from "../lib/apk-update-config";
 
+/** parseManifest now REQUIRES a digest (the owner confirmed the live
+ *  manifest carries one), so fixtures must supply a real 64-hex value. */
+const VALID_SHA = "e482dd5fdbe5eed4c5d3898b1282842013a3bd4af29f672c2d850ceef4e4b046";
+
 // Re-implement the streaming hasher test against Node's crypto as the oracle.
 // We can't import the private Sha256 class, so we exercise it indirectly by
 // reconstructing the same digest from base64-decoded chunks the way the file
@@ -56,15 +60,25 @@ describe("parseManifest sha256 handling", () => {
     expect(m?.sha256).toBe(sha);
   });
 
-  it("omits an invalid sha256 but keeps the manifest valid", () => {
-    const m = parseManifest({ buildNumber: 9, sha256: "not-a-hash" });
-    expect(m).not.toBeNull();
-    expect(m?.sha256).toBeUndefined();
+  it("REJECTS a manifest whose sha256 is invalid", () => {
+    // Was: "omits an invalid sha256 but keeps the manifest valid". A digest is now
+    // required, so a malformed one is a rejected manifest — "no update offered"
+    // rather than "update installed unverified".
+    expect(parseManifest({ buildNumber: 9, sha256: "not-a-hash" })).toBeNull();
+    expect(parseManifest({ buildNumber: 9, sha256: "" })).toBeNull();
+    expect(parseManifest({ buildNumber: 9, sha256: "abc" })).toBeNull();
   });
 
-  it("leaves sha256 undefined for older manifests (backward compatible)", () => {
-    const m = parseManifest({ buildNumber: 9, versionName: "1.0.9" });
-    expect(m?.sha256).toBeUndefined();
+  it("REJECTS a manifest with no sha256 at all", () => {
+    // SELF_HOSTED_UPDATE.md used to promise "no sha256 simply skips". That
+    // guarantee is withdrawn: omitting one key disabled verification entirely, and
+    // version.json is a far smaller asset to tamper with than the APK. The live
+    // manifest carries a digest and publish-release.sh emits one, so nothing real
+    // regresses.
+    //
+    // Note the old test asserted `m?.sha256` was undefined, which passes for a
+    // NULL manifest too — it would not have caught this change either way.
+    expect(parseManifest({ buildNumber: 9, versionName: "1.0.9" })).toBeNull();
   });
 });
 
