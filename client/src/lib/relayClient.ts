@@ -1825,6 +1825,30 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     loudspeakerOn = false;
     try { void loudspeakerCtx?.suspend(); } catch { /* */ }
   }
+  /**
+   * #160 — release the loudspeaker context at the END OF A CALL.
+   *
+   * `loudspeakerDisable` SUSPENDS, and must: three of its four callers are mid-call (the
+   * speaker toggle, a route change), and a closed AudioContext cannot be reopened — since
+   * `ensureLoudspeakerCtx` guards on `if (!loudspeakerCtx)`, closing there would hand back
+   * a dead context and every later `resume()` would throw, killing the loudspeaker for the
+   * rest of the call.
+   *
+   * So the close lives here, at teardown, and NULLS the reference so the next call builds
+   * a fresh one. That is safe precisely because `loudspeakerPrime()` runs inside the dial
+   * tap and the Answer tap — a context created outside a gesture starts suspended on iOS,
+   * which is the whole reason that priming exists.
+   *
+   * Its two siblings were already closed at hang-up (`teardownSpeakerMonitor`,
+   * `teardownLocalLevelMonitor`); this one was left out, and on a phone it is created on
+   * essentially every call (`loudspeakerPref()` defaults to true on iOS and Android). A
+   * suspended-but-open context keeps the iOS audio session claimed.
+   */
+  function releaseLoudspeakerCtx() {
+    loudspeakerDisable();
+    try { void loudspeakerCtx?.close?.(); } catch { /* */ }
+    loudspeakerCtx = null;
+  }
   async function toggleLoudspeaker() {
     // NATIVE ANDROID APP: real OS speakerphone routing (AudioManager) — no
     // WebAudio hop, identical to the system dialer. Falls through to the
@@ -2060,7 +2084,34 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       t.onended = () => { void recoverDeadLocalTrack(t.kind); };
     });
   }
+  /**
+   * #160 — recovery is SINGLE-FLIGHT.
+   *
+   * Every other media entry point in this file has one (`flipBusy`, `filterBusy`,
+   * `ensureMediaInFlight`) and this one did not, which made a live-mic orphan reachable by
+   * an ordinary sequence: the OS kills the mic, recovery A starts; the failure toast tells
+   * the user to *"tap mute/unmute to retry"* and they do, so `setMic` sees no live track
+   * and starts recovery B. A lands and installs mic #1; B lands, and the removal below
+   * takes mic #1 out of the stream WITHOUT stopping it.
+   *
+   * That track is then a live capture belonging to no `MediaStream`: `releaseLocalMedia`
+   * stops only `localStream`'s tracks, `pc.close()` does not stop a sender's track, and
+   * `replaceTrack` never stops the one it replaces — so the microphone stays captured
+   * after the call ends with NO handle anywhere able to stop it. `mediaGen` cannot help,
+   * because both acquisitions land during a LIVE call and nothing released in between.
+   */
+  let recoverBusy = false;
   async function recoverDeadLocalTrack(kind: string) {
+    if (!inCall || !localStream) return;
+    if (recoverBusy) return;
+    recoverBusy = true;
+    try {
+      await recoverDeadLocalTrackInner(kind);
+    } finally {
+      recoverBusy = false;
+    }
+  }
+  async function recoverDeadLocalTrackInner(kind: string) {
     if (!inCall || !localStream) return;
     const genR = mediaGen;
     diag("local " + kind + " track ENDED — attempting reacquire");
@@ -2073,7 +2124,18 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         const at = fresh.getAudioTracks()[0];
         if (!at) throw new Error("no-track");
         at.onended = () => { void recoverDeadLocalTrack("audio"); };
-        localStream.getAudioTracks().forEach(t => { try { localStream!.removeTrack(t); } catch { /* */ } });
+        /* STOPPED, not merely removed (#160). A track leaving this stream is one we are
+           done with, and the ONLY thing that made bare `removeTrack` safe was the
+           assumption that it is already ended — true for the dead track this recovery was
+           called for, and false for a live one a concurrent recovery had just installed.
+           The single-flight guard above closes that race; stopping here makes the orphan
+           impossible by construction, so a future path that re-enters cannot recreate it.
+           `stop()` on an already-ended track is a no-op, so the ordinary case is
+           unchanged. */
+        localStream.getAudioTracks().forEach(t => {
+          try { localStream!.removeTrack(t); } catch { /* */ }
+          try { t.stop(); } catch { /* */ }
+        });
         localStream.addTrack(at);
         // The filter pipeline's OUTPUT stream carries the audio too — future
         // mesh peers addTrack from processedStream, so leaving the dead track
@@ -6524,7 +6586,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     clearPendingRejoin();
     stopRingtone();
     cancelEndActiveFallback();
-    loudspeakerDisable(); // stop the loudspeaker scan + release the audio context
+    /* #160: this said it "release[s] the audio context" and it did not — `loudspeakerDisable`
+       SUSPENDS. A suspended-but-open context keeps the iOS audio session claimed, and on a
+       phone one is created on essentially every call. Now it really is released. */
+    releaseLoudspeakerCtx();
     if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }
     pendingRing = null;
     $("ringOverlay")?.classList.remove("active");
@@ -7053,7 +7118,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       // The shell's audio listener is on `window`, which outlives this engine — the
       // same reason the in-call flag is cleared above.
       try { unmountNativeAudio(); } catch { /* */ }
-      try { loudspeakerDisable(); loudspeakerCtx?.close?.(); } catch { /* */ }
+      try { releaseLoudspeakerCtx(); } catch { /* */ }
       if (reconnectT) { clearTimeout(reconnectT); reconnectT = null; }
       if (timerInt) { clearInterval(timerInt); timerInt = null; }
       if (ringTimeoutT) { clearTimeout(ringTimeoutT); ringTimeoutT = null; }

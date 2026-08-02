@@ -191,6 +191,14 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
       levelBuf = new Uint8Array(new ArrayBuffer(analyser.fftSize));
     }
   } catch {
+    /* #160 — CLOSE it before dropping the reference. `ac` is constructed above and the
+       lines after it can genuinely throw (this repo's own `androidAudioCamera.test.ts`
+       documents `createMediaStreamSource` failing for real — "stream already tapped"), so
+       nulling alone left an open context unreachable: `releaseAudio()` below reads the
+       already-nulled `ac` and cannot help. The MICROPHONE is not affected — `finish()`
+       stops the stream's tracks on every path — but on iOS an open context keeps the
+       audio session claimed. */
+    try { void ac?.close?.(); } catch { /* */ }
     ac = null;
     analyser = null;
   }
