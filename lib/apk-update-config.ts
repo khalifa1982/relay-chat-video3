@@ -102,6 +102,30 @@ export function normalizeSha256(raw?: unknown): string | null {
 }
 
 /**
+ * Is `url` an https URL under the COMPILED-IN update origin?
+ *
+ * The manifest used to choose the download origin outright: `resolveApkUrl`
+ * preferred `manifest.apkUrl` over the pinned `UPDATE_APK_URL` with no scheme or
+ * host check. So whoever could write version.json — which is a separate, smaller
+ * asset than the APK — could point every installation at any host they liked.
+ * The origin is a build-time decision, not a runtime one.
+ */
+export function isPinnedApkUrl(url: string): boolean {
+  try {
+    const target = new URL(url);
+    const base = new URL(UPDATE_BASE_URL);
+    if (target.protocol !== "https:") return false;
+    if (target.host !== base.host) return false;
+    // Also require the path to sit under the update folder, so the pinned host
+    // cannot be used as an open redirect to some other area of the same site.
+    const basePath = base.pathname.replace(/\/+$/, "");
+    return target.pathname.startsWith(basePath + "/");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Parse + validate a raw manifest payload. Returns null when invalid so the
  * caller can safely ignore malformed/unreachable manifests.
  */
@@ -112,9 +136,29 @@ export function parseManifest(raw: unknown): UpdateManifest | null {
   if (!Number.isFinite(build) || build <= 0) return null;
   const manifest: UpdateManifest = { buildNumber: Math.floor(build) };
   if (typeof obj.versionName === "string") manifest.versionName = obj.versionName;
-  if (typeof obj.apkUrl === "string" && obj.apkUrl) manifest.apkUrl = obj.apkUrl;
+  // Only a same-origin https URL under the pinned update folder is honoured; a
+  // manifest naming anywhere else falls back to the compiled-in UPDATE_APK_URL
+  // rather than being obeyed.
+  if (typeof obj.apkUrl === "string" && obj.apkUrl && isPinnedApkUrl(obj.apkUrl)) {
+    manifest.apkUrl = obj.apkUrl;
+  }
   if (typeof obj.notes === "string") manifest.notes = obj.notes;
   if (typeof obj.mandatory === "boolean") manifest.mandatory = obj.mandatory;
+  // The digest stays OPTIONAL, deliberately, and this is a judgement call worth
+  // recording. Requiring it would close a real gap — an attacker able to edit
+  // only version.json could omit the key and turn verification off — but
+  // SELF_HOSTED_UPDATE.md documents "no sha256 simply skips" as a compatibility
+  // guarantee, and `releases/latest/download/version.json` serves whatever is
+  // live right now. If that manifest predates the hash, requiring one would stop
+  // every installed app from ever seeing an update again, silently. That is a
+  // worse failure than the one it prevents.
+  //
+  // What IS closed: the absence of a hash can no longer be reported as a
+  // successful verification (see apk-integrity's `verified` flag), and the
+  // download origin is pinned above so a rewritten manifest cannot redirect it.
+  // TO TIGHTEN THIS: once the live manifest is confirmed to carry a digest,
+  // `if (!sha) return null;` here makes it mandatory. scripts/publish-release.sh
+  // already emits one.
   const sha = normalizeSha256(obj.sha256);
   if (sha) manifest.sha256 = sha;
   return manifest;

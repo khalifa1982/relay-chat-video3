@@ -6,22 +6,41 @@ import {
   isUpdateAvailable,
   parseManifest,
   resolveApkUrl,
+  UPDATE_BASE_URL,
+  UPDATE_APK_URL,
 } from "../lib/apk-update-config";
 
 describe("parseManifest", () => {
   it("parses a valid manifest", () => {
+    // The apkUrl must sit under the pinned update origin to be carried through —
+    // this fixture used an unrelated host, which parseManifest now drops so the
+    // download falls back to the compiled-in URL.
+    const apkUrl = `${UPDATE_BASE_URL}/app.apk`;
     const m = parseManifest({
       buildNumber: 5,
       versionName: "1.2.0",
-      apkUrl: "https://your-chat.io/update/app.apk",
+      apkUrl,
       notes: "Bug fixes",
     });
     expect(m).toEqual({
       buildNumber: 5,
       versionName: "1.2.0",
-      apkUrl: "https://your-chat.io/update/app.apk",
+      apkUrl,
       notes: "Bug fixes",
     });
+  });
+
+  it("drops an off-origin apkUrl but keeps the rest of the manifest", () => {
+    // A rewritten manifest must not be able to redirect the download; it also
+    // must not be able to suppress the update entirely by naming a bad URL.
+    const m = parseManifest({
+      buildNumber: 5,
+      versionName: "1.2.0",
+      apkUrl: "https://your-chat.io/update/app.apk",
+    });
+    expect(m).not.toBeNull();
+    expect(m?.apkUrl).toBeUndefined();
+    expect(m?.buildNumber).toBe(5);
   });
 
   it("accepts numeric strings and floors them", () => {
@@ -101,10 +120,31 @@ describe("isUpdateAvailable with version names", () => {
 });
 
 describe("resolveApkUrl", () => {
-  it("prefers the manifest apkUrl", () => {
-    expect(resolveApkUrl(parseManifest({ buildNumber: 2, apkUrl: "https://x/y.apk" }))).toBe(
-      "https://x/y.apk",
-    );
+  it("honours a manifest apkUrl only when it is under the PINNED origin", () => {
+    // The manifest used to choose the download origin outright. version.json is a
+    // separate, much smaller asset than the APK, so whoever could rewrite it could
+    // point every installation at any host — while `sha256` is an optional field
+    // of that same file, so they could disable verification in the same edit.
+    // The origin is a build-time decision; the manifest may only pick a file
+    // WITHIN it.
+    const pinned = `${UPDATE_BASE_URL}/relay-mobile-1.2.3.apk`;
+    expect(resolveApkUrl(parseManifest({ buildNumber: 2, apkUrl: pinned }))).toBe(pinned);
+  });
+
+  it("ignores an off-origin apkUrl and falls back to the compiled-in one", () => {
+    for (const hostile of [
+      "https://evil.tld/relay.apk",
+      "http://github.com/khalifa1982/relay-app-releases/releases/latest/download/relay.apk", // cleartext
+      "https://github.com.evil.tld/khalifa1982/relay-app-releases/releases/latest/download/x.apk",
+      "https://github.com/someone-else/releases/latest/download/relay.apk", // same host, other path
+      "javascript:alert(1)",
+      "not a url",
+    ]) {
+      expect(
+        resolveApkUrl(parseManifest({ buildNumber: 2, apkUrl: hostile })),
+        hostile,
+      ).toBe(UPDATE_APK_URL);
+    }
   });
 
   it("falls back to the default APK URL", () => {

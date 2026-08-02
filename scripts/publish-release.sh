@@ -40,8 +40,17 @@ if [[ -z "$VERSION_NAME" ]]; then
   exit 1
 fi
 
-# buildNumber = last segment of the version (1.0.7 -> 7). Override with BUILD_NUMBER env.
-BUILD_NUMBER="${BUILD_NUMBER:-$(echo "$VERSION_NAME" | awk -F. '{print $NF + 0}')}"
+# buildNumber: a monotonic integer derived from the WHOLE version, not just its
+# last segment. The old `awk '{print $NF + 0}'` gave 1.1.0 -> 0, and parseManifest
+# rejects buildNumber <= 0, so every x.y.0 release published a manifest the app
+# silently refused — updates just stopped, with no error anywhere. It also made
+# 1.0.7 and 1.1.7 both "7", so the tie-break could not order them.
+# major*10000 + minor*100 + patch keeps it monotonic and readable.
+BUILD_NUMBER="${BUILD_NUMBER:-$(echo "$VERSION_NAME" | awk -F. '{printf "%d", ($1+0)*10000 + ($2+0)*100 + ($3+0)}')}"
+if [ "${BUILD_NUMBER:-0}" -le 0 ]; then
+  echo "Refusing to publish: computed buildNumber '${BUILD_NUMBER}' is not positive (the app would reject this manifest)." >&2
+  exit 1
+fi
 TAG="v${VERSION_NAME}"
 TMP="$(mktemp -d)"
 cp "$APK_PATH" "$TMP/relay-mobile.apk"
