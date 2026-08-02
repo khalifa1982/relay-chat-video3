@@ -8,7 +8,6 @@ import {
   profileStatusMeta,
   type ProfileStatus,
 } from "@shared/profileStatus";
-import { useT, type TKey } from "./i18n";
 
 /**
  * The status picker — five labels with an emoji and a colour, plus a note (v2.102.1).
@@ -28,26 +27,6 @@ import { useT, type TKey } from "./i18n";
  * Nothing here depends on telling sky from violet, which is why these five hues need no
  * contrast measurement of their own — unlike the `--relay-*-text` tokens, which DO carry
  * small coloured text and were measured for exactly that reason (v2.99.94).
- *
- * ── IT SPEAKS BOTH LANGUAGES, AND THE LABELS ARE BORROWED RATHER THAN COPIED ─────────
- * The owner named these five by hand — *"you are in work, vacation, travel, free… and
- * everyone has emoji and color"* — and this grid rendered `meta.label` raw, so "At work"
- * and "On vacation" sat in English inside an Arabic screen while the SAME five words
- * were already translated for the profile chip.
- *
- * So the words come from `peer.profileStatus.*`, the keys `PeerOverlays`' chip already
- * uses, exactly as `dict/peer.ts` asks in its own header: one fact with two keys is how
- * one fact acquires two different Arabic words. The key names live on the shared
- * metadata (`labelKey` / `hintKey`) rather than in a private map here, so this component
- * and the chip cannot drift and a sixth status arrives carrying its own.
- *
- * `meta.label` / `meta.hint` remain the FALLBACK, so a status added to the shared module
- * before its keys exist renders words rather than a blank tile.
- *
- * IT STAYS PRESENTATIONAL. `useT` is a read of ambient state, like `useState` above it;
- * what this component still must never own is a mutation — each caller owns its own, or
- * the group sheet and Profile would both be writing through one component's idea of
- * where a status goes.
  */
 export function ProfileStatusPicker({
   value,
@@ -72,7 +51,6 @@ export function ProfileStatusPicker({
   /** What to say when nothing is picked; a group's presence story differs. */
   emptyHint?: string;
 }) {
-  const t = useT();
   const current = normalizeProfileStatus(value);
   const [draft, setDraft] = useState(note ?? "");
   // The note follows the server when it changes underneath us (another device, a
@@ -93,7 +71,7 @@ export function ProfileStatusPicker({
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
-        {PROFILE_STATUS_META.map(({ key, label, labelKey, emoji, color }) => {
+        {PROFILE_STATUS_META.map(({ key, label, emoji, color }) => {
           const on = current === key;
           return (
             <button
@@ -116,37 +94,28 @@ export function ProfileStatusPicker({
               }
             >
               <span aria-hidden="true" className="text-lg leading-none">{emoji}</span>
-              {/* The shared constant's own English is the fallback, so a status whose
-                  key has not been added yet still renders a word rather than nothing. */}
-              <span className="text-xs font-medium text-center leading-tight">
-                {labelKey ? t(labelKey as TKey) : label}
-              </span>
+              <span className="text-xs font-medium text-center leading-tight">{label}</span>
             </button>
           );
         })}
       </div>
       <p className="text-xs text-muted-foreground">
-        {/* `emptyHint` stays a PROP and is not keyed here: a group's presence story
-            differs from a person's, so the caller supplies its own already-translated
-            sentence. Only the default — the one this component owns — is keyed. */}
-        {(() => {
-          const meta = profileStatusMeta(current);
-          if (meta) return meta.hintKey ? t(meta.hintKey as TKey) : meta.hint;
-          return emptyHint ?? t("profileStatus.none");
-        })()}
+        {profileStatusMeta(current)?.hint ??
+          emptyHint ??
+          "No status — presence decides: online when you're active, offline otherwise."}
       </p>
       {/* The note is only meaningful ALONGSIDE a status, so it appears with one. On
           its own it would be a caption for nothing. */}
       {current && (
         <div className="space-y-1.5">
           <Label htmlFor={`${idPrefix}-note`} className="text-xs text-muted-foreground">
-            {t("profileStatus.note")}
+            Note (optional)
           </Label>
           <Input
             id={`${idPrefix}-note`}
             value={draft}
             maxLength={MAX_STATUS_NOTE}
-            placeholder={t("profileStatus.notePlaceholder")}
+            placeholder="back Monday"
             onFocus={() => setEditing(true)}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commitNote}
