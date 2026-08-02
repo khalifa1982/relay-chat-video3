@@ -69,6 +69,11 @@ const config: ExpoConfig = {
   },
   android: {
     googleServicesFile: "./google-services.json",
+    // The WebView runs with the app's own cookie jar, so app_webview/Cookies holds
+    // the authenticated your-chat.io session. With backup on (Expo's default),
+    // `adb backup` — or a cloud restore onto another device — carries that session
+    // out of the app sandbox. Messengers turn this off for exactly this reason.
+    allowBackup: false,
     adaptiveIcon: {
       backgroundColor: "#0B1020",
       foregroundImage: "./assets/images/android-icon-foreground.png",

@@ -133,8 +133,13 @@ export function BuildStatusRow({
   // A single, slim line. When idle/up-to-date we show only the compact version
   // identity so the footer is as small as possible and the WebView gets the
   // maximum area. During an update we surface the phase text instead.
+  // …and ALWAYS when there is a reason to show. `check()`'s catch sets
+  // `lastReason` and then `setStatus("idle")`, and with a null manifest
+  // `upToDate` cannot be false — so the reason, which exists precisely so a
+  // failed check never silently reads as "no update", was unreachable for every
+  // failure. A user with no network saw the footer sit there saying nothing.
   const showPhaseText =
-    status !== "idle" || (status === "idle" && !upToDate);
+    status !== "idle" || (status === "idle" && !upToDate) || !!reason;
 
   return (
     <View style={styles.container}>

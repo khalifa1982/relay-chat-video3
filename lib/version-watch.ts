@@ -3,8 +3,32 @@
  * React component so they can be unit-tested without a DOM / native runtime.
  */
 
-/** Extract a semantic version like "v2.51.0" from arbitrary page text. */
-export function extractVersion(text: string | null | undefined): string | null {
+/**
+ * Extract the deployed app version.
+ *
+ * `explicit` is the value of an anchor the WEB APP owns (`[data-relay-version]`
+ * or `#relay-version`). When present it is authoritative.
+ *
+ * `text` is the fallback: the first `vN.N.N` anywhere in `document.body
+ * .innerText`. That is USER CONTENT — a message, a status or a contact name
+ * containing "v1.2.3" is read as the deployed version and flips the watcher into
+ * a "RELAY was updated, reload" prompt, which interrupts and can be made to
+ * repeat.
+ *
+ * The fallback is deliberately KEPT rather than tightened: the live footer renders
+ * the version inline ("© 2026 RELAY · v2.51.0 · …"), so requiring a standalone
+ * match would break real detection today in exchange for closing a nuisance. The
+ * anchor is the actual fix, and it removes the ambiguity entirely the moment the
+ * web app emits one — at which point the fallback stops being consulted.
+ */
+export function extractVersion(
+  text: string | null | undefined,
+  explicit?: string | null,
+): string | null {
+  const anchored = (explicit ?? "").trim();
+  if (/^v?\d+\.\d+\.\d+$/.test(anchored)) {
+    return anchored.startsWith("v") ? anchored : "v" + anchored;
+  }
   if (!text) return null;
   const match = text.match(/v\d+\.\d+\.\d+/);
   return match ? match[0] : null;

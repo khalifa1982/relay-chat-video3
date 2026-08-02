@@ -65,7 +65,9 @@ export function GlossyCheckButton({
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   // Local tick so the countdown recomputes on a cadence.
-  const [, setTick] = useState(0);
+  // Named (was `[, setTick]`) so the ring effect can depend on it: the
+  // countdown target is recomputed from Date.now(), so the tick IS the input.
+  const [tick, setTick] = useState(0);
 
   const isCountdownPhase = status === "idle" || status === "checking";
   const isDownloading = status === "downloading";
@@ -80,7 +82,11 @@ export function GlossyCheckButton({
   // ring visibly drains. Cheap: a state bump that re-reads Date.now().
   useEffect(() => {
     if (!isCountdownPhase) return;
-    const id = setInterval(() => setTick((t) => (t + 1) % 1_000_000), 500);
+    // 5s, not 500ms. The ring drains over the ten-minute poll window, so a
+    // half-second tick re-rendered the tree 1,200 times to move it by 0.08% each
+    // time — on the JS thread, for the whole app lifetime, including during a
+    // video call.
+    const id = setInterval(() => setTick((t) => (t + 1) % 1_000_000), 5_000);
     return () => clearInterval(id);
   }, [isCountdownPhase]);
 
@@ -101,7 +107,19 @@ export function GlossyCheckButton({
       easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
     }).start();
-  });
+    // DEPENDENCY ARRAY (audit): without one this effect ran on every render, so a
+    // 450ms JS-driven animation was restarted continuously — and the 500ms tick
+    // above guaranteed a render to restart it. `tick` is included because the
+    // countdown target is recomputed from Date.now().
+  }, [
+    isDownloading,
+    isCountdownPhase,
+    progress,
+    lastCheckAt,
+    pollIntervalMs,
+    tick,
+    ringAnim,
+  ]);
 
   // Spin the glyph while actively checking/downloading/installing.
   useEffect(() => {

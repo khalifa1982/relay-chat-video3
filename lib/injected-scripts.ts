@@ -30,6 +30,18 @@ export const VERSION_WATCH_JS = `(() => {
       } catch (e) {}
     };
     var read = function () {
+      // Prefer an anchor the WEB APP owns. Scraping innerText reads USER CONTENT:
+      // a message or contact name containing "v1.2.3" was taken for the deployed
+      // version and raised a "RELAY was updated, reload" prompt on demand.
+      try {
+        var el = document.querySelector('[data-relay-version], #relay-version');
+        if (el) {
+          var a = (el.getAttribute('data-relay-version') || el.textContent || '').trim();
+          if (/^v?\\d+\\.\\d+\\.\\d+$/.test(a)) return a.charAt(0) === 'v' ? a : 'v' + a;
+        }
+      } catch (e) {}
+      // Fallback, unchanged: the live footer renders the version inline, so
+      // narrowing this would break real detection to close a nuisance.
       var m = (document.body && document.body.innerText || '').match(/v\\d+\\.\\d+\\.\\d+/);
       return m ? m[0] : null;
     };
