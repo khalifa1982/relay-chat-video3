@@ -48,6 +48,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
 
 const root = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 /** Comment-stripped. Every fix below EXPLAINS in prose what it must not do, and this repo
@@ -254,9 +255,19 @@ describe("contacts can be read", () => {
   it("the empty state names BOTH narrowings when both are active", () => {
     /* The three-way version blamed the search alone, so it never mentioned the lit chip
        and never offered the one-tap recovery — leaving somebody retyping a query that was
-       never the reason. */
+       never the reason.
+       Asked as the PROPERTY rather than as the old `${TAG_LABEL[tagFilter]}` literal: the
+       sentence is a dictionary entry now, and `copyOnScreen` is satisfied by the words
+       being on the screen either way — which is strictly stronger, because reaching the
+       dictionary also proves an Arabic half exists. */
     expect(CONTACTS).toMatch(/search && tagFilter/);
-    expect(CONTACTS).toMatch(/is labelled \$\{TAG_LABEL\[tagFilter\]\}/);
+    expect(
+      copyOnScreen(CONTACTS, "is labelled {label}"),
+      whyCopyMissing(CONTACTS, "is labelled {label}"),
+    ).toBe(true);
+    /* …and the label it names is the CHIP's own, so the sentence and the control it
+       points at cannot come to disagree — in either language. */
+    expect(CONTACTS).toMatch(/label: t\(tagLabelKey\(tagFilter\)\)/);
   });
 });
 

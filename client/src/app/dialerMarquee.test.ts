@@ -14,14 +14,15 @@ import fs from "fs";
 import path from "path";
 import { codeOnly } from "../../../server/testing/codeOnly";
 import { RELAY_ACCENT_CYCLE_MS } from "@/lib/relayBackground";
+import { translate, type Locale } from "./i18n";
 import {
   MARQUEE_TIMING,
   MARQUEE_MIN_VIEWPORT_H,
   MARQUEE_COPY_MAX,
   SLIDE_CONTACT_MS,
   SETTLE_MS,
-  ROUND_PROMPT,
-  HINT_LINES,
+  ROUND_PROMPT_KEY,
+  HINT_LINE_KEYS,
   UNTAGGED_ROUND,
   MATRIX_GLYPHS,
   DIGIT_GLYPHS,
@@ -53,6 +54,11 @@ const row = (over: Partial<MarqueeContactRow> = {}): MarqueeContactRow => ({
 
 /** Deterministic "random": always the first candidate. */
 const first = () => 0;
+
+/** The two languages the app ships. Every copy assertion below runs over BOTH:
+ *  the marquee is keyed now, so "does this fit the row" and "does this never say
+ *  the wrong thing" are questions about the Arabic as much as the English. */
+const LOCALES: Locale[] = ["en", "ar"];
 
 /** Walk a slide's whole timeline at the flick cadence. */
 function walk(slide: MarqueeSlide) {
@@ -130,7 +136,7 @@ describe("v2.106.78 — an empty category can never show a number", () => {
     /* Stronger than the behavioural walk above and deliberately kept alongside
        it: a test says today's code does not do it, a type says tomorrow's
        cannot. `empty` and `hint` have no field a number could be put in. */
-    const empty: MarqueeSlide = { kind: "empty", round: "family", prompt: "x" };
+    const empty: MarqueeSlide = { kind: "empty", round: "family", promptKey: "dialer.marqueeFamily" };
     expect(Object.keys(empty)).not.toContain("pin");
     expect(Object.keys(empty)).not.toContain("contact");
     expect(ENGINE).toMatch(/\{ kind: "hint" \}/);
@@ -144,7 +150,7 @@ describe("v2.106.78 — the decode resolves to the number it was given", () => {
   const slide: MarqueeSlide = {
     kind: "contact",
     round: "family",
-    prompt: "Contact your family",
+    promptKey: "dialer.marqueeFamily",
     contact: { number: "314159", name: "Amira" },
   };
 
@@ -199,7 +205,7 @@ describe("v2.106.78 — the decode resolves to the number it was given", () => {
     for (const s of [
       slide,
       { kind: "hint" } as MarqueeSlide,
-      { kind: "empty", round: "team", prompt: "x" } as MarqueeSlide,
+      { kind: "empty", round: "team", promptKey: "dialer.marqueeTeam" } as MarqueeSlide,
       { kind: "own", pin: "777777" } as MarqueeSlide,
     ]) {
       const atGap = frameAt(s, slideDuration(s) - MARQUEE_TIMING.GAP / 2);
@@ -313,7 +319,13 @@ describe("v2.106.78 — the rotation list", () => {
        on one screen, which is the vocabulary collision this repo keeps removing. */
     const all = [...buildRotations([], {}, first), ...buildRotations([row()], {}, first)];
     for (const s of all) for (const f of walk(s)) {
-      expect(f.promptText).not.toContain("—");
+      /* RESOLVED, AND IN BOTH LANGUAGES. The frame carries a KEY now, so reading
+         it raw would assert nothing about what a reader sees — and the em-dash
+         collision is a property of the rendered words, which means the Arabic has
+         to be checked too. */
+      for (const loc of LOCALES) {
+        expect(f.promptKey ? translate(loc, f.promptKey) : "").not.toContain("—");
+      }
       expect(f.cells.some((c) => c.digit === "—")).toBe(false);
     }
   });
@@ -338,7 +350,7 @@ describe("v2.106.78 — constants that must not drift", () => {
        a visibly different accent — a property with a test behind it rather than
        a coincidence that survives until somebody retunes one of the two. */
     expect(SLIDE_CONTACT_MS).toBe(RELAY_ACCENT_CYCLE_MS / 2);
-    expect(slideDuration({ kind: "contact", round: "vip", prompt: "x", contact: { number: "111111", name: "n" } })).toBe(
+    expect(slideDuration({ kind: "contact", round: "vip", promptKey: "dialer.marqueeVip", contact: { number: "111111", name: "n" } })).toBe(
       RELAY_ACCENT_CYCLE_MS / 2
     );
     // The settle absorbs whatever is left, so no constant can silently break it.
@@ -354,13 +366,44 @@ describe("v2.106.78 — constants that must not drift", () => {
     expect(PAINTER).toMatch(/max-height: \$\{MARQUEE_MIN_VIEWPORT_H\}px/);
   });
 
-  it("every copy string fits the row", () => {
-    // A wrap grows the row, and the row's height is part of the keypad's budget.
-    for (const s of [...Object.values(ROUND_PROMPT), ...HINT_LINES]) {
-      expect(s.length, s).toBeLessThanOrEqual(MARQUEE_COPY_MAX);
+  it("every copy string fits the row, IN BOTH LANGUAGES", () => {
+    /* A wrap grows the row, and the row's height is part of the keypad's budget.
+       REWRITTEN FROM A LIST OF LITERALS TO THE PROPERTY: the prompts are keys now,
+       so the thing that must fit is what each key RESOLVES to — and the Arabic is
+       a string this row has to hold just as much as the English. The old form
+       could not have caught an over-long Arabic prompt at all. */
+    for (const key of [...Object.values(ROUND_PROMPT_KEY), ...HINT_LINE_KEYS]) {
+      for (const loc of LOCALES) {
+        const s = translate(loc, key);
+        expect(s.length, `${key} (${loc}): "${s}"`).toBeLessThanOrEqual(MARQUEE_COPY_MAX);
+        expect(s.trim().length, `${key} (${loc}) is not empty`).toBeGreaterThan(0);
+      }
     }
-    // The owner's own words, verbatim.
-    expect(ROUND_PROMPT.family).toBe("Contact your family");
+    // The owner's own words, verbatim — now asserted through the key, which also
+    // proves an Arabic half exists (`Entry` requires both).
+    expect(translate("en", ROUND_PROMPT_KEY.family)).toBe("Contact your family");
+  });
+
+  it("the five rounds say five DIFFERENT things in Arabic, not one word five times", () => {
+    /* The four category prompts map to the four contact TAGS, so collapsing any two
+       onto one Arabic phrase would make the rotation say the same thing twice — in
+       the language where nobody reviewing this would notice. Asserted per locale
+       rather than once, because English being distinct says nothing about Arabic. */
+    for (const loc of LOCALES) {
+      const said = Object.values(ROUND_PROMPT_KEY).map((k) => translate(loc, k));
+      expect(new Set(said).size, `${loc}: ${said.join(" / ")}`).toBe(said.length);
+    }
+    // …and the two hint beats are two ideas, not the same one twice.
+    for (const loc of LOCALES) {
+      expect(translate(loc, HINT_LINE_KEYS[0])).not.toBe(translate(loc, HINT_LINE_KEYS[1]));
+    }
+  });
+
+  it("VIP borrows the CONTACT TAG's own Arabic rather than inventing a second term", () => {
+    /* The Contacts chip and this prompt name the SAME tag. Two spellings of one tag
+       is how they come to disagree, which is the reasoning `dict/peer.ts` already
+       records for reusing `contacts.tag.*` instead of minting `peer.tag.*`. */
+    expect(translate("ar", ROUND_PROMPT_KEY.vip)).toContain(translate("ar", "contacts.tag.vip"));
   });
 
   it("the whole PIN resolves inside the decode window", () => {
@@ -429,7 +472,12 @@ describe("v2.106.78 — the painter's shape", () => {
     expect(PAINTER).toMatch(/if \(prefersReducedMotion\(\)\) return;/);
     expect(PAINTER).toMatch(/const still = frameAt\(\{ kind: "hint" \}/);
     const still = frameAt({ kind: "hint" }, MARQUEE_TIMING.IN + MARQUEE_TIMING.PROMPT - 1);
-    expect(still.promptText).toBe(HINT_LINES[0]);
+    expect(still.promptKey).toBe(HINT_LINE_KEYS[0]);
+    /* AND THE PAINTER RESOLVES IT. The frame carries a key, so a still frame that
+       reached the DOM un-translated would render nothing at all for the one viewer
+       who can never see the rotation — pinned here because that viewer's entire
+       experience of this feature is this single frame. */
+    expect(PAINTER).toMatch(/still\.promptKey \? t\(still\.promptKey\) : ""/);
     expect(still.promptOpacity).toBeGreaterThan(0.9);
     expect(still.nameText).toBe("");
     expect(still.cells.every((c) => c.digit === "" && c.alphabet === null)).toBe(true);

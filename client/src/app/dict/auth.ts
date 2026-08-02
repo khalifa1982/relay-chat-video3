@@ -123,6 +123,12 @@ export const AUTH = {
     en: "No response yet — your other device may be offline or closed. You can sign in with your 4-digit PIN instead (no approval needed).",
     ar: "لا استجابة حتى الآن — قد يكون جهازك الآخر غير متصل أو مغلقًا. يمكنك تسجيل الدخول برمزك المكوّن من 4 أرقام بدلاً من ذلك (بلا حاجة إلى موافقة).",
   },
+  /* SURVIVES THE BUTTON IT WAS WRITTEN FOR. Board 5d replaced the unconditional
+     "Sign in with your PIN instead" button with `MethodSwitcher` — for a
+     correctness reason rather than a visual one, since for an account with NO
+     passcode that button pointed at a pad `loginWithPin` refuses — and the switcher
+     carries this sentence as the passcode row's subtitle, so the copy the owner
+     signed off is still on screen and still read. */
   "auth.usePinInstead": {
     en: "Sign in with your PIN instead",
     ar: "سجّل الدخول برمز الدخول بدلاً من ذلك",
@@ -278,4 +284,38 @@ export const AUTH = {
   "gate.voice": { en: "Voice", ar: "صوت" },
   "gate.video": { en: "Video", ar: "فيديو" },
   "gate.chat": { en: "Chat", ar: "دردشة" },
+
+  /* ── THE PIN REVEAL (#162) ────────────────────────────────────────────────────
+     The screen between passing login and reaching the dashboard, which EVERY way in
+     passes through — a guest name, an email sign-in, and any entry surface added
+     later, because it arms on the signed-out → signed-in transition rather than on a
+     callback per route. It belongs to this module for that reason: it is the last
+     step of the login path, not a screen of the app behind it.
+
+     Every string here is a MICRO-LABEL under heavy letter-spacing (0.3–0.4em), so the
+     Arabic is deliberately short — see the note in `PinReveal.tsx` about what that
+     spacing does to a connected script.
+
+     NOT TRANSLATED, on purpose: the brand mark "RELAY" is a name, and the six digits
+     are Western everywhere in the product because a number read aloud has to be the
+     number typed. */
+  "pin.yourNumber": { en: "YOUR NUMBER", ar: "رقمك" },
+  "pin.autoAssigned": { en: "AUTO-ASSIGNED", ar: "تلقائي" },
+  "pin.online": { en: "ONLINE", ar: "متصل" },
+  /* The one sentence on the screen, and the reason it is worth having: somebody who
+     has just been handed a number needs to know what it is FOR. */
+  "pin.caption": {
+    en: "Anyone with this number can dial you — no account needed.",
+    ar: "يمكن لأي شخص لديه هذا الرقم الاتصال بك — بلا حاجة إلى حساب.",
+  },
+  /* The digit slots are decorative spans, so this is the ONLY thing a screen reader
+     gets. The number is interpolated, and stays Western on both sides. */
+  "pin.screenReader": {
+    en: "Your RELAY number is {number}",
+    ar: "رقمك في RELAY هو {number}",
+  },
+  "pin.continueAria": {
+    en: "Your RELAY number — continue to the app",
+    ar: "رقمك في RELAY — تابع إلى التطبيق",
+  },
 } as const satisfies Record<string, Entry>;

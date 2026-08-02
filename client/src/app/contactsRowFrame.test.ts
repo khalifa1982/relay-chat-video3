@@ -28,6 +28,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { codeOnly } from "../../../server/testing/codeOnly";
+import { translate, DICT } from "./i18n";
+import { onlineCountKey, contactCountKey, tagLabelKey } from "../pages/app/Contacts";
 
 const SRC = codeOnly(readFileSync(resolve(process.cwd(), "client/src/pages/app/Contacts.tsx"), "utf8"));
 const CSS = readFileSync(resolve(process.cwd(), "client/src/index.css"), "utf8");
@@ -197,8 +199,17 @@ describe("the section header's online count says what it is counting", () => {
        lived only in a `title` — which a phone has no way to show. */
     const at = SRC.indexOf("{onlineCount > 0 && (");
     expect(at).toBeGreaterThan(-1);
-    const arm = SRC.slice(at, at + 420);
-    expect(arm).toMatch(/\{onlineCount\} online/);
+    const arm = SRC.slice(at, at + 460);
+    /* Asked as the COPY rather than as the old `{onlineCount} online` literal. The count
+       selects a WHOLE KEY PER BAND now (Arabic needs the dual at 2 and two more forms
+       above it), so what must hold is that the rendered words still say what is being
+       counted — in every band, which is strictly more than the one literal proved. */
+    expect(arm, "the count still carries its word").toMatch(/t\(onlineCountKey\(onlineCount\)/);
+    for (const n of [1, 2, 5, 40]) {
+      expect(translate("en", onlineCountKey(n), { count: n })).toBe(
+        n === 1 ? "1 online" : `${n} online`,
+      );
+    }
     expect(arm, "a presence dot beside it, in the presence green").toMatch(
       /bg-\[color:var\(--relay-online\)\]/,
     );
@@ -209,7 +220,11 @@ describe("the section header's online count says what it is counting", () => {
     const at = SRC.indexOf("{section.allActive ? (");
     expect(at).toBeGreaterThan(-1);
     const arm = SRC.slice(at, SRC.indexOf(") : (", at));
-    expect(arm, "the count it stands for is still announced").toMatch(/title=\{`\$\{total\} online`\}/);
+    /* The count it stands for is still announced — through the banded key rather than the
+       old `${total} online` literal, so it is announced in every plural band. */
+    expect(arm, "the count it stands for is still announced").toMatch(
+      /title=\{t\(onlineCountKey\(total\)/,
+    );
     /* Scoped to what is RENDERED, not to the whole arm — the `title` legitimately spells the
        word, so a bare `not.toMatch` here fails on correct code. That is the same shape as the
        prose trap, one attribute along. */
@@ -220,7 +235,13 @@ describe("the section header's online count says what it is counting", () => {
       .replace(/className="[^"]*"/g, "");
     expect(rendered.length).toBeGreaterThan(20);
     expect(rendered).toMatch(/\{total\}/);
-    expect(rendered, "the label already says Online").not.toMatch(/online/i);
+    /* The property: this header renders the NUMBER ALONE, because its own label already
+       says "Online" and "Online … 3 online" was measured reading exactly like that. Asked
+       as "no count PHRASE is rendered here" rather than as a bare /online/i sweep — the
+       word only ever arrives now via a banded key, and the key's own name contains
+       "online", so the old spelling would fail on correct code. */
+    expect(rendered, "the label already says Online").not.toMatch(/onlineCountKey/);
+    expect(rendered, "the label already says Online").not.toMatch(/\bonline\b/i);
   });
 
   it("the green is the AA-measured TEXT token, never the LED hue", () => {
@@ -238,5 +259,65 @@ describe("the section header's online count says what it is counting", () => {
     // A header that counted differently from the rows under it is worse than no count.
     expect(SRC).toMatch(/const onlineCount = section\.rows\.filter\(isActiveContact\)\.length;/);
     expect(SRC).toMatch(/const total = section\.rows\.length;/);
+  });
+});
+
+/* ============================================================================
+   #156 — THE TWO THINGS THIS SCREEN'S ARABIC CAN GET SILENTLY WRONG.
+
+   Both are invisible in English, which is exactly why they are pinned: an English
+   reader sees a correct screen either way.
+   ============================================================================ */
+describe("the counts are banded, not one sentence with a number in it", () => {
+  it("Arabic really is four DIFFERENT forms, and the dual carries no numeral", () => {
+    /* This is the assertion English cannot make. `contacts.onlineCountTwo` and
+       `…Few` have the SAME English ("2 online" either way), so a mutation collapsing
+       the dual into the paucal is invisible to every English check — and in Arabic it
+       is a grammatical error on a header the owner reads. At 2 the numeral disappears
+       into the word entirely ("متصلان"), which is also why no suffix scheme can
+       express this. */
+    for (const key of [onlineCountKey, contactCountKey]) {
+      const ar = [1, 2, 5, 40].map((n) => translate("ar", key(n), { count: n }));
+      expect(new Set(ar).size, "four distinct Arabic forms, not one form four times").toBe(4);
+      expect(ar[1], "the dual is a WORD, not a numeral").not.toMatch(/\d/);
+      expect(ar[0], "and so is the singular").not.toMatch(/\d/);
+      for (const s of ar) expect(s, "Arabic script, not transliteration").toMatch(/[؀-ۿ]/);
+    }
+  });
+
+  it("every band a real count can reach is a key that exists", () => {
+    // A band pointing at a missing key renders the KEY on somebody's phone — the one
+    // failure `translate`'s English fallback cannot save, because there is no entry.
+    for (let n = 0; n <= 60; n++) {
+      for (const key of [onlineCountKey, contactCountKey]) {
+        expect(DICT[key(n)], `${key(n)} (n=${n})`).toBeTruthy();
+      }
+    }
+  });
+});
+
+describe("a tag is named ONCE — the heading, the filter chip and the row chip agree", () => {
+  it("all three read the SAME key, so they cannot disagree in either language", () => {
+    /* The chips used to render `TAG_LABEL[tag]` from @shared/contactTags while the
+       heading rendered `CATEGORY_META[tag].labelKey` — one fact, two sources. They had
+       ALREADY drifted in English ("Friend" on the chip, "Friends" on the heading), and
+       in Arabic the heading was translated while the chips were not. Reading all three
+       off one map is what makes them unable to disagree by construction. */
+    expect(SRC, "the shared English map must not be a render source any more").not.toMatch(
+      /\{TAG_LABEL\[/,
+    );
+    // …and each of the three render sites goes through the one selector.
+    expect((SRC.match(/t\(tagLabelKey\(/g) ?? []).length, "filter chip + row chip + empty state")
+      .toBeGreaterThanOrEqual(3);
+    /* The selector really reads the SECTION HEADING's map — that is the structural half,
+       and it is what makes "cannot disagree" true rather than merely currently-equal. */
+    expect(SRC).toMatch(/function tagLabelKey\(tag: ContactTag\): TKey \{\s*\n\s*return CATEGORY_META\[tag as Category\]\.labelKey;/);
+    // …and every tag really resolves to an entry that exists, in both languages.
+    for (const tag of ["vip", "family", "friend", "team"] as const) {
+      const key = tagLabelKey(tag);
+      expect(DICT[key], `${tag} -> ${key}`).toBeTruthy();
+      expect(translate("ar", key), tag).toMatch(/[؀-ۿ]/);
+      expect(translate("ar", key), tag).not.toBe(translate("en", key));
+    }
   });
 });

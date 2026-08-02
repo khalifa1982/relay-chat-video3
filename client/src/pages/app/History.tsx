@@ -13,7 +13,6 @@ import {
   PhoneIncoming,
   PhoneMissed,
   PhoneOutgoing,
-  Radio,
   Search,
   Trash2,
   UserPlus,
@@ -40,7 +39,7 @@ import { useIdentity } from "@/app/useIdentity";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
-import { useT, type TKey } from "@/app/i18n";
+import { useT, translate, type TKey } from "@/app/i18n";
 import { matchQuery } from "@/app/searchMatch";
 // #117 — the paging primitives, kept pure so the ordering and de-duplication can be
 // tested without a database or a browser.
@@ -228,16 +227,79 @@ export function historyPeerKey(it: Item): string {
 /**
  * The name to put on a grouped row — the same name the individual rows show, so the
  * group header and the calls under it can never disagree about who this is.
+ *
+ * ── IT RETURNS A KEY BESIDE THE TEXT, AND THAT IS THE ONLY SHAPE THAT WORKS ──
+ * This is a module-level function, so it cannot call a hook and cannot translate
+ * anything itself. The two tempting alternatives are both wrong: returning finished
+ * English leaves the row untranslatable, and mapping that English back to a key at the
+ * render site is the `text → key` lookup the dictionary's own rule forbids — a copy
+ * edit would silently drop the translation. So it returns `{ text, key, vars }`, the
+ * same shape `peerStatus` uses, and `text` is DERIVED from the key rather than written
+ * twice so the two halves cannot come to disagree.
+ *
+ * `key` is NULL for a person's own NAME, which is data rather than copy and is the
+ * same in every language.
  */
-export function groupTitleOf(it: Item): string {
+export function groupTitleOf(it: Item): {
+  text: string;
+  key: TKey | null;
+  vars?: Record<string, string | number>;
+} {
+  const named = (text: string) => ({ text, key: null, vars: undefined });
+  const phrase = (key: TKey, vars?: Record<string, string | number>) => ({
+    text: translate("en", key, vars),
+    key,
+    vars,
+  });
   if (it.kind === "solo") {
-    return it.call.other?.displayName || it.call.other?.number || "Unknown";
+    const name = it.call.other?.displayName || it.call.other?.number;
+    return name ? named(name) : phrase("history.unknown");
   }
   const c = it.conf;
-  if (c.partyLine) return `${c.partyLineTitle || `Line ${c.dialedNumber ?? ""}`.trim()} (party line)`;
+  if (c.partyLine) {
+    const title = c.partyLineTitle || translate("en", "history.lineNamed", { number: c.dialedNumber ?? "" }).trim();
+    return phrase("history.partyLineNamed", { title });
+  }
   const others = c.participants.filter((p) => !p.isSelf);
-  if (others.length > 1) return `Group · ${others.length + 1}`;
-  return others[0]?.name || others[0]?.number || c.dialedNumber || "Call";
+  if (others.length > 1) return phrase("history.groupOf", { count: others.length + 1 });
+  const name = others[0]?.name || others[0]?.number || c.dialedNumber;
+  return name ? named(name) : phrase("history.call");
+}
+
+/**
+ * Which band a count falls in — see `dict/history.ts`'s header, and the shape
+ * `guestExpiryKey` established. Arabic needs the DUAL at 2 (where the numeral vanishes
+ * into the word) and different forms at 3-10 and 11+, so a whole key is picked per
+ * band rather than a number being dropped into one sentence.
+ *
+ * EACH RETURNS LITERAL KEYS, never `` `history.callCount${band}` ``. A template literal
+ * needs an `as TKey` cast, which switches the type checker OFF for precisely the strings
+ * that have to match the dictionary; and the dead-key sweep looks for each key's TEXT in
+ * the sources, so a composed key reads as having no reader and a whole family looks like
+ * coverage nobody consumes. `guestExpiryKey` returns literals for the same two reasons.
+ *
+ * Exported where a test drives them: whether "1 calls" ever renders, or Arabic ever puts
+ * a numeral where the dual belongs, is what a source pin cannot answer.
+ */
+export function callCountKey(n: number): TKey {
+  if (n <= 1) return "history.callCountOne";
+  if (n === 2) return "history.callCountTwo";
+  return n <= 10 ? "history.callCountFew" : "history.callCountMany";
+}
+function missedCountKey(n: number): TKey {
+  if (n <= 1) return "history.missedCountOne";
+  if (n === 2) return "history.missedCountTwo";
+  return n <= 10 ? "history.missedCountFew" : "history.missedCountMany";
+}
+export function loadedCountKey(n: number): TKey {
+  if (n <= 1) return "history.loadedCountOne";
+  if (n === 2) return "history.loadedCountTwo";
+  return n <= 10 ? "history.loadedCountFew" : "history.loadedCountMany";
+}
+function inCallCountKey(n: number): TKey {
+  if (n <= 1) return "history.inCallCountOne";
+  if (n === 2) return "history.inCallCountTwo";
+  return n <= 10 ? "history.inCallCountFew" : "history.inCallCountMany";
 }
 
 /** A person's calls, newest first, with the newest one standing for the group. */
@@ -344,23 +406,35 @@ function searchFieldsOf(it: Item, savedNameOf?: (num: string) => string | undefi
 }
 
 /** Bucket a call timestamp into a collapsible day-section {key,label}. Pure
- *  presentation — the underlying rows/handlers are untouched. */
-function dayBucket(ts: number, now: number): { key: string; label: string } {
+ *  presentation — the underlying rows/handlers are untouched.
+ *
+ *  A module-level function cannot call a hook, so the two FIXED labels come back as
+ *  dictionary keys and the render site translates them (the `FILTERS` shape). Older
+ *  days keep a formatted DATE, which is not copy — it is `toLocaleDateString`, and
+ *  making it follow the app's language rather than the browser's is the same
+ *  locale-aware-date work `formatFullWhen` needs, so it is named as still-English
+ *  rather than half-done here. */
+function dayBucket(ts: number, now: number): { key: string; label: string; labelKey: TKey | null } {
   const d = new Date(ts);
   const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const n = new Date(now);
   const todayStart = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
   const DAY = 86_400_000;
   let label: string;
-  if (startOfDay === todayStart) label = "Today";
-  else if (startOfDay === todayStart - DAY) label = "Yesterday";
-  else
+  let labelKey: TKey | null = null;
+  if (startOfDay === todayStart) {
+    labelKey = "history.today";
+    label = translate("en", labelKey);
+  } else if (startOfDay === todayStart - DAY) {
+    labelKey = "history.yesterday";
+    label = translate("en", labelKey);
+  } else
     label = new Date(startOfDay).toLocaleDateString(undefined, {
       weekday: "short",
       month: "short",
       day: "numeric",
     });
-  return { key: String(startOfDay), label };
+  return { key: String(startOfDay), label, labelKey };
 }
 
 export default function HistoryPage() {
@@ -396,7 +470,7 @@ export default function HistoryPage() {
   const openThread = trpc.messages.openThread.useMutation({
     onSuccess: (res) => setLocation(`/app/messages?c=${res.conversationId}`),
     // A silently-failed tap is the worst case (v2.88) — say why nothing opened.
-    onError: (err) => toast.error(err.message || "Couldn't open that conversation."),
+    onError: (err) => toast.error(err.message || t("history.openFailed")),
   });
 
   // Answered calls (2..10 parties) with full roster + duration.
@@ -464,7 +538,7 @@ export default function HistoryPage() {
       ]);
       if (calls.length) setOlderCalls((p) => [...p, calls as CallRow[]]);
       if (confs.length) setOlderConfs((p) => [...p, confs as ConfRow[]]);
-      if (!calls.length && !confs.length) toast.info("That's the whole call log.");
+      if (!calls.length && !confs.length) toast.info(t("history.thatsAll"));
     } catch {
       // A silently-failed tap is the worst case (v2.88) — say why nothing loaded.
       toast.error(t("history.loadOlderFailed"));
@@ -568,12 +642,12 @@ export default function HistoryPage() {
   // components receive — are the exact same references as before.
   const sections = useMemo(() => {
     const now = Date.now();
-    const map = new Map<string, { key: string; label: string; items: Item[] }>();
+    const map = new Map<string, { key: string; label: string; labelKey: TKey | null; items: Item[] }>();
     for (const it of visible) {
-      const { key, label } = dayBucket(it.at, now);
+      const { key, label, labelKey } = dayBucket(it.at, now);
       let sec = map.get(key);
       if (!sec) {
-        sec = { key, label, items: [] };
+        sec = { key, label, labelKey, items: [] };
         map.set(key, sec);
       }
       sec.items.push(it);
@@ -618,8 +692,8 @@ export default function HistoryPage() {
   // rows — rides the same watch the post-dial voicemail card registers.
   const watchOnline = trpc.directory.watchOnline.useMutation({
     onSuccess: (res) =>
-      toast.success(`You'll be alerted when ${res.displayName || res.number} is back online.`),
-    onError: (err) => toast.error(err.message || "Couldn't set the alert."),
+      toast.success(t("history.watchSet", { name: res.displayName || res.number })),
+    onError: (err) => toast.error(err.message || t("history.watchFailed")),
   });
   const watch = (num: string) => {
     if (num) watchOnline.mutate({ number: num });
@@ -630,7 +704,7 @@ export default function HistoryPage() {
       utils.contacts.list.invalidate();
       toast.success(t("history.added"));
     },
-    onError: (err) => toast.error(err.message || "Couldn't add the contact."),
+    onError: (err) => toast.error(err.message || t("history.addFailed")),
   });
   const quickAdd = (num: string, name: string) => {
     if (num) addContact.mutate({ number: num, displayName: name || undefined });
@@ -708,7 +782,7 @@ export default function HistoryPage() {
     <div className="mx-auto flex w-full max-w-2xl flex-1 min-h-0 flex-col px-4 pb-3 pt-4 md:pb-6">
       <header className="mb-3 flex items-center gap-2">
         <Clock className="size-5 text-primary" />
-        <h1 className="text-lg font-semibold tracking-tight">Call history</h1>
+        <h1 className="text-lg font-semibold tracking-tight">{t("history.title")}</h1>
       </header>
 
       {/* Live-call rejoin (v2.99.9): any recent call that is STILL ALIVE and
@@ -843,7 +917,7 @@ export default function HistoryPage() {
             }
           >
             <Layers className={"size-3.5 " + (grouped ? "text-violet-400" : "")} />
-            Group
+            {t("history.group")}
           </button>
           <span className="flex-1" />
           <Button
@@ -877,7 +951,7 @@ export default function HistoryPage() {
                 clearHistory.mutate();
               }}
             >
-              Clear history
+              {t("history.clear")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -893,22 +967,22 @@ export default function HistoryPage() {
                 onClick={() => { void conferences.refetch(); void oneToOne.refetch(); }}
                 className="mt-3 inline-flex items-center rounded-lg border border-border px-3 py-1.5 text-foreground hover:bg-muted/50"
               >
-                Retry
+                {t("common.retry")}
               </button>
             </div>
           ) : loading ? (
-            <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+            <div className="p-6 text-sm text-muted-foreground">{t("history.loading")}</div>
           ) : visible.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
               {historySearch.trim()
-                ? `No calls match “${historySearch.trim()}”.`
+                ? t("history.noMatches", { query: historySearch.trim() })
                 : filter === "missed"
                   ? t("history.noneMissed")
                   : filter === "dialed"
                     ? t("history.noneDialed")
                     : filter === "received"
                       ? t("history.noneReceived")
-                      : "No calls yet. Your conference and call history will appear here — who you dialed, how many people joined, their names and numbers, and how long the call lasted."}
+                      : t("history.none")}
             </div>
           ) : grouped ? (
             /* GROUPED: one row per person, newest first, tap to expand.
@@ -934,16 +1008,22 @@ export default function HistoryPage() {
                       )}
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[15px] font-bold text-foreground" dir="auto">
-                          {groupTitleOf(g.head)}
+                          {/* A person's NAME is data and comes back with no key; every
+                              other title is a phrase and comes back as one. */}
+                          {(() => {
+                            const gt = groupTitleOf(g.head);
+                            return gt.key ? t(gt.key, gt.vars) : gt.text;
+                          })()}
                         </span>
                         <span className="block text-[12.5px] text-muted-foreground">
-                          {g.count === 1
-                            ? "1 call in this log"
-                            : `${g.count} calls in this log`}
+                          {/* A WHOLE KEY PER BAND, never "1 call" + an "s". English needs
+                              one/other; Arabic needs the dual at 2 and two more forms
+                              above it, which no suffix can express. */}
+                          {t(callCountKey(g.count), { count: g.count })}
                           {g.missed > 0 && (
                             <span className="text-red-600 dark:text-red-400">
                               {" · "}
-                              {g.missed} missed
+                              {t(missedCountKey(g.missed), { count: g.missed })}
                             </span>
                           )}
                           {" · "}
@@ -1018,7 +1098,7 @@ export default function HistoryPage() {
                         className="flex-1 text-start font-mono text-[10px] font-bold uppercase"
                         style={{ letterSpacing: ".26em" }}
                       >
-                        {sec.label}
+                        {sec.labelKey ? t(sec.labelKey) : sec.label}
                       </span>
                       <span className="text-[11px] text-muted-foreground/70">{sec.items.length}</span>
                       {sectionMissed && (
@@ -1085,8 +1165,7 @@ export default function HistoryPage() {
               {/* Say what the reach currently IS, so the counts above are read for what
                   they are — a figure over what is loaded, not a lifetime total. */}
               <div className="mt-2 text-[11px] text-muted-foreground">
-                {items.length} {items.length === 1 ? "call" : "calls"} loaded · search and
-                grouping cover these
+                {t(loadedCountKey(items.length), { count: items.length })}
               </div>
             </div>
           )}
@@ -1236,12 +1315,14 @@ function ConferenceItem({
   // Title = the party line's name (v2.89) when this room WAS a line, else the
   // other people on the call (or the dialed number as a fallback).
   const title = conf.partyLine
-    ? `${conf.partyLineTitle || `Line ${conf.dialedNumber ?? ""}`.trim()} (party line)`
+    ? t("history.partyLineNamed", {
+        title: conf.partyLineTitle || t("history.lineNamed", { number: conf.dialedNumber ?? "" }).trim(),
+      })
     : others.length > 0
       ? others.map((p) => p.name).join(", ")
       : conf.dialedNumber
-        ? `Call to ${conf.dialedNumber}`
-        : "Call";
+        ? t("history.callTo", { number: conf.dialedNumber })
+        : t("history.call");
   /**
    * A group row draws NO presence LED. The disc it would sit on is a generic
    * `Users` glyph standing for N people, and N people do not have one presence —
@@ -1264,7 +1345,13 @@ function ConferenceItem({
   return (
     <li
       className="border-b-2 border-border px-4 py-3.5 last:border-b-0 transition-colors hover:bg-muted/30"
-      aria-label={`${direction === "out" ? "Outgoing" : "Incoming"} call with ${title}, ${formatDuration(conf.durationSec)} duration`}
+      /* One whole key per direction rather than the direction word substituted into a
+         shared sentence: nesting a translated word inside another translated sentence
+         is the seam that stops Arabic ordering either of them freely. */
+      aria-label={t(direction === "out" ? "history.confRowOut" : "history.confRowIn", {
+        title,
+        duration: formatDuration(conf.durationSec),
+      })}
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {isGroup ? (
@@ -1298,7 +1385,7 @@ function ConferenceItem({
               type="button"
               onClick={() => openPeerProfile(peer.number)}
               className="flex max-w-full items-baseline text-start text-[15px] font-bold text-foreground outline-none focus-visible:underline"
-              aria-label={`View ${peer.name}'s profile`}
+              aria-label={t("peer.viewNamedProfile", { name: peer.name })}
             >
               <span className="truncate" dir="auto">{title}</span>
               <RoleBadge role={peer.role ?? null} size={14} className="ms-1 self-center" />
@@ -1318,17 +1405,17 @@ function ConferenceItem({
               <>
                 <span className="font-semibold text-foreground">
                   <Users className="me-0.5 inline size-3 align-[-1px]" />
-                  Group · {conf.partyCount}
+                  {t("history.groupOf", { count: conf.partyCount })}
                 </span>
                 {" · "}
               </>
             ) : null}
             <span className={"font-semibold " + tone.label}>
-              {direction === "out" ? "Outgoing" : "Incoming"}
+              {t(direction === "out" ? "history.outgoing" : "history.incoming")}
             </span>
             {" "}· {formatDuration(conf.durationSec)}
             {/* #116 — nothing at all when the channel was never recorded. */}
-            {conf.channel === "voice" ? " · Voice" : conf.channel === "video" ? " · Video" : ""}
+            {conf.channel === "voice" ? ` · ${t("history.voice")}` : conf.channel === "video" ? ` · ${t("history.video")}` : ""}
           </div>
           <div className="mt-0.5 text-[11px] text-muted-foreground/80">
             {formatFullWhen(conf.startedAt)}
@@ -1465,6 +1552,8 @@ function SoloItem({
   return (
     <li
       className="border-b-2 border-border px-4 py-3.5 last:border-b-0 transition-colors hover:bg-muted/30"
+      /* Punctuation around two values that are already localised where they are
+         produced — no words of its own, so no dictionary entry. */
       aria-label={`${label} — ${peerName}`}
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -1487,7 +1576,7 @@ function SoloItem({
               "flex max-w-full items-baseline text-start text-[15px] font-bold outline-none focus-visible:underline " +
               (missedIn ? tone.name : "text-foreground")
             }
-            aria-label={`View ${peerName}'s profile`}
+            aria-label={t("peer.viewNamedProfile", { name: peerName })}
           >
             <span className="truncate" dir="auto">{peerName}</span>
             {/* Owner: "immediately put the badge" — right after the last name, and
@@ -1498,7 +1587,7 @@ function SoloItem({
           </button>
           <div className="truncate text-xs text-muted-foreground">
             <span className={"font-semibold " + tone.label}>{label}</span>
-            {call.channel === "voice" ? " · Voice" : call.channel === "video" ? " · Video" : ""}
+            {call.channel === "voice" ? ` · ${t("history.voice")}` : call.channel === "video" ? ` · ${t("history.video")}` : ""}
             {/* A missed/unanswered call has no duration to show, so it is only
                 rendered when there genuinely is one. The peer's number now lives
                 beside the name, and OUR OWN number is never shown anywhere in the
@@ -1575,13 +1664,50 @@ function SoloItem({
 }
 
 /**
- * Live-call rejoin card (v2.99.9). For a number currently in a call that the
- * viewer was part of, `directory.liveRoom` returns the live roster + host (or
- * null — for a stranger's call, an ended call, or a non-signaling instance).
- * Tapping Join asks the host to let you back in (a knock); the engine surfaces
- * the host's approval and, once granted, drops you into the live call.
+ * Live-call rejoin card — board frame 5b (v2.99.9; rebuilt to the frame).
+ *
+ * For a number currently in a call that the viewer was part of,
+ * `directory.liveRoom` returns the live roster + host (or null — for a
+ * stranger's call, an ended call, or a non-signaling instance). Tapping Join
+ * asks the host to let you back in (a knock); the engine surfaces the host's
+ * approval and, once granted, drops you into the live call.
+ *
+ * ── THE CARD WAS PAINTED IN THE PRESENCE GREEN, WHICH IS THE ONE THING GREEN
+ *    MAY NOT MEAN ──
+ * The surface, the disc and the Join button all read `--relay-online`. That hue
+ * means ONLINE and nothing else — it is what every presence LED in the app is
+ * drawn with, which is why v2.99.86 moved DND off it, v2.106.9 the speaking
+ * tile, v2.106.11 the push banner, v2.106.18 the voice waveform and v2.106.42
+ * the pinned-thread marker. "A call is live" is an ACTIVITY and Join is a CTA,
+ * and the board says so in as many words ("Green means ONLINE, and nothing
+ * else… that's what the accent is for"). So the whole card moves to the accent,
+ * which is also what frame 5b draws.
+ *
+ * `--primary` rather than a raw `var(--rb)`: v2.106.4 repointed `--primary` at
+ * the cycling accent inside `.dark.relay-v2` precisely so accent UI follows the
+ * hue in dark while light keeps a measured value — the raw variable as TEXT
+ * measures ~1.7:1 on a light card and fails AA. The solid Join fill is `.rcta`,
+ * the shared primary-CTA recipe, which carries the board's `#04211a` on-accent
+ * text (legible across all twelve hues, where white fails on the yellow and
+ * lime entries) and the accent glow.
+ *
+ * ── THE DISC FOLLOWS THIS SCREEN'S OWN GROUP/PERSON LANGUAGE ──
+ * The frame draws a squircle for the room and a circle for a person, which is
+ * already the distinction every row here makes. A room with more than one other
+ * person in it gets the violet `Users` squircle a group conference row uses;
+ * borrowing one member's photo for a multi-party room would be the same guess
+ * v2.99.77 forbids for a group row's presence LED — N people do not have one
+ * face any more than they have one presence. With exactly one person in the
+ * room, `number` provably IS that person, so they get their real photo, story
+ * ring and profile tap like every other 1:1 row.
+ *
+ * `liveRoom` returns names and a host and DELIBERATELY no pins and no avatars
+ * (the router says why: the caller was in this call, but we still don't hand
+ * back a machine-dialable roster). So the group disc has no initials to draw —
+ * the glyph is the honest mark, not a placeholder.
  */
 function LiveRejoinCard({ number }: { number: string }) {
+  const t = useT();
   const engine = useRelayEngine();
   const q = trpc.directory.liveRoom.useQuery(
     { number },
@@ -1590,34 +1716,68 @@ function LiveRejoinCard({ number }: { number: string }) {
   const info = q.data;
   if (!info) return null;
   const names = info.members.map((m) => m.name).filter(Boolean);
-  const preview =
+  /* The viewer is NEVER counted here: `liveRoomInfo` refuses to advertise a room
+     the requester is already an active member of, so `count` is other people. */
+  const isGroup = info.count > 1;
+  /* The room's identity is the people in it. The count is NOT a fallback title —
+     it already renders on the line below, and printing it twice would be the
+     card telling you the same number in two type sizes; `history.call` is this
+     file's established title fallback (a conference row uses it too). */
+  const title =
     names.length === 0
-      ? `${info.count} in the call`
+      ? t("history.call")
       : names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3}` : "");
   return (
-    <div className="mb-2.5 flex items-center gap-3 rounded-2xl border border-[color:var(--relay-online,#06d6a0)]/40 bg-[color:var(--relay-online,#06d6a0)]/10 p-3">
-      <span className="grid size-10 shrink-0 place-items-center rounded-full bg-[color:var(--relay-online,#06d6a0)]/20 text-[color:var(--relay-online,#06d6a0)]">
-        <Radio className="size-5" />
-      </span>
+    <div className="mb-2.5 flex items-center gap-3 rounded-2xl border border-primary/40 bg-primary/5 p-3">
+      {isGroup ? (
+        <span
+          className="grid size-10 shrink-0 place-items-center rounded-xl"
+          style={{
+            background: "linear-gradient(160deg, rgba(167,139,250,.24), rgba(167,139,250,.07))",
+            color: "#a78bfa",
+          }}
+        >
+          <Users className="size-[18px]" />
+        </span>
+      ) : (
+        <PeerAvatar number={number} name={names[0]} avatarUrl={null} size={40} fallbackClassName="text-sm" />
+      )}
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 text-sm font-semibold">
-          Live now
-          <span className="text-xs font-normal text-muted-foreground">· {info.count} in the call</span>
+        <div className="truncate text-[15px] font-bold text-foreground" dir="auto">
+          {title}
         </div>
-        <div className="truncate text-xs text-muted-foreground">
-          {preview}
-          {info.hostName ? ` · hosted by ${info.hostName}` : ""}
+        {/* One sub-line, in the frame's own order: the live pip, then what is
+            happening, then who is hosting. `flex-wrap` rather than a second row,
+            so a long host name reflows instead of squeezing the run that says
+            the call is live down to nothing on a 320px phone. */}
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+          {/* Decorative: the words beside it already say the call is live, so a
+              screen reader must not hear it twice. Opacity-only and behind
+              `motion-safe`, because a repainting animation on the app's densest
+              scrolling screen is the cost class v2.99.84 measured out. */}
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 rounded-full bg-primary motion-safe:animate-pulse"
+          />
+          <span className="shrink-0 whitespace-nowrap text-xs font-semibold text-primary">
+            {t("history.liveNow")} · {t(inCallCountKey(info.count), { count: info.count })}
+          </span>
+          {info.hostName ? (
+            <span className="min-w-0 truncate text-xs text-muted-foreground" dir="auto">
+              · {t("history.hostedBy", { name: info.hostName })}
+            </span>
+          ) : null}
         </div>
       </div>
       <button
         type="button"
         onClick={() => {
           engine.knock(number);
-          toast("Asked the host to let you in…");
+          toast(t("history.knocked"));
         }}
-        className="shrink-0 rounded-full bg-[color:var(--relay-online,#06d6a0)] px-4 py-2 text-xs font-semibold text-black active:scale-95 transition-transform"
+        className="rcta shrink-0 rounded-xl px-4 py-2 text-xs font-bold transition-transform active:scale-95"
       >
-        Join
+        {t("history.join")}
       </button>
     </div>
   );

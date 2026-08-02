@@ -41,10 +41,38 @@ describe("v2.99.31 QA M6 — draft flushes instead of dropping on thread switch"
 
 describe("v2.99.31 QA L2/L3 — auth code + approval edges", () => {
   it("L2: resets the approval-status cache before entering the waiting stage", () => {
-    const idx = AUTH.indexOf("utils.otpAuth.sessionApprovalStatus.reset()");
-    expect(idx).toBeGreaterThan(0);
-    // the reset sits immediately before setStage("waiting")
-    expect(AUTH.slice(idx, idx + 120)).toMatch(/setStage\("waiting"\)/);
+    /* THE PROPERTY IS THE ORDER, not the distance. This used to bound the two at
+       120 characters, which a later comment between them overflowed — a failure on
+       CORRECT source, and the recurring fixed-slice fragility (v2.99.78). What has
+       to hold is that the cache is cleared BEFORE the stage that polls it, so the
+       waiting effect can never act on a `denied` left by an earlier attempt; the
+       window is bounded by the enclosing block instead, so prose can move freely. */
+    /* Scoped to `verifyCode`, which is the site that matters: it is the one that
+       enters the stage off a FRESHLY parked session, so a `denied` cached from an
+       earlier attempt is exactly what the effect would serve. */
+    const from = AUTH.indexOf("async function verifyCode");
+    const to = AUTH.indexOf("async function resend", from);
+    expect(from).toBeGreaterThan(0);
+    expect(to).toBeGreaterThan(from); // an end anchor that PRECEDES the start collapses the slice
+    const fn = AUTH.slice(from, to);
+    expect(fn.length).toBeGreaterThan(200);
+    const resetAt = fn.indexOf("utils.otpAuth.sessionApprovalStatus.reset()");
+    const waitingAt = fn.indexOf('setStage("waiting")');
+    expect(resetAt).toBeGreaterThan(0);
+    expect(waitingAt).toBeGreaterThan(0);
+    expect(resetAt).toBeLessThan(waitingAt);
+    /* Nothing may await in between, or the effect can run on the old value first. */
+    expect(fn.slice(resetAt, waitingAt)).not.toMatch(/\bawait\b/);
+
+    /* THE SECOND ENTRY IS SAFE, and the reason is recorded rather than assumed —
+       `pickMethod("device")` also enters the stage and deliberately does NOT reset.
+       It cannot serve a stale verdict because a denial CLEARS `approvalPending`, and
+       the row that reaches it is gated on that flag, which is set only immediately
+       after the reset above. Both halves are pinned, so a change to either turns
+       this red rather than quietly re-opening L2 through the newer door. */
+    expect(AUTH).toMatch(/s === "denied"[\s\S]{0,400}?setApprovalPending\(false\)/);
+    expect((AUTH.match(/hasPending=\{approvalPending\}/g) || []).length).toBeGreaterThan(0);
+    expect(AUTH).toMatch(/setApprovalPending\(true\);\s*\n\s*setStage\("waiting"\)/);
   });
   it("L3: verifyCode clears the code on a wrong-code error", () => {
     const fn = AUTH.slice(AUTH.indexOf("async function verifyCode"), AUTH.indexOf("async function verifyCode") + 2400);

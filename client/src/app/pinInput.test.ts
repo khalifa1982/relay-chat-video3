@@ -116,7 +116,11 @@ describe("the composer's Send is permanent (v2.106.65)", () => {
     // It lives in the + menu now. The `Mic` import stays used — RecordingBar's resume
     // button renders it — so its mere presence proves nothing; the SWAP is what must go.
     expect(MSG).not.toMatch(/aria-label=\{recording \? "Stop" : "Record"\}/);
-    expect(MSG).toMatch(/startRecording\(\); \}\}[\s\S]{0,400}Voice note/);
+    // Read through `expandCopy` — the row's label is a dictionary key now, and a raw
+    // search for the English would report a translated composer as having lost its
+    // recorder. The PROPERTY is unchanged: the recording start sits inside the + menu's
+    // Voice note row, not in the composer's primary slot.
+    expect(expandCopy(MSG)).toMatch(/startRecording\(\); \}\}[\s\S]{0,400}Voice note/);
   });
 });
 

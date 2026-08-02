@@ -15,6 +15,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { copyOnScreen } from "../../../server/testing/copyOnScreen";
+import { DICT } from "./i18n";
 import {
   EMOJI_GROUPS,
   REACTION_QUICK,
@@ -312,7 +313,23 @@ describe("the reply band in the story viewer", () => {
     // The server answers a dead id and an unauthorised one identically. Without
     // this the person gets a bare refusal with no explanation.
     expect(STATUS).toMatch(/const expired = new Date\(expiresAt\)\.getTime\(\) <= Date\.now\(\);/);
-    expect(STATUS).toMatch(/This status has expired\./);
+    /* THE PIN FROZE THE WRONG WORD. It required the literal "This status has expired."
+       — and v2.101.0's whole correction is that the ephemeral post is a STORY, so this
+       sentence was one of two on the screen still naming the profile label. It survived
+       because `storyVsStatus.test.ts`'s sweep reads only quoted title/placeholder/
+       aria-label/toast literals and this is a bare JSX text node.
+
+       Rewritten to the property it always stood for: the bar SAYS the thing has expired,
+       rather than leaving a refusal unexplained. `copyOnScreen` is satisfied by the
+       literal or by a key whose English half is that sentence, and is stronger than
+       either, because reaching the dictionary also proves an Arabic half exists. */
+    expect(
+      copyOnScreen(STATUS, "has expired."),
+      "the reply bar must still say the story has expired",
+    ).toBe(true);
+    expect(STATUS).toMatch(/\{t\("status\.expired"\)\}/);
+    // …and it says STORY, which is the word this sentence was getting wrong.
+    expect(DICT["status.expired"].en.toLowerCase()).toContain("story");
   });
 
   it("guards against a double-tap sending twice", () => {

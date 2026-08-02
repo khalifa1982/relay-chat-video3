@@ -274,8 +274,14 @@ describe("the row renders it, and a locked group still says nothing", () => {
     // A privacy screen that started naming an activity would leak the thing it covers.
     const iHidden = rowSlice.indexOf('hidden\n');
     const iReply = rowSlice.indexOf("previewOfStoryReply");
-    expect(rowSlice).toMatch(/hidden[\s\S]{0,40}\?\s*"Locked"/);
-    expect(iReply).toBeGreaterThan(rowSlice.indexOf('"Locked"'));
+    // Anchored on the KEY rather than the word: an ordering assertion whose anchor is
+    // copy answers -1 the moment the screen is translated, and -1 is less than every
+    // real offset — so this would have gone on passing while the lock check moved
+    // BELOW the story-reply line (the negative-index trap, v2.99.78 / v2.106.65).
+    const iLocked = rowSlice.indexOf('tr("msg.locked")');
+    expect(rowSlice).toMatch(/hidden[\s\S]{0,40}\?\s*tr\("msg\.locked"\)/);
+    expect(iLocked).toBeGreaterThan(-1);
+    expect(iReply).toBeGreaterThan(iLocked);
     expect(iHidden === -1 || iHidden < iReply).toBe(true);
   });
 
@@ -293,7 +299,9 @@ describe("the reply-quote line got the same treatment", () => {
   });
 
   it("but the disappearing-message guard stays AHEAD of it", () => {
-    const iExpire = fn.indexOf("Disappearing message");
+    // Same re-anchoring as above — the masked wording is keyed now, and an anchor made
+    // of copy would slide to -1 and satisfy this comparison vacuously.
+    const iExpire = fn.indexOf('t("msg.disappearingPreview")');
     const iReply = fn.indexOf("statusReplyOf");
     expect(iExpire).toBeGreaterThan(-1);
     expect(iReply).toBeGreaterThan(iExpire);

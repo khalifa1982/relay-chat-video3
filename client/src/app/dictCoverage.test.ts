@@ -36,13 +36,22 @@ const DICT_DIR = path.join(ROOT, "client/src/app/dict");
  * of one button arrive — and because deleting and re-adding them churns the Arabic.
  */
 const UNREAD_BY_DESIGN: Record<string, string> = {
-  "common.delete": "shared vocabulary, for the group/admin sweep still to come",
-  "common.retry": "shared vocabulary, for the group/admin sweep still to come",
+  /* `common.delete` was here and is NOT any more: Contacts' row menu renders the shared
+     verb as of #156, which is exactly what the vocabulary was being kept for. */
+  /* `common.retry` was here and is NOT any more: the Messages thread list's own Retry
+     button reads it as of the 2026-08-02 sweep, so the exemption stopped being true.
+     That is this test's second assertion doing its job rather than a change to it. */
   "common.search": "shared vocabulary, for the group/admin sweep still to come",
-  "common.signOut": "shared vocabulary, for the group/admin sweep still to come",
-  "appearance.title": "the pane's heading comes from Profile's own PANE_TITLE map",
+  /* `common.signOut` and `appearance.title` were here and are NOT any more: Profile's
+     sweep wired both — the sign-out row renders the shared verb, and the Appearance
+     pane's heading comes from `appearance.title` rather than a rival key, so the pane's
+     title and the settings inside it cannot come to disagree. Same as above: the
+     staleness assertion below is what forced this, which is the guard working. */
   "appearance.sample": "the preview line is not rendered yet",
-  "contacts.nOnline": "superseded by the section header's own count expression",
+  /* `contacts.nOnline` was here and is now DELETED. Its own reason said it was
+     "superseded by the section header's own count expression" — and that expression is a
+     BANDED key family now (`contacts.onlineCount*`), because a count cannot be one
+     interpolated sentence in a language whose dual swallows the numeral entirely. */
   "dialer.from": "superseded when the dial readout dropped the viewer's own number",
   "dialer.myNumber": "superseded when the dial readout dropped the viewer's own number",
   "msg.clearAction": "superseded by the swipe tray's own labels",
@@ -73,6 +82,17 @@ function appSources(): string {
     }
   };
   walk(path.join(ROOT, "client/src"));
+  /* AND `shared/`, because a key can legitimately be READ from there. `shared/` holds
+     modules the browser imports directly — `profileStatus.ts` is one, and it names the
+     dictionary keys for the five profile-status labels and hints on its own metadata
+     (the `labelKey` pattern, so a module-level constant that cannot call a hook still
+     carries its words). Walking `client/src` alone reported those five as dead keys
+     while they were being resolved on every render of the picker, which is the failure
+     mode this guard exists to prevent, pointing the wrong way: a key with a real reader
+     reported as unread is a guard crying wolf, and the fix is to look where the reader
+     is. Widening the search can only ever find MORE readers, so it cannot mask a
+     genuinely dead key. */
+  walk(path.join(ROOT, "shared"));
   return all;
 }
 

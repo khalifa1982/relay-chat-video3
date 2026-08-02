@@ -20,6 +20,8 @@ import {
   foldName,
   type SuggestableContact,
 } from "./contactSuggest";
+import { guestHoldKey } from "@/pages/app/Profile";
+import { translate } from "./i18n";
 
 const ROOT = path.resolve(__dirname, "..", "..", "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -322,10 +324,61 @@ describe("the guest notice is accurate rather than alarming", () => {
   });
 
   it("says the clock RESETS on each visit, which is the non-alarming truth", () => {
-    // `touchGuestExpiry` pushes it forward every visit, so an active guest never
-    // runs out — a bare "expires in N days" would imply a countdown they cannot stop.
-    expect(body).toMatch(/resets every time you open RELAY/);
+    /* `touchGuestExpiry` pushes it forward every visit, so an active guest never runs
+       out — a bare "expires in N days" would imply a countdown they cannot stop.
+
+       PINNED AT THE SELECTOR, NOT THROUGH `copyOnScreen`, and the limit is worth naming:
+       that helper resolves LITERAL `t("key")` call sites, and this sentence is reached
+       through `tn(guestHoldKey(days))` — a key chosen at RUNTIME, which no static reader
+       can follow. So every band the selector can return is checked to carry the promise,
+       which is stronger than the old literal: it covers all four wordings rather than
+       whichever one happened to be written first. */
+    for (const n of [0, 1, 2, 5, 30]) {
+      expect(
+        translate("en", guestHoldKey(n)),
+        `${n} days still says the clock resets`,
+      ).toMatch(/resets every time you open RELAY/);
+      /* AND IN ARABIC. Checking only the English was a real gap in the first version of
+         this test — a mutation that stripped the promise from an Arabic band survived it
+         untouched, which is the "pin the English and say nothing about the other half"
+         shape the whole dictionary exists to prevent. */
+      expect(
+        translate("ar", guestHoldKey(n)),
+        `${n} days says the clock resets in Arabic too`,
+      ).toMatch(/وتُجدَّد المدة كلما فتحت/);
+    }
     expect(read("server/v2db.ts")).toMatch(/export async function touchGuestExpiry\(/);
+  });
+
+  it("the day count needs FOUR Arabic forms and gets them", () => {
+    /* `{days} more day${days === 1 ? "" : "s"}` cannot be translated at all: English
+       needs one/other, Arabic needs 1 singular, 2 DUAL, 3–10 plural of paucity and 11+
+       singular accusative. Rendering "3 يومًا" is wrong in a way every Arabic reader
+       sees, which is why a WHOLE key is selected per band rather than a word spliced in. */
+    expect(translate("en", guestHoldKey(1), { days: 1 })).toContain("1 more day");
+    expect(translate("en", guestHoldKey(1), { days: 1 })).not.toContain("1 more days");
+    for (const n of [0, 2, 3, 11, 30]) {
+      expect(translate("en", guestHoldKey(n), { days: n })).toContain(`${n} more days`);
+    }
+    expect(translate("ar", guestHoldKey(1))).toContain("يومًا واحدًا");
+    expect(translate("ar", guestHoldKey(2))).toContain("يومين");
+    for (const n of [3, 7, 10]) {
+      expect(translate("ar", guestHoldKey(n), { days: n }), `${n} takes أيام`).toContain("أيام");
+    }
+    for (const n of [11, 25, 30]) {
+      expect(translate("ar", guestHoldKey(n), { days: n }), `${n} takes يومًا`).toContain("يومًا");
+    }
+    // The bands are genuinely different strings, or the split is decoration.
+    expect(guestHoldKey(2)).not.toBe(guestHoldKey(3));
+    expect(guestHoldKey(10)).not.toBe(guestHoldKey(11));
+    /* WESTERN DIGITS wherever a count is actually substituted (v2.106.84) — and scoped
+       to those forms, because Arabic spells one and two as WORDS and has no digit there. */
+    for (const n of [3, 7, 12, 30]) {
+      expect(translate("ar", guestHoldKey(n), { days: n })).toMatch(new RegExp(`\\b${n}\\b`));
+    }
+    for (const n of [0, 1, 2, 5, 12]) {
+      expect(translate("ar", guestHoldKey(n), { days: n })).not.toMatch(/[٠-٩]/);
+    }
   });
 
   it("renders nothing when there is no clock to report", () => {

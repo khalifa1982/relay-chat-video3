@@ -23,7 +23,15 @@ describe("Contacts — rich rows + inline actions", () => {
   it("each row taps into the profile popup, and exposes Voice/Video/Message buttons", () => {
     expect(PAGE).toMatch(/function ContactRow/);
     // v2.96: the main tap opens the profile popup (avatar + status + actions).
-    expect(PAGE).toMatch(/aria-label=\{`View \$\{c\.displayName \|\| c\.number\}'s profile`\}/);
+    /* The label is the SHARED phrase now (`peer.viewNamedProfile`), which History's rows
+       use too. That is not just localisation bookkeeping: the possessive has no Arabic
+       equivalent, so "X's profile" becomes "the profile of X" and the NAME has to move
+       within the sentence — which only a whole key can express, and which a template
+       literal chopped at the English apostrophe never could. The property is that the
+       control is LABELLED with the person it opens. */
+    expect(PAGE).toMatch(
+      /aria-label=\{t\("peer\.viewNamedProfile", \{ name: c\.displayName \|\| c\.number \}\)\}/,
+    );
     expect(PAGE).toMatch(/onClick=\{\(\) => openPeerProfile\(c\.number\)\}/);
     expect(PAGE).toMatch(/aria-label=\{t\("contacts\.voiceCall"\)\}/);
     expect(PAGE).toMatch(/aria-label=\{t\("contacts\.videoCall"\)\}/);

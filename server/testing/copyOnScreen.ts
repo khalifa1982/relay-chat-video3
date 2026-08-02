@@ -47,8 +47,21 @@ function normalize(s: string): string {
  * translator there would silently be a ThreadSummary rather than a function. A helper
  * that only knew `t` would report those screens as having lost their copy, which is a
  * guard crying wolf on correct code.
+ *
+ * `tn` is the THIRD spelling and had the same problem. It is `translateNodes`, and it
+ * is not a stylistic variant — it exists because some sentences carry an inline node in
+ * the MIDDLE (a bolded email address, a bolded group name), and `dict/auth.ts` records
+ * why splitting those at the English seam is untranslatable: Arabic does not put the
+ * emphasised part between the same two fragments, so the halves can only be
+ * re-assembled into nonsense. A sentence rendered with `tn` is just as much on the
+ * screen as one rendered with `t`, so a helper that knew only two of the three reported
+ * exactly the sentences that were hardest to translate as missing.
+ *
+ * Widening this can only ever recognise MORE correct code — `copyOnScreen` is asked
+ * positively ("is this sentence here"), so a spelling it does not know produces a false
+ * FAILURE and never a false pass.
  */
-const TCALL = "\\b(?:t|tr)\\(\\s*";
+const TCALL = "\\b(?:t|tr|tn)\\(\\s*";
 
 /**
  * Every dictionary key whose English half CONTAINS this text.

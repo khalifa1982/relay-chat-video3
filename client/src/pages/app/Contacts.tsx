@@ -114,6 +114,59 @@ const CATEGORY_META: Record<Category, { labelKey: TKey; icon: typeof Crown; tint
 const CATEGORY_ORDER: Category[] = ["vip", "family", "friend", "team"];
 
 /**
+ * A tag's label key — the SAME key the section heading uses.
+ *
+ * The filter chips and the row chip used to render `TAG_LABEL[tag]` from
+ * `@shared/contactTags` while the heading rendered `CATEGORY_META[tag].labelKey`, so
+ * one fact had two sources: in English they already disagreed ("Friend" on the chip,
+ * "Friends" on the heading), and in Arabic the heading was translated while the chip
+ * was not. Reading both off `CATEGORY_META` makes them unable to disagree by
+ * construction rather than by anyone remembering to keep two lists in step.
+ *
+ * `Category` and `ContactTag` are the same four values; this is the one place that
+ * has to be said, so a fifth tag becomes a compile error here rather than an
+ * untranslated chip.
+ */
+export function tagLabelKey(tag: ContactTag): TKey {
+  return CATEGORY_META[tag as Category].labelKey;
+}
+
+/**
+ * Which band a count falls in — the shape `guestExpiryKey` established (v2.106.93).
+ *
+ * A count cannot be a placeholder in one sentence: English needs one/other and Arabic
+ * needs the DUAL at 2 (where the numeral disappears into the word entirely), the
+ * plural genitive at 3-10 and the singular accusative at 11+. So a WHOLE key is
+ * selected per band and nothing is ever assembled from a stem plus a suffix.
+ *
+ * Shared by both counts on this screen, because "which band is this number in" is one
+ * rule and two copies of it is how the two headers come to disagree at 2.
+ *
+ * EACH KEY IS RETURNED AS A LITERAL, never composed as `` `contacts.onlineCount${band}` ``.
+ * That is not a style preference and it cost two real properties when it was written the
+ * other way: a template literal needs an `as TKey` cast, which switches the type checker
+ * OFF for exactly the strings that must match the dictionary — a misspelt band would
+ * compile and render the raw key on somebody's phone; and the dead-key sweep looks for
+ * each key's TEXT in the sources, so composed keys read as having no reader at all and
+ * the whole family looked like coverage nobody consumes. `guestExpiryKey` returns
+ * literals for the same two reasons.
+ *
+ * Exported so the bands can be driven behaviourally: whether "1 online" ever renders as
+ * "1 onlines", or Arabic ever puts a numeral where the dual belongs, is exactly what a
+ * source pin cannot answer.
+ */
+export function onlineCountKey(n: number): TKey {
+  if (n <= 1) return "contacts.onlineCountOne";
+  if (n === 2) return "contacts.onlineCountTwo";
+  return n <= 10 ? "contacts.onlineCountFew" : "contacts.onlineCountMany";
+}
+export function contactCountKey(n: number): TKey {
+  if (n <= 1) return "contacts.contactCountOne";
+  if (n === 2) return "contacts.contactCountTwo";
+  return n <= 10 ? "contacts.contactCountFew" : "contacts.contactCountMany";
+}
+
+/**
  * "last seen …" for one row.
  *
  * TOTAL BY CONSTRUCTION, and that is not defensiveness for its own sake — it is a
@@ -385,15 +438,15 @@ export default function ContactsPage() {
             (tagFilter === null ? "rchip-accent" : "bg-secondary/60 text-muted-foreground hover:text-foreground")
           }
         >
-          All
+          {t("contacts.filterAll")}
         </button>
-        {CONTACT_TAGS.map((t) => {
-          const on = tagFilter === t;
+        {CONTACT_TAGS.map((tag) => {
+          const on = tagFilter === tag;
           return (
             <button
-              key={t}
+              key={tag}
               type="button"
-              onClick={() => setTagFilter(on ? null : t)}
+              onClick={() => setTagFilter(on ? null : tag)}
               aria-pressed={on}
               /* The lit chip wears the TAG'S OWN colour rather than the accent —
                  unlike every other selection in the app. These four are fixed
@@ -410,11 +463,12 @@ export default function ContactsPage() {
               className={
                 "shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition " +
                 (on
-                  ? "rtag " + TAG_CLASS[t]
+                  ? "rtag " + TAG_CLASS[tag]
                   : "bg-secondary/60 text-muted-foreground hover:text-foreground")
               }
             >
-              {TAG_LABEL[t]}
+              {/* The heading's own key — see `tagLabelKey`: one fact, one source. */}
+              {t(tagLabelKey(tag))}
             </button>
           );
         })}
@@ -444,13 +498,11 @@ export default function ContactsPage() {
                 <AlertCircle />
               </EmptyMedia>
               <EmptyTitle>{t("contacts.loadFailed")}</EmptyTitle>
-              <EmptyDescription>
-                Your saved contacts are still there — this device just couldn't reach them.
-              </EmptyDescription>
+              <EmptyDescription>{t("contacts.loadFailedHint")}</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button size="sm" onClick={() => void contacts.refetch()}>
-                Retry
+                {t("common.retry")}
               </Button>
             </EmptyContent>
           </Empty>
@@ -490,12 +542,22 @@ export default function ContactsPage() {
                     the SEARCH alone — so it never mentioned the lit chip and never offered
                     the one-tap recovery, leaving somebody retyping a query that was never
                     the reason. Four cases, one expression. */}
+                {/* `label` and `all` are the CHIPS' OWN labels rather than the words
+                    spelled again, so the sentence pointing at a control and the control
+                    itself cannot come to disagree — in either language. */}
                 {search && tagFilter
-                  ? `Nobody matching "${search}" is labelled ${TAG_LABEL[tagFilter]}. Tap All to search everyone.`
+                  ? t("contacts.noMatchesInLabel", {
+                      query: search,
+                      label: t(tagLabelKey(tagFilter)),
+                      all: t("contacts.filterAll"),
+                    })
                   : search
-                    ? `Nobody matches "${search}".`
+                    ? t("contacts.noMatchesFor", { query: search })
                     : tagFilter
-                      ? `None of your contacts are labelled ${TAG_LABEL[tagFilter]}. Tap All to see everyone.`
+                      ? t("contacts.noneWithLabel", {
+                          label: t(tagLabelKey(tagFilter)),
+                          all: t("contacts.filterAll"),
+                        })
                       : t("contacts.noneHint")}
               </EmptyDescription>
             </EmptyHeader>
@@ -584,20 +646,23 @@ export default function ContactsPage() {
                          word in place and it read exactly like that. */
                       <span
                         className="flex shrink-0 items-center gap-1 font-mono text-[10px] font-bold tabular-nums text-[color:var(--relay-green-text)]"
-                        title={`${total} online`}
+                        title={t(onlineCountKey(total), { count: total })}
                       >
                         <span className="size-1.5 rounded-full bg-[color:var(--relay-online)]" />
                         {total}
                       </span>
                     ) : (
                       <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] tabular-nums">
-                        <span className="text-muted-foreground/70" title={`${total} contacts`}>
+                        <span
+                          className="text-muted-foreground/70"
+                          title={t(contactCountKey(total), { count: total })}
+                        >
                           {total}
                         </span>
                         {onlineCount > 0 && (
                           <span className="flex items-center gap-1 font-bold text-[color:var(--relay-green-text)]">
                             <span className="size-1.5 rounded-full bg-[color:var(--relay-online)]" />
-                            {onlineCount} online
+                            {t(onlineCountKey(onlineCount), { count: onlineCount })}
                           </span>
                         )}
                       </span>
@@ -817,7 +882,9 @@ function ContactRow({
         type="button"
         onClick={() => openPeerProfile(c.number)}
         className="flex flex-1 min-w-0 items-center gap-3 text-start outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-lg"
-        aria-label={`View ${c.displayName || c.number}'s profile`}
+        /* The shared phrase — the possessive has no Arabic equivalent, so the name
+           MOVES within the sentence, which only a whole key can express. */
+        aria-label={t("peer.viewNamedProfile", { name: c.displayName || c.number })}
       >
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 min-w-0">
@@ -871,7 +938,8 @@ function ContactRow({
                     " shrink-0 !rounded-md px-1.5 py-px text-[9.5px] font-bold uppercase tracking-wider"
                   }
                 >
-                  {TAG_LABEL[first]}
+                  {/* The section heading's own key — see `tagLabelKey`. */}
+                  {t(tagLabelKey(first))}
                 </span>
               ) : null;
             })()}
@@ -898,17 +966,31 @@ function ContactRow({
           `shrink-0` and `ms-auto` pins them to the trailing edge in both directions. */}
       <div className="flex items-center gap-2 ps-[54px]">
         <span className="min-w-0 truncate text-xs text-muted-foreground">
+          {/* `presence.onCall` and `presence.away` are the APP's shared words for those
+              two states and their English matches this row exactly, so they are reused
+              rather than copied — one state must not end up with two Arabic words. The
+              bare "online" is deliberately NOT `presence.online` ("online now"): a
+              different English phrase, and swapping it would be an unrequested copy
+              change to a row whose width was measured. */}
           {c.blocked ? (
-            <span className="text-[#ff8d84]">blocked</span>
+            <span className="text-[#ff8d84]">{t("contacts.blocked")}</span>
           ) : c.presenceHidden ? null : c.inCall ? (
-            <span className="text-amber-500">on a call</span>
+            <span className="text-amber-500">{t("presence.onCall")}</span>
           ) : c.isOnline && c.idle ? (
             // Backgrounded (v2.99.92): "away", not "online" and definitely not
             // "last seen 3s ago", which is what minimising used to produce.
-            <span className="text-muted-foreground">away</span>
+            <span className="text-muted-foreground">{t("presence.away")}</span>
           ) : c.isOnline ? (
-            <span className="text-[color:var(--relay-online)]">online</span>
+            <span className="text-[color:var(--relay-online)]">{t("contacts.rowOnline")}</span>
           ) : (
+            /* STILL ENGLISH, AND DELIBERATELY SO. `relativeTime` is a relative-time
+               formatter of exactly the same class as `formatLastSeen`, which five other
+               surfaces share and which is being translated as its own piece of work.
+               Translating this one alone would make a contact's row and that same
+               person's profile popup answer the same question in two languages; and
+               translating the "last seen" wrapper WITHOUT the duration would assemble a
+               sentence from a fragment, which is the one thing the dictionary's rules
+               forbid outright. Named in the release notes rather than half-done. */
             <>last seen {relativeTime(c.lastSeenAt)}</>
           )}
         </span>
@@ -976,10 +1058,14 @@ function ContactRow({
                 a duplicate of a control that is now always on screen is a second way to
                 do one thing, and the one that is harder to find. */}
             <DropdownMenuItem onClick={onToggleFavorite}>
-              {c.favourite ? <><StarOff className="size-4" /> Unfavorite</> : <><Star className="size-4" /> Favorite</>}
+              {c.favourite ? (
+                <><StarOff className="size-4" /> {t("contacts.unfavorite")}</>
+              ) : (
+                <><Star className="size-4" /> {t("contacts.favorite")}</>
+              )}
             </DropdownMenuItem>
             <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/70 pt-2">
-              Category
+              {t("contacts.category")}
             </DropdownMenuLabel>
             {CATEGORY_ORDER.map((cat) => {
               const CIcon = CATEGORY_META[cat].icon;
@@ -1001,14 +1087,14 @@ function ContactRow({
             })}
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={onEdit}>
-              <Pencil className="size-4" /> Edit
+              <Pencil className="size-4" /> {t("contacts.edit")}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={onToggleBlock}>
               <Ban className={"size-4 " + (c.blocked ? "" : "text-red-500")} />
               {c.blocked ? t("contacts.unblock") : t("contacts.block")}
             </DropdownMenuItem>
             <DropdownMenuItem variant="destructive" onClick={onDelete}>
-              <Trash2 className="size-4" /> Delete
+              <Trash2 className="size-4" /> {t("common.delete")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -1127,7 +1213,7 @@ function AddContactDialog({
           <DialogDescription className="sr-only">
             {editing.id ? t("contacts.editBody") : t("contacts.addBody")}
           </DialogDescription>
-          <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close">
+          <Button size="icon" variant="ghost" onClick={onClose} aria-label={t("contacts.close")}>
             <X className="size-4" />
           </Button>
         </div>
@@ -1137,7 +1223,7 @@ function AddContactDialog({
         <div className="space-y-4 p-5 overflow-y-auto flex-1 min-h-0">
           <div>
             <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-              RELAY number
+              {t("contacts.relayNumber")}
             </label>
             <div className="relative">
               <Input
@@ -1150,7 +1236,7 @@ function AddContactDialog({
                   setNumber(capPinInput(e.target.value))
                 }
                 disabled={!!editing.id}
-                placeholder="e.g. 482015"
+                placeholder={t("contacts.numberPlaceholder")}
                 maxLength={PIN_INPUT_MAXLENGTH}
                 inputMode="numeric"
                 autoFocus={!editing.id}
@@ -1162,7 +1248,7 @@ function AddContactDialog({
             </div>
             {!editing.id && (
               <p className="text-xs text-muted-foreground mt-1.5">
-                Type a 6-digit RELAY number to preview the user.
+                {t("contacts.numberHint")}
               </p>
             )}
           </div>
@@ -1220,15 +1306,16 @@ function AddContactDialog({
                     </div>
                     <div className="text-xs text-muted-foreground font-mono">
                       {lookup.data!.number}
+                      {/* The same two words the row above uses, from the same keys. */}
                       {lookup.data!.presenceHidden ? null : lookup.data!.isOnline ? (
                         <>
                           {" · "}
                           <span className="text-[color:var(--relay-online)] font-medium">
-                            online
+                            {t("contacts.rowOnline")}
                           </span>
                         </>
                       ) : (
-                        <span> · offline</span>
+                        <span> · {t("presence.offline")}</span>
                       )}
                     </div>
                   </div>
@@ -1240,11 +1327,10 @@ function AddContactDialog({
                   </div>
                   <div className="text-sm">
                     <div className="font-medium text-foreground">
-                      No RELAY user with this number
+                      {t("contacts.noSuchUser")}
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      You can still save it — they'll show up once they
-                      register.
+                      {t("contacts.noSuchUserHint")}
                     </div>
                   </div>
                 </div>
@@ -1254,7 +1340,7 @@ function AddContactDialog({
 
           <div>
             <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-              Display name
+              {t("contacts.displayName")}
             </label>
             <Input
               value={displayName}
@@ -1269,7 +1355,7 @@ function AddContactDialog({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-                Email
+                {t("contacts.email")}
               </label>
               <Input
                 type="email"
@@ -1281,7 +1367,7 @@ function AddContactDialog({
             </div>
             <div>
               <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-                Phone
+                {t("contacts.phone")}
               </label>
               <Input
                 type="tel"
@@ -1293,7 +1379,7 @@ function AddContactDialog({
             </div>
             <div>
               <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-                Company
+                {t("contacts.company")}
               </label>
               <Input
                 value={company}
@@ -1304,7 +1390,7 @@ function AddContactDialog({
             </div>
             <div>
               <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-                Title / role
+                {t("contacts.jobTitleLabel")}
               </label>
               <Input
                 value={jobTitle}
@@ -1315,7 +1401,7 @@ function AddContactDialog({
             </div>
             <div>
               <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-                Website
+                {t("contacts.website")}
               </label>
               <Input
                 value={website}
@@ -1326,19 +1412,19 @@ function AddContactDialog({
             </div>
             <div>
               <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-                Birthday
+                {t("contacts.birthday")}
               </label>
               <Input
                 value={birthday}
                 onChange={(e) => setBirthday(e.target.value)}
-                placeholder="e.g. Mar 14"
+                placeholder={t("contacts.birthdayPlaceholder")}
                 maxLength={32}
               />
             </div>
           </div>
           <div>
             <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-              Notes
+              {t("contacts.notes")}
             </label>
             <Textarea
               value={notes}
@@ -1349,7 +1435,7 @@ function AddContactDialog({
           </div>
           <div>
             <label className="text-xs uppercase tracking-widest text-muted-foreground block mb-1.5">
-              Category
+              {t("contacts.category")}
             </label>
             <div className="flex flex-wrap gap-2">
               {CATEGORY_ORDER.map((cat) => {
@@ -1380,7 +1466,7 @@ function AddContactDialog({
         {/* Sticky footer — always visible regardless of form length. */}
         <div className="shrink-0 flex items-center justify-end gap-2 p-4 border-t border-border/60 bg-card rounded-b-2xl">
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             onClick={() =>

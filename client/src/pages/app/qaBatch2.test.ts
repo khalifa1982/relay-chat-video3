@@ -29,7 +29,7 @@ describe("v2.99.23 QA H2 — a locked expiring message can't be extracted from t
     // and the draft-reconstruct path passes meta through
     expect(MSGS).toMatch(/meta: \(m as \{ meta\?: unknown \}\)\.meta \}\);/);
     // previewOf already masks on meta.expire (regression guard)
-    expect(MSGS).toMatch(/\?\.expire != null\) return "⏱ Disappearing message";/);
+    expect(MSGS).toMatch(/\?\.expire != null\) return t\("msg\.disappearingPreview"\);/);
   });
 });
 

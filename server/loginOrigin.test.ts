@@ -267,8 +267,12 @@ describe("one projection, three surfaces", () => {
  *  collapsed the window to "" and every assertion inside passed vacuously — the
  *  unbounded-slice fragility this repo keeps re-learning. */
 function pendingCard(): string {
-  const at = PROFILE.indexOf("New sign-in waiting");
-  const card = PROFILE.slice(at, PROFILE.indexOf("Decline", at));
+  /* RE-ANCHORED ON CODE (2026-08-02): both ends used to be COPY, and this screen now
+     renders through `dict/profile.ts` — so the heading became `t("profile.devicePending")`
+     and `indexOf` answered -1, which `slice(-1, …)` turns into a one-character window.
+     A prose anchor cannot survive a translation sweep; the key expression can. */
+  const at = PROFILE.indexOf('t("profile.devicePending")');
+  const card = PROFILE.slice(at, PROFILE.indexOf('t("profile.deviceDecline")', at));
   if (card.length < 200) throw new Error("pendingCard slice collapsed");
   return card;
 }
@@ -291,7 +295,10 @@ describe("what the owner actually sees", () => {
   });
 
   it("it tells the owner what to do if it wasn't them", () => {
-    expect(PROFILE).toMatch(/If this wasn't you, decline it/);
+    expect(
+      copyOnScreen(PROFILE, "If this wasn't you, decline it"),
+      whyCopyMissing(PROFILE, "If this wasn't you, decline it")
+    ).toBe(true);
   });
 
   it("the IP is bidi-isolated, so an RTL locale cannot reorder it", () => {

@@ -26,6 +26,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { formatElapsedSince, formatLastSeen } from "@shared/profileFields";
+import { translate } from "@/app/i18n";
 import { peerPresenceLines } from "./Dialer";
 
 const ROOT = path.resolve(__dirname, "..", "..", "..", "..");
@@ -141,8 +142,20 @@ describe("add to contacts is one glossy icon, or nothing", () => {
   it("is an icon, not a text pill", () => {
     expect(codeOnly(QA)).not.toMatch(/Save \$\{fmt\} to contacts/);
     expect(QA).toMatch(/<UserPlus className="relative size-5"/);
-    // Still reachable without sight: the label lives on the button.
-    expect(QA).toMatch(/aria-label=\{`Add \$\{number\} to your contacts`\}/);
+    /* Still reachable without sight: the label lives on the button and NAMES THE
+       NUMBER being saved. Through the dictionary now — which is strictly stronger
+       than the literal it replaces, because reaching a key also proves an Arabic
+       half exists (`Entry` requires both), and the resolved sentence is asserted
+       below so the key cannot be repointed at different words. */
+    expect(QA).toMatch(/aria-label=\{t\("dialer\.addNumberToContacts", \{ number \}\)\}/);
+    expect(translate("en", "dialer.addNumberToContacts", { number: "777777" })).toBe(
+      "Add 777777 to your contacts",
+    );
+    // The number is INTERPOLATED, not dropped, in either language — a label that
+    // said only "add to your contacts" would not say which number.
+    for (const loc of ["en", "ar"] as const) {
+      expect(translate(loc, "dialer.addNumberToContacts", { number: "777777" })).toContain("777777");
+    }
     expect(QA).toMatch(/title=\{t\("dialer\.addToContacts"\)\}/);
   });
 

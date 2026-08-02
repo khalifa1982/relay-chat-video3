@@ -17,6 +17,26 @@
  *
  * See ./auth.ts for the Western-digits rule — every countdown and count here is
  * interpolated.
+ *
+ * ── COUNTS REUSE `groups.*` RATHER THAN MINTING A SECOND VOCABULARY ──────────────────
+ * "{n} members" and "{n} online" already exist as `groups.memberCountOne/Many` and
+ * `groups.onlineCount`, rendered by the group-info sheet. Keys are global, so the
+ * conversation header reads them directly instead of adding `msg.*` twins: two keys for
+ * one noun is how the sheet and the header come to describe the same group differently,
+ * and the Arabic plural decision then has to be made twice. That decision is the house's
+ * existing TWO-band one (singular / «أعضاء» for everything above it) rather than the
+ * four-band treatment `peer.guestExpiry*` uses — followed here for consistency with the
+ * surface that already ships it, not re-litigated.
+ *
+ * ── THE SECONDS BANDS ARE REAL, THOUGH ───────────────────────────────────────────────
+ * The disappearing-message copy SPELLS OUT "seconds", and the values it can carry are
+ * 5, 10 and 30 — which straddle an Arabic band boundary: 3–10 take the plural of paucity
+ * («ثوانٍ») and 11+ the singular accusative («ثانية»). `expireSecondsKey` in Messages.tsx
+ * picks the whole key; the two English halves are identical, which is fine, because the
+ * dictionary's uniqueness rule is about KEYS.
+ *
+ * Everywhere the same fact is shown ABBREVIATED ("{n}s", "{n}m") no band is needed and
+ * none is used: a unit symbol does not inflect in either language.
  */
 import type { Entry } from "./types";
 
@@ -228,4 +248,277 @@ export const MESSAGES = {
     ar: "أضف صورة للمجموعة (اختياري).",
   },
   "msg.createGroup": { en: "Create group", ar: "أنشئ المجموعة" },
+
+  /* ══════════════════════════════════════════════════════════════════════════════════
+     THE REST OF THE SCREEN (2026-08-02)
+
+     v2.106.85 wired the thread-list chrome, the confirmations and most of the composer,
+     and left ~90 render sites behind — including the `+` attachment menu the owner named
+     in their own words ("on the attachment inside the chat on the plus button add the
+     voice note beside of the other features set as video photos"), which was built
+     correctly and shipped entirely in English.
+     ══════════════════════════════════════════════════════════════════════════════════ */
+
+  // ── Thread-list states ──
+  "msg.loading": { en: "Loading…", ar: "جارٍ التحميل…" },
+  "msg.noGroupsYet": { en: "No groups yet.", ar: "لا مجموعات بعد." },
+  "msg.startGroupHint": {
+    en: "Tap the + above to start one.",
+    ar: "اضغط على + بالأعلى لبدء واحدة.",
+  },
+  "msg.noMessagesYet": { en: "No messages yet.", ar: "لا رسائل بعد." },
+  "msg.startConversationHint": {
+    en: "Tap the + above to start a conversation.",
+    ar: "اضغط على + بالأعلى لبدء محادثة.",
+  },
+  /* Same English as `msg.forwardNoMatch` on purpose — one sentence, two surfaces that
+     each narrow their own list. Keyed separately so either can be reworded alone. */
+  "msg.noThreadsMatch": {
+    en: "No conversations match “{query}”.",
+    ar: "لا توجد محادثات تطابق «{query}».",
+  },
+  "msg.threadStateFailed": {
+    en: "Couldn't save that — nothing changed.",
+    ar: "تعذّر الحفظ — لم يتغيّر شيء.",
+  },
+
+  // ── Row fallbacks. These stand in for a conversation's name, so none may be blank. ──
+  "msg.group": { en: "Group", ar: "مجموعة" },
+  /* The thread row's own TITLE. `msg.notesToSelf` ("Notes to yourself") is the avatar's
+     aria-label and reads as a description; this is the name in the list. */
+  "msg.notesToSelfName": { en: "Notes to self", ar: "ملاحظات لنفسي" },
+  "msg.unknown": { en: "Unknown", ar: "غير معروف" },
+  /* What a LOCKED group's row shows in place of its preview (v2.105.20). It replaces the
+     words AND the sender's name, so it must not read as somebody's message. */
+  "msg.locked": { en: "Locked", ar: "مقفلة" },
+  "msg.noMessagesYetShort": { en: "No messages yet", ar: "لا رسائل بعد" },
+  "msg.muted": { en: "Muted", ar: "مكتومة" },
+  "msg.typing": { en: "typing", ar: "يكتب" },
+  "msg.selectConversation": { en: "Select a conversation", ar: "اختر محادثة" },
+
+  // ── Group-calls section (Groups tab) ──
+  "msg.groupCalls": { en: "Group calls", ar: "مكالمات جماعية" },
+  "msg.startGroupCall": { en: "Start a group call", ar: "ابدأ مكالمة جماعية" },
+
+  /* ── Compact relative time ──
+     UNIT SYMBOLS, not sentences: "3h" does not inflect in English and «3 س» does not in
+     Arabic, so one key per unit is correct and no plural band is involved. The number is
+     interpolated and therefore Western in both, per the rule above. */
+  "msg.timeNow": { en: "now", ar: "الآن" },
+  "msg.timeMinutes": { en: "{n}m", ar: "{n} د" },
+  "msg.timeHours": { en: "{n}h", ar: "{n} س" },
+  "msg.timeDays": { en: "{n}d", ar: "{n} ي" },
+  /* The stamp goes INSIDE the sentence rather than being concatenated after it: Arabic
+     puts «آخر ظهور» first but a language that did not would have nowhere to put it. */
+  "msg.lastSeen": { en: "last seen {when}", ar: "آخر ظهور {when}" },
+
+  // ── Conversation header presence ──
+  "msg.typingNow": { en: "typing…", ar: "يكتب…" },
+  "msg.away": { en: "away", ar: "غائب" },
+  "msg.online": { en: "online", ar: "متصل" },
+  "msg.offline": { en: "offline", ar: "غير متصل" },
+
+  // ── In-conversation search ──
+  "msg.searchHint": {
+    en: "Type to search this conversation.",
+    ar: "اكتب للبحث في هذه المحادثة.",
+  },
+  "msg.searching": { en: "Searching…", ar: "جارٍ البحث…" },
+  "msg.noMessagesMatch": {
+    en: "No messages match “{query}”.",
+    ar: "لا توجد رسائل تطابق «{query}».",
+  },
+  "msg.results": { en: "Results", ar: "النتائج" },
+  "msg.member": { en: "Member", ar: "عضو" },
+  "msg.emptyThread": { en: "No messages yet. Say hi 👋", ar: "لا رسائل بعد. ألقِ التحية 👋" },
+
+  /* ── Who said it ──
+     «هذا الشخص» rather than a literal "them": Arabic has no neutral third-person plural
+     used as a polite singular, so the demonstrative is what reads as a person here. */
+  "msg.you": { en: "You", ar: "أنت" },
+  "msg.them": { en: "Them", ar: "هذا الشخص" },
+  /* SELF GETS ITS OWN WHOLE SENTENCE rather than "{name}" resolving to "You": «الرد على
+     أنت» is ungrammatical, and there is no substitution that fixes it — the pronoun has
+     to change form, which only a separate string can express. */
+  "msg.replyingTo": { en: "Replying to {name}", ar: "الرد على {name}" },
+  "msg.replyingToSelf": { en: "Replying to yourself", ar: "الرد على نفسك" },
+
+  // ── Reply-quote preview of a locked message ──
+  "msg.disappearingPreview": { en: "⏱ Disappearing message", ar: "⏱ رسالة تختفي" },
+
+  // ── Voicemail bubble label (v2.88) ──
+  "msg.voicemail": { en: "Voicemail", ar: "بريد صوتي" },
+
+  // ── Self-destructing messages ──
+  "msg.viewOnceShort": { en: "View once", ar: "عرض واحد" },
+  "msg.disappearsAfterOpening": {
+    en: "Disappears {n}s after opening",
+    ar: "تختفي بعد {n} ث من الفتح",
+  },
+  "msg.opening": { en: "Opening…", ar: "جارٍ الفتح…" },
+  "msg.tapToView": { en: "Tap to view", ar: "انقر للعرض" },
+  "msg.viewOnceHint": {
+    en: "Can be viewed once, then it disappears",
+    ar: "يمكن عرضها مرة واحدة ثم تختفي",
+  },
+  "msg.disappearsAfterYouOpen": {
+    en: "Disappears {n}s after you open it",
+    ar: "تختفي بعد {n} ث من فتحك لها",
+  },
+  "msg.expireBannerOnce": {
+    en: "Disappearing: they can view this ONCE — then it's gone for both of you.",
+    ar: "تختفي: يمكنهم عرضها مرة واحدة فقط — ثم تُحذف لديكما معًا.",
+  },
+  /* 3–10 seconds: the plural of paucity. */
+  "msg.expireBannerFew": {
+    en: "Disappearing: gone {n} seconds after they open it.",
+    ar: "تختفي: تُحذف بعد {n} ثوانٍ من فتحهم لها.",
+  },
+  /* 11+ seconds: the singular accusative. Same English, different Arabic — which is the
+     whole reason both keys exist. */
+  "msg.expireBannerMany": {
+    en: "Disappearing: gone {n} seconds after they open it.",
+    ar: "تختفي: تُحذف بعد {n} ثانية من فتحهم لها.",
+  },
+  "msg.expireToggleOff": {
+    en: "Make the next message disappear",
+    ar: "اجعل الرسالة التالية تختفي",
+  },
+  "msg.expireToggleOnce": { en: "Disappearing: view once", ar: "تختفي: عرض واحد" },
+  "msg.expireToggleFew": { en: "Disappearing: {n} seconds", ar: "تختفي: {n} ثوانٍ" },
+  "msg.expireToggleMany": { en: "Disappearing: {n} seconds", ar: "تختفي: {n} ثانية" },
+  "msg.expireCycleHint": {
+    en: "Disappearing message: tap to cycle off · view-once · 5s · 10s · 30s",
+    ar: "رسالة تختفي: انقر للتنقل بين إيقاف · عرض واحد · 5 ث · 10 ث · 30 ث",
+  },
+
+  /* ── THE "+" ATTACHMENT MENU (v2.106.65, and the owner's named ask) ──
+     Every row here is a THING YOU CAN ATTACH, so each is a noun phrase rather than an
+     imperative — «رسالة صوتية», not «سجّل». The disabled hint is the exception: it tells
+     you what to do instead, so it ends in an instruction. */
+  "msg.recordVideo": { en: "Record video", ar: "تسجيل فيديو" },
+  "msg.photoAndVideo": { en: "Photo & video", ar: "صورة أو فيديو" },
+  "msg.attachFile": { en: "Attach file", ar: "إرفاق ملف" },
+  "msg.voiceNote": { en: "Voice note", ar: "رسالة صوتية" },
+  "msg.recordVoiceNoteHint": { en: "Record a voice note", ar: "سجّل رسالة صوتية" },
+  "msg.voiceNoteUnsupported": {
+    en: "Voice notes need a newer browser — use Attach file for an audio file instead",
+    ar: "تحتاج الرسائل الصوتية إلى متصفح أحدث — استخدم «إرفاق ملف» لإرسال ملف صوتي بدلاً من ذلك",
+  },
+
+  // ── Read receipt (the tick's own title) ──
+  "msg.notSent": { en: "Not sent", ar: "لم تُرسل" },
+
+  /* ── The message ⋮ menu ──
+     "Delete for me" and "Remove for everyone" reuse `msg.hideAction` /
+     `msg.adminRemoveAction`: the menu item and the confirmation it opens are the SAME
+     act, and giving them separate keys is how the button and the dialog come to promise
+     different blast radii — the exact distinction this file's header exists to protect. */
+  "msg.reply": { en: "Reply", ar: "رد" },
+  "msg.reactAction": { en: "React", ar: "تفاعل" },
+  "msg.copy": { en: "Copy", ar: "نسخ" },
+  "msg.forward": { en: "Forward", ar: "إعادة توجيه" },
+  "msg.info": { en: "Info", ar: "معلومات" },
+  "msg.unsendAction": { en: "Unsend", ar: "التراجع عن الإرسال" },
+
+  // ── Attachments ──
+  "msg.imageAlt": { en: "Image", ar: "صورة" },
+  "msg.fileFallback": { en: "Attachment", ar: "مرفق" },
+  "msg.tapToOpen": { en: "Tap to open or download", ar: "انقر للفتح أو التنزيل" },
+
+  // ── Recording bar (short button titles; the aria-labels above are the long forms) ──
+  "msg.resume": { en: "Resume", ar: "استئناف" },
+
+  // ── Fullscreen media viewer ──
+  "msg.closePreview": { en: "Close preview", ar: "إغلاق المعاينة" },
+  "msg.download": { en: "Download", ar: "تنزيل" },
+  /* The wording is deliberately NOT an end-to-end claim — `messages.body` is plain text
+     the server searches with LIKE, so it cannot make one. Translating it must not quietly
+     upgrade the promise either: «مشفّرة أثناء النقل» is in-transit and nothing more. */
+  "msg.encryptedInTransit": {
+    en: "Encrypted in transit · stays in the app",
+    ar: "مشفّرة أثناء النقل · تبقى داخل التطبيق",
+  },
+
+  // ── Away auto-reply ──
+  "msg.autoReplyFailed": {
+    en: "Couldn't change auto-reply. Try again.",
+    ar: "تعذّر تغيير الرد التلقائي. أعد المحاولة.",
+  },
+  "msg.autoReplySrHint": {
+    en: "Turn the away auto-reply on or off.",
+    ar: "شغّل أو أوقف الرد التلقائي أثناء الغياب.",
+  },
+  "msg.autoReplyTitle": { en: "Auto-reply when I'm away", ar: "الرد التلقائي أثناء غيابي" },
+  "msg.autoReplyBody": {
+    en: "If someone messages you while you're offline, RELAY replies once to let them know you'll get back to them. Off by default.",
+    ar: "إذا راسلك أحد وأنت غير متصل، يرد RELAY مرة واحدة ليخبره أنك ستعود إليه. متوقف افتراضيًا.",
+  },
+
+  // ── Forward dialog copy ──
+  "msg.forwardExpiringNote": {
+    en: "This is a disappearing message — forwarding it would break the promise it was sent under, so it can't be forwarded.",
+    ar: "هذه رسالة تختفي — إعادة توجيهها تنقض الوعد الذي أُرسلت بموجبه، لذا لا يمكن إعادة توجيهها.",
+  },
+  "msg.forwardHint": {
+    en: "Pick a conversation. It's sent as a new message there, with its own delivery receipts.",
+    ar: "اختر محادثة. سترسل هناك كرسالة جديدة، بإيصالات تسليم خاصة بها.",
+  },
+
+  // ── New-message sheet ──
+  "msg.newMessage": { en: "New message", ar: "رسالة جديدة" },
+  "msg.newGroup": { en: "New group", ar: "مجموعة جديدة" },
+  "msg.newConversation": { en: "New conversation", ar: "محادثة جديدة" },
+  "msg.conversationType": { en: "Conversation type", ar: "نوع المحادثة" },
+  "msg.noteToSelf": { en: "Note to self", ar: "ملاحظة لنفسي" },
+  "msg.noteToSelfHint": {
+    en: "Save links, ideas, and attachments to your own thread.",
+    ar: "احفظ الروابط والأفكار والمرفقات في محادثتك الخاصة.",
+  },
+  "msg.orMessageSomeone": { en: "or message someone", ar: "أو راسل شخصًا" },
+  /* RELAY is the product name and stays Latin in both, like every other number label in
+     the app — a number you read aloud has to be the number you type (v2.106.84). */
+  "msg.relayNumber": { en: "RELAY number", ar: "رقم RELAY" },
+  "msg.numberOrName": { en: "Number or name", ar: "رقم أو اسم" },
+  "msg.searchContactsLabel": {
+    en: "Search your contacts by number or name",
+    ar: "ابحث في جهات اتصالك بالرقم أو الاسم",
+  },
+  "msg.open": { en: "Open", ar: "فتح" },
+  "msg.groupName": { en: "Group name", ar: "اسم المجموعة" },
+  "msg.groupNamePlaceholder": { en: "e.g. Weekend Trip", ar: "مثال: رحلة نهاية الأسبوع" },
+  "msg.addMembersByNumber": { en: "Add members by number", ar: "أضف أعضاء بالرقم" },
+  "msg.removeMember": { en: "Remove {number}", ar: "إزالة {number}" },
+  "msg.creating": { en: "Creating…", ar: "جارٍ الإنشاء…" },
+  /* The count INCLUDES YOU, which is why it can never be zero here. Two bands, matching
+     `groups.memberCount*` — see the header note. */
+  "msg.createGroupOne": { en: "Create group · {n} member", ar: "أنشئ المجموعة · {n} عضو" },
+  "msg.createGroupMany": { en: "Create group · {n} members", ar: "أنشئ المجموعة · {n} أعضاء" },
+  /* `AvatarPicker`'s remove-confirmation slots this in mid-sentence, so it is a noun
+     phrase with its article, not a label. */
+  "msg.theGroupPhoto": { en: "the group photo", ar: "صورة المجموعة" },
+  "msg.unnamed": { en: "Unnamed", ar: "بدون اسم" },
+
+  // ── Toasts ──
+  "msg.voiceSendFailed": {
+    en: "Voice note not sent — tap the mic and try again.",
+    ar: "لم تُرسل الرسالة الصوتية — اضغط الميكروفون وأعد المحاولة.",
+  },
+  "msg.removeFailed": {
+    en: "Couldn't remove that — it's still here.",
+    ar: "تعذّرت إزالتها — ما زالت هنا.",
+  },
+  "msg.uploadFailed": { en: "Upload failed: {reason}", ar: "فشل الرفع: {reason}" },
+  "msg.sendFailed": {
+    en: "Message not sent — check your connection and tap send again.",
+    ar: "لم تُرسل الرسالة — تحقّق من اتصالك واضغط إرسال مجددًا.",
+  },
+  "msg.voiceUnsupportedToast": {
+    en: "Voice notes aren't supported by this browser yet. Try the latest Safari/Chrome, or send an audio file via the paperclip instead.",
+    ar: "لا يدعم هذا المتصفح الرسائل الصوتية بعد. جرّب أحدث إصدار من Safari أو Chrome، أو أرسل ملفًا صوتيًا عبر مشبك الورق بدلاً من ذلك.",
+  },
+  "msg.micRequired": {
+    en: "Mic access required for voice notes: {reason}",
+    ar: "يلزم الإذن بالوصول إلى الميكروفون للرسائل الصوتية: {reason}",
+  },
 } as const satisfies Record<string, Entry>;

@@ -24,7 +24,13 @@ import path from "node:path";
 // #115 — the story vocabulary now lives in one shared place, so assert it there.
 import { STORY_KIND_LABEL } from "@shared/statusReply";
 import { previewOfStoryReply } from "@/app/messagePreview";
-import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
+import {
+  copyOnScreen,
+  whyCopyMissing,
+  expandCopy,
+  keysForEnglish,
+} from "../../../server/testing/copyOnScreen";
+import { DICT } from "./i18n";
 
 const ROOT = path.resolve(__dirname, "../../..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -51,7 +57,14 @@ const SURFACES: Array<[string, string]> = [
  * reads. Comments are stripped first — the point is what the app SAYS, and a
  * comment explaining the distinction legitimately uses both words.
  */
-function visibleStrings(src: string): string[] {
+function visibleStrings(rawSrc: string): string[] {
+  /* EXPANDED FIRST, or this sweep goes VACUOUS on every screen that gets translated —
+     which is strictly worse than going red, because it reports safety while covering
+     nothing (the v2.106.85 lesson). `Profile.tsx` renders its labels as
+     `aria-label={t("profile.dndToggle")}`, so a literal-only extractor finds zero
+     strings there and the "no user-visible string says status" rule silently stops
+     applying to the very screen whose vocabulary this test exists to police. */
+  const src = expandCopy(rawSrc);
   const code = src
     // FIXED in v2.102.1: the first pass used to be a JSX-span strip,
     // /\{\s*\/\*[\s\S]*?\*\/\s*\}/ — but a DOCUMENTED PROP TYPE has the same
@@ -70,6 +83,13 @@ function visibleStrings(src: string): string[] {
     /(?:title|placeholder|aria-label)=\{?"([^"]{2,})"/g,
     /(?:title|placeholder|aria-label)=\{`([^`]{2,})`/g,
     /toast\.(?:success|error|info|message)\(\s*"([^"]{2,})"/g,
+    /* THE EXPANDED FORMS. `expandCopy` rewrites `aria-label={t("k")}` to
+       `aria-label={Some words}` — no quotes — so without these two the sweep reads a
+       translated screen as having no user-visible strings at all. Deliberately
+       single-line and quote-free at the start, so the two patterns above keep owning the
+       literal forms and an unexpanded multi-line expression is not scraped as prose. */
+    /(?:title|placeholder|aria-label)=\{([^}"'`\n][^}\n]{1,})\}/g,
+    /toast\.(?:success|error|info|message)\(\s*([^"'`)\n][^)\n]{1,})\)/g,
   ]) {
     for (const m of code.matchAll(re)) out.push(m[1]);
   }
@@ -155,18 +175,41 @@ describe("the ephemeral post is called a STORY", () => {
   });
 
   it("the audience control is about STORIES, and says so", () => {
-    // `statusAudience` gates who can see an ephemeral post — a story — not the
-    // profile label. This row used to read "Status privacy", which named the wrong
-    // feature entirely.
-    expect(PROFILE).toMatch(/privacy: "Story privacy",/);
-    expect(PROFILE).toMatch(/sub="Who can watch your stories"/);
-    expect(PROFILE).toMatch(/aria-label="Who can see my stories"/);
+    /* `statusAudience` gates who can see an ephemeral post — a story — not the profile
+       label. This row used to read "Status privacy", which named the wrong feature
+       entirely.
+
+       THROUGH `copyOnScreen`, because this screen now renders through `dict/profile.ts`:
+       the old pins froze English literals, so they would have forbidden the translation
+       while saying nothing about the words. Strictly stronger this way — reaching the
+       dictionary also proves an Arabic half exists, i.e. that the rename survived into
+       the language where nobody would notice it being undone. */
+    for (const s of ["Story privacy", "Who can watch your stories", "Who can see my stories"]) {
+      expect(copyOnScreen(PROFILE, s), whyCopyMissing(PROFILE, s)).toBe(true);
+    }
+    /* AND THE ARABIC SAYS STORY TOO. `copyOnScreen` only proves an Arabic half exists;
+       this proves it is about القصص (stories) rather than الحالة (the status label),
+       which is the whole distinction the rename made. */
+    for (const k of keysForEnglish("Story privacy")) {
+      expect(DICT[k as keyof typeof DICT].ar, `${k} says story in Arabic`).toMatch(/قصص|قصة/);
+    }
   });
 
   it("the PROFILE LABEL is still called Status — the rename is one-directional", () => {
-    // Renaming this too would have swapped one wrong word for another. The pane
-    // that opens `StatusSection` (the away/travel picker) is the status.
-    expect(PROFILE).toMatch(/    status: "Status",/);
+    /* Renaming this too would have swapped one wrong word for another. The pane that
+       opens `StatusSection` (the away/travel picker) is the status.
+
+       PINNED ON THE PANE MAP'S OWN ENTRY, resolved through the dictionary: the map is
+       now `status: t("profile.paneStatus")`, so freezing the old literal would say
+       nothing, and a containment check would pass on any key that merely mentions
+       "Status". The English half must be exactly the word, and the Arabic must be the
+       status word rather than a story one. */
+    const titles = PROFILE.slice(PROFILE.indexOf("const paneTitle: Record<Pane, string>"));
+    const key = /\bstatus: t\("([\w.]+)"\)/.exec(titles.slice(0, titles.indexOf("};")))?.[1];
+    expect(key, "the status pane's title comes from a dictionary key").toBeTruthy();
+    const entry = DICT[key as keyof typeof DICT];
+    expect(entry.en).toBe("Status");
+    expect(entry.ar, "the Arabic is the STATUS word, not a story one").not.toMatch(/قصص|قصة/);
     expect(PROFILE).toMatch(/pane === "status" && <StatusSection/);
   });
 

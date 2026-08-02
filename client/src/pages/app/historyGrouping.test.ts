@@ -14,7 +14,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { filterItems, groupByPeer, groupTitleOf, historyPeerKey } from "./History";
+import { callCountKey, filterItems, groupByPeer, groupTitleOf, historyPeerKey } from "./History";
+import { translate } from "../../app/i18n";
 import { codeOnly } from "../../../../server/testing/codeOnly";
 import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
 
@@ -170,20 +171,35 @@ describe("groupByPeer", () => {
 });
 
 describe("the group's title matches the rows beneath it", () => {
+  /* #156 — `groupTitleOf` returns `{ text, key }` rather than a finished string. It is a
+     module-level function, so it cannot call a hook; returning English would leave the row
+     untranslatable, and mapping that English back to a key at the render site is the
+     `text → key` lookup the dictionary's own rule forbids. `text` is DERIVED from `key`
+     (see the function), so asserting on it is still asserting the words, and `key` being
+     null for a person's NAME is itself the property: a name is data, not copy. */
   it("uses the peer's name for a 1:1", () => {
-    expect(groupTitleOf(conf(30, 1, { id: 1, num: "111111", name: "Ahmed Ali" }, "in"))).toBe("Ahmed Ali");
-    expect(groupTitleOf(solo(31, 1, { id: 1, num: "111111", name: "Ahmed Ali" }, "in"))).toBe("Ahmed Ali");
+    for (const it_ of [
+      conf(30, 1, { id: 1, num: "111111", name: "Ahmed Ali" }, "in"),
+      solo(31, 1, { id: 1, num: "111111", name: "Ahmed Ali" }, "in"),
+    ]) {
+      expect(groupTitleOf(it_).text).toBe("Ahmed Ali");
+      expect(groupTitleOf(it_).key, "a NAME is data, never a translatable phrase").toBeNull();
+    }
   });
 
   it("names a GROUP as a group, with its size", () => {
     const g = conf(32, 1, { id: 9, num: "111111" }, "out");
     g.conf.partyCount = 4;
     g.conf.participants = [ME, { identityId: 9, number: "111111", name: "A", isSelf: false }, { identityId: 10, number: "222222", name: "B", isSelf: false }];
-    expect(groupTitleOf(g)).toBe("Group · 3");
+    expect(groupTitleOf(g).text).toBe("Group · 3");
+    // …and it is a PHRASE, so it reaches the dictionary rather than the screen raw.
+    expect(groupTitleOf(g).key).toBe("history.groupOf");
+    expect(translate("ar", "history.groupOf", { count: 3 })).toContain("3");
   });
 
   it("falls back to the number when there is no name", () => {
-    expect(groupTitleOf(conf(33, 1, { id: null, num: "601586" }, "in"))).toBe("601586");
+    expect(groupTitleOf(conf(33, 1, { id: null, num: "601586" }, "in")).text).toBe("601586");
+    expect(groupTitleOf(conf(33, 1, { id: null, num: "601586" }, "in")).key).toBeNull();
   });
 });
 
@@ -294,8 +310,16 @@ describe("the count says what it can actually know", () => {
     // Both call payloads are hard-capped at 100 rows server-side, so a lifetime
     // figure is a number we cannot know. Claiming one would be worse than being
     // specific about what was counted.
-    expect(HISTORY).toMatch(/calls in this log/);
-    expect(HISTORY).toMatch(/1 call in this log/);
+    /* PINNED AT THE SELECTOR, NOT THROUGH `copyOnScreen`, and the limit is worth naming:
+       that helper resolves LITERAL `t("key")` call sites, and this is `t(callCountKey(n))`
+       — a key chosen at RUNTIME, which no static reader can follow. So the screen is
+       pinned to the selector and the WORDS are driven through every band, which is
+       strictly more than the two literals this replaces proved. */
+    expect(HISTORY).toMatch(/t\(callCountKey\(g\.count\)/);
+    expect(translate("en", callCountKey(1), { count: 1 })).toBe("1 call in this log");
+    for (const n of [2, 6, 25]) {
+      expect(translate("en", callCountKey(n), { count: n })).toBe(`${n} calls in this log`);
+    }
   });
 
   it("and the cap it is being honest about is real", () => {
@@ -303,7 +327,15 @@ describe("the count says what it can actually know", () => {
   });
 
   it("pluralises rather than printing '1 calls'", () => {
-    expect(HISTORY).toMatch(/g\.count === 1\s*\n?\s*\? "1 call in this log"/);
+    /* The ternary this froze is gone, replaced by something stronger: English one/other is
+       only TWO forms, and Arabic needs four (the dual at 2 swallows the numeral entirely),
+       so the count picks a whole key per band. Asserted behaviourally in both languages —
+       a source pin cannot tell you whether "1 calls" ever renders. */
+    expect(HISTORY).toMatch(/t\(callCountKey\(g\.count\), \{ count: g\.count \}\)/);
+    expect(translate("en", callCountKey(1), { count: 1 })).not.toContain("1 calls");
+    const ar = [1, 2, 5, 20].map((n) => translate("ar", callCountKey(n), { count: n }));
+    expect(new Set(ar).size, "four distinct Arabic forms, not one form four times").toBe(4);
+    expect(ar[1], "the dual carries no numeral at all").not.toContain("2");
   });
 });
 

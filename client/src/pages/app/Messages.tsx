@@ -45,6 +45,7 @@ import {
   Forward,
   Info,
   Lock,
+  Delete,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,8 +74,14 @@ import { statusReplyOf, storyKindLabel } from "@shared/statusReply";
 /* `tr`, not `t`, in MessagesPage: the swipe-action builder binds the THREAD to
    `t`, so an unaliased translator would be shadowed into a ThreadSummary. */
 import { useT, type TKey } from "@/app/i18n";
-import { isGroupHidden, useGroupLocks } from "@/app/groupLock";
-import { GroupLockGate } from "@/app/GroupLockGate";
+import {
+  attemptOpenGroup,
+  isGroupHidden,
+  isValidLockCode,
+  removeGroupLock,
+  useGroupLocks,
+} from "@/app/groupLock";
+import { hasPasscode } from "@/app/passcode";
 import { uploadAttachment, uploadThumbnail } from "@/lib/uploadAttachment";
 import { StatusStrip } from "./Status";
 import {
@@ -154,14 +161,73 @@ function useSavedNames(): Map<string, string> {
   }, [saved.data]);
 }
 
-function timeAgo(iso: string | Date): string {
+/** The translator's shape, so the pure helpers below need no React and stay drivable
+ *  from a test with a stub. Same contract as `MissedCalls.tsx`'s own `T`. */
+type T = (key: TKey, vars?: Record<string, string | number>) => string;
+
+/**
+ * Compact relative time — "now" / "3m" / "5h" / "2d", then a date.
+ *
+ * TAKES THE TRANSLATOR rather than returning finished English. This is a pure function
+ * outside any component so it cannot call a hook, and a module-level helper that returns
+ * a sentence is exactly how a screen ends up almost entirely translated with its
+ * timestamps still in English — the shape `MissedCalls.tsx`'s `ago()` already avoids.
+ *
+ * The units are SYMBOLS, so one key each and no plural band: "3h" does not inflect in
+ * English and «3 س» does not in Arabic.
+ *
+ * THE DATE FALLBACK IS DELIBERATELY LEFT ON THE BROWSER'S LOCALE, and that is a scope
+ * decision rather than an oversight: rendering it in the APP's locale needs the
+ * `-u-nu-latn` numbering-system rule (`toLocaleDateString("ar")` emits Arabic-Indic
+ * numerals, which would put two numeral systems in one row — the v2.106.84 rule), and
+ * that rule already exists, test-pinned, as a private helper in `MissedCalls.tsx`. A
+ * third private copy is the duplication class this repo keeps paying for, so the fix is
+ * to promote that helper to a shared module — which is a different file's change.
+ */
+function timeAgo(t: T, iso: string | Date): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;
   const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 60) return "now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)}d`;
+  if (diff < 60) return t("msg.timeNow");
+  if (diff < 3600) return t("msg.timeMinutes", { n: Math.floor(diff / 60) });
+  if (diff < 86400) return t("msg.timeHours", { n: Math.floor(diff / 3600) });
+  if (diff < 86400 * 7) return t("msg.timeDays", { n: Math.floor(diff / 86400) });
   return d.toLocaleDateString();
+}
+
+/**
+ * Which "{n} seconds" wording a disappearing-message countdown needs.
+ *
+ * ENGLISH NEEDS ONE FORM AND ARABIC NEEDS TWO, which is why this is a function rather
+ * than an interpolation at the render site: 3–10 take the plural of paucity («ثوانٍ»)
+ * and 11+ the singular accusative («ثانية»). The values this can carry are 5, 10 and 30,
+ * so both bands are live — "30 ثوانٍ" would be wrong in a way every Arabic reader sees.
+ *
+ * Exported as a test seam: which form a count selects is exactly what a source pin
+ * cannot answer.
+ */
+/**
+ * Which "Create group · {n} members" wording the picked party needs.
+ *
+ * The count INCLUDES YOU — a button reading 3 for a group of 4 would be wrong about the
+ * thing it names — so it can never be zero here, and in practice never one either.
+ *
+ * TWO BANDS, matching `groups.memberCountOne/Many`, rather than the four the guest
+ * countdown uses: the group-info sheet already ships that simplification for this exact
+ * noun, and a second, different treatment of "member" in the same app is worse than the
+ * infelicity it would fix.
+ *
+ * Exported as a test seam, and pinned AT THE SELECTOR rather than through `copyOnScreen`
+ * — that helper resolves LITERAL `t("key")` sites and this key is chosen at runtime,
+ * which no static reader can follow (the limit v2.106.85 recorded for `guestExpiryKey`).
+ */
+export function createGroupCountKey(members: number): TKey {
+  return members === 1 ? "msg.createGroupOne" : "msg.createGroupMany";
+}
+
+export function expireSecondsKey(n: number, kind: "banner" | "toggle"): TKey {
+  const few = n >= 3 && n <= 10;
+  if (kind === "banner") return few ? "msg.expireBannerFew" : "msg.expireBannerMany";
+  return few ? "msg.expireToggleFew" : "msg.expireToggleMany";
 }
 
 /**
@@ -515,7 +581,7 @@ export default function MessagesPage({
   type ThreadRow = NonNullable<typeof threads.data>[number];
   const threadState = trpc.messages.setThreadState.useMutation({
     onSuccess: () => utils.messages.threads.invalidate(),
-    onError: (e) => toast.error(e.message || "Couldn't save that — nothing changed."),
+    onError: (e) => toast.error(e.message || tr("msg.threadStateFailed")),
   });
 
   const swipeLeftActions = (t: ThreadRow): SwipeAction[] => [
@@ -613,7 +679,7 @@ export default function MessagesPage({
       >
         <header className="flex items-center justify-between px-4 md:px-5 py-4 border-b border-border">
           <h2 className="text-base font-extrabold tracking-tight">
-            {only === "groups" ? "Groups" : "Messages"}
+            {only === "groups" ? tr("nav.groups") : tr("nav.messages")}
           </h2>
           <div className="flex items-center gap-1">
             <AutoReplyToggle />
@@ -666,30 +732,30 @@ export default function MessagesPage({
                 onClick={() => threads.refetch()}
                 className="mt-3 inline-flex items-center rounded-lg border border-border px-3 py-1.5 text-foreground hover:bg-muted/50"
               >
-                Retry
+                {tr("common.retry")}
               </button>
             </div>
           ) : threads.isLoading ? (
-            <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+            <div className="p-6 text-sm text-muted-foreground">{tr("msg.loading")}</div>
           ) : scopedThreads.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
               {only === "groups" ? (
                 <>
                   <Users className="size-8 mx-auto mb-2 opacity-50" />
-                  <p>No groups yet.</p>
-                  <p className="mt-1">Tap the + above to start one.</p>
+                  <p>{tr("msg.noGroupsYet")}</p>
+                  <p className="mt-1">{tr("msg.startGroupHint")}</p>
                 </>
               ) : (
                 <>
                   <MessageSquarePlus className="size-8 mx-auto mb-2 opacity-50" />
-                  <p>No messages yet.</p>
-                  <p className="mt-1">Tap the + above to start a conversation.</p>
+                  <p>{tr("msg.noMessagesYet")}</p>
+                  <p className="mt-1">{tr("msg.startConversationHint")}</p>
                 </>
               )}
             </div>
           ) : threadCategories.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
-              No conversations match “{threadSearch.trim()}”.
+              {tr("msg.noThreadsMatch", { query: threadSearch.trim() })}
             </div>
           ) : (
             <div>
@@ -759,10 +825,10 @@ export default function MessagesPage({
                         const isNotes = !!me && !isGroup && t.peerIdentityId === me.id;
                         const isDm = !isGroup && !isNotes;
                         const displayName = isGroup
-                          ? t.title || "Group"
+                          ? t.title || tr("msg.group")
                           : isNotes
-                            ? "Notes to self"
-                            : t.peerDisplayName || t.peerNumber || "Unknown";
+                            ? tr("msg.notesToSelfName")
+                            : t.peerDisplayName || t.peerNumber || tr("msg.unknown");
                         const typing = typingConvos.includes(t.conversationId);
                         const muted = isThreadMuted(t.conversationId);
                         const unread = t.unreadCount > 0;
@@ -789,9 +855,9 @@ export default function MessagesPage({
                            story-reply line, since that would name an activity the lock
                            exists to cover. */
                         const preview = hidden
-                          ? "Locked"
+                          ? tr("msg.locked")
                           : !t.lastMessageAt
-                            ? "No messages yet"
+                            ? tr("msg.noMessagesYetShort")
                             : t.lastMessageStatusReply
                               ? previewOfStoryReply({
                                   mine: !!t.lastMessageMine,
@@ -996,7 +1062,7 @@ export default function MessagesPage({
                                       (unread ? "font-semibold text-primary" : "text-muted-foreground")
                                     }
                                   >
-                                    {timeAgo(t.lastMessageAt)}
+                                    {timeAgo(tr, t.lastMessageAt)}
                                   </span>
                                 )}
                               </div>
@@ -1005,7 +1071,7 @@ export default function MessagesPage({
                                   the PIN and the unread count can never be clipped;
                                   it may wrap rather than starve the preview. */}
                               <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[14px] leading-snug text-muted-foreground">
-                                {muted && <BellOff aria-label="Muted" className="size-3.5 shrink-0 opacity-70" />}
+                                {muted && <BellOff aria-label={tr("msg.muted")} className="size-3.5 shrink-0 opacity-70" />}
                                 {pin && (
                                   <>
                                     <span
@@ -1031,7 +1097,7 @@ export default function MessagesPage({
                                      is the kind of live detail a privacy screen is
                                      for. */
                                   <span className="flex shrink-0 items-center gap-1 font-medium text-[color:var(--relay-online)]">
-                                    typing
+                                    {tr("msg.typing")}
                                     <span className="flex items-end gap-[2px]" aria-hidden="true">
                                       {[0, 1, 2].map((i) => (
                                         <span
@@ -1193,7 +1259,7 @@ export default function MessagesPage({
       >
         {activeConvoId == null ? (
           <div className="hidden md:flex h-full items-center justify-center text-muted-foreground text-sm">
-            Select a conversation
+            {tr("msg.selectConversation")}
           </div>
         ) : (
           <ConversationView conversationId={activeConvoId} />
@@ -1270,6 +1336,7 @@ export default function MessagesPage({
  * which exist, which is the class this repo keeps removing.
  */
 function GroupCallsSection({ onOpenPicker }: { onOpenPicker: () => void }) {
+  const t = useT();
   return (
     <div className="border-b border-border/60">
       <div className="flex items-center gap-2 px-4 md:px-5 pt-3 pb-1.5 text-muted-foreground">
@@ -1277,7 +1344,7 @@ function GroupCallsSection({ onOpenPicker }: { onOpenPicker: () => void }) {
           <PhoneCall className="size-3.5" />
         </span>
         <span className="flex-1 text-start text-[11px] font-bold uppercase tracking-[0.12em]">
-          Group calls
+          {t("msg.groupCalls")}
         </span>
       </div>
       <div className="px-4 md:px-5 pb-2">
@@ -1287,7 +1354,7 @@ function GroupCallsSection({ onOpenPicker }: { onOpenPicker: () => void }) {
           className="rchip-accent flex min-h-11 w-full items-center justify-center gap-2 rounded-[11px] px-4 text-[12px] font-bold transition"
         >
           <Users className="size-4" />
-          Start a group call
+          {t("msg.startGroupCall")}
         </button>
       </div>
       {/* `onJoined` is a no-op rather than a close: this is a LIST on a tab, not a modal
@@ -1443,7 +1510,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       if (!ok) toast.error(t("msg.callFailed"));
       else setLocation("/app/call");
     } catch (e) {
-      toast.error((e as Error)?.message || "Couldn't start the call.");
+      toast.error((e as Error)?.message || t("msg.callFailed"));
     }
   }
 
@@ -1523,7 +1590,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const voiceSendMutation = trpc.messages.send.useMutation({
     onSuccess: afterSend,
     onError: (e) =>
-      toast.error(e.message || "Voice note not sent — tap the mic and try again."),
+      toast.error(e.message || t("msg.voiceSendFailed")),
   });
 
   /* ── self-destructing messages (v2.96) ──────────────────────────
@@ -1700,7 +1767,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       await utils.messages.threads.invalidate();
       toast.success(t("msg.removedForEveryone"));
     },
-    onError: (e) => toast.error(e.message || "Couldn't remove that — it's still here."),
+    onError: (e) => toast.error(e.message || t("msg.removeFailed")),
   });
 
   const hideMutation = trpc.messages.hide.useMutation({
@@ -1893,8 +1960,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.replyToId, msgById]);
   function senderLabel(identityId: number): string {
-    if (me && identityId === me.id) return "You";
-    return nameById.get(identityId) || thread?.peerDisplayName || "Them";
+    if (me && identityId === me.id) return t("msg.you");
+    return nameById.get(identityId) || thread?.peerDisplayName || t("msg.them");
   }
 
   /* Board 4e wants the fullscreen viewer to say WHOSE media this is and WHEN — the
@@ -1914,9 +1981,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       });
   }
   function previewOf(msg: { body: string | null; kind: string; meta?: unknown } | undefined): string {
-    if (!msg) return "Message";
+    if (!msg) return t("msg.message");
     // Never quote a self-destructing message's content (v2.96).
-    if ((msg.meta as { expire?: unknown } | null)?.expire != null) return "⏱ Disappearing message";
+    if ((msg.meta as { expire?: unknown } | null)?.expire != null) return t("msg.disappearingPreview");
     /* #115 — quoting a story reply used to show a bare emoji here too, so the SECOND
        surface with the gap gets the same shared rule rather than its own wording.
        The expire guard stays AHEAD of it: a locked message must never be described,
@@ -2091,7 +2158,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       }
       setPendingUpload({ id: json.id, url: json.url, mimeType: json.mimeType, filename: json.filename ?? file.name });
     } catch (err) {
-      toast.error("Upload failed: " + (err instanceof Error ? err.message : String(err)));
+      toast.error(t("msg.uploadFailed", { reason: err instanceof Error ? err.message : String(err) }));
     } finally {
       setUploading(false);
     }
@@ -2194,7 +2261,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
        * that did not. The connection wording survives only as the fallback for an error
        * that genuinely carries no message. */
       const why = e instanceof Error ? e.message.trim() : "";
-      toast.error(why || "Message not sent — check your connection and tap send again.");
+      toast.error(why || t("msg.sendFailed"));
     }
   }
 
@@ -2327,9 +2394,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
 
   async function startRecording() {
     if (!recorderSupported()) {
-      toast.error(
-        "Voice notes aren't supported by this browser yet. Try the latest Safari/Chrome, or send an audio file via the paperclip instead."
-      );
+      toast.error(t("msg.voiceUnsupportedToast"));
       return;
     }
     try {
@@ -2376,8 +2441,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         });
     } catch (err) {
       toast.error(
-        "Mic access required for voice notes: " +
-          (err instanceof Error ? err.message : String(err))
+        t("msg.micRequired", { reason: err instanceof Error ? err.message : String(err) })
       );
     }
   }
@@ -2447,7 +2511,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           </span>
           <Lock aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
         </header>
-        <GroupLockGate conversationId={conversationId} title={thread?.title || "Group"} />
+        <LockedGroupGate
+          conversationId={conversationId}
+          title={thread?.title || "Group"}
+          avatarUrl={thread?.groupAvatarUrl}
+        />
       </>
     );
   }
@@ -2517,8 +2585,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <div className="font-semibold text-[15px] truncate flex items-center gap-1.5">
             <span className="truncate">
               {isGroup
-                ? thread?.title || thread?.peerDisplayName || "Group"
-                : thread?.peerDisplayName || thread?.peerNumber || "Conversation"}
+                ? thread?.title || thread?.peerDisplayName || t("msg.group")
+                : thread?.peerDisplayName || thread?.peerNumber || t("msg.conversation")}
             </span>
             {/* A group has no tier — the badge describes a person's account. */}
             {thread && !isGroup && (
@@ -2559,10 +2627,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 push the list. Scoped to non-group here rather than removed outright, so a
                 1:1 header — which has no members line to protect — is unchanged. */}
             {typers.length > 0 && !isGroup ? (
-              <span className="text-[color:var(--relay-online)] font-medium animate-pulse">typing…</span>
+              <span className="text-[color:var(--relay-online)] font-medium animate-pulse">{t("msg.typingNow")}</span>
             ) : isGroup ? (
               <span className="text-muted-foreground">
-                {`${thread?.memberCount ?? infoQuery.data?.members.length ?? ""} members`}
+                {(() => {
+                  const n = thread?.memberCount ?? infoQuery.data?.members.length ?? null;
+                  return n == null
+                    ? ""
+                    : t(n === 1 ? "groups.memberCountOne" : "groups.memberCountMany", { n });
+                })()}
                 {/* Board 3c. Withheld entirely when nobody else is online, rather
                     than shown as a zero: "0 online" spends a line saying nothing,
                     and the member count above it already carries the group's size.
@@ -2573,7 +2646,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   <>
                     <span className="text-muted-foreground/40"> · </span>
                     <span className="text-[color:var(--relay-green-text)] font-medium">
-                      {membersOnline} online
+                      {t("groups.onlineCount", { n: membersOnline })}
                     </span>
                   </>
                 )}
@@ -2581,15 +2654,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             ) : thread?.peerIsOnline && thread?.peerIdle ? (
               // Backgrounded (v2.99.92) — "away", not "online", and not the
               // "last seen 3s ago" that minimising used to produce.
-              <span className="text-muted-foreground font-medium">away</span>
+              <span className="text-muted-foreground font-medium">{t("msg.away")}</span>
             ) : thread?.peerIsOnline ? (
-              <span className="text-[color:var(--relay-online)] font-medium">online</span>
+              <span className="text-[color:var(--relay-online)] font-medium">{t("msg.online")}</span>
             ) : thread?.peerLastSeenAt ? (
               // Short stamp here (the header is one cramped line); the profile
               // popup carries the full date + time.
-              <span className="text-muted-foreground truncate">last seen {timeAgo(thread.peerLastSeenAt)}</span>
+              <span className="text-muted-foreground truncate">{t("msg.lastSeen", { when: timeAgo(t, thread.peerLastSeenAt) })}</span>
             ) : (
-              <span className="text-muted-foreground">offline</span>
+              <span className="text-muted-foreground">{t("msg.offline")}</span>
             )}
           </div>
         </div>
@@ -2698,18 +2771,18 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <div className="flex-1 min-h-0 overflow-y-auto px-3 md:px-5 py-3 space-y-2">
             {debouncedSearch.length === 0 ? (
               <div className="text-center text-sm text-muted-foreground mt-10">
-                Type to search this conversation.
+                {t("msg.searchHint")}
               </div>
             ) : searchResults.isLoading ? (
-              <div className="text-sm text-muted-foreground">Searching…</div>
+              <div className="text-sm text-muted-foreground">{t("msg.searching")}</div>
             ) : (searchResults.data?.length ?? 0) === 0 ? (
               <div className="text-center text-sm text-muted-foreground mt-10">
-                No messages match “{debouncedSearch}”.
+                {t("msg.noMessagesMatch", { query: debouncedSearch })}
               </div>
             ) : (
               <>
                 <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-1">
-                  Results
+                  {t("msg.results")}
                 </div>
                 {searchResults.data?.map((m) => {
                   const mine = m.senderIdentityId === me.id;
@@ -2724,7 +2797,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             className="text-[11px] font-semibold mb-0.5"
                             style={{ color: nameColorFor({ isGroup, senderIdentityId: m.senderIdentityId }) }}
                           >
-                            {nameById.get(m.senderIdentityId) || "Member"}
+                            {nameById.get(m.senderIdentityId) || t("msg.member")}
                           </div>
                         )}
                         {m.attachment && (
@@ -2773,10 +2846,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             top-margin spacer push content down when it doesn't fill the view. */}
         <div className="mt-auto shrink-0" aria-hidden="true" />
         {messagesQuery.isLoading ? (
-          <div className="text-sm text-muted-foreground">Loading…</div>
+          <div className="text-sm text-muted-foreground">{t("msg.loading")}</div>
         ) : (messagesQuery.data?.length ?? 0) === 0 ? (
           <div className="text-center text-sm text-muted-foreground mt-10">
-            No messages yet. Say hi 👋
+            {t("msg.emptyThread")}
           </div>
         ) : (
           /* ONE <section> PER DAY, so the header can be sticky (v2.105.3).
@@ -2964,7 +3037,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             className="text-[11px] font-semibold mb-0.5"
                             style={{ color: nameColorFor({ isGroup, senderIdentityId: m.senderIdentityId }) }}
                           >
-                            {nameById.get(m.senderIdentityId) || "Member"}
+                            {nameById.get(m.senderIdentityId) || t("msg.member")}
                           </div>
                         )}
                         <div className="text-4xl leading-tight">{m.body}</div>
@@ -3108,7 +3181,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         "text-white/80"
                       }
                     >
-                      <Voicemail className="size-3.5" /> Voicemail
+                      <Voicemail className="size-3.5" /> {t("msg.voicemail")}
                     </div>
                   )}
                   {(() => {
@@ -3201,7 +3274,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       return (
                         <>
                           {content(m.body, m.attachment)}
-                          {chip(exp!.expire === "once" ? "View once" : `Disappears ${exp!.expire}s after opening`)}
+                          {chip(
+                            exp!.expire === "once"
+                              ? t("msg.viewOnceShort")
+                              : t("msg.disappearsAfterOpening", { n: exp!.expire! })
+                          )}
                         </>
                       );
                     }
@@ -3217,11 +3294,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                           <Timer className={"size-4" + (loadingThis ? " animate-spin" : "")} />
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block text-[13px] font-semibold">{loadingThis ? "Opening…" : "Tap to view"}</span>
+                          <span className="block text-[13px] font-semibold">{loadingThis ? t("msg.opening") : t("msg.tapToView")}</span>
                           <span className="block text-[11px] text-muted-foreground">
                             {exp!.expire === "once"
-                              ? "Can be viewed once, then it disappears"
-                              : `Disappears ${exp!.expire}s after you open it`}
+                              ? t("msg.viewOnceHint")
+                              : t("msg.disappearsAfterYouOpen", { n: exp!.expire! })}
                           </span>
                         </span>
                       </button>
@@ -3342,7 +3419,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             <Reply className="size-4 shrink-0 text-[#fb923c]" />
             <div className="flex-1 min-w-0">
               <div className="text-[11px] font-semibold text-[#fb923c]">
-                Replying to {senderLabel(replyingTo.senderIdentityId)}
+                {me && replyingTo.senderIdentityId === me.id
+                  ? t("msg.replyingToSelf")
+                  : t("msg.replyingTo", { name: senderLabel(replyingTo.senderIdentityId) })}
               </div>
               <div className="truncate text-xs text-muted-foreground">{previewOf(replyingTo)}</div>
             </div>
@@ -3425,7 +3504,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 onClick={() => { setAttachMenuOpen(false); setVideoRecOpen(true); }}
                 className="flex items-center justify-center gap-2 rounded-xl bg-[#38bdf8]/12 px-3 py-3 text-sm font-semibold text-[#38bdf8] active:scale-95 transition-transform"
               >
-                <Video className="size-4 shrink-0" /> <span className="truncate">Record video</span>
+                <Video className="size-4 shrink-0" /> <span className="truncate">{t("msg.recordVideo")}</span>
               </button>
             )}
             <button
@@ -3433,14 +3512,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               onClick={() => { setAttachMenuOpen(false); imageRef.current?.click(); }}
               className="flex items-center justify-center gap-2 rounded-xl bg-muted/60 px-3 py-3 text-sm font-semibold text-foreground active:scale-95 transition-transform"
             >
-              <ImageIcon className="size-4 shrink-0" /> <span className="truncate">Photo &amp; video</span>
+              <ImageIcon className="size-4 shrink-0" /> <span className="truncate">{t("msg.photoAndVideo")}</span>
             </button>
             <button
               type="button"
               onClick={() => { setAttachMenuOpen(false); fileRef.current?.click(); }}
               className="flex items-center justify-center gap-2 rounded-xl bg-muted/60 px-3 py-3 text-sm font-semibold text-foreground active:scale-95 transition-transform"
             >
-              <Paperclip className="size-4 shrink-0" /> <span className="truncate">Attach file</span>
+              <Paperclip className="size-4 shrink-0" /> <span className="truncate">{t("msg.attachFile")}</span>
             </button>
             {/* v2.106.64 — VOICE NOTE lives here now, beside the other things you can
                 attach, per the owner: *"on the attachment inside the chat on the plus
@@ -3458,12 +3537,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               disabled={!recorderSupported() || uploading}
               title={
                 recorderSupported()
-                  ? "Record a voice note"
-                  : "Voice notes need a newer browser — use Attach file for an audio file instead"
+                  ? t("msg.recordVoiceNoteHint")
+                  : t("msg.voiceNoteUnsupported")
               }
               className="flex items-center justify-center gap-2 rounded-xl bg-muted/60 px-3 py-3 text-sm font-semibold text-foreground active:scale-95 transition-transform disabled:opacity-50"
             >
-              <Mic className="size-4 shrink-0" /> <span className="truncate">Voice note</span>
+              <Mic className="size-4 shrink-0" /> <span className="truncate">{t("msg.voiceNote")}</span>
             </button>
           </div>
         )}
@@ -3472,8 +3551,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             <Timer className="size-4 shrink-0 text-[#a78bfa]" />
             <span className="flex-1 text-xs text-muted-foreground">
               {expire === "once"
-                ? "Disappearing: they can view this ONCE — then it's gone for both of you."
-                : `Disappearing: gone ${expire} seconds after they open it.`}
+                ? t("msg.expireBannerOnce")
+                : t(expireSecondsKey(expire, "banner"), { n: expire })}
             </span>
             <button
               type="button"
@@ -3527,10 +3606,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             }
             aria-label={
               expire === null
-                ? "Make the next message disappear"
-                : `Disappearing: ${expire === "once" ? "view once" : `${expire} seconds`}`
+                ? t("msg.expireToggleOff")
+                : expire === "once"
+                  ? t("msg.expireToggleOnce")
+                  : t(expireSecondsKey(expire, "toggle"), { n: expire })
             }
-            title="Disappearing message: tap to cycle off · view-once · 5s · 10s · 30s"
+            title={t("msg.expireCycleHint")}
             className={expire !== null ? "bg-[#a78bfa]/15 text-[#a78bfa] hover:text-[#a78bfa]" : ""}
           >
             {expire === null ? (
@@ -3765,8 +3846,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             <AlertDialogTitle>{t("msg.forwardTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
               {forwarding && (forwarding.meta as { expire?: unknown } | null)?.expire != null
-                ? "This is a disappearing message — forwarding it would break the promise it was sent under, so it can't be forwarded."
-                : "Pick a conversation. It's sent as a new message there, with its own delivery receipts."}
+                ? t("msg.forwardExpiringNote")
+                : t("msg.forwardHint")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {forwarding && (forwarding.meta as { expire?: unknown } | null)?.expire == null && (
@@ -3890,12 +3971,416 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 setUnsendId(null);
               }}
             >
-              Unsend
+              {t("msg.unsendAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   BOARD 4i — THE LOCKED-GROUP GATE
+   ══════════════════════════════════════════════════════════════════════════════
+
+   The frame: a 64px group avatar wearing a GOLD lock puck · "This group is locked"
+   19/700 · an explainer naming the group · four 12px PIN dots · a 3x4 circular
+   glass keypad whose hover is GOLD · the app-passcode escape in the ACCENT · and
+   the footer "Locked groups never show previews in the thread list".
+
+   ── WHY GOLD ON THE LOCK AND THE ACCENT ON THE ESCAPE ────────────────────────────
+   This is the frame's own vocabulary rather than decoration. Gold means admin /
+   owner / LOCKED in this app and is spent on nothing else (global rule 4), so the
+   puck, the dots and the keypad's hover wear it. The one thing on the screen that
+   is NOT about being locked — the way out — is the one thing 4i paints in the
+   accent. `GroupInfoSheet`'s lock section already reads 4i exactly that way and
+   says so in place; this is the other half of the frame, the half that takes the
+   code. Green is deliberately absent: it means ONLINE and nothing else, and this
+   screen used to be one of the surfaces that spent it elsewhere.
+
+   ── THE DEFECT THIS FRAME'S "RECOVERY STATE" EXPOSED, WHICH IS THE REAL FIND ─────
+   `groupLock.ts` is built on one promise: the app passcode is the only route back
+   from a forgotten group code, which is why `setGroupLock` REFUSES until one
+   exists. Profile lets that passcode be 4-8 digits (`onlyDigits` slices to 8,
+   `save()` requires >= 4). But `attemptOpenGroup` opens with
+   `if (!isValidLockCode(code)) return "no"` — exactly four digits — so it never
+   reaches `verifyPasscode` for a longer one, and the gate it backs capped its
+   field at 4 and auto-submitted there.
+
+   So for anybody whose app passcode is 5-8 digits the documented recovery was
+   UNREACHABLE: forget the group code and that chat is redacted on that device
+   permanently, with "clear all site data" — which destroys a guest identity and
+   its 6-digit number (v2.99.68) — as the only way out. That is precisely the trap
+   the app-passcode requirement exists to prevent, arriving through the one length
+   nobody checked.
+
+   IT IS FIXED HERE THROUGH THE MODULE'S OWN PUBLIC API rather than by loosening
+   the guard: `removeGroupLock` has no length gate ahead of `verifyPasscode`, so a
+   5-8 digit entry goes there. THE SPLIT IS BY LENGTH AND THE ORDER IS PRESERVED —
+   a 4-digit entry still goes through `attemptOpenGroup`, which tries the GROUP
+   code first and only then the passcode, so the ordinary path can never remove a
+   lock, and a group whose code happened to equal the app passcode is not silently
+   unlocked-and-removed (the module's own stated reason for that ordering). A 5-8
+   digit entry cannot be a group code by construction, so there is nothing to try
+   first.
+
+   Both routes REMOVE the lock when the app passcode is what opened it, which is
+   the module's policy verbatim: whoever used it has just demonstrated they do not
+   know the group code, so leaving the lock in place would strand them again next
+   session.
+
+   ── THE ESCAPE IS A HINT, NOT A SECOND CONTROL ───────────────────────────────────
+   This same keypad takes both codes, so a separate "unlock with your passcode"
+   button would have to open a second field for a code this pad already accepts —
+   two ways to do one thing, and the one that gets forgotten is how they come to
+   disagree. It is WITHHELD when `hasPasscode()` is false, because there the
+   sentence would be a lie: the passcode can be cleared from Profile after a group
+   was locked, and a screen promising a recovery that cannot work is worse than one
+   that admits the group code is the only way in.
+
+   ── THE HEADER ABOVE IT STAYS, AND THAT IS A DELIBERATE DEVIATION ────────────────
+   The board draws this frame as a whole phone screen with no app chrome. Ours
+   keeps the lock header, because it carries BACK — without it a deep link into a
+   locked group on a phone is a screen with no way out. The frame's explainer names
+   the group, so the header's own reason for naming it (v2.105.20: "a nameless lock
+   screen would leave somebody unsure which group they had opened") is satisfied
+   twice over rather than lost. */
+
+/** Gold = admin / owner / locked. The board's literal, matching `GroupInfoSheet`. */
+const LOCK_GOLD = "#e8c94a";
+const lockGold = (a: number) => `rgba(232, 201, 74, ${a})`;
+
+/**
+ * WHICH ROUTE A TYPED CODE TAKES OUT OF THE GATE — a pure function, and exported so
+ * it can be DRIVEN rather than read: "does a 6-digit app passcode get a chance to
+ * open this group" is exactly the question a source pin cannot answer, and getting
+ * it wrong is the difference between a recovery and a permanent lockout.
+ *
+ *   4 digits  → `group-code`   the module's own rule: the GROUP code is tried first
+ *                              and only then the app passcode, so the ordinary path
+ *                              can never remove a lock.
+ *   5-8       → `app-passcode` cannot be a group code by construction, and
+ *                              `attemptOpenGroup` would refuse it before testing it.
+ *   anything else → `too-short`, which submits nothing.
+ *
+ * The upper bound is Profile's own: an app passcode is 4-8 digits there.
+ */
+export function lockGateRoute(code: string): "group-code" | "app-passcode" | "too-short" {
+  if (isValidLockCode(code)) return "group-code";
+  if (/^\d{5,8}$/.test(code)) return "app-passcode";
+  return "too-short";
+}
+
+/**
+ * One keypad key.
+ *
+ * ITS HOVER IS DRIVEN BY POINTER STATE RATHER THAN `:hover`, and the reason is a
+ * cascade fact rather than a preference. The shipped `.rkey` recipe would give the
+ * right glass for free, but its hover is `.relay-v2 .rkey:hover` — three class
+ * selectors — so ANY utility a component adds (two) loses to it and the key would
+ * hover ACCENT. On this screen that is the wrong word: the accent is reserved for
+ * the escape and gold is what "locked" means. Re-pointing `.rkey` means editing
+ * `index.css`, which is not this file's to touch, and a Tailwind class that silently
+ * loses the cascade is indistinguishable from one that does not exist (v2.106.78).
+ * So the tint is applied directly and cannot be a no-op.
+ *
+ * Pointer state, not `onMouseEnter`, so a stylus/touch pointer leaving the key
+ * clears it; and `useState` per key rather than an index in the parent, so a hover
+ * re-renders one 62px button rather than the whole pad.
+ */
+function LockPadKey({
+  onPress,
+  disabled,
+  label,
+  children,
+}: {
+  onPress: () => void;
+  disabled?: boolean;
+  label?: string;
+  children: ReactNode;
+}) {
+  const [hot, setHot] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onPress}
+      disabled={disabled}
+      aria-label={label}
+      onPointerEnter={(e) => e.pointerType === "mouse" && setHot(true)}
+      onPointerLeave={() => setHot(false)}
+      onPointerCancel={() => setHot(false)}
+      className="grid aspect-square place-items-center rounded-full outline-none transition-[transform,background-color,border-color,opacity] duration-150 select-none active:scale-[0.94] disabled:opacity-30 disabled:active:scale-100 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      style={{
+        /* The board's own key: a 180deg white gradient over a hairline, with the
+           inset highlight that makes it read as glass rather than as a flat disc. */
+        backgroundColor: hot && !disabled ? lockGold(0.12) : "transparent",
+        backgroundImage:
+          "linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.02))",
+        border: `1px solid ${hot && !disabled ? lockGold(0.4) : "rgba(255,255,255,.11)"}`,
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,.1)",
+        transitionTimingFunction: "var(--ease-out)",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function LockedGroupGate({
+  conversationId,
+  title,
+  avatarUrl,
+}: {
+  conversationId: number;
+  title: string;
+  avatarUrl?: string | null;
+}) {
+  const t = useT();
+  const [code, setCode] = useState("");
+  const [wrong, setWrong] = useState(false);
+  const [busy, setBusy] = useState(false);
+  /* Read once per mount rather than per render: Profile cannot be reached from
+     behind this gate, so it cannot change while the gate is on screen. */
+  const [canRecover] = useState(() => hasPasscode());
+
+  /* Switching between two locked groups must not carry the first one's digits —
+     or its error — into the second. */
+  useEffect(() => {
+    setCode("");
+    setWrong(false);
+  }, [conversationId]);
+
+  const submit = useCallback(
+    async (value: string) => {
+      /* THE LENGTH DECIDES THE ROUTE — see `lockGateRoute` and the header above. */
+      const route = lockGateRoute(value);
+      if (busy || route === "too-short") return;
+      setBusy(true);
+      try {
+        const opened =
+          route === "group-code"
+            ? await attemptOpenGroup(conversationId, value)
+            : (await removeGroupLock(conversationId, value))
+              ? "recovered"
+              : "no";
+        if (opened === "recovered") toast.success(t("groups.lockRemovedToast"));
+        /* On success the module notifies its subscribers and `useGroupLocks()` in
+           the conversation view re-renders this gate away. There is deliberately no
+           success callback: two ways to drive one transition is how the forgotten
+           one leaves the gate on screen. */
+        if (opened !== "no") return;
+        setWrong(true);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, conversationId, t]
+  );
+
+  const push = useCallback(
+    (d: string) => {
+      setWrong(false);
+      setCode((c) => {
+        if (c.length >= 8) return c;
+        const next = c + d;
+        /* Auto-submit at four, which is every group code and the common path — a
+           separate tap for something that can only be four characters is the step
+           the app lock does not ask for either. A wrong four does NOT clear: an app
+           passcode may be 5-8 digits, so the digits have to survive for the fifth
+           to be typed. */
+        if (next.length === 4) void submit(next);
+        return next;
+      });
+    },
+    [submit]
+  );
+
+  const back = useCallback(() => {
+    setWrong(false);
+    setCode((c) => c.slice(0, -1));
+  }, []);
+
+  /* A PHYSICAL keyboard drives the pad. The gate this replaces was a text input,
+     which was the only way to type on a desktop — losing that would be a
+     regression for everyone not on a phone. On `window` rather than an input, so
+     it works whether or not anything holds focus. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (/^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        push(e.key);
+      } else if (e.key === "Backspace") {
+        e.preventDefault();
+        back();
+      } else if (e.key === "Enter") {
+        // Enter on a focused button is the browser clicking THAT control; submitting
+        // here as well would append a digit and unlock in one press.
+        const el = document.activeElement;
+        if (el instanceof HTMLElement && (el.tagName === "BUTTON" || el.tagName === "A")) return;
+        e.preventDefault();
+        void submit(code);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [push, back, submit, code]);
+
+  /* Four slots is the frame, and every group code is exactly four. The row grows
+     only when somebody is typing a longer app passcode, so the recovery is not
+     capped by a fixed row asserting a length this screen also has to accept. */
+  const slots = Math.min(8, Math.max(4, code.length));
+
+  return (
+    <div className="flex flex-1 flex-col items-center overflow-y-auto px-6 pt-10 pb-8 text-center">
+      {/* Board: a 64px group avatar with the gold lock puck pinned to its trailing
+          bottom corner. `GroupAvatar` because a group's photo has exactly one
+          implementation — a private copy is how a changed photo comes to render on
+          one surface and not another (v2.106.89) — and it degrades to the glyph
+          rather than to a hole when the url fails. */}
+      <span className="relative shrink-0">
+        <GroupAvatar url={avatarUrl} name={title} size={64} />
+        <span
+          className="absolute -bottom-1.5 -end-1.5 grid size-[26px] place-items-center rounded-full"
+          style={{ background: "#0d1316", border: `1px solid ${lockGold(0.5)}` }}
+        >
+          <Lock aria-hidden="true" className="size-3" style={{ color: LOCK_GOLD }} strokeWidth={2} />
+        </span>
+      </span>
+
+      <h2 className="mt-[18px] text-[19px] font-bold tracking-tight text-foreground">
+        This group is locked
+      </h2>
+      {/* The board's explainer, naming the group so the screen says WHICH chat this
+          is. `dir="auto"` on the name alone: the sentence around it is the UI's
+          language and the title is the group's. */}
+      <p className="mt-1.5 max-w-[240px] text-[11.5px] leading-[1.55] text-muted-foreground">
+        Enter the group code to open{" "}
+        <span dir="auto" className="font-semibold text-foreground">
+          {title}
+        </span>
+        .{" "}
+        {canRecover
+          ? "Your app passcode opens it too."
+          : "Ask whoever set it if you don't have it."}
+      </p>
+
+      {/* PIN dots — board: 12px, gap 12, filled = gold with a .6 glow, empty = a
+          1.5px .3 white ring. Decoration; the live region below is what a screen
+          reader is told, which is why these are hidden from it. */}
+      <div aria-hidden="true" className="mt-6 flex justify-center gap-3">
+        {Array.from({ length: slots }, (_, i) => {
+          const filled = i < code.length;
+          return (
+            <span
+              key={i}
+              className="size-3 rounded-full"
+              style={
+                filled
+                  ? wrong
+                    ? { background: "#fb7185", boxShadow: "0 0 10px rgba(251,113,133,.6)" }
+                    : { background: LOCK_GOLD, boxShadow: `0 0 10px ${lockGold(0.6)}` }
+                  : { border: "1.5px solid rgba(255,255,255,.3)" }
+              }
+            />
+          );
+        })}
+      </div>
+
+      {/* The only thing that SAYS what happened — the dots above cannot. Its wording
+          already names both codes, so it stays true for either route. */}
+      <div aria-live="polite" className="min-h-5">
+        {wrong && (
+          <p role="alert" className="mt-2.5 text-[11.5px] font-semibold text-destructive">
+            {t("groups.lockWrongCode")}
+          </p>
+        )}
+      </div>
+
+      {/* Board: `repeat(3, 62px)`, gap 11. Each key is `aspect-square`, so the cell
+          is square BY CONSTRUCTION at any width — sizing rows independently is what
+          made the Dialer's "circles" ovals by 18px (v2.106.3). Capped at the board's
+          212px and allowed to shrink on a narrow phone. */}
+      <div
+        role="group"
+        aria-label={t("groups.lockAnyCodeAria")}
+        className="mt-6 grid w-[min(100%,212px)] gap-[11px]"
+        style={{ gridTemplateColumns: "repeat(3, 1fr)" }}
+      >
+        {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
+          <LockPadKey key={d} onPress={() => push(d)}>
+            <span
+              className="font-mono leading-none"
+              style={{ fontSize: 21, fontWeight: 600, color: "#eafff6" }}
+            >
+              {d}
+            </span>
+          </LockPadKey>
+        ))}
+        {/* BLANK · 0 · ERASE — the app's own bottom row since v2.99.90. A real inert
+            cell rather than a shortened list, which is what keeps `0` in the middle
+            column and erase under the thumb that just typed. Not a button and
+            aria-hidden, so nothing announces an empty control between 9 and 0. */}
+        <span aria-hidden="true" />
+        <LockPadKey onPress={() => push("0")}>
+          <span
+            className="font-mono leading-none"
+            style={{ fontSize: 21, fontWeight: 600, color: "#eafff6" }}
+          >
+            0
+          </span>
+        </LockPadKey>
+        {/* `dialer.eraseLast`, not a private twin: keys are global, and this file's
+            own dictionary note is explicit that two keys for one noun is how two
+            surfaces come to describe the same act differently — the Arabic half then
+            has to be decided twice. Dimmed with nothing to erase, never hidden,
+            because a key that comes and goes makes the grid jump. */}
+        <LockPadKey onPress={back} disabled={code.length === 0} label={t("dialer.eraseLast")}>
+          <Delete aria-hidden="true" style={{ width: 21, height: 21, color: "#eafff6" }} strokeWidth={2} />
+        </LockPadKey>
+      </div>
+
+      {/* Submitting a code LONGER than four needs its own control, because nothing
+          can auto-fire it: four digits is where the group code ends, and how many
+          digits an app passcode has is not knowable from here — only its hash is
+          stored, deliberately. ABSENT rather than disabled below five digits, so it
+          is never a control that can only refuse (v2.103.3). */}
+      {code.length > 4 && (
+        <Button
+          type="button"
+          disabled={busy}
+          onClick={() => void submit(code)}
+          className="rcta mt-5 h-11 rounded-full border-0 px-6 text-[12.5px] font-bold"
+        >
+          Unlock
+        </Button>
+      )}
+
+      {/* THE ESCAPE, in the accent — the frame gives it to exactly one thing. Not a
+          button: this same pad takes the passcode, so it is an instruction about the
+          keypad above rather than a second way in. `text-primary` and never the raw
+          variable, which measures 1.59:1 as text on a light card. */}
+      {canRecover && (
+        <p className="mt-[22px] max-w-[260px] text-[11.5px] font-semibold text-primary">
+          Forgotten it? Type your app passcode on this keypad instead — that removes
+          the lock.
+        </p>
+      )}
+
+      {/* WHAT THE LOCK IS, said plainly, because a screen that implies a permission
+          would be a promise the code cannot keep: every member still has these
+          messages and this account on another device shows them unlocked. */}
+      <p className="mt-3 max-w-[260px] text-[11px] leading-relaxed text-muted-foreground">
+        {t("groups.lockExplain")}
+      </p>
+
+      {/* The board's footer note, and it is TRUE rather than aspirational: the thread
+          row redacts a locked group's preview (v2.105.20). */}
+      <p className="mt-auto pt-6 text-[11px] text-muted-foreground/80">
+        {t("groups.lockNoPreviews")}
+      </p>
+    </div>
   );
 }
 
@@ -3960,6 +4445,7 @@ function AccentCircle({
  * row's status, not the payload.
  */
 function Receipt({ status, mine }: { status?: string | null; mine: boolean }) {
+  const t = useT();
   if (!mine || !status) return null;
   const read = status === "read";
   const twoTicks = read || status === "delivered";
@@ -4007,12 +4493,12 @@ function Receipt({ status, mine }: { status?: string | null; mine: boolean }) {
     color: read ? "var(--rb, #3FE0C5)" : "rgba(255,255,255,0.45)",
   };
   const label = failed
-    ? "Not sent"
+    ? t("msg.notSent")
     : read
-      ? "Read"
+      ? t("msg.read")
       : twoTicks
-        ? "Delivered"
-        : "Sent";
+        ? t("msg.delivered")
+        : t("msg.sent");
   return (
     <span
       className="ms-1 inline-flex items-center"
@@ -4258,7 +4744,7 @@ function MessageMenu({
               onClick={() => { onReply(); setOpen(false); }}
               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
             >
-              <Reply className="size-4" /> Reply
+              <Reply className="size-4" /> {t("msg.reply")}
             </button>
             {onReact && (
               <button
@@ -4266,7 +4752,7 @@ function MessageMenu({
                 onClick={() => { onReact(); setOpen(false); }}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
               >
-                <SmilePlus className="size-4" /> React
+                <SmilePlus className="size-4" /> {t("msg.reactAction")}
               </button>
             )}
             {onCopy && (
@@ -4275,7 +4761,7 @@ function MessageMenu({
                 onClick={() => { onCopy(); setOpen(false); }}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
               >
-                <Copy className="size-4" /> Copy
+                <Copy className="size-4" /> {t("msg.copy")}
               </button>
             )}
             {onForward && (
@@ -4284,7 +4770,7 @@ function MessageMenu({
                 onClick={() => { onForward(); setOpen(false); }}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
               >
-                <Forward className="size-4" /> Forward
+                <Forward className="size-4" /> {t("msg.forward")}
               </button>
             )}
             {onInfo && (
@@ -4293,7 +4779,7 @@ function MessageMenu({
                 onClick={() => { onInfo(); setOpen(false); }}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
               >
-                <Info className="size-4" /> Info
+                <Info className="size-4" /> {t("msg.info")}
               </button>
             )}
             {/* "Delete for me" (v2.102.2, owner #81) — offered on EVERY message,
@@ -4306,7 +4792,7 @@ function MessageMenu({
                 onClick={() => { onHide(); setOpen(false); }}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
               >
-                <EyeOff className="size-4" /> Delete for me
+                <EyeOff className="size-4" /> {t("msg.hideAction")}
               </button>
             )}
             {mine && onDelete && (
@@ -4315,7 +4801,7 @@ function MessageMenu({
                 onClick={() => { onDelete(); setOpen(false); }}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm text-destructive hover:bg-destructive/10"
               >
-                <Trash2 className="size-4" /> Unsend
+                <Trash2 className="size-4" /> {t("msg.unsendAction")}
               </button>
             )}
             {/* v2.104.0 — the group-admin override. Never shown on my OWN message: that
@@ -4329,7 +4815,7 @@ function MessageMenu({
                 onClick={() => { onAdminDelete(); setOpen(false); }}
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm text-destructive hover:bg-destructive/10"
               >
-                <Trash2 className="size-4" /> Remove for everyone
+                <Trash2 className="size-4" /> {t("msg.adminRemoveAction")}
               </button>
             )}
           </div>
@@ -4381,7 +4867,7 @@ function AttachmentView({
   // fall back to the tappable file card instead (v2.96).
   const [imgBroken, setImgBroken] = useState(false);
   if (mimeType.startsWith("image/")) {
-    if (imgBroken) return <FileCard url={url} filename={filename || "Image"} mine={mine} />;
+    if (imgBroken) return <FileCard url={url} filename={filename || t("msg.imageAlt")} mine={mine} />;
     // Thumbnail in the bubble (falls back to the full url for legacy/GIF
     // rows) → click opens the FULL-SIZE image in the in-app lightbox.
     const hasDims = typeof width === "number" && width > 0 && typeof height === "number" && height > 0;
@@ -4394,7 +4880,7 @@ function AttachmentView({
       >
         <img
           src={thumbUrl || url}
-          alt={filename || "image"}
+          alt={filename || t("msg.imageAlt")}
           width={hasDims ? width! : undefined}
           height={hasDims ? height! : undefined}
           style={hasDims ? { aspectRatio: `${width} / ${height}` } : undefined}
@@ -4976,7 +5462,7 @@ function RecordingBar({
         onClick={onTogglePause}
         disabled={busy}
         aria-label={paused ? t("msg.resumeRecording") : t("msg.pauseRecording")}
-        title={paused ? "Resume" : "Pause"}
+        title={paused ? t("msg.resume") : t("msg.pause")}
         className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground/10 text-foreground transition active:scale-95 disabled:opacity-50"
       >
         {paused ? <Mic className="size-4" /> : <Pause className="size-4" />}
@@ -4986,7 +5472,7 @@ function RecordingBar({
         onClick={onSend}
         disabled={busy}
         aria-label={t("msg.sendVoiceNote")}
-        title="Send"
+        title={t("msg.send")}
         className="rcta grid size-9 shrink-0 place-items-center rounded-full transition active:scale-95 disabled:opacity-50"
       >
         <Send className="size-4" />
@@ -4998,6 +5484,7 @@ function RecordingBar({
 /** Styled generic-attachment card (v2.96) — replaces the bare underlined
  *  link: icon tile + filename + an explicit open/download affordance. */
 function FileCard({ url, filename, mine }: { url: string; filename?: string; mine: boolean }) {
+  const t = useT();
   return (
     <a
       href={url}
@@ -5017,9 +5504,9 @@ function FileCard({ url, filename, mine }: { url: string; filename?: string; min
         <Paperclip className="size-4" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-semibold">{filename || "Attachment"}</span>
+        <span className="block truncate text-[13px] font-semibold">{filename || t("msg.fileFallback")}</span>
         <span className={"block text-[10.5px] " + "text-white/70"}>
-          Tap to open or download
+          {t("msg.tapToOpen")}
         </span>
       </span>
       <Download className="size-4 shrink-0 opacity-70" />
@@ -5060,6 +5547,7 @@ function MediaLightbox({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  const t = useT();
   return (
     <div
       className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 p-4"
@@ -5068,7 +5556,7 @@ function MediaLightbox({
       <button
         type="button"
         onClick={onClose}
-        aria-label="Close preview"
+        aria-label={t("msg.closePreview")}
         className="absolute end-4 top-4 grid size-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
       >
         <X className="size-5" />
@@ -5080,7 +5568,7 @@ function MediaLightbox({
         target="_blank"
         rel="noreferrer"
         onClick={(e) => e.stopPropagation()}
-        aria-label="Download"
+        aria-label={t("msg.download")}
         className="absolute end-16 top-4 grid size-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
       >
         <Download className="size-5" />
@@ -5110,7 +5598,7 @@ function MediaLightbox({
         onClick={(e) => e.stopPropagation()}
       >
         {media.type === "image" ? (
-          <img src={media.url} alt={media.name || "image"} className="max-h-[78vh] max-w-[92vw] rounded-lg object-contain" />
+          <img src={media.url} alt={media.name || t("msg.imageAlt")} className="max-h-[78vh] max-w-[92vw] rounded-lg object-contain" />
         ) : (
           <video src={media.url} controls autoPlay className="max-h-[78vh] max-w-[92vw] rounded-lg" />
         )}
@@ -5140,7 +5628,7 @@ function MediaLightbox({
         className="pointer-events-none absolute inset-x-0 bottom-5 text-center font-mono text-[10px] font-semibold uppercase text-white/45"
         style={{ letterSpacing: ".22em" }}
       >
-        Encrypted in transit · stays in the app
+        {t("msg.encryptedInTransit")}
       </div>
     </div>
   );
@@ -5173,7 +5661,7 @@ function AutoReplyToggle() {
     },
     onError: (_e, _v, cxt) => {
       if (cxt?.prev !== undefined) utils.identity.whoami.setData(undefined, cxt.prev);
-      toast.error("Couldn't change auto-reply. Try again.");
+      toast.error(t("msg.autoReplyFailed"));
     },
     onSuccess: ({ enabled }) => {
       toast.success(enabled ? t("msg.autoReplyOn") : t("msg.autoReplyOff"));
@@ -5187,8 +5675,8 @@ function AutoReplyToggle() {
         size="icon"
         variant="ghost"
         onClick={() => setOpen(true)}
-        aria-label="Message options"
-        title="Message options"
+        aria-label={t("msg.options")}
+        title={t("msg.options")}
         className={"size-8 " + (on ? "text-primary" : "text-muted-foreground")}
       >
         <StickyNote className="size-5" />
@@ -5198,7 +5686,7 @@ function AutoReplyToggle() {
           <AlertDialogHeader>
             <AlertDialogTitle>{t("msg.options")}</AlertDialogTitle>
             <AlertDialogDescription className="sr-only">
-              Turn the away auto-reply on or off.
+              {t("msg.autoReplySrHint")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <button
@@ -5222,15 +5710,14 @@ function AutoReplyToggle() {
               />
             </span>
             <span className="min-w-0">
-              <span className="block text-sm font-semibold">Auto-reply when I'm away</span>
+              <span className="block text-sm font-semibold">{t("msg.autoReplyTitle")}</span>
               <span className="block text-xs text-muted-foreground mt-0.5">
-                If someone messages you while you're offline, RELAY replies once to let them know
-                you'll get back to them. Off by default.
+                {t("msg.autoReplyBody")}
               </span>
             </span>
           </button>
           <AlertDialogFooter>
-            <AlertDialogCancel>Done</AlertDialogCancel>
+            <AlertDialogCancel>{t("common.done")}</AlertDialogCancel>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -5335,8 +5822,8 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="New message"
-        title="New message"
+        aria-label={t("msg.newMessage")}
+        title={t("msg.newMessage")}
         /* BOARD 1c: the compose chip is the ACCENT chip. It was a hand-rolled orange tint
            carrying an orange GLYPH — accent-on-its-own-tint, the v2.106.31 pattern, and it
            measured 1.77:1 in light (the tint itself is only 1.28:1 against the card, so the
@@ -5379,7 +5866,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex shrink-0 items-center justify-between mb-3">
-              <h3 className="font-semibold">{mode === "group" ? "New group" : "New conversation"}</h3>
+              <h3 className="font-semibold">{mode === "group" ? t("msg.newGroup") : t("msg.newConversation")}</h3>
               <Button size="icon" variant="ghost" onClick={resetAll}>
                 <X className="size-4" />
               </Button>
@@ -5393,7 +5880,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                 runtime-built colour class is invisible to the JIT and renders unstyled. */}
             <div
               role="group"
-              aria-label="Conversation type"
+              aria-label={t("msg.conversationType")}
               className="grid shrink-0 grid-cols-2 gap-[7px] rounded-[13px] p-[5px] mb-4 border"
               style={{ background: "rgba(0,0,0,.32)", borderColor: "rgba(255,255,255,.08)" }}
             >
@@ -5420,7 +5907,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     : undefined
                 }
               >
-                <MessageSquarePlus className="size-3.5" /> Direct
+                <MessageSquarePlus className="size-3.5" /> {t("msg.section.direct")}
               </button>
               <button
                 type="button"
@@ -5440,7 +5927,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     : undefined
                 }
               >
-                <Users className="size-3.5" /> Group
+                <Users className="size-3.5" /> {t("msg.group")}
               </button>
             </div>
 
@@ -5463,9 +5950,9 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     <StickyNote className="size-5" />
                   </span>
                   <span className="flex-1 min-w-0">
-                    <span className="block font-medium text-sm">Note to self</span>
+                    <span className="block font-medium text-sm">{t("msg.noteToSelf")}</span>
                     <span className="block text-xs text-muted-foreground">
-                      Save links, ideas, and attachments to your own thread.
+                      {t("msg.noteToSelfHint")}
                     </span>
                   </span>
                 </button>
@@ -5476,13 +5963,13 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                   </div>
                   <div className="relative flex justify-center">
                     <span className="bg-card px-2 text-[10px] uppercase tracking-widest text-muted-foreground">
-                      or message someone
+                      {t("msg.orMessageSomeone")}
                     </span>
                   </div>
                 </div>
 
                 <label className="mb-2 block font-mono text-[10px] uppercase tracking-[.2em] text-muted-foreground">
-                  RELAY number
+                  {t("msg.relayNumber")}
                 </label>
                 <div className="flex gap-2">
                   <Input
@@ -5490,12 +5977,12 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     // NOT digit-stripped any more (v2.99.93) — that is what made a
                     // name untypeable. Bounded at 64 so it stays a search box.
                     onChange={(e) => setNumber(e.target.value.slice(0, 64))}
-                    placeholder="Number or name"
+                    placeholder={t("msg.numberOrName")}
                     // `text`, not numeric: a numeric keypad cannot type a name, and
                     // the whole point is that either works.
                     inputMode="text"
                     autoComplete="off"
-                    aria-label="Search your contacts by number or name"
+                    aria-label={t("msg.searchContactsLabel")}
                   />
                   <Button
                     // Enabled on SIX DIGITS only — the request takes a number, so a
@@ -5504,7 +5991,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     onClick={() => openThread.mutate({ number: digitsOf(number) })}
                     disabled={digitsOf(number).length !== 6 || !isNumberQuery(number) || pending}
                   >
-                    <Search className="size-4 me-1.5" /> Open
+                    <Search className="size-4 me-1.5" /> {t("msg.open")}
                   </Button>
                 </div>
                 <SuggestList
@@ -5537,7 +6024,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                   </p>
                 </div>
                 <label className="mb-2 block font-mono text-[10px] uppercase tracking-[.2em] text-muted-foreground">
-                  Group name
+                  {t("msg.groupName")}
                 </label>
                 {/* Board 3d draws this field with an ACCENT focus ring (border .45 plus
                     a 3px .12 halo) — it is the one field on the sheet that MUST be
@@ -5550,12 +6037,12 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                   <Input
                     value={groupTitle}
                     onChange={(e) => setGroupTitle(e.target.value.slice(0, 128))}
-                    placeholder="e.g. Weekend Trip"
+                    placeholder={t("msg.groupNamePlaceholder")}
                     className="rounded-[13px]"
                   />
                 </div>
                 <label className="mb-2 block font-mono text-[10px] uppercase tracking-[.2em] text-muted-foreground">
-                  Add members by number
+                  {t("msg.addMembersByNumber")}
                 </label>
                 <div className="flex gap-2">
                   <Input
@@ -5564,7 +6051,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     // `addGroupNumber` derives the digits.
                     onChange={(e) => setGroupInput(e.target.value.slice(0, 64))}
                     onKeyDown={(e) => { if (e.key === "Enter") addGroupNumber(); }}
-                    placeholder="Number or name"
+                    placeholder={t("msg.numberOrName")}
                     inputMode="text"
                   />
                   <Button
@@ -5606,7 +6093,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                         {n.slice(0, 3)} {n.slice(3)}
                         <button
                           type="button"
-                          aria-label={`Remove ${n}`}
+                          aria-label={t("msg.removeMember", { number: n })}
                           onClick={() => setGroupNumbers((xs) => xs.filter((x) => x !== n))}
                           className="text-muted-foreground hover:text-destructive"
                         >
@@ -5647,9 +6134,11 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                         because you are in the group you are creating — a count reading 3
                         for a group of 4 would be wrong about the thing it names. */}
                     {createGroup.isPending
-                      ? "Creating…"
+                      ? t("msg.creating")
                       : groupNumbers.length
-                        ? `Create group · ${groupNumbers.length + 1} members`
+                        ? t(createGroupCountKey(groupNumbers.length + 1), {
+                            n: groupNumbers.length + 1,
+                          })
                         : t("msg.createGroup")}
                   </Button>
                 )}
@@ -5667,9 +6156,9 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
       <AvatarPicker
         open={groupAvatarOpen}
         onClose={() => setGroupAvatarOpen(false)}
-        displayName={groupTitle || "Group"}
-        title="Choose a group photo"
-        removeLabel="the group photo"
+        displayName={groupTitle || t("msg.group")}
+        title={t("msg.chooseGroupPhoto")}
+        removeLabel={t("msg.theGroupPhoto")}
         onSave={async (url) => setGroupAvatar(url)}
       />
     </>
@@ -5710,6 +6199,7 @@ function SuggestList({
   selectable?: boolean;
   onPick: (number: string) => void;
 }) {
+  const t = useT();
   const skip = new Set(exclude ?? []);
   const hits = suggestContacts(contacts, query, 6).filter((c) => !skip.has(c.number));
   if (hits.length === 0) return null;
@@ -5751,7 +6241,7 @@ function SuggestList({
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium" dir="auto">
-                  {c.displayName || "Unnamed"}
+                  {c.displayName || t("msg.unnamed")}
                 </span>
                 {/* The number stays LTR + bidi-isolated so an Arabic name above
                     cannot reorder the digits (the v2.99.77 lesson). */}

@@ -1,5 +1,17 @@
 # Project TODO
 
+## v2.106.96 — the last five screens speak Arabic (#156 done)
+- [x] 411 new dictionary keys across profile (169) / messages (104) / history (41) / status (40) / contacts (33) / dialer (18) / auth (6)
+- [x] ~430 call sites wired; a sweep for a bare title/placeholder/aria literal on those six screens returns zero
+- [x] `auth.usePinInstead` deleted then RESTORED — the coverage sweep read a file an agent was mid-edit; the typecheck caught it
+- [x] Status composer: two pins repointed from board-4b's old arrangement to the properties (row cannot overflow; card bounded, scroll inside, Post outside the scroller)
+- [x] Second of those had frozen a real defect — the card AS the scroller is what makes Post slide away (v2.106.86)
+- [x] 6/6 mutations bite; my first "Post row is shrink-0" draft caught a SIBLING, fixed with a real enclosing-chain walk
+- [x] `qaBatch9` L2: fixed 120-char window → order comparison scoped to `verifyCode`; `pickMethod`'s second entry proven safe and pinned
+- [ ] `formatLastSeen` (8 readers) still returns finished English — needs whole-key-per-band selection like `guestExpiryKey`
+- [ ] Date formatters read the browser's locale, not the app's (flagged independently by three agents)
+- [ ] Nobody has read these six screens in Arabic on a real device
+
 ## v2.106.95 — the in-call surface speaks Arabic
 - [x] `dict/calls.ts` filled (it shipped as `{}` while being imported and spread — a wired surface contributing nothing)
 - [x] 79 markup sites annotated (`data-i18n` / `-aria` / `-title` / `-placeholder` / `-msg`) + `applyEngineLabels`

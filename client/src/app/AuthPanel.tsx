@@ -1,11 +1,27 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Mail, ArrowLeft, Lock, LockKeyhole, Check, Camera, Loader2 } from "lucide-react";
+import { X, Mail, ArrowLeft, Lock, LockKeyhole, Check, Camera, Loader2, KeyRound, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
 import { uploadAvatarImage } from "@/lib/uploadAttachment";
 import { AvatarPicker } from "./AvatarPicker";
+/**
+ * THE OFFER RULE IS IMPORTED, NOT RE-DERIVED — that is the whole reason this is a
+ * cross-module import rather than five copied lines. "Which ways in do we offer"
+ * is ONE rule with two readers now (the standalone `LoginScreen` and this sheet),
+ * and a second implementation is precisely how two surfaces come to disagree —
+ * one offering a method that always refuses, the other hiding one that works. This
+ * repo has paid for that twice already (v2.99.71's TURN checker, v2.105.11's token
+ * classifier), so the agreement is made STRUCTURAL here instead of tested.
+ *
+ * IT COSTS NO BUNDLE, which is what makes it free rather than a trade: `App.tsx`
+ * imports `AppShell` statically, `AppShell` imports `OnboardingGate`, and that
+ * imports `LoginScreen` — so the module is already in the eager graph of every
+ * surface that can open this sheet (the shell, the gate, and Profile, which is a
+ * lazy route rendered INSIDE the shell). Verified by reading the graph, not assumed.
+ */
+import { signInMethodOptions, type SignInMethod } from "./LoginScreen";
 import { useLocale, useT } from "./i18n";
 
 /** Format a 6-digit RELAY number as NNN-NNN (LTR island). */
@@ -273,6 +289,133 @@ function ExistingAccountNote() {
   );
 }
 
+/**
+ * BOARD 5d — THE SIGN-IN METHOD SWITCHER.
+ *
+ * The board draws the three ways in as a LIST of rows — accent icon tile, name,
+ * one line of explanation, an optional live indicator on the right — with the
+ * current one lit. This sheet had all three ways in already (v2.99.7 shipped the
+ * passcode bypass, the email code and approve-on-another-device) and no way to
+ * move BETWEEN them: the passcode step offered exactly one exit, the waiting step
+ * one, and the CODE step none at all. So somebody whose approver device was shut,
+ * or who reached the code screen and then remembered their passcode, had to guess.
+ *
+ * #122 built exactly this for the standalone `LoginScreen`; the sheet never got
+ * it. This is that picker, to frame, on the surface that was left behind.
+ *
+ * ── A METHOD THAT CANNOT WORK IS OMITTED, NEVER DISABLED ────────────────────
+ * `signInMethodOptions` is the shared rule and it is IMPORTED (see the header):
+ * the email code is always offered because any registered address can be mailed
+ * one, the passcode only when the account HAS one, and second-device approval only
+ * once the server has actually parked a session — it is not something a client can
+ * choose into existence. A control that can only ever refuse is worse than no
+ * control (the v2.103.3 rule), which is also why a LOCKED passcode does not count
+ * as having one: see `probeHasPin`.
+ *
+ * One way in is not a choice, so a single option renders NOTHING rather than a
+ * list of one.
+ *
+ * ── THREE DELIBERATE DEVIATIONS FROM THE FRAME, EACH FOR A REASON ───────────
+ * 1. THE CURRENT ROW CARRIES NO SUBTITLE. On the board the picker IS the whole
+ *    card, so its selected row has to say where you are. Here every stage already
+ *    has its own body saying it — so rendering the subtitle on the lit row would
+ *    print the same sentence twice on one small sheet (the waiting step would read
+ *    "approve this from a device already signed in" immediately above "This is a
+ *    new device. Approve it from a device you're already signed in on"). The
+ *    subtitle exists to explain the ways in you are NOT on.
+ * 2. THE DEVICE ROW SHOWS A LIVE DOT, NOT THE FRAME'S "1:52". That numeral is a
+ *    countdown to a retry, and re-asking the other device means re-sending the
+ *    code — which is the CODE row, right above it. A timer counting down to
+ *    nothing would be a claim this sheet cannot keep.
+ * 3. THE ICONS ARE `LoginScreen`'S THREE, not the frame's keypad/padlock/monitor
+ *    paths. Two pickers for one concept must not draw one method two ways; the
+ *    shared vocabulary is worth more than the exact path data, and the copy keys
+ *    (`login.method*`) are shared for the same reason.
+ */
+function MethodSwitcher({
+  current,
+  hasPin,
+  hasPending,
+  codeSent,
+  resendIn,
+  onPick,
+}: {
+  current: SignInMethod;
+  hasPin: boolean;
+  hasPending: boolean;
+  /** A code is already outstanding, so the code row describes a REACHABLE inbox
+   *  rather than an action. Tracked rather than inferred from the stage: a person
+   *  who goes code → passcode still has a live code waiting. */
+  codeSent: boolean;
+  resendIn: number;
+  onPick: (m: SignInMethod) => void;
+}) {
+  const t = useT();
+  const opts = signInMethodOptions(hasPin, hasPending);
+  // One way in is not a choice; a list of one is noise.
+  if (opts.length < 2) return null;
+  const META: Record<SignInMethod, { icon: React.ReactNode; title: string; sub: string }> = {
+    code: {
+      icon: <Mail className="size-[15px]" />,
+      title: t("login.methodCode"),
+      sub: codeSent ? t("login.codeSent") : t("auth.emailCodeInstead"),
+    },
+    pin: {
+      icon: <KeyRound className="size-[15px]" />,
+      title: t("login.methodPin"),
+      /* Says what picking the row DOES, not what the row IS: "Enter your 4-digit
+         passcode" under a title reading "4-digit passcode" is the same words
+         twice. It is also the sentence the button this picker replaced carried,
+         so the copy the owner signed off is still on screen — and still read,
+         which is what keeps it out of the dead-key sweep. */
+      sub: t("auth.usePinInstead"),
+    },
+    device: {
+      icon: <Smartphone className="size-[15px]" />,
+      title: t("login.methodDevice"),
+      sub: t("login.waitingBody"),
+    },
+  };
+  return (
+    <div className="rauth-methods">
+      <div className="rauth-eyebrow font-mono">{t("login.orSignInWith")}</div>
+      {opts.map((k) => {
+        const on = k === current;
+        const m = META[k];
+        return (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={on}
+            disabled={on}
+            onClick={() => onPick(k)}
+            className={`rauth-method ${on ? "rauth-method-on" : "rauth-method-off"}`}
+          >
+            <span aria-hidden className="rauth-method-ico">{m.icon}</span>
+            <span className="rauth-method-text">
+              <span className="rauth-method-title">{m.title}</span>
+              {!on && <span className="rauth-method-sub">{m.sub}</span>}
+            </span>
+            {/* The resend countdown, on the row it belongs to. Withheld while the
+                code row is CURRENT because the dedicated Resend button below then
+                carries the very same sentence, and one small sheet must not state
+                the same countdown twice. */}
+            {k === "code" && !on && resendIn > 0 && (
+              <span className="rauth-method-meta font-mono">
+                {t("auth.resendIn", { seconds: resendIn })}
+              </span>
+            )}
+            {/* A pending approval is genuinely live, so the dot shows wherever the
+                row does — including from the passcode step, where it is the only
+                sign that the other device is still being asked. */}
+            {k === "device" && <span aria-hidden className="rauth-method-dot" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function AuthPanel({
   onClose,
   onVerified,
@@ -320,6 +463,24 @@ export function AuthPanel({
    * routes to, so the change of subject is explained rather than silent.
    */
   const [existingAccount, setExistingAccount] = useState(false);
+  /**
+   * BOARD 5d — what the picker is allowed to offer.
+   *
+   * `probeHasPin` subtracts `locked`, and that is the load-bearing half rather
+   * than caution: `loginProbe` reports a spent-attempt account as locked (v2.99.47),
+   * and `loginWithPin` refuses it — so a locked passcode is a method that CANNOT
+   * work, and offering it would be the dead control the frame's own rule forbids.
+   * The locked notice already tells the person the email code is the way back in.
+   *
+   * `approvalPending` is only ever set by the server parking a session
+   * (`verifyOtp` → pending): second-device approval is not something a client can
+   * choose into existence, so the row appears only once it is real.
+   */
+  const [probeHasPin, setProbeHasPin] = useState(false);
+  const [approvalPending, setApprovalPending] = useState(false);
+  /** A code is outstanding. Not derivable from the stage — code → passcode leaves
+   *  a live code behind — so it is tracked at the one place a code is sent. */
+  const [codeSent, setCodeSent] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
 
   // 1Hz resend countdown.
@@ -370,6 +531,9 @@ export function AuthPanel({
         else onClose();
       });
     } else if (s === "denied") {
+      // That session was refused, so approving on another device is no longer a
+      // way in — the row goes with it rather than lingering as a dead option.
+      setApprovalPending(false);
       setStage("email");
       setError(t("auth.err.declined"));
     }
@@ -437,6 +601,7 @@ export function AuthPanel({
     setStage("code");
     setResendIn(60);
     setCode("");
+    setCodeSent(true);
     setError(null);
   }
 
@@ -465,7 +630,10 @@ export function AuthPanel({
     // resetting here is safe and re-set true only on a real registration.
     setWasRegistration(false);
     const p = await loginProbe.mutateAsync({ email });
-    if (p.unregistered) { setExistingAccount(false); setStage("register"); return; }
+    if (p.unregistered) { setExistingAccount(false); setProbeHasPin(false); setStage("register"); return; }
+    // BOARD 5d: a LOCKED passcode cannot sign anybody in, so the picker must not
+    // offer it — omitted, never shown disabled.
+    setProbeHasPin(Boolean(p.hasPin) && !p.locked);
     // BOARD 2e's "already has an account → log in" state. The probe decided this;
     // all that happens here is that the answer is REMEMBERED so the step it routes
     // to can say why registering turned into signing in. Set before the branches
@@ -540,6 +708,27 @@ export function AuthPanel({
     }
   }
 
+  /**
+   * BOARD 5d — move to another way in.
+   *
+   * The passcode and the device rows only ever CHANGE SCREEN: both credentials
+   * already exist (a passcode the person knows, a session the server has parked),
+   * so nothing is sent and nothing is spent.
+   *
+   * The code row is the one that acts, and it goes through the SAME
+   * `pinToEmailCode` the passcode step has always used rather than a second
+   * sender — so switching to the code from the waiting step is exactly
+   * "ask that device again", because re-sending the code is what re-prompts it.
+   * There is no separate nudge to build.
+   */
+  async function pickMethod(m: SignInMethod) {
+    setError(null);
+    setNotice(null);
+    if (m === "pin") { setPin(""); setLock("idle"); setStage("pin"); return; }
+    if (m === "device") { setStage("waiting"); return; }
+    await pinToEmailCode();
+  }
+
   async function submitSetup(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -606,6 +795,9 @@ export function AuthPanel({
         // with a false "declined" before the server ever evaluates this new
         // session. Reset the cache so the effect only acts on a FRESH result.
         utils.otpAuth.sessionApprovalStatus.reset();
+        // BOARD 5d: the ONLY thing that makes second-device approval real, so it
+        // is the only thing that puts that row in the picker.
+        setApprovalPending(true);
         setStage("waiting");
         return;
       }
@@ -688,7 +880,11 @@ export function AuthPanel({
             {stage !== "email" && (
               <button
                 type="button"
-                onClick={() => { setStage("email"); setError(null); setNotice(null); setLock("idle"); setExistingAccount(false); }}
+                /* Back is how the address is CHANGED, so everything the probe and
+                   the verify learned about the previous one is dropped with it —
+                   a picker row describing another account's passcode or another
+                   account's pending session would be worse than no row. */
+                onClick={() => { setStage("email"); setError(null); setNotice(null); setLock("idle"); setExistingAccount(false); setProbeHasPin(false); setApprovalPending(false); setCodeSent(false); }}
                 aria-label={t("auth.back")}
                 className="-ms-1.5 grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted"
               >
@@ -829,9 +1025,23 @@ export function AuthPanel({
             <Button type="submit" className="rcta h-12 w-full rounded-[13px] text-[15px] font-bold" disabled={busy || pin.length !== 4}>
               {lock === "ok" ? t("auth.unlocked") : loginWithPin.isPending ? t("auth.unlocking") : t("auth.title.signIn")}
             </Button>
-            <Button type="button" variant="secondary" className="h-12 w-full rounded-[13px]" onClick={pinToEmailCode} disabled={busy}>
-              {t("auth.emailCodeInstead")}
-            </Button>
+            {/* BOARD 5d. The old one-way "Email me a code instead" button is now one
+                ROW of the shared picker rather than a second control beside it: two
+                ways to do one thing is dead weight, and the harder one to find wins
+                nothing. The email-code escape this step has always owed a person who
+                has forgotten their passcode is unchanged — it is the code row. */}
+            <MethodSwitcher
+              current="pin"
+              /* `true`, not `probeHasPin`: standing on the passcode step IS the
+                 evidence there is one. It also makes the escape structural — the
+                 picker hides itself below two options, so a false here would let a
+                 future route into this step arrive with no way out at all. */
+              hasPin
+              hasPending={approvalPending}
+              codeSent={codeSent}
+              resendIn={resendIn}
+              onPick={(m) => void pickMethod(m)}
+            />
             <p className="rauth-foot text-center">{t("auth.pinFoot")}</p>
           </form>
         )}
@@ -854,20 +1064,31 @@ export function AuthPanel({
               </p>
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
+            {/* THE STALL NOTE NOW MATCHES THE ACCOUNT, and that is a real fix rather
+                than a restyle: `auth.waitStalled` ends "you can sign in with your
+                4-digit PIN instead", which is FALSE for an account that has none —
+                and the button below it used to be rendered unconditionally, so such
+                a person was pointed at a pad `loginWithPin` refuses. With no
+                passcode the honest thing to say is what one WOULD buy them, which
+                is what the login screen already says in this exact situation. */}
             {waitStalled && (
               <div className="rauth-tile rounded-[13px] p-3 text-xs text-muted-foreground">
-                {t("auth.waitStalled")}
+                {probeHasPin ? t("auth.waitStalled") : t("login.passcodeNoApproval")}
               </div>
             )}
-            <Button
-              type="button"
-              variant="secondary"
-              className="h-12 w-full rounded-[13px]"
-              onClick={() => { setPin(""); setLock("idle"); setError(null); setNotice(null); setStage("pin"); }}
-              disabled={busy}
-            >
-              {t("auth.usePinInstead")}
-            </Button>
+            {/* BOARD 5d. Replaces the unconditional "Sign in with your PIN instead"
+                button: the passcode row appears only for an account that HAS one,
+                and the code row doubles as "ask that device again" — re-sending the
+                code is what re-prompts the other device, so there is no separate
+                nudge to invent. */}
+            <MethodSwitcher
+              current="device"
+              hasPin={probeHasPin}
+              hasPending
+              codeSent={codeSent}
+              resendIn={resendIn}
+              onPick={(m) => void pickMethod(m)}
+            />
             <button
               type="button"
               className="w-full text-center text-xs text-muted-foreground underline-offset-2 hover:underline disabled:opacity-60"
@@ -1007,6 +1228,17 @@ export function AuthPanel({
             <Button type="button" variant="secondary" onClick={resend} disabled={resendIn > 0} className="h-12 w-full rounded-[13px]">
               {resendIn > 0 ? t("auth.resendIn", { seconds: resendIn }) : t("auth.resend")}
             </Button>
+            {/* BOARD 5d. This step had NO way to change method at all — the one
+                genuine dead end of the three, since somebody who reached it and then
+                remembered their passcode had to go Back and be re-probed. */}
+            <MethodSwitcher
+              current="code"
+              hasPin={probeHasPin}
+              hasPending={approvalPending}
+              codeSent={codeSent}
+              resendIn={resendIn}
+              onPick={(m) => void pickMethod(m)}
+            />
           </form>
         )}
         </div>
@@ -1109,6 +1341,65 @@ export function AuthPanel({
           overflow-y: auto; -webkit-overflow-scrolling: touch;
           padding-bottom: calc(34px + env(safe-area-inset-bottom, 0px));
         }
+        /* ── BOARD 5d method switcher ────────────────────────────────────── */
+        .relay-auth .rauth-methods { margin-top: 14px; }
+        .relay-auth .rauth-methods .rauth-eyebrow { margin-bottom: 8px; }
+        /* The frame's row: 12/13 padding around a 36px tile, so the target is ~60px
+           tall — comfortably past the 44px floor without stating a second number. */
+        .relay-auth .rauth-method {
+          display: flex; align-items: center; gap: 11px; width: 100%;
+          padding: 12px 13px; border-radius: 15px; margin-bottom: 8px;
+          text-align: start; cursor: pointer;
+        }
+        .relay-auth .rauth-method:last-child { margin-bottom: 0; }
+        /* The lit row is where you ARE, so it is not a target. Not the "disabled
+           control" the omission rule is about — an unavailable METHOD is absent
+           from this list entirely. */
+        .relay-auth .rauth-method:disabled { cursor: default; }
+        .relay-auth .rauth-method-on {
+          background: rgba(var(--rb-rgb, 63, 224, 197), .1);
+          border: 1px solid rgba(var(--rb-rgb, 63, 224, 197), .45);
+          box-shadow: 0 0 0 3px rgba(var(--rb-rgb, 63, 224, 197), .1);
+        }
+        .relay-auth .rauth-method-off {
+          background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.012));
+          border: 1px solid rgba(255,255,255,.09);
+        }
+        .relay-auth .rauth-method-off:hover { background: rgba(255,255,255,.07); }
+        /* The accent tile. A color rather than a fill, so the lucide glyph inherits
+           it as currentColor — and it is the LITERAL-fallback form, because
+           var(--rb, var(--rb)) is a cycle the browser drops outright.
+           NOTE: no backticks in this literal. One in a comment terminates the
+           template and the syntax error surfaces a hundred lines away — it bit
+           again writing this block, for the sixth recorded time. */
+        .relay-auth .rauth-method-ico {
+          width: 36px; height: 36px; border-radius: 12px; flex-shrink: 0;
+          display: grid; place-items: center;
+          background: rgba(var(--rb-rgb, 63, 224, 197), .13);
+          border: 1px solid rgba(var(--rb-rgb, 63, 224, 197), .32);
+          color: var(--rb, #3FE0C5);
+        }
+        /* min-width:0 is load-bearing: without it a flex child refuses to shrink
+           below its content and a long subtitle pushes the countdown off the row. */
+        .relay-auth .rauth-method-text { flex: 1; min-width: 0; display: block; }
+        .relay-auth .rauth-method-title {
+          display: block; font-size: 13px; font-weight: 700; color: #eafff6;
+        }
+        .relay-auth .rauth-method-sub {
+          display: block; font-size: 10.5px; line-height: 1.45; color: #8ea09b; margin-top: 2px;
+        }
+        .relay-auth .rauth-method-meta {
+          font-size: 10px; white-space: nowrap; flex-shrink: 0;
+          color: var(--rb, #3FE0C5);
+        }
+        .relay-auth .rauth-method-dot {
+          width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
+          background: var(--rb, #3FE0C5);
+        }
+        @media (prefers-reduced-motion: no-preference) {
+          .relay-auth .rauth-method-dot { animation: rauthPulse 1.1s ease infinite; }
+        }
+        @keyframes rauthPulse { 50% { opacity: .25; } }
         .relay-auth .lockbadge-ring { animation: authSpin .8s linear infinite; }
         @keyframes authSpin { to { transform: rotate(360deg); } }
         @media (prefers-reduced-motion: no-preference) {

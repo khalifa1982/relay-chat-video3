@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 import {
   personReelKey,
   personReelKeyByNumber,
@@ -527,8 +528,20 @@ describe("v2.105.6 — the ring, and the composer", () => {
     // would invite somebody to pick "Everyone" and believe they had widened it.
     expect(STATUS).toMatch(/const audiencePickerApplies = targetGroupId == null;/);
     expect(codeOnly(STATUS)).toMatch(/\{audiencePickerApplies \? \(/);
-    // …and the copy says who WILL see it instead.
-    expect(STATUS).toMatch(/can see this for\s*\n?\s*24h, and it shows under the group/);
+    /* …and the copy says who WILL see it instead. THROUGH `copyOnScreen`, because this
+       froze an ENGLISH LITERAL and the sentence now lives in the dictionary: matching
+       the KEY instead would freeze an implementation detail while saying nothing about
+       the words, and deleting the pin would leave the sentence unguarded. Strictly
+       stronger than the literal it replaces — reaching the dictionary also proves an
+       Arabic half exists. */
+    expect(
+      copyOnScreen(STATUS, "can see this for 24h, and it shows under the group"),
+      whyCopyMissing(STATUS, "can see this for 24h, and it shows under the group"),
+    ).toBe(true);
+    /* The group's NAME stays inside that sentence rather than being glued around it:
+       Arabic does not put it between the same two fragments, so a sentence chopped at
+       the English seam can only be re-assembled into nonsense. */
+    expect(STATUS).toMatch(/tn\("status\.groupAudienceNote", \{/);
   });
 
   it("the picker reads the thread list the Messages tab already has", () => {
@@ -536,7 +549,12 @@ describe("v2.105.6 — the ring, and the composer", () => {
     // everywhere else — a separate "my groups" endpoint would be a second answer to
     // one question.
     expect(STATUS).toMatch(/trpc\.messages\.threads\.useQuery/);
-    expect(STATUS).toMatch(/\.filter\(\(t\) => t\.kind === "group"\)/);
+    /* THE PARAMETER'S NAME IS NOT THE PROPERTY. It was `t`, which shadowed the
+       translator the moment this screen was localised — the collision `dict/messages.ts`
+       records for the swipe-action builder, where the LOOP VARIABLE was likewise renamed
+       because removing a shadow beats aliasing around it. What this pin is for is that
+       the list is narrowed to groups, so it is written that way. */
+    expect(STATUS).toMatch(/\.filter\(\((\w+)\) => \1\.kind === "group"\)/);
   });
 
   it("the viewer names the AUTHOR of a group slide", () => {
@@ -553,7 +571,10 @@ describe("v2.105.6 — the ring, and the composer", () => {
     expect(to).toBeGreaterThan(from); // the window is real, not an accidental ""
     const hdr = STATUS.slice(from, to);
     expect(hdr).toMatch(/group\.subject\.kind === "group" && item\.author/);
-    expect(hdr).toMatch(/item\.mine \? "You" : item\.author\.displayName/);
+    /* "You" moved into the dictionary — it is a word a person reads, so it had to. The
+       PROPERTY is the branch: my own slide says "you" and everybody else's is named. */
+    expect(hdr).toMatch(/item\.mine \? t\("status\.you"\) : item\.author\.displayName/);
+    expect(copyOnScreen(STATUS, "You"), whyCopyMissing(STATUS, "You")).toBe(true);
   });
 
   it("a reply is addressed to the SLIDE'S author, not to the group", () => {

@@ -11,6 +11,9 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen } from "./testing/copyOnScreen";
+import { DICT } from "../client/src/app/i18n";
+import { createGroupCountKey } from "../client/src/pages/app/Messages";
 
 const UI = codeOnly(
   readFileSync(resolve(process.cwd(), "client/src/pages/app/Messages.tsx"), "utf8")
@@ -25,8 +28,11 @@ function sheet(): string {
   const end = UI.indexOf("function SuggestList", at);
   expect(end).toBeGreaterThan(at);
   const region = UI.slice(at, end);
-  // The window is real, not an accidental empty string.
-  expect(region).toContain("Conversation type");
+  // The window is real, not an accidental empty string. Asked through `copyOnScreen`
+  // rather than as a raw literal because the sentinel is COPY, and copy moves into the
+  // dictionary: a non-vacuity guard that goes red when a screen is translated is a guard
+  // that has to be weakened at exactly the wrong moment.
+  expect(copyOnScreen(region, "Conversation type")).toBe(true);
   return region;
 }
 
@@ -84,7 +90,31 @@ describe("board 3d — the fields and chips", () => {
   it("the CTA counts YOU as a member", () => {
     // "Create group · 4 members" for three picked people plus you. A count reading 3
     // for a group of 4 would be wrong about the thing it names.
-    expect(sheet()).toMatch(/Create group · \$\{groupNumbers\.length \+ 1\} members/);
+    //
+    // Pinned as the ARITHMETIC plus the copy, not as one template literal: the wording
+    // now comes from the dictionary (and in two plural bands, because Arabic counts
+    // differently), so freezing the interpolation would forbid the translation while
+    // saying nothing about the +1 — which is the only part that can be wrong.
+    //
+    // The key is chosen at RUNTIME, so `copyOnScreen` cannot see it (the v2.106.85 limit
+    // recorded for `guestExpiryKey`); the copy is therefore pinned at the SELECTOR, and
+    // what this region owes is the +1 reaching it.
+    expect(sheet()).toMatch(/createGroupCountKey\(groupNumbers\.length \+ 1\)/);
+    expect(sheet()).toMatch(/n: groupNumbers\.length \+ 1/);
+  });
+
+  it("and the wording it selects really says so, in both bands", () => {
+    for (const n of [1, 4, 30]) {
+      const e = DICT[createGroupCountKey(n)] as { en: string; ar: string };
+      expect(e.en).toContain("Create group");
+      expect(e.en).toContain("{n}");
+      expect(e.ar).toContain("{n}");
+      // Western digits in Arabic prose (v2.106.84) — the numeral is interpolated, so an
+      // Arabic-Indic one beside it would read as a rendering fault.
+      expect(e.ar).not.toMatch(/[٠-٩]/);
+    }
+    // The bands are REAL: a plural sentence for one member would be the bug.
+    expect(createGroupCountKey(1)).not.toBe(createGroupCountKey(4));
   });
 
   it("every accent fallback is a LITERAL, never a self-reference", () => {

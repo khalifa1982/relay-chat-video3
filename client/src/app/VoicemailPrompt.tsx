@@ -101,6 +101,34 @@ const ACCENT = "var(--rb, #3FE0C5)";
 /** The same hue at low alpha, for the paused waveform — one colour, not two. */
 const ACCENT_DIM = "rgba(var(--rb-rgb, 63, 224, 197), 0.28)";
 
+/**
+ * Board 5h's SHEET EDGE — the one thing that frame adds over 2g.
+ *
+ * 5h is titled "Sheet states", and reading its four cards together shows the
+ * frame's actual thesis: the sheet's own border reports the sheet's state.
+ * Measured off the board's markup rather than inferred — the four borders are
+ * `rgba(var(--rb-rgb) …)` for DEVICE APPROVAL (an action awaiting you),
+ * `rgba(255,255,255,.13)` for the empty inbox, `rgba(251,85,96,.3)` for
+ * VOICEMAIL — RECORDING, and `rgba(255,255,255,.13)` for the group story. Three
+ * of the four are somebody else's file; this is the one in this component, and
+ * it was the last genuinely-absent part of 5h's voicemail quarter: the card's
+ * edge was `border-border` in all four of its states.
+ *
+ * AN INLINE STYLE RATHER THAN A CLASS, for two independent reasons. It is this
+ * file's established pattern for exactly this (`ACCENT` above, same rationale),
+ * and a Tailwind class here could only be selected by a ternary INSIDE
+ * `className`, which would turn that attribute into an expression — the sheet's
+ * `.rsheet` recipe is pinned by a literal `className="rsheet ` match in
+ * `voicemailFrame.test.ts`, a file this change has no business editing. It also
+ * beats `.dark.relay-v2 .rsheet`, which sets the `border` SHORTHAND, so the
+ * tint lands in both themes rather than only the light one.
+ *
+ * SCOPED TO `recording` ON PURPOSE: the board draws an edge for that state and
+ * for no other, so `sending` and `sent` deliberately keep the neutral border
+ * rather than inventing a tint the frame never specified.
+ */
+const RECORDING_EDGE = "color-mix(in oklab, var(--destructive) 45%, transparent)";
+
 /* Exported as TEST SEAMS. A source pin cannot tell you whether the readout the
    recipient's sender sees actually counts up to the cap, or whether the three
    refusal reasons still read as three different honest sentences. */
@@ -639,7 +667,14 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
       role="alertdialog"
       aria-label={t("voicemail.didntConnect", { who })}
     >
-      <div className="rsheet w-[min(94vw,400px)] rounded-3xl border border-border bg-card p-5 shadow-2xl">
+      {/* The sheet's own edge reports its state (board 5h). `undefined` in every
+          other state leaves the border to `.rsheet` / `border-border` exactly as
+          before, so this is additive: nothing about the idle, sending or sent
+          card changes. */}
+      <div
+        className="rsheet w-[min(94vw,400px)] rounded-3xl border border-border bg-card p-5 shadow-2xl"
+        style={{ borderColor: recState === "recording" ? RECORDING_EDGE : undefined }}
+      >
         <div className="flex justify-end">
           <button
             type="button"

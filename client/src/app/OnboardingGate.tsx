@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Phone, Video, MessageSquare, ArrowRight, User2, PhoneCall, Users } from "lucide-react";
+import { Phone, Video, MessageSquare, ArrowRight, User2, PhoneCall, Users, Lock } from "lucide-react";
 import { InviteCard, type InvitePartyLine, type InvitePerson } from "./InviteCard";
+import { GroupAvatar } from "./GroupAvatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
@@ -28,6 +29,30 @@ export function inviteTargetFromSearch(search: string): string | null {
   try {
     const to = (new URLSearchParams(search || "").get("to") || "").replace(/\D+/g, "").slice(0, 6);
     return /^\d{6}$/.test(to) ? to : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A GROUP invite link is `/g/<token>` — a signed capability, not a number. Pull the
+ * token out of the PATH so an identity-less visitor gets the group-invite landing
+ * (board 4h) instead of the generic sign-in screen. Returns the raw token or null.
+ * Pure + exported for tests.
+ *
+ * IT DECIDES WHICH SCREEN TO DRAW AND NOTHING ELSE. The token is never parsed,
+ * trusted or acted on here — the server verifies its signature, its epoch and its
+ * audience on both the preview and the join. The 256 cap mirrors the server's own
+ * input bound purely so a pathological URL cannot be rendered; it is not a gate,
+ * and a token this refuses simply falls through to the ordinary sign-in screen.
+ */
+export function groupInviteTokenFromPath(pathname: string): string | null {
+  try {
+    const m = /^\/g\/([^/?#]+)\/?$/.exec(pathname || "");
+    if (!m) return null;
+    // A token can arrive percent-encoded; a malformed escape throws and is caught.
+    const raw = decodeURIComponent(m[1]);
+    return raw.length > 0 && raw.length <= 256 ? raw : null;
   } catch {
     return null;
   }
@@ -62,6 +87,12 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
   // query, no identity needed) so the join card can name who you're calling.
   const [callTarget] = useState<string | null>(() =>
     inviteTargetFromSearch(typeof window !== "undefined" ? window.location.search : "")
+  );
+  /* A GROUP invite link (`/g/<token>`, v2.105.9). Read from the PATH, so it cannot be
+     confused with the `?to=` call target above — one screen guessing which of two
+     unrelated things a URL meant would be guessing on a string somebody else chose. */
+  const [groupToken] = useState<string | null>(() =>
+    groupInviteTokenFromPath(typeof window !== "undefined" ? window.location.pathname : "")
   );
   const invite = trpc.directory.lookup.useQuery(
     { number: callTarget ?? "" },
@@ -149,6 +180,10 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
   // ── Call-link direct-join: a focused "enter your name to connect" card. ──
   // Shown when a call target is in the URL and we're not in the email path.
   const showJoin = !!callTarget && !emailMode;
+  /* Board 4h. Deliberately NOT folded into `showJoin`: that card dials a person and
+     this one joins a conversation, and they are told apart by which part of the URL
+     carried them (`?to=` vs the `/g/` path) rather than by a shared flag. */
+  const showGroupJoin = !!groupToken && !callTarget && !emailMode;
   const invitee = invite.data;
   const line = (inviteLine.data ?? null) as InvitePartyLine | null;
   const isPartyLine = !!invitee?.partyLine;
@@ -201,8 +236,13 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
      The `/i/<pin>` call-link join screen below is deliberately untouched: the
      spec does not cover it, and it has been one focused field since v2.94.5
      precisely so a shared link connects in a single tap — a second decision
-     there costs the caller the call. */
-  if (!showJoin) return <LoginScreen />;
+     there costs the caller the call.
+
+     A GROUP INVITE (`/g/<token>`, board 4h) is the second exception, for the same
+     reason: somebody who tapped an invite has already chosen where they are going,
+     and answering that with the generic sign-in screen loses the one thing they
+     were told — that there is a group at the end of it. */
+  if (!showJoin && !showGroupJoin) return <LoginScreen />;
 
   return (
     <div className="dark relay-login relative min-h-svh overflow-hidden grid place-items-center bg-[#08090C] text-foreground p-5">
@@ -318,6 +358,119 @@ export function OnboardingGate({ children }: OnboardingGateProps) {
               {t("gate.joinFoot")}
             </p>
           </>
+        ) : showGroupJoin ? (
+          /* ── GROUP-INVITE LANDING (board 4h) ──────────────────────────────────
+             What an identity-less visitor sees on `/g/<token>`. Before this they
+             got the ORDINARY sign-in screen with nothing saying they had been
+             invited to a group at all — they typed a name for reasons the screen
+             never gave them, and the group appeared afterwards.
+
+             JOINING STILL TAKES A REAL TAP, twice over: this card only mints an
+             identity, and `GroupInvite` then previews the group and asks again.
+             Nothing here joins on arrival — v2.99.57/M48 closed exactly that for
+             `?to=`, where landing on a URL placed a call.
+
+             WHAT THIS CARD DELIBERATELY DOES NOT SAY. The frame draws the group's
+             name, photo and member row here, and none of the three can be shown to
+             a caller with no identity: `groupInvitePreview` opens with
+             `requireIdentity(ctx)`, and that is a deliberate decision (v2.105.9)
+             — telling an anonymous caller which groups exist would widen a
+             signed-capability read to everybody who can guess a URL. So the card
+             says what is TRUE at this point and the group identifies itself one
+             screen later, which is what the frame's own display-name note
+             describes. Inventing a name to fill the space would be the class of
+             confident-but-wrong claim this codebase keeps removing. */
+          <div className="rglass rounded-[22px] px-5 py-6 text-center">
+            <div className="flex flex-col items-center">
+              {/* The frame's 74px puck. `GroupAvatar` rather than a fourth private
+                  copy of the group-photo fallback — with no url it renders the
+                  glyph, which is exactly this state. */}
+              <GroupAvatar url={null} name={null} size={74} className="rounded-[26px]" />
+
+              <p className="mt-3.5 font-mono text-[9px] font-semibold uppercase tracking-[0.24em] text-muted-foreground">
+                You are invited to join
+              </p>
+              <h1 className="mt-1.5 text-[23px] font-bold leading-tight">a group on RELAY</h1>
+              <p className="mt-2 max-w-[17rem] text-xs leading-relaxed text-muted-foreground">
+                You'll see which group, who is in it and how many members on the next
+                screen — joining is still your tap.
+              </p>
+
+              {/* THE FRAME'S "END-TO-END ENCRYPTED GROUP" CHIP IS DECLINED, and the
+                  wording below is the one this app can keep. `messages.body` is
+                  `text` in `drizzle/schema.ts` and `server/v2db.ts` searches it with
+                  `like(messages.body, …)` — a substring match only possible on
+                  plaintext the server reads, so there is no end-to-end encryption
+                  here to claim. v2.106.40 declined the identical chip on board 1d
+                  and this reuses the key it established, so the two screens cannot
+                  drift into promising different things. */}
+              <span className="mt-3 inline-flex items-center gap-1.5 font-mono text-[8.5px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                <Lock className="size-2.5 shrink-0" aria-hidden />
+                {t("msg.encryptedInTransit")}
+              </span>
+            </div>
+
+            <form onSubmit={onGuestSubmit} className="mt-5 text-start">
+              <label
+                htmlFor="relay-group-name"
+                className="mb-2 block text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground"
+              >
+                {t("gate.joinNameLabel")}
+              </label>
+              <Input
+                id="relay-group-name"
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t("gate.yourName")}
+                maxLength={64}
+                className="h-12 rounded-xl text-base"
+              />
+              {startGuestError && (
+                <p className="mt-2.5 text-sm text-destructive">{startGuestError.message}</p>
+              )}
+              {/* `.rcta` is the board's own CTA recipe — solid accent with the
+                  `#04211a` on-accent text that stays legible across all twelve
+                  hues. Never `var(--rb)` as TEXT, which measures ~1.7:1. */}
+              <Button
+                type="submit"
+                disabled={!name.trim() || startGuestPending}
+                className="rcta mt-4 h-12 w-full gap-2 rounded-xl text-base font-semibold disabled:opacity-60"
+              >
+                {startGuestPending ? (
+                  t("gate.settingUp")
+                ) : (
+                  <>
+                    <Users className="size-4" aria-hidden />
+                    Continue to the group
+                  </>
+                )}
+              </Button>
+            </form>
+
+            {/* The frame's own note, and it is the one line on that frame written
+                for THIS visitor rather than for the screen after it. */}
+            <p className="mt-3 text-[10.5px] leading-relaxed text-muted-foreground/80">
+              Joining needs an identity — you'll pick a display name first, exactly
+              like the rest of RELAY.
+            </p>
+
+            {/* THE REGISTERED DOOR, AND IT IS THE ACTIONABLE HALF OF THE FRAME'S
+                REFUSED BAND. A link can be restricted to registered accounts
+                (v2.105.23), and a guest who meets one is refused — so offering the
+                account door HERE is the only point at which that dead end can be
+                avoided rather than merely explained, because after this tap a guest
+                identity already exists. It never claims THIS link is restricted:
+                the audience is decided by the server from the token's signature,
+                and guessing it client-side would be a confident wrong answer. */}
+            <button
+              type="button"
+              onClick={() => setEmailMode(true)}
+              className="mt-3 w-full text-center text-xs text-muted-foreground hover:text-foreground"
+            >
+              {t("gate.haveAccount")}
+            </button>
+          </div>
         ) : (
           <>
             {/* ── RESTORE A PREVIOUS NUMBER (v2.99.68) ──

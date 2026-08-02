@@ -33,7 +33,7 @@ import fs from "fs";
 import path from "path";
 import { activeRegInvite, REG_INVITE_TTL_MS } from "./v2db";
 import { codeOnly } from "./testing/codeOnly";
-import { copyOnScreen } from "./testing/copyOnScreen";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 
 const read = (p: string) => fs.readFileSync(path.join(process.cwd(), p), "utf8");
 
@@ -395,8 +395,9 @@ describe("both surfaces tell the truth about how far the button reaches", () => 
   });
 
   it("the guest's card says the address is theirs to change", () => {
-    expect(PROFILE).toMatch(/An administrator suggested an address/);
-    expect(PROFILE).toMatch(/You can change it/);
+    for (const s of ["An administrator suggested an address", "You can change it"]) {
+      expect(copyOnScreen(PROFILE, s), whyCopyMissing(PROFILE, s)).toBe(true);
+    }
   });
 
   it("and warns that whoever owns the inbox can sign in", () => {
@@ -405,8 +406,16 @@ describe("both surfaces tell the truth about how far the button reaches", () => 
     // suggest an address they control, and whoever reads that inbox can then sign in
     // with an email code. It is unchanged by this feature — "type this address" was
     // always sayable — so the mitigation is informing the person who can refuse.
-    expect(PROFILE).toMatch(/Use an address you own/);
-    expect(PROFILE).toMatch(/can sign in to this\s*\n?\s*number/);
+    expect(
+      copyOnScreen(PROFILE, "Use an address you own"),
+      whyCopyMissing(PROFILE, "Use an address you own")
+    ).toBe(true);
+    /* The \s*\n? in the old needle existed only to tolerate JSX line-wrapping; the
+       sentence is one string in the dictionary now, so the property is asked directly. */
+    expect(
+      copyOnScreen(PROFILE, "can sign in to this number"),
+      whyCopyMissing(PROFILE, "can sign in to this number")
+    ).toBe(true);
   });
 
   it("the address is rendered LTR-isolated on both surfaces", () => {

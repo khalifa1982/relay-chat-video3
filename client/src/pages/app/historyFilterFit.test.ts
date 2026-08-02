@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { codeOnly } from "../../../../server/testing/codeOnly";
-import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
+import { copyOnScreen, whyCopyMissing } from "../../../../server/testing/copyOnScreen";
 
 const H = readFileSync(resolve(process.cwd(), "client/src/pages/app/History.tsx"), "utf8");
 
@@ -77,6 +77,9 @@ describe("v2.103.1 — the History filter bar fits a phone", () => {
       expect(copyOnScreen(H, label), label).toBe(true);
     }
     expect(H).toMatch(/aria-label=\{t\("history\.clear"\)\}/);
-    expect(H).toMatch(/Group\s*\n\s*<\/button>/);
+    /* The toggle renders through the dictionary now; asked as the copy rather than as a
+       bare literal followed by its closing tag. */
+    expect(copyOnScreen(H, "Group"), whyCopyMissing(H, "Group")).toBe(true);
+    expect(H).toMatch(/\{t\("history\.group"\)\}\s*\n\s*<\/button>/);
   });
 });

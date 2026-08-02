@@ -397,7 +397,11 @@ describe("the gate sits where no route can go round it", () => {
     expect(gate).toBeGreaterThan(-1);
     expect(header).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(header);
-    expect(MSG).toMatch(/<GroupLockGate conversationId=\{conversationId\}/);
+    /* Matched on the PROP rather than the component's name: the gate has been
+       renamed once already (GroupLockGate -> LockedGroupGate) and the rule this
+       stands for is that the locked branch mounts a gate scoped to THIS
+       conversation, not what that component happens to be called. */
+    expect(MSG).toMatch(/<Locked\w*Gate\b[\s\S]{0,80}conversationId=\{conversationId\}/);
   });
 
   it("the view SUBSCRIBES, or a correct code would leave the gate on screen", () => {
@@ -406,7 +410,11 @@ describe("the gate sits where no route can go round it", () => {
 
   it("the thread row redacts the preview and suppresses the typing line", () => {
     expect(MSG).toMatch(/const hidden = isGroup && isGroupHidden\(t\.conversationId\)/);
-    expect(MSG).toMatch(/hidden\s*\?\s*"Locked"/);
+    // The word is a dictionary key now; what must not change is that `hidden` is what
+    // selects it, and that the word really is the lock notice rather than somebody's
+    // message that happens to read "Locked".
+    expect(MSG).toMatch(/hidden\s*\?\s*tr\("msg\.locked"\)/);
+    expect(copyOnScreen(MSG, "Locked")).toBe(true);
     expect(MSG).toMatch(/\{typing && !hidden \? \(/);
   });
 

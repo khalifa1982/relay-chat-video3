@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { copyOnScreen, whyCopyMissing } from "../../../../server/testing/copyOnScreen";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 
@@ -64,6 +65,6 @@ describe("History search", () => {
   });
   it("search combines with the All/Dialed/Missed filter and has a no-match state", () => {
     expect(src).toMatch(/\}, \[items, filter, historySearch, savedNameOf\]\)/);
-    expect(src).toMatch(/No calls match/);
+    expect(copyOnScreen(src, "No calls match"), whyCopyMissing(src, "No calls match")).toBe(true);
   });
 });

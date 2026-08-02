@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { codeOnly } from "./testing/codeOnly";
 
 const read = (...p: string[]) => fs.readFileSync(path.resolve(__dirname, ...p), "utf8");
 const V2DB = read("v2db.ts");
@@ -389,6 +390,17 @@ describe("R1 — an endpoint re-bind requires proof of possession", () => {
 
 describe("desktop New-status composer no longer overlaps or clips", () => {
   const STATUS = read("..", "client", "src", "pages", "app", "Status.tsx");
+  /* Comment-stripped, because this file's own prose quotes the very class strings
+     asserted below (`max-h-[92dvh]` is explained in a comment two lines above the
+     element that carries it) — the prose trap, for the twentieth time. */
+  const CODE = codeOnly(STATUS);
+  const COMPOSER = (() => {
+    const start = CODE.indexOf("function StatusComposer(");
+    const end = CODE.indexOf("function MediaPreview(", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    return CODE.slice(start, end);
+  })();
 
   it("renders through a portal, so no ancestor can trap the fixed overlay", () => {
     expect(STATUS).toMatch(/import \{ createPortal \} from "react-dom";/);
@@ -398,15 +410,92 @@ describe("desktop New-status composer no longer overlaps or clips", () => {
     expect(STATUS).toMatch(/a backdrop-blur\s*\n\s*counts\)/);
   });
 
-  it("the tab row can shrink and truncate rather than overflow the card", () => {
-    const row = STATUS.slice(STATUS.indexOf("{/* Mode toggle */}"), STATUS.indexOf("{/* Preview area */}"));
-    expect(row).toMatch(/flex min-w-0 gap-1 p-3/);
-    expect((row.match(/min-w-0 flex-1/g) || []).length).toBe(3);
-    expect((row.match(/shrink-0/g) || []).length).toBe(3); // icons never shrink
-    expect((row.match(/<span className="truncate">/g) || []).length).toBe(3);
+  /* THE PROPERTY, not the arrangement that happened to deliver it.
+     v2.99.49 fixed a tab row that OVERFLOWED the card by making each tab a
+     `min-w-0 flex-1` cell with a `truncate` label, and froze exactly that. Board 4b
+     then went to a WRAPPING row of intrinsic-width pills, which delivers the same
+     property by a different mechanism — so the old pin forbade a legitimate
+     improvement while saying nothing about whether the tabs still fit.
+     A flex row of tabs stays inside its card iff EITHER it wraps OR its items can
+     shrink and clip. The shape that overflows is the third one: a non-wrapping row
+     of `shrink-0` items, which is what this rejects. */
+  it("the tab row cannot overflow the card at any width", () => {
+    /* Anchored on the tabs' own MOUNTS and on the body's textarea — code, not the
+       comments a later edit legitimately reflows. Both anchors are asserted to
+       exist and to be ordered first: `indexOf` answers -1 for an absent needle, and
+       a slice taken from -1 reads the wrong region rather than failing. */
+    const firstPill = CODE.indexOf("<TabPill");
+    const bodyAt = CODE.indexOf("<textarea");
+    expect(firstPill).toBeGreaterThan(0);
+    expect(bodyAt).toBeGreaterThan(firstPill);
+    const rowStart = CODE.lastIndexOf('<div className="', firstPill);
+    expect(rowStart).toBeGreaterThan(0);
+    const row = CODE.slice(rowStart, bodyAt);
+
+    /* Non-vacuity: the slice really is the tab row. Two literal mounts cover four
+       rendered tabs — the text one plus MEDIA_TABS' three. */
+    expect((row.match(/<TabPill/g) || []).length).toBe(2);
+    expect(row).toMatch(/MEDIA_TABS\.map/);
+
+    const container = /^<div className="([^"]*)"/.exec(CODE.slice(rowStart))?.[1] ?? "";
+    expect(container).toMatch(/\bflex\b/);
+    const wraps = /\bflex-wrap\b/.test(container);
+    const shrinksAndClips =
+      (row.match(/min-w-0 flex-1/g) || []).length >= 3 && (row.match(/truncate/g) || []).length >= 3;
+    expect(
+      wraps || shrinksAndClips,
+      "the tab row neither wraps nor lets its tabs shrink — it will overflow the card",
+    ).toBe(true);
   });
 
-  it("a tall composer scrolls inside itself instead of being cut off", () => {
-    expect(STATUS).toMatch(/max-h-\[92dvh\] overflow-y-auto overflow-x-hidden/);
+  /* Likewise a property rather than one element's class string. The old pin
+     required `max-h-[92dvh] overflow-y-auto` on the CARD, i.e. the card WAS the
+     scroller — and that is the defect v2.106.86 fixed on the new-group sheet: with
+     the whole card scrolling, the bottom bar carrying Post slides away as the story
+     grows, so the primary action leaves the screen exactly as you use the screen.
+     What has to hold is that the card is BOUNDED, the scrolling happens INSIDE it,
+     and the chrome sits outside the scroller. */
+  it("a tall composer is bounded and scrolls INSIDE itself, keeping Post reachable", () => {
+    const card = /className="([^"]*max-h-\[\d+dvh\][^"]*)"/.exec(COMPOSER)?.[1];
+    expect(card, "the composer card declares no viewport-relative height bound").toBeTruthy();
+    /* The card must NOT be the scroller itself, or the bottom bar scrolls away. */
+    expect(card).not.toMatch(/overflow-y-auto/);
+    expect(card).toMatch(/overflow-hidden/);
+
+    /* `min-h-0` is load-bearing, not tidiness: a flex item defaults to
+       `min-height:auto` and refuses to shrink below its content, so without it the
+       card grows straight past the bound above and nothing has changed. */
+    const scroller = /className="([^"]*overflow-y-auto[^"]*)"/.exec(COMPOSER)?.[1];
+    expect(scroller, "nothing inside the composer scrolls").toBeTruthy();
+    expect(scroller).toMatch(/min-h-0/);
+    expect(scroller).toMatch(/flex-1/);
+
+    /* …and the primary action is pinned OUTSIDE that scroller rather than merely
+       scrollable-to. This needs the divs that genuinely ENCLOSE the button, not the
+       ones that merely precede it in source: a first draft walked backwards over
+       `<div className="` occurrences and passed with the bar's `shrink-0` deleted,
+       because three hops back is the SWATCH row — a sibling, which carries it. */
+    const submitAt = COMPOSER.indexOf("onClick={submit}");
+    expect(submitAt).toBeGreaterThan(0);
+    const open: string[] = [];
+    for (const m of COMPOSER.slice(0, submitAt).matchAll(/<div\b([^>]*)>|<\/div>/g)) {
+      if (m[0] === "</div>") open.pop();
+      else if (!m[1].trimEnd().endsWith("/")) open.push(/className="([^"]*)"/.exec(m[1])?.[1] ?? "");
+    }
+    expect(open.length, "could not resolve the enclosing chain").toBeGreaterThan(1);
+    /* THE PROPERTY, exactly: nothing the button sits inside scrolls vertically. That
+       covers the card becoming the scroller AND any future re-nesting of the bar
+       into the body — both of which take Post off the screen as the story grows. */
+    expect(
+      open.filter((c) => /\boverflow-y-auto\b/.test(c)),
+      "the Post button sits inside a scroller — it will slide away",
+    ).toEqual([]);
+    /* …and its own row cannot be squeezed by the scroller beside it. */
+    expect(
+      open.some((c) => /\bshrink-0\b/.test(c)),
+      "no enclosing row is shrink-0 — the Post row will be compressed",
+    ).toBe(true);
+    /* The button itself too, or the chips beside it squeeze it to nothing. */
+    expect(COMPOSER.slice(submitAt, submitAt + 400)).toMatch(/className="rcta[^"]*shrink-0/);
   });
 });

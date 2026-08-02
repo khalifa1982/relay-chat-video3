@@ -28,7 +28,7 @@ import {
   alreadyReported,
 } from "./useDeliveryReceipts";
 import { codeOnly } from "../../../server/testing/codeOnly";
-import { copyOnScreen } from "../../../server/testing/copyOnScreen";
+import { copyOnScreen, expandCopy } from "../../../server/testing/copyOnScreen";
 
 /* BOUNDED BY THE FUNCTION'S OWN END, not a fixed character count (v2.106.89). Both slices
    below took `+6000` characters from the declaration, so v2.106.89's additions pushed
@@ -350,10 +350,17 @@ describe("the ⋮ menu and the info panel", () => {
   const menu = MSG.slice(MSG.indexOf("function MessageMenu("), MSG.indexOf("function AttachmentView("));
 
   it("offers Reply, Forward, Copy, Info — and Unsend on our own", () => {
-    expect(menu).toMatch(/<Reply className="size-4" \/> Reply/);
-    expect(menu).toMatch(/<Forward className="size-4" \/> Forward/);
-    expect(menu).toMatch(/<Copy className="size-4" \/> Copy/);
-    expect(menu).toMatch(/<Info className="size-4" \/> Info/);
+    /* Read through `expandCopy` — every row's label is a dictionary key now, so a raw
+       search for the English would report a translated menu as having lost its items.
+       The PROPERTY is unchanged: each glyph is paired with the word that names it. */
+    // `expandCopy` rewrites `t("msg.reply")` to its English half but leaves the JSX
+    // braces around it, so the label is `{Reply}` on a swept screen and `Reply` on one
+    // still carrying its literal — the pin accepts both rather than assuming either.
+    const labelled = expandCopy(menu);
+    expect(labelled).toMatch(/<Reply className="size-4" \/> \{?Reply\}?/);
+    expect(labelled).toMatch(/<Forward className="size-4" \/> \{?Forward\}?/);
+    expect(labelled).toMatch(/<Copy className="size-4" \/> \{?Copy\}?/);
+    expect(labelled).toMatch(/<Info className="size-4" \/> \{?Info\}?/);
     // Unsend removes the message for EVERYONE, so it is only ever ours to do.
     expect(menu).toMatch(/\{mine && onDelete && \(/);
   });
@@ -366,7 +373,12 @@ describe("the ⋮ menu and the info panel", () => {
     expect((MSG.match(/onForward=\{isExpiring \? undefined : \(\) => setForwarding\(m\)\}/g) || []).length).toBe(1);
     const fwd = MSG.slice(MSG.indexOf("async function forwardTo("), MSG.indexOf("async function forwardTo(") + 1200);
     expect(fwd).toBeTruthy();
-    expect(MSG).toMatch(/This is a disappearing message — forwarding it would break the promise/);
+    expect(
+      copyOnScreen(
+        MSG,
+        "This is a disappearing message — forwarding it would break the promise",
+      ),
+    ).toBe(true);
   });
 
   it("a still-LOCKED expiring message shows no menu at all (QA H2 stands)", () => {

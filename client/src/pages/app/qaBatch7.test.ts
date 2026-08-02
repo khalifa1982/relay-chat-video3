@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { AUDIENCE_OPTIONS } from "@/app/statusAudience";
+import { DICT } from "@/app/i18n";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const src = read("client/src/pages/app/Status.tsx");
@@ -59,7 +60,24 @@ describe("v2.99.29/33 QA M16 — status audience copy matches the enforcement", 
     expect(AUDIENCE_OPTIONS[0].posted).toMatch(/your contacts and anyone who's saved you/);
   });
   it("the confirmation is derived from the audience actually posted, not hardcoded", () => {
-    expect(src).toMatch(/Status posted — \$\{audienceOption\(effectiveAudience\)\.posted\}/);
+    /* THIS PIN FROZE THE DEFECT, twice over. The expression it required was
+       `Status posted — ${audienceOption(effectiveAudience).posted}`, which (a) called a
+       STORY a "status", the vocabulary the owner corrected three times, and (b) built a
+       sentence by gluing a stem to an interpolated tail — untranslatable, because Arabic
+       does not put that qualifier where English does, so the halves can only be
+       re-assembled into nonsense.
+
+       The property it always stood for is that the confirmation is CHOSEN BY the
+       audience actually posted rather than hardcoded, which is now one WHOLE key per
+       outcome (the `guestExpiryKey` rule). Both are asserted, and the two sentences are
+       required to differ — a single key for both would be "not hardcoded" in form and
+       hardcoded in effect. */
+    expect(src).toMatch(/t\(audienceKeys\(effectiveAudience\)\.posted\)/);
+    expect(DICT["status.postedContacts"].en).not.toBe(DICT["status.postedEveryone"].en);
+    expect(DICT["status.postedContacts"].ar).not.toBe(DICT["status.postedEveryone"].ar);
+    for (const k of ["status.postedContacts", "status.postedEveryone"] as const) {
+      expect(DICT[k].en.toLowerCase(), `${k} must say story, not status`).not.toContain("status");
+    }
     // …and the value sent is the one the picker showed.
     expect(src).toMatch(/audience: effectiveAudience/);
   });

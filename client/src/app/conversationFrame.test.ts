@@ -31,6 +31,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { bubbleGlyphColor, GROUP_PALETTE, peerPaletteIndex } from "./peerColors";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
 const root = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -199,7 +200,7 @@ describe("nothing on screen claims a security property the app does not have", (
     expect(root("drizzle/schema.ts")).toMatch(/body: text\("body"\)/);
     expect(strip(root("server/v2db.ts"))).toMatch(/like\(messages\.body/);
     expect(MSG).not.toMatch(/end-to-end/i);
-    expect(MSG).toMatch(/Encrypted in transit/);
+    expect(copyOnScreen(MSG, "Encrypted in transit · stays in the app")).toBe(true);
   });
 });
 

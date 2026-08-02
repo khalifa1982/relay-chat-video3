@@ -17,6 +17,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { extraHeaderLines, buildMimeMessage } from "./smtp";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 import { unsubscribeToken, verifyUnsubscribeToken, unsubscribeHeaders } from "./unsubscribe";
 
 const read = (...p: string[]) => fs.readFileSync(path.resolve(__dirname, ...p), "utf8");
@@ -133,7 +134,13 @@ describe("R7 GAP2 — push delivery honours a user preference", () => {
   it("is exposed and writable over tRPC, and shown in Profile", () => {
     expect(ROUTERS).toMatch(/push: user\.pushEnabled !== false/);
     expect(ROUTERS).toMatch(/pushEnabled: input\.push/);
-    expect(PROFILE).toMatch(/title="Push notifications"/);
+    /* The ROW EXISTS AND IS LABELLED. The old pin froze the attribute's literal form;
+       the property is that Profile offers the master push switch by name. */
+    expect(PROFILE).toMatch(/title=\{t\("profile\.pushTitle"\)\}/);
+    expect(
+      copyOnScreen(PROFILE, "Push notifications"),
+      whyCopyMissing(PROFILE, "Push notifications")
+    ).toBe(true);
     expect(PROFILE).toMatch(/onChange=\{\(v\) => setPrefs\.mutate\(\{ push: v \}\)\}/);
   });
 
