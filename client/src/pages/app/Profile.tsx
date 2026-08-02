@@ -103,6 +103,7 @@ import {
 import { useTheme } from "@/contexts/ThemeContext";
 import { useLocale, useT, type TKey } from "@/app/i18n";
 import { formatDateIn, formatDateTimeIn } from "@/app/dateLocale";
+import { loginDetailLine } from "@/app/loginOriginCopy";
 
 /**
  * The translator's shape, so a helper OUTSIDE a component can still speak both
@@ -1386,8 +1387,13 @@ function DevicesSection({ onRegister }: { onRegister?: () => void }) {
                       rendered empty — a place we could not resolve must read as
                       absent, not as a blank claim. */}
                   <div className="truncate text-xs text-muted-foreground">{p.label}</div>
-                  {p.detail && (
-                    <div className="truncate text-xs text-muted-foreground">{p.detail}</div>
+                  {/* Recomposed rather than rendered whole: the server's `detail` is
+                      "place · method" and the method half is prose. See
+                      `loginOriginCopy.ts`. */}
+                  {loginDetailLine(p, t) && (
+                    <div className="truncate text-xs text-muted-foreground">
+                      {loginDetailLine(p, t)}
+                    </div>
                   )}
                   <div className="text-[11px] text-muted-foreground">
                     {formatDateTimeIn(locale, p.createdAt)}

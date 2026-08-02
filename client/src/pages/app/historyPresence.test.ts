@@ -168,14 +168,29 @@ describe("the LED can no longer be keyed off dialedNumber", () => {
 
 describe("one LED rule, everywhere", () => {
   it("History's LED defers to presenceDot instead of its own ternary", () => {
-    expect(HISTORY).toMatch(/import \{ presenceDot \} from "@\/app\/presenceDot"/);
+    /* The SYMBOL from the shared module, not a frozen import LIST — History now also
+       takes `PresenceDotState` to key its own tooltips, and pinning the exact list
+       would break on any legitimate second import while saying nothing about the
+       rule being shared. */
+    expect(HISTORY).toMatch(/import \{[^}]*\bpresenceDot\b[^}]*\} from "@\/app\/presenceDot"/);
     expect(HISTORY).toMatch(/const dot = presenceDot\(p\)/);
     // …and the verdict is actually APPLIED. Calling the rule and then painting a
     // hand-rolled colour anyway passed the assertions above — caught by the mutation
     // run, and the same declaration-versus-use trap this repo keeps finding.
     expect(HISTORY).toMatch(/background: dot\.color/);
     expect(HISTORY).toMatch(/boxShadow: dot\.glow/);
-    expect(HISTORY).toMatch(/aria-label=\{dot\.label\}/);
+    /* The LED is LABELLED — and through the translator, because `presenceDot` now
+       returns a key rather than finished English (v2.107.0). Matching the key
+       expression rather than a literal is the property: the control is labelled,
+       and it is labelled in the reader's language. */
+    expect(HISTORY).toMatch(/aria-label=\{t\(dot\.labelKey\)\}/);
+    /* …and the TOOLTIP — History's own wording, which names the consequence rather
+       than the state — is selected by the STATE. It used to compare `dot.label`
+       against "On a call" / "Online" / "Away", which held only for as long as
+       nobody edited those four words and would then have fallen silently through
+       to the offline branch with every test still green. */
+    expect(HISTORY).toMatch(/title=\{t\(HISTORY_PRESENCE_TITLE\[dot\.state\]\)\}/);
+    expect(HISTORY).not.toMatch(/dot\.label ===/);
     // The old hand-rolled colour branch is gone — not merely supplemented.
     const code = codeOnly(HISTORY);
     expect(code).not.toMatch(/\? "bg-amber-400"/);

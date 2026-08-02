@@ -156,8 +156,12 @@ export const GROUPS = {
     en: "Added them to the group.",
     ar: "تمت إضافة هذا الشخص إلى المجموعة.",
   },
+  /* "was", not "were" — this half is the one a named person gets, and it inherited
+     the plural verb from the pronoun sibling directly below it, so it rendered
+     "Sara were already in this group." English is the default language, so this is
+     the half most people see. */
   "groups.alreadyNamed": {
-    en: "{name} were already in this group.",
+    en: "{name} was already in this group.",
     ar: "{name} موجود في هذه المجموعة بالفعل.",
   },
   "groups.alreadyUnnamed": {

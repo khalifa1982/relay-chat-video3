@@ -249,8 +249,8 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
                           const dot = presenceDot({ isOnline: c.isOnline, idle: c.idle });
                           return (
                             <span
-                              aria-label={dot.label}
-                              title={dot.label}
+                              aria-label={t(dot.labelKey)}
+                              title={t(dot.labelKey)}
                               // `-end-0.5` so the LED sits on the disc's trailing corner
                               // in both directions — the same logical edge GroupInfoSheet
                               // uses for the identical affordance.

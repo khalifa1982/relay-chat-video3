@@ -122,4 +122,29 @@ export const ALERTS = {
     en: "If this wasn't you, decline it.",
     ar: "إذا لم تكن أنت، فارفضه.",
   },
+
+  /* ── HOW the sign-in happened ──────────────────────────────────────────
+     The server used to compose "Dubai, AE · Email code" and both surfaces
+     rendered it whole, so the method — the only English in that line — arrived
+     untranslated. The wire now carries the enum and these three are selected from
+     it; each `en` is byte-identical to what `loginMethodLabel` returns, because
+     the English half is not what was broken.
+
+     The PLACE beside it is deliberately not a key: a city arrives written as the
+     geo service writes it, an ISO country code is the same in every language, and
+     an IP is digits. */
+  "alerts.loginMethodCode": { en: "Email code", ar: "رمز بالبريد" },
+  /* WESTERN "4", not «٤» — the v2.106.84 rule, and the standing numeral guard caught
+     me writing the Arabic-Indic form here. It is the same passcode the pad shows in
+     Western digits, so naming it any other way puts two numeral systems on one
+     screen for one fact. */
+  "alerts.loginMethodPin": { en: "4-digit passcode", ar: "رمز من 4 أرقام" },
+  "alerts.loginMethodRegister": { en: "New registration", ar: "تسجيل جديد" },
+  /* NOT DONE, AND SAID HERE RATHER THAN LEFT TO BE NOTICED: the DEVICE label beside
+     this line is still English — `deviceLabelFromUA` composes "Chrome on Android"
+     and falls back to "Unknown device", and both are STORED as finished strings in
+     `sessions.label`, so a key here could only be selected by comparing that text,
+     which is the antipattern this whole dictionary exists to remove. Doing it
+     honestly means the function returning its parts and the client composing them,
+     which also has to answer for the rows already written. Its own piece of work. */
 } as const satisfies Record<string, Entry>;

@@ -59,7 +59,11 @@ describe("Contacts — rich rows + inline actions", () => {
     expect(PAGE).toMatch(/import \{ presenceDot \} from "@\/app\/presenceDot"/);
     expect(PAGE).toMatch(/const dot = presenceDot\(c\);/);
     expect(PAGE).toMatch(/style=\{\{ background: dot\.color, boxShadow: dot\.glow \|\| undefined \}\}/);
-    expect(PAGE).toMatch(/aria-label=\{dot\.label\}/);
+    /* The LED is LABELLED — and through the translator, because `presenceDot` now
+       returns a key rather than finished English (v2.107.0). Matching the key
+       expression rather than a literal is the property: the control is labelled,
+       and it is labelled in the reader's language. */
+    expect(PAGE).toMatch(/aria-label=\{t\(dot\.labelKey\)\}/);
     // v2.99.6: the verified-only badge became the three-tier RoleBadge
     // (Guest/Registered/Admin) rendered for EVERY contact.
     expect(PAGE).toMatch(/<RoleBadge role=\{roleFromFlags\(c\.role, c\.verified\)\}/);

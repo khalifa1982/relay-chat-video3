@@ -821,8 +821,8 @@ function ContactRow({
           const dot = presenceDot(c);
           return (
             <span
-              aria-label={dot.label}
-              title={c.inCall ? t("contacts.onACall") : dot.label}
+              aria-label={t(dot.labelKey)}
+              title={c.inCall ? t("contacts.onACall") : t(dot.labelKey)}
               /* `-end-0.5` so the LED hangs off the avatar's TRAILING corner in both
                  directions, which is the edge Messages' thread rows and History's
                  `PresenceLed` already use for this same affordance — one presence dot

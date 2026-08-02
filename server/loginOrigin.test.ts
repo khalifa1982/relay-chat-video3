@@ -281,7 +281,12 @@ describe("what the owner actually sees", () => {
   it("the approval prompt shows the device, the place, the time and the IP", () => {
     const card = pendingCard();
     expect(card).toMatch(/\{p\.label\}/);
-    expect(card).toMatch(/\{p\.detail\}/);
+    /* v2.107.0: the detail line is RECOMPOSED on the client rather than rendered
+       whole, because the server's `detail` is "place · method" and the method half
+       is prose — so it arrived in English on an Arabic screen. The property is that
+       the line is SHOWN and that the method reaches it through the translator, not
+       which field carries it. */
+    expect(card).toMatch(/loginDetailLine\(p, t\)/);
     /* v2.106.98: the property is that a LOCALISED date-and-time is shown, not that
        it is produced by an empty arglist — which formats in the BROWSER's language
        and so was the defect on a screen the user may have set to Arabic. The pin now
@@ -294,7 +299,7 @@ describe("what the owner actually sees", () => {
     // A place we could not resolve must read as absent. Rendering an empty line
     // makes the card look broken and, worse, looks like a claim.
     const card = pendingCard();
-    expect(card).toMatch(/\{p\.detail && \(/);
+    expect(card).toMatch(/\{loginDetailLine\(p, t\) && \(/);
     expect(card).toMatch(/\{p\.ip && \(/);
   });
 
@@ -318,7 +323,7 @@ describe("what the owner actually sees", () => {
     // With two waiting, naming the newest would describe one and imply both.
     expect(BELL).toMatch(/pendingDevices === 1 && pendingDetail \?/);
     expect(BELL).toMatch(/\{pendingDetail\.label\}/);
-    expect(BELL).toMatch(/\{pendingDetail\.detail\}/);
+    expect(BELL).toMatch(/loginDetailLine\(pendingDetail, t\)/);
     /* REWRITTEN TO THE PROPERTY (#159). This froze the EMPTY argument list, and the
        Arabic sweep gives the formatter the app's locale — so as written it required
        the stamp to be rendered in the BROWSER's language on a screen that has just
@@ -339,14 +344,27 @@ describe("what the owner actually sees", () => {
     // saying nothing about the property it stands for — that the prop is OPTIONAL,
     // so a caller (or an older client) that has not fetched the detail degrades to
     // the count line rather than rendering blanks.
-    const decl = BELL.slice(BELL.indexOf("pendingDetail?:"));
-    expect(decl.slice(0, 200)).toMatch(/^pendingDetail\?:/); // optional, not required
+    /* Bounded by the declaration's OWN end rather than a fixed 200 characters: the
+       type grew `place` and `method` so the client could recompose the line with a
+       translated method, and a fixed slice went stale — the recurring fragility. */
+    const at = BELL.indexOf("pendingDetail?:");
+    expect(at, "pendingDetail? not declared").toBeGreaterThan(0);
+    const end = BELL.indexOf("} | null;", at);
+    expect(end, "unterminated declaration").toBeGreaterThan(at);
+    const decl = BELL.slice(at, end + "} | null;".length);
+    expect(decl).toMatch(/^pendingDetail\?:/); // optional, not required
     for (const f of ["label", "detail", "createdAt"]) {
-      expect(decl.slice(0, 200), `detail field ${f}`).toMatch(new RegExp(`\\b${f}:`));
+      expect(decl, `detail field ${f}`).toMatch(new RegExp(`\\b${f}:`));
     }
     // Nullable as well as optional: AppShell passes null outright when more than one
     // sign-in is waiting, and a non-nullable type would have forced a placeholder.
-    expect(decl.slice(0, 200)).toMatch(/\|\s*null;/);
+    expect(decl).toMatch(/\|\s*null;/);
+    /* `detail` SURVIVES beside the new fields rather than being replaced. It is the
+       server's pre-composed English, and a rolling deploy serves both bundles for
+       about a minute — during which a payload carrying no `method` must still show
+       something rather than blanking the line. */
+    expect(decl).toMatch(/\bplace\?:/);
+    expect(decl).toMatch(/\bmethod\?:/);
   });
 
   it("AppShell derives it from the SAME query the count comes from", () => {

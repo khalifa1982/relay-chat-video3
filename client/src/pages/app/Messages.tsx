@@ -992,8 +992,8 @@ export default function MessagesPage({
                                     const dot = presenceDot({ isOnline: t.peerIsOnline, idle: t.peerIdle });
                                     return (
                                       <span
-                                        aria-label={dot.label}
-                                        title={dot.label}
+                                        aria-label={tr(dot.labelKey)}
+                                        title={tr(dot.labelKey)}
                                         className="absolute bottom-0 end-0 size-[15px] rounded-full border-2 border-card"
                                         style={{ background: dot.color, boxShadow: dot.glow || undefined }}
                                       />
@@ -2610,8 +2610,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 const dot = presenceDot({ isOnline: thread?.peerIsOnline, idle: thread?.peerIdle });
                 return (
                   <span
-                    aria-label={dot.label}
-                    title={dot.label}
+                    aria-label={t(dot.labelKey)}
+                    title={t(dot.labelKey)}
                     className="absolute -bottom-0.5 -end-0.5 size-2.5 rounded-full border-2 border-card"
                     style={{ background: dot.color, boxShadow: dot.glow || undefined }}
                   />
@@ -6323,7 +6323,7 @@ function SuggestList({
                   </span>
                 )}
                 <span
-                  aria-label={dot.label}
+                  aria-label={t(dot.labelKey)}
                   className="absolute -bottom-0.5 -end-0.5 size-2.5 rounded-full border-2 border-card"
                   style={{ background: dot.color, boxShadow: dot.glow || undefined }}
                 />

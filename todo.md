@@ -1,5 +1,120 @@
 # Project TODO
 
+## v2.107.0 — an `aria-label` nobody could sweep, and a sign-in notice in English
+
+The 60-agent Arabic run's adversarial verifiers reported five things. Each was checked
+against source before anything was changed; all five are real, and two of them are the
+same shape — **a function returning FINISHED ENGLISH that a screen then renders**,
+which no literal sweep can see because the offender is an EXPRESSION. `aria-label={dot.label}`
+contains no English at all. That is how they survived a pass that took every screen
+through the dictionary.
+
+**1 — `presenceDot()` PUT ENGLISH INTO SEVEN `aria-label`s.** It returned
+`label: "Online" | "Away" | "Offline" | "On a call"`, and Contacts, the Messages thread
+list, the chat header, the Messages contact picker, GroupCallScreen, GroupInfoSheet and
+History all fed it straight to a screen reader. On an Arabic phone that is English on
+every contact row, every thread row, every group member and every picker entry.
+
+**THE FIX IS A REMOVAL, NOT AN ADDITION, and that is the load-bearing decision.** Adding
+`labelKey` beside `label` would have left the English available for the eighth surface to
+adopt, invisibly. Deleting the field turns every such site into a COMPILE ERROR — which
+is also how the change proved it had found all seven rather than most of them: the
+typecheck went clean only once every one was converted.
+
+**FOUR NEW KEYS RATHER THAN A REUSE OF THE FOUR THAT ALREADY EXISTED.** `peer.presence*`
+was right there and reads slightly better ("Online now"), and taking it would have
+silently changed the English on seven surfaces. Only the broken half moves: each new
+`en` is byte-identical to the string `presenceDot` returned before.
+
+**HISTORY WAS SELECTING ITS TOOLTIP BY COMPARING THE ENGLISH LABEL** — `dot.label === "On a call"`,
+four times. Its tooltips are legitimately its own (they name the CONSEQUENCE — "calling
+will page their phone" — rather than the state), so the wording stays; what moved is what
+it keys on. `presenceDot` now also returns a `state` discriminant, and the mapping is a
+`Record<PresenceDotState, TKey>`, so a fifth state is a compile error rather than a row
+that quietly reads "Offline".
+
+**2 — THE SIGN-IN NOTICE ARRIVED AS "Dubai, AE · Email code".** `describeLogin()` composes
+that on the server and BOTH surfaces that show a waiting sign-in — the notification centre
+and Profile → Devices — rendered it whole. The wire already carried `place`, `ip` and
+`country` separately, so only the METHOD is genuinely prose; the enum now rides across
+beside the composed phrase and the client picks its own key.
+
+**`methodLabel` SURVIVES BESIDE IT rather than being replaced**: a rolling deploy serves
+both bundles for about a minute, and a payload carrying no `method` must still show
+something rather than blanking the line on the card somebody is being asked to approve.
+**ONE renderer for two surfaces** (`client/src/app/loginOriginCopy.ts`), because two copies
+of "how do I phrase a login" is how two screens come to describe one sign-in differently —
+which `server/loginOrigin.ts` already says in its own header about the three surfaces it
+serves. **The PLACE is deliberately NOT translated**: a city arrives written as the geo
+service writes it, an ISO country code is the same in every language, and an IP is digits.
+
+**NOT DONE, AND SAID HERE RATHER THAN LEFT TO BE NOTICED**: the DEVICE label beside that
+line is still English. `deviceLabelFromUA` composes "Chrome on Android" and falls back to
+"Unknown device", and both are STORED as finished strings in `sessions.label` — so a key
+could only be selected by comparing that text, which is the antipattern this dictionary
+exists to remove. Doing it honestly means the function returning its parts and the client
+composing them, which also has to answer for the rows already written. Its own piece of work.
+
+**3 — `"{name} were already in this group."`** rendered as *"Sara were already in this
+group."* The plural verb was inherited from the pronoun sibling directly below it. English
+is the default language, so this is the half most people see.
+
+**4 — AN ADMIN PLACEHOLDER SAID `them@example.com`** — an English word on an Arabic screen,
+in a field whose placeholder only has to demonstrate a shape. `name@example.com` is
+language-neutral and removes the string at no cost.
+
+**5 — `engineLocale.test.ts`'s SWEEP HAD FIVE MUTATION-PROVEN BLIND SPOTS.** None is a
+shipped defect — the live region really is clean — but a sweep with holes is worse than no
+sweep, because it reports safety for the shapes it cannot see, and the next string added is
+as likely to take one of these forms as the ones it caught: a template-literal attribute, a
+single-quoted attribute, `toast.success(…)` (only the bare `toast(` was matched, and every
+real call site uses a method), a bare string literal in a text position, and — the widest —
+**any text node containing an expression at all**, because the run refused braces outright,
+so `>Muted {n} people<` was skipped whole rather than having its English half read.
+
+**PLUS A STRUCTURAL FRAGILITY IT NEVER STATED**: `LIVE = CODE.slice(0, DEAD_AT)` is
+"everything live" only while the dead component is LAST in the file, so a component
+appended after it was silently exempt. Now pinned — and mutation-proven by actually
+appending one.
+
+**TWO DEFECTS IN MY OWN WIDENING, both caught by the file's own cases.** The brace strip
+was single-pass, so `{t("k", { n })}` survived it and correct, translated code was flagged.
+And once fixed, allowing braces made a run like `{cond ? (` … `) : null}` read as text —
+**five perfectly correct ternaries reported as untranslated English**. A guard that cries
+wolf on correct code is as useless as one that never fires, so a run with an UNBALANCED
+brace is now skipped: that is a multi-line JSX expression spanning elements, not a text node.
+
+**TWO STANDING GUARDS CAUGHT ME, and both were right.** The numeral sweep flagged my own
+`"رمز من ٤ أرقام"` — Arabic-Indic digits, against the v2.106.84 rule that a number somebody
+acts on is the number shown. And two dead-key sweeps flagged the new keys, correctly: both
+are reached through a runtime map, so they are NAMED at their selector (the `guestExpiryKey`
+precedent) with the exemption EARNED — each must still be what the map returns, so one that
+stopped being selected goes red rather than sitting in the list looking covered.
+
+**AND THE PROSE TRAP AGAIN**, in the assertion written to catch the thing the prose
+describes: History's comment EXPLAINS the removal and therefore names `dot.label`, so the
+sweep failed on correct source. It runs on `codeOnly` now, with a companion assertion
+proving the reason really is recorded and only there, so the strip cannot be hiding a live one.
+
+**18 of 18 tripwires verified by MUTATION** off a confirmed-green baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once and treating a changed
+test TOTAL as a harness failure; every source byte-identical afterwards. One survivor was a
+BAD MUTATION of mine, reported rather than counted — it inserted the trailing component
+BEFORE the dead one, i.e. above it, which is the case that is fine; re-run as a genuine
+append, it bit.
+
+**SEVEN PRE-EXISTING PINS REPOINTED, and two had frozen the defect**: `presenceIdle` and
+three surface tests asserted `dot.label` verbatim (i.e. they required the English that was
+the bug), `loginOrigin` pinned the whole-phrase rendering, `adminLocale` exempted the old
+placeholder, and `groupsLocale` froze the component count at exactly 3 — which says nothing
+about the property and went red when a fourth legitimately took a translator. It is a floor
+now, so a removal still bites.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: nobody has run a screen reader over an Arabic
+contact list, and nobody has approved a second-device sign-in on the owner's phone.
+
+No schema change, no new dependency, no new env var. 6198 tests.
+
 ## v2.106.99 — a camera double-tap left the button ON with every sender holding null
 - [x] PROVENANCE: the two source changes are a parallel run's finished #145/#160 work, committed by me because this container is ephemeral and they were complete + green
 - [x] `stopCameraCapture` is async (one `replaceTrack(null)` per peer), so a second tap asked `haveLive` while the track was still alive, skipped the reacquire, and the pending stop took the camera down underneath it

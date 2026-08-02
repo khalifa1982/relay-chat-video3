@@ -203,6 +203,20 @@ export const PEER = {
   },
   "peer.presenceOnline": { en: "Online now", ar: "متصل الآن" },
   "peer.presenceOffline": { en: "Offline", ar: "غير متصل" },
+
+  /* ── the presence DOT's own label ───────────────────────────────────────
+     A SECOND, SHORTER SET RATHER THAN A REUSE OF THE FOUR ABOVE, and that is a
+     decision rather than duplication. These four are the `aria-label` on an 11px
+     LED — a bare state name is the whole of what a screen reader needs there —
+     while the four above are a presence LINE that sits beside a name and can
+     afford to say "Online now" and to explain what "Away" means. Reusing the long
+     forms would have silently changed the English on seven surfaces, and the rule
+     is that only the broken half moves: each `en` below is byte-identical to the
+     string `presenceDot` returned before it took a key. */
+  "peer.dotOnCall": { en: "On a call", ar: "في مكالمة" },
+  "peer.dotOffline": { en: "Offline", ar: "غير متصل" },
+  "peer.dotAway": { en: "Away", ar: "بعيد" },
+  "peer.dotOnline": { en: "Online", ar: "متصل" },
   /* A full date-and-time stamp, formatted in the APP's language rather than the
      browser's — see `dateLocale.ts`. */
   "peer.presenceLastSeen": { en: "Last seen {when}", ar: "آخر ظهور {when}" },

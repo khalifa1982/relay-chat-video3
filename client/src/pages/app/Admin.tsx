@@ -719,7 +719,11 @@ export default function Admin() {
                             dir="ltr"
                             autoComplete="off"
                             maxLength={320}
-                            placeholder="them@example.com"
+                            /* A language-NEUTRAL example: "them" is an English word sitting on an Arabic
+                               screen, and the placeholder tells you nothing the local part has to
+                               carry — so the fix costs nothing and removes a string that would
+                               otherwise need translating. */
+                            placeholder="name@example.com"
                             value={inviteEmail[r.id] ?? ""}
                             onChange={(e) => {
                               setInviteEmail((m) => ({ ...m, [r.id]: e.target.value }));
