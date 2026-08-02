@@ -62,12 +62,23 @@ export const POOL_REFRESH_MS = NODE_HEARTBEAT_MS;
  */
 export const POOL_WARN_COOLDOWN_MS = 5 * 60_000;
 
+/**
+ * How many rooms this app has assigned to each node SINCE a given moment.
+ *
+ * Injected rather than imported, for the reason every hook in this codebase is: the only thing
+ * that can answer it is the signaling registry, and `relay.ts` already imports this module, so
+ * reaching the other way would close a cycle (the `setNumberChangeHook` / `onResolveDial`
+ * pattern).
+ */
+export type VoipPendingSource = (sinceMs: number) => Map<string, number> | Record<string, number>;
+
 let client: VoipRegistryClient | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
 let nodes: VoipNode[] = [];
 let lastReadAt = 0;
 let lastReason: PoolReason | null = null;
 let lastWarnAt = 0;
+let pendingSource: VoipPendingSource | null = null;
 
 /** Injected so the whole module can be driven in a test with no Redis and no clock. */
 export function setVoipPoolClient(c: VoipRegistryClient | null): void {
@@ -75,6 +86,32 @@ export function setVoipPoolClient(c: VoipRegistryClient | null): void {
   if (!c) {
     nodes = [];
     lastReadAt = 0;
+  }
+}
+
+/**
+ * Register the source of the pending-room counts. A no-op until one is set, which is what
+ * keeps this module dormant on an API-tier instance that owns no registry.
+ */
+export function setVoipPendingSource(fn: VoipPendingSource | null): void {
+  pendingSource = fn;
+}
+
+/**
+ * The pending counts as of the last snapshot, or null when nothing can answer.
+ *
+ * FAILS OPEN, and the direction is stated because it is the wrong-looking one: a throwing or
+ * absent source yields null, which drops the correction and leaves the ceiling applied to the
+ * node's own `routers` alone — i.e. exactly the behaviour before this term existed. The
+ * alternative (treat an unreadable count as "assume full") would let one broken counter refuse
+ * every call on the fleet, which is a far worse failure than a bounded burst overshoot.
+ */
+export function poolPending(): Map<string, number> | Record<string, number> | null {
+  if (!pendingSource) return null;
+  try {
+    return pendingSource(lastReadAt);
+  } catch {
+    return null;
   }
 }
 
@@ -113,7 +150,16 @@ export interface PoolState extends NodePartition {
 
 /** The pool as it stands right now, for a status surface. */
 export function poolState(nowMs = Date.now(), excludeInstanceIds?: Iterable<string> | null): PoolState {
-  const part = partitionNodes(nodes, { nowMs, excludeInstanceIds: excludeInstanceIds ?? null });
+  /* PENDING IS PASSED HERE TOO, so the warning line and the selector cannot describe different
+     pools. From the refresh timer it happens to be empty anyway — the tick reads state
+     immediately after installing a snapshot, so nothing has been assigned against it yet — but
+     "true because of when it is called" is not a property, and this surface is also read by
+     `/api/health` and the admin diagnostics at arbitrary moments. */
+  const part = partitionNodes(nodes, {
+    nowMs,
+    excludeInstanceIds: excludeInstanceIds ?? null,
+    pending: poolPending(),
+  });
   return {
     ...part,
     ageMs: lastReadAt === 0 ? null : nowMs - lastReadAt,
@@ -211,6 +257,13 @@ export function planDialTransport(opts: {
     partySize: opts.partySize ?? null,
     forceMesh: opts.forceMesh,
     preferAz: opts.preferAz ?? null,
+    /* THE HARD-ADMISSION TERM (owner, 2026-08-02). Without it the router ceiling is bounded by
+       a report up to one refresh old, so a burst of dials inside that window all read the same
+       headroom and all take it — and with no pending at all they also all SCORE identically, so
+       they pile onto one node rather than spreading. Supplying it here rather than at the call
+       site is what makes it structural: `relay.ts` calls this once per invite and has nothing
+       to remember. */
+    pending: poolPending(),
   });
 }
 
@@ -251,4 +304,5 @@ export function _resetVoipPoolForTests(): void {
   lastReadAt = 0;
   lastReason = null;
   lastWarnAt = 0;
+  pendingSource = null;
 }

@@ -54,6 +54,7 @@
 import Redis from "ioredis";
 import { busSecret } from "./redisBus";
 import crypto from "crypto";
+import { isVoipAssignment, type VoipAssignment } from "./voipRegistry";
 
 export const ROOM_KEY_PREFIX = "relay:room:";
 /** SET of live room ids, so hydration is one SMEMBERS instead of a SCAN over a
@@ -129,6 +130,25 @@ export interface PersistedRoom {
    * fabricated media type.
    */
   video?: boolean;
+  /**
+   * #129 — the mediasoup node this room was PLACED on.
+   *
+   * A room's routers live on ONE node and media must reach the host holding them, so an
+   * assignment lost to a leader change cannot be recovered by re-planning: the pool refreshes
+   * every few seconds, so a fresh plan can legitimately answer a DIFFERENT node, and a call
+   * whose ops then went to two nodes is broken rather than degraded. That is why this is
+   * persisted at all — it is the one fact about a live mediasoup call that nothing else can
+   * re-derive.
+   *
+   * OPTIONAL for the same reason `groupAdminPins` and `video` are, and here it is also the
+   * SAFE direction: a record from a not-yet-updated instance has no field, the room comes back
+   * as MESH, and mesh is the transport that needs no infrastructure to be true. The opposite
+   * default would hand a hydrated room to a node that has never heard of it.
+   *
+   * A MALFORMED value drops the WHOLE record (see the validator), not just this field: it
+   * feeds the live registry and would otherwise authorize ops against a nonexistent address.
+   */
+  voip?: VoipAssignment;
 }
 
 const isStr = (v: unknown): v is string => typeof v === "string";
@@ -172,6 +192,11 @@ export function isPersistedRoom(v: unknown): v is PersistedRoom {
   // #116 — absent is fine (a party line, or a pre-feature record). Present must be
   // a real boolean, since hydration feeds this into the live registry.
   if (o.video !== undefined && typeof o.video !== "boolean") return false;
+  /* Validated with the SAME predicate the registry uses, imported rather than restated — two
+     definitions of "is this a real assignment" is how a record accepted on write comes to be
+     refused on read, and that failure presents as every call on that node dying at a leader
+     change with nothing saying why. */
+  if (o.voip !== undefined && !isVoipAssignment(o.voip)) return false;
   if (!Array.isArray(o.roster) || o.roster.length > 128) return false;
   for (const r of o.roster) {
     if (!Array.isArray(r) || r.length !== 2 || !isStr(r[0]) || !isStr(r[1])) return false;

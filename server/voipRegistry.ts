@@ -241,15 +241,57 @@ export function isNodeLive(n: VoipNode, nowMs: number, ttlMs = NODE_TTL_MS): boo
   return isNodeFresh(n, nowMs, ttlMs);
 }
 
-/** Fresh, not being retired, and under both ceilings: may receive a NEW room. */
-export function isNodeEligible(n: VoipNode, nowMs: number, ttlMs = NODE_TTL_MS): boolean {
+/**
+ * ONE READER for the pending map.
+ *
+ * It is shared by the EXCLUSION and the RANKING deliberately: two copies of "how many rooms
+ * have we just put here" is how those two come to disagree about the same node, and then one
+ * of them is wrong about capacity while both look reasonable.
+ */
+export function pendingCountFor(
+  pending: Record<string, number> | Map<string, number> | null | undefined,
+  instanceId: string,
+): number {
+  if (!pending) return 0;
+  const v = pending instanceof Map ? pending.get(instanceId) : pending[instanceId];
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/**
+ * Fresh, not being retired, and under both ceilings: may receive a NEW room.
+ *
+ * `pendingRooms` IS PART OF THE CEILING, NOT PART OF THE RANKING — and that is the whole of
+ * the owner's hard-admission requirement (2026-08-02: *"at cap, next node; over-cap must be
+ * unreachable, not merely discouraged"*).
+ *
+ * The reason it has to be here is that `routers` is the node's OWN report from up to one
+ * refresh ago (~5s). Between refreshes every dial reads the same number, so a node sitting at
+ * `NODE_MAX_ROUTERS - 1` is eligible for every one of them: a burst of N dials all pass the
+ * gate and the node ends up N-1 rooms past a cap that reads like a hard limit. Correcting
+ * only the load SCORE cannot fix that — a score is a preference between nodes, and when the
+ * whole fleet is near its ceiling (exactly the case the cap exists for) there is no better
+ * node to prefer, so the burst lands anyway. Only the exclusion can say no.
+ *
+ * UNWEIGHTED, unlike `nodeLoadScore`. One pending room is exactly one future router, so
+ * `PENDING_CONSUMER_WEIGHT` — which exists because that function measures CONSUMERS and a
+ * room implies several — would make this cap wrong by that factor.
+ *
+ * IT DELIBERATELY DOES NOT TOUCH THE CPU CEILING. A pending room has no measured CPU cost,
+ * and inventing one would be a guess presented as a reading.
+ */
+export function isNodeEligible(
+  n: VoipNode,
+  nowMs: number,
+  ttlMs = NODE_TTL_MS,
+  pendingRooms = 0,
+): boolean {
   return (
     isNodeFresh(n, nowMs, ttlMs) &&
     n.draining !== true &&
     n.cpuLoad < NODE_CPU_CEILING &&
     // EXCLUDED rather than ranked last, for the same reason as the CPU ceiling: a node at
     // its room ceiling does not degrade gracefully, it degrades for everybody already on it.
-    n.routers < NODE_MAX_ROUTERS
+    n.routers + pendingRooms < NODE_MAX_ROUTERS
   );
 }
 
@@ -297,14 +339,27 @@ export interface NodePartition {
  */
 export function partitionNodes(
   nodes: VoipNode[],
-  opts: { nowMs: number; ttlMs?: number; excludeInstanceIds?: Iterable<string> | null },
+  opts: {
+    nowMs: number;
+    ttlMs?: number;
+    excludeInstanceIds?: Iterable<string> | null;
+    /**
+     * instanceId -> rooms we have assigned here since that node last reported. Counts toward
+     * the ROOM CEILING, so a node whose remaining headroom is already spoken for is excluded
+     * rather than merely ranked lower. Absent reads as 0, i.e. exactly the snapshot's own
+     * number, so every existing caller is byte-identical.
+     */
+    pending?: Record<string, number> | Map<string, number> | null;
+  },
 ): NodePartition {
   const excluded = new Set(opts.excludeInstanceIds ?? []);
   const total = nodes.length;
   const live = nodes.filter((n) => isNodeLive(n, opts.nowMs, opts.ttlMs));
   const undrained = live.filter((n) => n.draining !== true);
   const included = undrained.filter((n) => !excluded.has(n.instanceId));
-  const eligible = included.filter((n) => isNodeEligible(n, opts.nowMs, opts.ttlMs));
+  const eligible = included.filter((n) =>
+    isNodeEligible(n, opts.nowMs, opts.ttlMs, pendingCountFor(opts.pending, n.instanceId)),
+  );
   const base = {
     eligible,
     live,
@@ -365,12 +420,6 @@ export function rankNodes(
     excludeInstanceIds?: Iterable<string> | null;
   },
 ): VoipNode[] {
-  const pendingFor = (id: string): number => {
-    const p = opts.pending;
-    if (!p) return 0;
-    const v = p instanceof Map ? p.get(id) : p[id];
-    return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
-  };
   /* THE FAIL-OPEN LINK THE DESIGN REVIEW FOUND MISSING is inside `partitionNodes` now, and
      the reason it matters is unchanged: a node whose shared secret is wrong (or which has
      wedged) keeps looking perfectly healthy in the registry — it heartbeats happily — while
@@ -385,8 +434,8 @@ export function rankNodes(
   const usable = partitionNodes(nodes, opts).eligible;
   if (usable.length === 0) return [];
   return [...usable].sort((a, b) => {
-    const la = nodeLoadScore(a, pendingFor(a.instanceId));
-    const lb = nodeLoadScore(b, pendingFor(b.instanceId));
+    const la = nodeLoadScore(a, pendingCountFor(opts.pending, a.instanceId));
+    const lb = nodeLoadScore(b, pendingCountFor(opts.pending, b.instanceId));
     /* AZ preference applies only when the two nodes are within a QUARTER of a consumer
        per core of each other — close enough that zone locality is the more useful
        tiebreak. Above that gap, load wins: a room placed in the right zone on a node
@@ -625,6 +674,12 @@ export function planRoomTransport(opts: {
         nowMs: opts.nowMs,
         ttlMs: undefined,
         excludeInstanceIds: opts.excludeInstanceIds ?? null,
+        /* PENDING MUST REACH THIS CALL TOO. It is the same funnel run for its REASON rather
+           than its list, so leaving pending out here would let the two disagree: the selector
+           would refuse a burst-saturated node while the reason still said `ok`, and the group
+           refusal is keyed on the reason. That is the drift the comment inside `rankNodes`
+           warns about, arriving through the second call site instead of a second filter. */
+        pending: opts.pending ?? null,
       }).reason;
   const transport = chooseCallTransport({
     mediasoupNode: node,

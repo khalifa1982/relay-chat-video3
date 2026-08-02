@@ -6,6 +6,41 @@ on:
   # the two-repo split lands, and so PRs targeting the web mainline get CI —
   # `pull_request` workflows are read from the BASE branch, so a PR into a branch
   # that is not listed here queues no checks at all.
+  #
+  # READ THE COUNT, NOT THE COLOUR. On PR #138 `get_status` answered `pending`
+  # with `total_count: 0` — no check had been *reported*, which is not the same
+  # thing as a check failing, and the two are indistinguishable if you only look
+  # for something red. A PR with zero checks is not a passing PR.
+  #
+  # When that happens, distinguish a TRIGGER problem from an ACTIONS problem
+  # before editing this file, because they look identical from the PR page:
+  #   - trigger problem  → a run object exists for some other ref but not yours,
+  #                        or the base branch's copy of this file omits the base
+  #                        (see the note above — `pull_request` reads the BASE).
+  #   - Actions problem  → the repo-wide run count does not move at all for ANY
+  #                        event. On #138 it sat at 979 across a fresh push to an
+  #                        open PR's head, i.e. no run was ever created. That is
+  #                        repo/account level — Actions disabled, a spending cap,
+  #                        or a GitHub incident — and nothing in this file fixes it.
+  #   - merge-commit     → CHECK THIS FIRST. It is INDISTINGUISHABLE from the
+  #     problem             Actions case by run count alone, and it is far more
+  #                        likely. `pull_request` checks run on GitHub's TEST-MERGE
+  #                        commit, so a PR whose `mergeable_state` is `dirty` (a
+  #                        conflict with its base) cannot have one built — and every
+  #                        push after that creates ZERO runs, silently. #138 sat like
+  #                        that for 2.5 hours while the repo-wide count stayed at 979
+  #                        and Actions, billing and GitHub status were all clean; the
+  #                        cause was a merge conflict with `web-app-main`. ONE FIELD
+  #                        on the PR would have answered it. Fix: merge or rebase the
+  #                        base branch in, resolve, push — the run fires on the new
+  #                        head the moment a merge commit is buildable.
+  #                        THIS REPO HAD ALREADY RECORDED IT (CLAUDE.md v2.99.21, PR
+  #                        #94, same `mergeable_state: "dirty"`, same remedy), which
+  #                        is why it is written here rather than left to be
+  #                        rediscovered a third time.
+  # So: read the PR's `mergeable_state` BEFORE blaming the account, then compare
+  # `list_workflow_runs`' unfiltered `total_count` before and after a push to tell
+  # the trigger and Actions cases apart.
   push:
     branches: [main, master, web-app-main]
   pull_request:
