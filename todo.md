@@ -1,5 +1,183 @@
 # Project TODO
 
+## v2.107.2 — four screens the owner could not read, and one of them had been "fixed" in the wrong place
+
+Owner, with four screenshots:
+
+> *"Redesign these screens to make sure that it's showing because it's overlapping and
+> cannot see"*
+>
+> *"For this group call area, make it more friendly, more clear because you're so much
+> talks routine and it's not clear"*
+>
+> *"The status page, my own status if I click on it, if you see the top bar doesn't show
+> because it's over lap on the top navigation bar, so make it low. I circled the red one
+> When I record the voice, it doesn't show me that it's, uh, like the wave volume. When I
+> talk, it's, like, balding. It doesn't work."*
+
+Four reports, four different mechanisms. **Two of them were already "fixed" — one by a
+pin that froze the defect, one by a release that put the right fix in the one place it
+cannot work.** Two were measured rather than guessed at, and one of those measurements
+refuted my own first theory.
+
+### 1 — the roster name was the only thing in the row that could shrink
+
+The member row was ONE flex line: a 34px avatar, a `min-w-0 flex-1` name column, then
+two `shrink-0` buttons. `shrink-0` means the buttons keep their width whatever happens,
+so the name column absorbed every shortfall.
+
+**MEASURED against the real built stylesheet at 320/360/375/390/430**, over four name
+shapes (short, typical, a 21-character Latin name, Arabic):
+
+| width | name box | needs | verdict |
+|---|---|---|---|
+| 320 | **0.0px** | 105–178 | an ellipsis and nothing else |
+| 375 | 51.3px | 105 | truncated |
+| 430 | 106.3px | 178 | truncated |
+
+**15 of 20 name cells truncated, including at 430px.** At 320 the box is literally zero
+wide — which is the owner's "M..". Two lines: **0 of 20**, at every width.
+
+This is the **v2.106.41 Contacts-row class in a second place** — there the fix was the
+same, and for the same reason.
+
+**THE COST IS STATED RATHER THAN BURIED: 61px → 102px per row.** It is paid ONLY by an
+admin, because the controls line sits inside the same `iAmAdmin && !m.isCreator` gate
+the buttons always carried — an ordinary member's row is unchanged. **Shrinking the
+buttons was the cheaper fix and is refused**: `min-h-11` is the 44px touch floor this
+codebase applies everywhere, and one of the two being shrunk would be Remove.
+
+The indent is **logical** (`ps-[42px]` = 34px avatar + the identity line's own 8px gap),
+so an Arabic sheet indents from the trailing edge instead of leaving the buttons under
+nothing. And **the admin condition is not restated on the button** now that it is the
+line's own gate — two individually-removable copies of one rule is dead weight that
+reads as load-bearing (v2.105.17). `!m.isMe` IS genuinely narrower, so it stays.
+
+### 2 — the party-lines section said one thing twice, in two voices
+
+**MY FIRST DIAGNOSIS WAS WRONG AND THE MEASUREMENT IS WHAT SAID SO.** I expected the
+"New line" button to be clipping and planned a `min-w-0` fix. Measured in EN and AR at
+all five widths: the button is **92.3px at every width, never clipped, never off-screen,
+no page overflow.** There was nothing to fix there, and shipping that change would have
+been motion aimed at nothing.
+
+What IS real is the prose. At 320px the section carried a mono uppercase caption (29px)
+above a paragraph (64px) — **93px of explanation above a 36px field, 59% of the whole
+section** — and the two said the same thing. That is the owner's *"so much talks routine
+and it's not clear"* exactly. **Re-measured after: 48px at 320, 32px from 360 up** (the
+section body 157px → 104px), with the button still 92.3px and no overflow.
+
+`groupcall.lineHint` is **DELETED**, not shortened, and deleting the KEY as well as the
+render site is the load-bearing half: a key with no reader reads as coverage, which is
+what `dictCoverage` exists to catch. **A mono uppercase run at `.18em` tracking is a
+three-or-four-word section LABEL** — asking it to carry a sentence is part of what made
+this hard to read, so the surviving line is plain readable type. That deviates from the
+board's caption style deliberately, and only where the caption was restating its
+neighbour. The capacity still comes from `engine.maxParticipants`, never a literal 10 —
+every call runs the mesh, whose cap is 6.
+
+### 3 — a stacking context trapped the story viewer under the navigation
+
+`StatusViewer` is `fixed inset-0 z-[100]`, and **that 100 was never competing with the
+app shell at all.** `AppShell` wraps `{children}` in `relative z-10` — a deliberate
+correctness rule, because `RelayBackground`'s canvas is `fixed; z-index: 0` and would
+otherwise paint over unpositioned page content — and **`position` plus a non-auto
+`z-index` CREATES a stacking context**. So the viewer's 100 resolves INSIDE that
+wrapper, and against the wrapper's own siblings it is the wrapper's **10** that
+competes. It loses to the top bar and the tab bar, both `z-30`.
+
+The viewer's progress bars and header rendered underneath the navigation. Raising the
+number cannot fix that; only leaving the context can, so it is portalled to
+`document.body`.
+
+**THE COMPOSER IN THE SAME FILE WAS PORTALLED FOR THE SAME CLASS OF REASON IN v2.99.49
+AND THIS ONE WAS NOT** — the fixed-in-one-of-N-places pattern this repo keeps paying
+for. A test now counts both.
+
+Its chrome also takes `max(12px, env(safe-area-inset-top))`, so it clears a notch while
+a device with no inset keeps exactly the 12px it had. The PREMISE is asserted too: if
+AppShell ever stops creating that context the test goes red and whoever changed it sees
+the reasoning rather than a portal that looks like belt-and-braces.
+
+### 4 — the recording waveform, fixed in the one place the fix cannot work
+
+**v2.106.89 DIAGNOSED THIS CORRECTLY AND THEN PUT THE CURE WHERE IT IS INERT.** Its
+reasoning is right and is kept: WebKit starts an `AudioContext` created outside a user
+gesture **SUSPENDED**, a suspended context does not run its graph, so
+`getByteTimeDomainData` keeps returning the all-128 midpoint fill and `level()` returns
+**exactly 0** for the whole take. The composer's 30 bars are driven by nothing else, so
+they sit flat at their floor — the owner's *"balding"*.
+
+**WHAT THAT RELEASE MISSED IS THAT `resume()` NEEDS THE GESTURE TOO.** It called
+`ac.resume()` immediately AFTER `await getUserMedia`, by which point the gesture is
+spent — and on WebKit a resume from outside a gesture does not start the context either.
+The line was added, read as the cure, and changed nothing on the one engine it was
+written for. That is why the owner is reporting it again.
+
+The gesture is live for exactly one window: **the synchronous prefix of
+`startVoiceRecording`**. The mic button's `onClick` calls `startRecording()`, which calls
+that function directly, whose first await is the `getUserMedia`. So the context is now
+constructed **and resumed** there, and **only the graph** is wired after the stream
+exists — `createMediaStreamSource` genuinely needs the stream, `new AudioContext()` does
+not, and putting it after the await is precisely what left it suspended.
+
+**A REFUSED MICROPHONE MUST STILL CLOSE IT** (#160's rule): the context is already open
+by the time permission is refused, and on iOS an open context keeps the audio session
+claimed with nothing left holding a reference to it.
+
+### the pins that broke, and why every one of them was frozen on the wrong thing
+
+Nine failures across seven files. Every one was a pre-existing pin frozen on a literal
+this release legitimately moves — and **one of them froze the defect outright**:
+
+- **`voiceAndStamps`** asserted `ac = new Ctor()` comes AFTER the recorder, i.e. after
+  the await. It REQUIRED the bug while reading as a guard. Rewritten to the opposite
+  property, with the resume pinned alongside it and both counted at exactly one, so a
+  second construction after the await cannot creep back.
+- **`mediaRelease`** anchored on `const stream = await …`, which became `stream = await
+  …` when the acquisition moved into a try/catch. `indexOf` answered -1, `slice(-1)` read
+  the file's LAST CHARACTER, and the match count came back `undefined` — the
+  negative-index trap this repo records at v2.99.78 / v2.106.56 / v2.106.65. Re-anchored,
+  with the anchor's existence asserted first so it can never silently read nothing again.
+- **`dialPadStory`** sliced from the JSX comment reading "progress bars", which this
+  release reworded — the prose-anchor trap.
+- **`groupRoster` ×2 and `groupProfileEditor`** froze the single expression
+  `{iAmAdmin && !m.isCreator && !m.isMe && (`, one particular way of spelling three
+  rules. They now assert the three rules directly, so the row may be rearranged again
+  and a genuinely dropped rule still bites.
+- **`groupcallLocale` ×2 and `partyLinesFrame`** froze the deleted `lineHint` key.
+
+### two mistakes of my own, both caught by a failure rather than by reading
+
+**RUNNING PRETTIER REFORMATTED 1,400 LINES.** The repo's `.prettierrc` (printWidth 80,
+`arrowParens: "avoid"`) does not match how the code is actually checked in, so `prettier
+--write` on five touched files produced a diff nobody could review — the v2.106.27
+lesson. Reverted and every edit re-applied by hand; the real diff is 237/138.
+
+**THE SELF-TERMINATING COMMENT, ONE RELEASE AFTER v2.107.1 RECORDED IT.** A block comment
+of mine quoted a JSX comment verbatim, whose closing sequence ended the block comment
+early and broke the parse. Rewritten as line comments that name the trap.
+
+And **the guard caught my own copy edit**: `copyOnScreen(R, "up to")` went red because
+the new sentence capitalises "Up to" as its opener. The property — this screen states a
+capacity in words the reader can see — is unchanged and still asserted.
+
+### verification
+
+`client/src/app/ownerBatchV21072.test.ts` (15). **18 of 18 tripwires verified by
+MUTATION** off a confirmed-GREEN baseline, from byte-exact backups, the mutator aborting
+unless its target occurs exactly once and treating a changed test TOTAL as a harness
+failure; **no survivors**, all five sources byte-identical afterwards. One aborted on a
+non-unique needle of mine and bit once re-anchored.
+
+**NOT VERIFIED ON A DEVICE, said plainly.** Every width here is measured in a real
+browser against the real built stylesheet, but nobody has opened a group's details, a
+story or the voice composer on the owner's phone — and the waveform fix in particular is
+about WebKit behaviour that this Chromium cannot exhibit either way. What is proven is
+that the context is opened and resumed while the gesture is live.
+
+No schema change, no new dependency, no new env var, no server change. 6220 tests.
+
 ## v2.107.1 — the in-call chip says who you are talking to, and a number stops being drawn in a green that fails AA
 
 Owner: *"make sure all designs should be implemented you choose any frame i dont care ..

@@ -497,14 +497,17 @@ export function PartyLinesSection({
       </button>
       {open && (
         <div className="space-y-2 px-4 pb-3">
-          {/* The board's mono caption. The cap is read from the live transport,
-              never the frame's literal 10 — every call runs the mesh, whose cap is
-              6, so a hardcoded 10 would be a false claim about capacity (the
-              v2.106.9 argument). */}
-          <p className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-muted-foreground">
-            {t("groupcall.lineHint", { max: lineCap })}
+          {/* ONE line of explanation, not two (v2.107.2, owner: *"make it more
+              friendly, more clear because you're so much talks routine and it's not
+              clear"*). A mono uppercase caption used to sit above this saying the
+              same thing in a harder-to-read voice; the reasoning is recorded in
+              `dict/groupcall.ts`. The cap is read from the live transport, never the
+              frame's literal 10 — every call runs the mesh, whose cap is 6, so a
+              hardcoded 10 would be a false claim about capacity (the v2.106.9
+              argument). */}
+          <p className="text-xs text-muted-foreground">
+            {t("groupcall.lineAbout", { max: lineCap })}
           </p>
-          <p className="text-xs text-muted-foreground">{t("groupcall.lineAbout")}</p>
           {atOwnerCap ? (
             // Rule 5: at the cap the field is ABSENT rather than a button that
             // always refuses. `max` was already on the wire and read by nothing,

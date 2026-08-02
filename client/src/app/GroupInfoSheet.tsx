@@ -947,105 +947,138 @@ export function GroupInfoSheet({
               ) : null}
               <ul>
                 {(info.data?.members ?? []).map((m) => (
-                  <li key={m.id} className="flex flex-wrap items-center gap-2 border-b border-white/[0.06] py-2 last:border-0">
-                    <span
-                      className="relative grid size-[34px] shrink-0 place-items-center overflow-visible rounded-full text-[11px] font-bold"
-                      style={memberDisc(m.id)}
-                    >
-                      <span className="grid size-[34px] place-items-center overflow-hidden rounded-full">
-                        {initialOf(m.displayName || m.number)}
-                        {m.avatarUrl ? (
-                          <img
-                            src={m.avatarUrl}
-                            alt=""
-                            className="absolute inset-0 size-full object-cover"
-                            onError={(e) => {
-                              (e.currentTarget as HTMLImageElement).style.display = "none";
-                            }}
-                          />
-                        ) : null}
-                      </span>
-                      {m.isMe ? null : <MemberDot p={presenceByNumber.get(m.number)} />}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1.5">
-                        <span className="min-w-0 truncate text-[12.5px] font-semibold">
-                          {m.displayName || t("groups.someone")}
-                          {m.isMe && (
-                            <span className="text-muted-foreground"> · {t("groups.you")}</span>
-                          )}
+                  /* TWO LINES, BECAUSE THE NAME WAS THE ONLY THING THAT COULD SHRINK
+                     (v2.107.2, owner: *"make sure that it's showing because it's
+                     overlapping and cannot see"*). The row was ONE flex line — avatar,
+                     a `min-w-0 flex-1` name column, then two `shrink-0` buttons — so the
+                     buttons kept their width and the name absorbed every shortfall.
+                     MEASURED against the real built stylesheet at 320/360/375/390/430:
+                     the name's box was **0px wide at 320** (an ellipsis and nothing
+                     else — the owner's "M..") and 15 of 20 name cells truncated,
+                     INCLUDING at 430. Two lines: 0 of 20, at every width. This is the
+                     v2.106.41 Contacts-row class in a second place.
+
+                     The cost is real and is stated rather than buried: 61px -> 102px per
+                     row. It is paid ONLY by an admin, because the controls line sits
+                     inside the same `iAmAdmin && !m.isCreator` gate the buttons always
+                     had — an ordinary member's row is unchanged. Shrinking the buttons
+                     was the cheaper fix and is refused: `min-h-11` is the 44px touch
+                     floor this codebase applies everywhere, and one of the two being
+                     shrunk would be Remove. */
+                  <li key={m.id} className="border-b border-white/[0.06] py-2 last:border-0">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="relative grid size-[34px] shrink-0 place-items-center overflow-visible rounded-full text-[11px] font-bold"
+                        style={memberDisc(m.id)}
+                      >
+                        <span className="grid size-[34px] place-items-center overflow-hidden rounded-full">
+                          {initialOf(m.displayName || m.number)}
+                          {m.avatarUrl ? (
+                            <img
+                              src={m.avatarUrl}
+                              alt=""
+                              className="absolute inset-0 size-full object-cover"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).style.display = "none";
+                              }}
+                            />
+                          ) : null}
                         </span>
-                        {/* CREATOR is a fact, not a power — a creator and an admin can do
-                            exactly the same things, so it is labelled separately and only
-                            one of the two labels is ever shown.
-                            BOTH WEAR GOLD, which is the board's reserved admin/owner hue:
-                            the creator's tag is FILLED and an appointed admin's is an
-                            outline, so rank is legible without spending a second colour on
-                            a meaning gold already carries. The word stays "Creator"
-                            rather than the frame's "OWNER" — v2.104.0 chose it
-                            deliberately, and an explicit earlier decision is not something
-                            a later visual spec overrules. */}
-                        {m.isCreator ? (
-                          <span className={ROLE_TAG} style={ROLE_TAG_CREATOR}>
-                            {t("groups.roleCreator")}
-                          </span>
-                        ) : m.isAdmin ? (
-                          <span className={ROLE_TAG} style={ROLE_TAG_ADMIN}>
-                            {t("groups.roleAdmin")}
-                          </span>
-                        ) : null}
+                        {m.isMe ? null : <MemberDot p={presenceByNumber.get(m.number)} />}
                       </span>
-                      <span className="mt-0.5 block font-mono text-[9.5px] text-muted-foreground" dir="ltr">
-                        {m.number}
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5">
+                          <span className="min-w-0 truncate text-[12.5px] font-semibold">
+                            {m.displayName || t("groups.someone")}
+                            {m.isMe && (
+                              <span className="text-muted-foreground"> · {t("groups.you")}</span>
+                            )}
+                          </span>
+                          {/* CREATOR is a fact, not a power — a creator and an admin can do
+                              exactly the same things, so it is labelled separately and only
+                              one of the two labels is ever shown.
+                              BOTH WEAR GOLD, which is the board's reserved admin/owner hue:
+                              the creator's tag is FILLED and an appointed admin's is an
+                              outline, so rank is legible without spending a second colour on
+                              a meaning gold already carries. The word stays "Creator"
+                              rather than the frame's "OWNER" — v2.104.0 chose it
+                              deliberately, and an explicit earlier decision is not something
+                              a later visual spec overrules. */}
+                          {m.isCreator ? (
+                            <span className={ROLE_TAG} style={ROLE_TAG_CREATOR}>
+                              {t("groups.roleCreator")}
+                            </span>
+                          ) : m.isAdmin ? (
+                            <span className={ROLE_TAG} style={ROLE_TAG_ADMIN}>
+                              {t("groups.roleAdmin")}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="mt-0.5 block font-mono text-[9.5px] text-muted-foreground" dir="ltr">
+                          {m.number}
+                        </span>
                       </span>
-                    </span>
-                    {/* The control renders only for an admin, and never against the
+                    </div>
+                    {/* LINE 2 — the controls, indented past the avatar (34px + the row's
+                        own 8px gap) with a LOGICAL `ps-`, so an Arabic sheet indents from
+                        the trailing edge rather than leaving the buttons under nothing.
+                        The whole line is gated, or a member with no controls would pay
+                        `mt-1.5` for an empty div.
+
+                        The control renders only for an admin, and never against the
                         creator — their adminship is derived from who made the group, so
                         no stored value could remove it and a button that appears to work
                         and changes nothing is worse than none. The SERVER refuses both
-                        cases regardless; this only avoids offering them. */}
+                        cases regardless; this only avoids offering them. That condition
+                        is now the LINE's gate and is not restated on the button below —
+                        two individually-removable copies of one rule is dead weight that
+                        reads as load-bearing (v2.105.17). */}
                     {iAmAdmin && !m.isCreator && (
-                      <button
-                        type="button"
-                        disabled={role.isPending}
-                        onClick={() =>
-                          role.mutate({
-                            conversationId,
-                            targetIdentityId: m.id,
-                            role: m.isAdmin ? null : "admin",
-                          })
-                        }
-                        className="min-h-11 shrink-0 rounded-[9px] border px-2.5 text-[11px] font-semibold transition-colors disabled:opacity-50"
-                        style={{ borderColor: gold(0.35), color: GOLD }}
-                      >
-                        {/* «إلغاء الإشراف» / «تعيين مشرفًا» — revoking an ADMINSHIP, which
-                            is a different act from removing the PERSON on the button
-                            beside it («إزالة»). English spells both "remove"; Arabic must
-                            not, or the two controls on one row read the same. */}
-                        {m.isAdmin ? t("groups.removeAdmin") : t("groups.makeAdmin")}
-                      </button>
-                    )}
-                    {/* REMOVE FROM GROUP (v2.105.16). Admin-only with NO toggle — "all
-                        users can add" says add, and one member ejecting another is a
-                        different, larger power. Withheld against the CREATOR (removing
-                        them would strip the group of its own admin with no route back)
-                        and against YOURSELF (that is leaving, which does not exist yet,
-                        so the button would wear the wrong label). The server refuses all
-                        three regardless; this only avoids offering them. */}
-                    {iAmAdmin && !m.isCreator && !m.isMe && (
-                      <button
-                        type="button"
-                        disabled={removeMember.isPending}
-                        onClick={() =>
-                          setRemoving({ id: m.id, name: m.displayName || t("groups.someone") })
-                        }
-                        aria-label={t("groups.removeMemberAria", {
-                          name: m.displayName || t("groups.thisMember"),
-                        })}
-                        className="min-h-11 shrink-0 rounded-[9px] border border-destructive/40 bg-destructive/10 px-2.5 text-[11px] font-bold text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-50"
-                      >
-                        {t("groups.remove")}
-                      </button>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5 ps-[42px]">
+                        <button
+                          type="button"
+                          disabled={role.isPending}
+                          onClick={() =>
+                            role.mutate({
+                              conversationId,
+                              targetIdentityId: m.id,
+                              role: m.isAdmin ? null : "admin",
+                            })
+                          }
+                          className="min-h-11 shrink-0 rounded-[9px] border px-2.5 text-[11px] font-semibold transition-colors disabled:opacity-50"
+                          style={{ borderColor: gold(0.35), color: GOLD }}
+                        >
+                          {/* «إلغاء الإشراف» / «تعيين مشرفًا» — revoking an ADMINSHIP,
+                              which is a different act from removing the PERSON on the
+                              button beside it («إزالة»). English spells both "remove";
+                              Arabic must not, or the two controls read the same. */}
+                          {m.isAdmin ? t("groups.removeAdmin") : t("groups.makeAdmin")}
+                        </button>
+                        {/* REMOVE FROM GROUP (v2.105.16). Admin-only with NO toggle —
+                            "all users can add" says add, and one member ejecting another
+                            is a different, larger power. Withheld against the CREATOR
+                            (removing them would strip the group of its own admin with no
+                            route back) and against YOURSELF (that is leaving, which does
+                            not exist yet, so the button would wear the wrong label). The
+                            server refuses all three regardless; this only avoids offering
+                            them. `!m.isMe` is genuinely NARROWER than the line's own gate,
+                            so unlike the admin condition it stays. */}
+                        {!m.isMe && (
+                          <button
+                            type="button"
+                            disabled={removeMember.isPending}
+                            onClick={() =>
+                              setRemoving({ id: m.id, name: m.displayName || t("groups.someone") })
+                            }
+                            aria-label={t("groups.removeMemberAria", {
+                              name: m.displayName || t("groups.thisMember"),
+                            })}
+                            className="min-h-11 shrink-0 rounded-[9px] border border-destructive/40 bg-destructive/10 px-2.5 text-[11px] font-bold text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-50"
+                          >
+                            {t("groups.remove")}
+                          </button>
+                        )}
+                      </div>
                     )}
                   </li>
                 ))}

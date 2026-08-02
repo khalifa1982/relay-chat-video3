@@ -119,7 +119,63 @@ export interface VoiceRecording {
 export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<VoiceRecording> {
   const pick = pickAudioMime();
   if (!pick) throw new Error("Voice recording isn't supported by this browser.");
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+  /* ── THE LEVEL METER'S AudioContext IS OPENED HERE, BEFORE THE AWAIT (v2.107.2) ──
+   *
+   * v2.106.89 diagnosed this correctly and then fixed it in the one place the fix
+   * cannot work. Its reasoning is right and is kept below: WebKit starts a context
+   * created outside a user gesture SUSPENDED, a suspended context does not run its
+   * graph, so `getByteTimeDomainData` keeps returning the all-128 midpoint fill,
+   * `level()` returns exactly 0 for the whole take, and the composer's 30 bars —
+   * driven by nothing else — sit flat at their floor. That is the owner's *"no wave
+   * when you talk"*, reported AGAIN on 2026-08-02: *"When I record the voice, it
+   * doesn't show me that it's, uh, like the wave volume."*
+   *
+   * WHAT THAT RELEASE MISSED IS THAT `resume()` NEEDS THE GESTURE TOO. It called
+   * `ac.resume()` immediately AFTER `await getUserMedia`, by which point the gesture
+   * is spent — and on WebKit a resume from outside a gesture does not start the
+   * context either. So the line was added, read as the cure, and changed nothing on
+   * the one engine it was written for.
+   *
+   * The gesture is live for exactly one window: the SYNCHRONOUS PREFIX of this
+   * function. The mic button's `onClick` calls `startRecording()`, which calls this
+   * directly, and this function's first await is the `getUserMedia` below. So the
+   * context is constructed AND resumed here, and only the GRAPH is wired after the
+   * stream exists — `createMediaStreamSource` genuinely needs the stream, `new
+   * AudioContext()` does not.
+   *
+   * A FAILED getUserMedia MUST STILL CLOSE IT (#160's rule): the context is already
+   * open by the time permission is refused, and on iOS an open context keeps the
+   * audio session claimed with nothing left holding a reference to it. */
+  let ac: AudioContext | null = null;
+  try {
+    const Ctor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (Ctor) {
+      ac = new Ctor();
+      // Fire-and-forget: a resume that never settles must not delay the recording,
+      // and every failure path here already leaves `level()` returning 0.
+      void ac.resume?.().catch(() => {
+        /* a meter is never a reason for recording to fail */
+      });
+    }
+  } catch {
+    ac = null;
+  }
+
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    try {
+      void ac?.close?.();
+    } catch {
+      /* nothing left to do */
+    }
+    ac = null;
+    throw e;
+  }
   // v2.99.36: the ONLY release of this mic used to be inside rec.onstop, so a
   // MediaRecorder that fails to construct or start (unsupported mime
   // substitution, device yanked, browser quirk) threw with the microphone still
@@ -151,36 +207,15 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
   // A WebAudio analyser on the SAME stream the recorder uses, so the meter shows the
   // audio actually being captured rather than a second, differently-gated capture.
   // Entirely optional: every failure path leaves `level()` returning 0.
-  let ac: AudioContext | null = null;
+  //
+  // ONLY THE GRAPH IS WIRED HERE. The context itself is constructed and resumed in the
+  // synchronous prefix above, while the user gesture is still live — see the long note
+  // there. Putting `new AudioContext()` at this point, after the await, is exactly what
+  // left it SUSPENDED on WebKit and pinned `level()` at 0.
   let analyser: AnalyserNode | null = null;
   let levelBuf: Uint8Array<ArrayBuffer> | null = null;
   try {
-    const Ctor =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (Ctor) {
-      ac = new Ctor();
-      /* THE LEVEL METER WAS DEAD ON iPHONE, AND THE CAUSE IS THE AWAIT ABOVE (v2.106.89).
-       *
-       * `getUserMedia` is awaited before we get here, so the synchronous user gesture is
-       * long gone by the time this context is constructed — and WebKit starts a context
-       * created outside a gesture SUSPENDED. A suspended context does not run its graph,
-       * so `getByteTimeDomainData` keeps handing back the all-128 midpoint fill and
-       * `level()` returns exactly 0 for the whole recording. The 30 bars the composer
-       * draws are driven by nothing else, so they sit flat at their floor: the owner's
-       * *"no wave when you talk"* on iPhone, and the second half of *"this voice bar …
-       * the iPhone showing"*.
-       *
-       * This repo already knows this — `relayClient.ts` resumes for the IDENTICAL
-       * mic → analyser → level pattern, and `dtmf.ts` and `Home.tsx` both name it in
-       * prose as "the classic iOS Web Audio race". The recorder was simply never given
-       * the same line.
-       *
-       * Fire-and-forget: a resume that never settles must not delay the recording, and
-       * every failure path here already leaves `level()` returning 0. */
-      void ac.resume?.().catch(() => {
-        /* a meter is never a reason for recording to fail */
-      });
+    if (ac) {
       const src = ac.createMediaStreamSource(stream);
       analyser = ac.createAnalyser();
       analyser.fftSize = 512;

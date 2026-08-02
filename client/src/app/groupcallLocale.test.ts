@@ -369,7 +369,9 @@ describe("numbers read the same in both languages", () => {
       expect(translate(l, "groupcall.lineCreated", { number: "794-254" })).toContain("794-254");
       expect(translate(l, "groupcall.live", { count: 4 })).toContain("4");
       expect(translate(l, "groupcall.atCap", { max: 10 })).toContain("10");
-      expect(translate(l, "groupcall.lineHint", { max: 6 })).toContain("6");
+      // `lineAbout` carries the cap now — v2.107.2 deleted `lineHint`, whose whole
+      // content was a second, harder-to-read copy of this sentence's meaning.
+      expect(translate(l, "groupcall.lineAbout", { max: 6 })).toContain("6");
       expect(translate(l, "groupcall.startCount", { n: 3 })).toContain("3");
       expect(translate(l, "groupcall.joinAria", { title: "غرفة العائلة" })).toContain("غرفة العائلة");
     }
@@ -383,7 +385,7 @@ describe("numbers read the same in both languages", () => {
   it("the interpolated values reach the render sites with the names the keys use", () => {
     // A key whose English half reads "{max}" and a call site passing `{ n: … }` renders the
     // literal "{max}" on screen. Silent, and only visible in the language nobody reviews.
-    expect(SRC).toMatch(/t\("groupcall\.lineHint", \{ max: lineCap \}\)/);
+    expect(SRC).toMatch(/t\("groupcall\.lineAbout", \{ max: lineCap \}\)/);
     expect(SRC).toMatch(/t\("groupcall\.atCap", \{ max: maxLines \}\)/);
     expect(SRC).toMatch(/t\("groupcall\.live", \{ count: l\.liveCount \}\)/);
     expect(SRC).toMatch(/t\("groupcall\.startCount", \{ n: selected\.size \}\)/);

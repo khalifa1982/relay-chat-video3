@@ -429,9 +429,24 @@ describe("a story only chains where the owner said it should", () => {
   it("the progress bars only ever describe the story on screen", () => {
     // Bars for stories the viewer will never reach would promise chaining that is
     // no longer going to happen.
-    const bars = STATUS.slice(STATUS.indexOf("{/* progress bars */}"));
-    expect(bars.slice(0, 500)).toMatch(/\{group\.items\.map\(/);
-    expect(bars.slice(0, 500)).not.toMatch(/groups\.map\(/);
+    // ANCHORED ON CODE, NOT ON A COMMENT. This used to slice from the literal JSX
+    // comment reading "progress bars"; v2.107.2 reworded it, so `indexOf` answered -1
+    // and the slice read the file's last character — the prose-anchor trap. Line
+    // comments here on purpose: quoting a JSX comment inside a block comment ends the
+    // block comment early, which is the v2.107.1 self-terminating-comment trap and is
+    // exactly what the first draft of this note did.
+    // `createPortal(` is the viewer's own return and no comment can move it.
+    // Scoped to StatusViewer's OWN portal: this file now has two (the composer was
+    // portalled in v2.99.49, the viewer in v2.107.2), and a bare `createPortal(`
+    // needle finds the composer's, which is earlier in the file.
+    const fn = STATUS.indexOf("function StatusViewer(");
+    expect(fn, "StatusViewer must exist").toBeGreaterThan(0);
+    const at = STATUS.indexOf("return createPortal(", fn);
+    expect(at, "the viewer's return must exist").toBeGreaterThan(fn);
+    const bars = STATUS.slice(at);
+    expect(bars.length, "the slice must be real").toBeGreaterThan(400);
+    expect(bars.slice(0, 900)).toMatch(/\{group\.items\.map\(/);
+    expect(bars.slice(0, 900)).not.toMatch(/groups\.map\(/);
   });
 });
 

@@ -323,7 +323,23 @@ describe("schema and migrator", () => {
 
 describe("the sheet offers only what the server would allow", () => {
   it("Remove is admin-only, and never against the creator or yourself", () => {
-    expect(SHEET).toMatch(/\{iAmAdmin && !m\.isCreator && !m\.isMe && \(/);
+    /* THE PROPERTY, NOT THE ARRANGEMENT (v2.107.2). This froze the single expression
+       `{iAmAdmin && !m.isCreator && !m.isMe && (` — one particular way of spelling
+       three rules — so it broke the moment the row split onto two lines and the
+       admin half became the CONTROLS LINE's own gate. What it stands for is that
+       Remove is offered only to an admin, never against the creator, and never
+       against yourself; all three are asserted directly, so the row may be
+       rearranged again and a genuinely dropped rule still bites.
+       `Remove` lives inside `iAmAdmin && !m.isCreator`, which is exactly the gate on
+       the line it sits in, and carries its own narrower `!m.isMe`. */
+    const lineGate = SHEET.indexOf("{iAmAdmin && !m.isCreator && (");
+    expect(lineGate, "the member controls are admin-only and spare the creator").toBeGreaterThan(0);
+    const selfGate = SHEET.indexOf("{!m.isMe && (", lineGate);
+    expect(selfGate, "…and Remove additionally spares yourself").toBeGreaterThan(lineGate);
+    const removeBtn = SHEET.indexOf("setRemoving({", selfGate);
+    expect(removeBtn, "…and that gate is the one wrapping Remove").toBeGreaterThan(selfGate);
+    // A constant would satisfy an `indexOf` while deciding nothing.
+    expect(codeOnly(SHEET)).not.toMatch(/\{(true|false) && !m\.isCreator/);
   });
 
   it("Add widens to a plain member only on the SERVER's answer", () => {
@@ -355,7 +371,11 @@ describe("the sheet offers only what the server would allow", () => {
        negative-index trap (v2.99.78, v2.106.56, v2.106.65) inside the very pin written
        to catch a real gap. Re-anchored on the element's own closing tag, which no copy
        change can move. */
-    const btnStart = SHEET.indexOf("{iAmAdmin && !m.isCreator && !m.isMe && (");
+    // v2.107.2 split the row onto two lines, so the admin half is now the CONTROLS
+    // LINE's gate and only `!m.isMe` wraps Remove itself. Anchored on that, with the
+    // existence assertion kept — a stale needle here is what produced the -1 slice
+    // this comment is about.
+    const btnStart = SHEET.indexOf("{!m.isMe && (");
     expect(btnStart, "the row-button gate moved").toBeGreaterThan(-1);
     const btnEnd = SHEET.indexOf("</button>", btnStart);
     expect(btnEnd, "the row button lost its closing tag").toBeGreaterThan(btnStart);
