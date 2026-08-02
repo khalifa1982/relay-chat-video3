@@ -1,0 +1,96 @@
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const SRC = readFileSync(resolve(__dirname, "..", "lib/injected-scripts.ts"), "utf8");
+
+/**
+ * Two call-path defects in the JavaScript the shell injects into the RELAY page.
+ *
+ * These are source pins by necessity: the code is a string injected into a
+ * WebView and driven by live WebRTC state, so there is no way to execute it
+ * meaningfully under vitest with no device. The properties pinned are the ones
+ * whose loss reproduces the bug.
+ */
+
+describe("the shell never re-enables a LOCAL audio track", () => {
+  /* The web app mutes by setting `enabled = false` on the local mic track. The
+   * shell ran a 2-second interval that re-enabled every disabled local audio
+   * track, so mute lasted at most two seconds — while the button kept rendering
+   * as muted. The user believed they were muted and was not.
+   *
+   * The shell cannot distinguish "accidentally disabled" from "the user pressed
+   * mute": they are the same one bit. So there is no safe version to keep. */
+
+  it("the health monitor and its interval are gone", () => {
+    expect(SRC).not.toContain("ensureAudioTracksEnabled");
+    expect(SRC).not.toMatch(/setInterval\([^)]*\n?[^)]*ensureAudioTracks/);
+  });
+
+  it("no 'mute' event handler re-enables a track", () => {
+    expect(SRC).not.toMatch(/addEventListener\('mute'/);
+  });
+
+  it("a freshly acquired stream is not force-enabled either", () => {
+    const gum = SRC.slice(SRC.indexOf("return origGUM(c).then"), SRC.indexOf("window.__relayReacquireCamera"));
+    expect(gum).not.toMatch(/getAudioTracks\(\)\.forEach\(function \(t\) \{\s*\n\s*t\.enabled = true;/);
+  });
+
+  it("camera reacquire restores the PRIOR enabled value, not true", () => {
+    // Otherwise kicking a frozen preview turns a camera back on that the user
+    // had deliberately switched off.
+    const at = SRC.indexOf("window.__relayReacquireCamera = function");
+    expect(at, "the reacquire function exists").toBeGreaterThan(-1);
+    const fn = SRC.slice(at, at + 900);
+    expect(fn).toMatch(/var was = t\.enabled;/);
+    expect(fn).toMatch(/t\.enabled = was;/);
+    expect(fn).not.toMatch(/setTimeout\(function \(\) \{ t\.enabled = true; \}/);
+  });
+
+  it("enabling a REMOTE track is still allowed (that is incoming audio)", () => {
+    // The local mute button does not control the other party's audio, so this
+    // one is unrelated and must not be swept away with the rest.
+    expect(SRC).toMatch(/if \(ev\.track && ev\.track\.kind === 'audio'\) \{\s*\n\s*ev\.track\.enabled = true;/);
+  });
+});
+
+describe("a transient ICE drop does not end the call", () => {
+  /* `recompute()` runs the irreversible teardown — track.stop() on every local
+   * track, plus reporting the call ended to CallKit / the Android call service.
+   * Treating 'disconnected' as terminal meant a two-second tunnel killed the
+   * microphone and camera for the REST of the call, and nothing re-added the
+   * connection when ICE recovered. */
+
+  const cleanup = SRC.slice(SRC.indexOf("var deadT = null;"), SRC.indexOf("var origClose ="));
+
+  it("only a CLOSED connection tears down immediately", () => {
+    expect(cleanup).toMatch(/if \(cs === 'closed' \|\| pc\.iceConnectionState === 'closed'\) \{\s*\n\s*finish\(\);/);
+  });
+
+  it("disconnected and failed are debounced, not immediate", () => {
+    expect(cleanup).toMatch(/if \(cs === 'failed' \|\| cs === 'disconnected'\)/);
+    expect(cleanup).toMatch(/deadT = setTimeout\(/);
+    // …and the delay is long enough to cover a real handoff.
+    const ms = Number(/\}, (\d+)\);/.exec(cleanup)?.[1]);
+    expect(ms).toBeGreaterThanOrEqual(10000);
+  });
+
+  it("recovery cancels the pending teardown", () => {
+    expect(cleanup).toMatch(/if \(cs === 'connected' \|\| cs === 'completed'\) \{\s*\n[^}]*clearDead\(\);/);
+    // and the timer re-checks state before acting, in case it recovered late
+    expect(cleanup).toMatch(/if \(now !== 'connected' && now !== 'completed'\) finish\(\);/);
+  });
+
+  it("an explicit close() cancels the timer too", () => {
+    expect(SRC).toMatch(/pc\.close = function \(\) \{ clearDead\(\);/);
+  });
+});
+
+/* NOT TESTED HERE, deliberately: that no stray backtick appears inside the
+ * injected JS. This file holds that JS in TypeScript template literals, so a
+ * backtick in the body — even inside a comment — terminates the string. It is a
+ * real trap (CLAUDE.md records the same thing biting the CSS template, and it
+ * bit twice while writing these fixes). But `pnpm check` fails the build on an
+ * unterminated template, immediately and by exact line, and any heuristic here
+ * would be strictly weaker than that. Counting backticks, for instance, passes
+ * happily when a comment adds two. */

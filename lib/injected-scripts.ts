@@ -124,21 +124,21 @@ export const CALL_WATCH_JS = `(() => {
       }, 300);
     };
 
-    // --- BUG #2 FIX: Audio track health monitor ---
-    // Periodically check all local audio tracks and re-enable any that got
-    // accidentally disabled. This prevents one-way audio scenarios.
-    var ensureAudioTracksEnabled = function () {
-      try {
-        localStreams.forEach(function (s) {
-          if (!s || typeof s.getAudioTracks !== 'function') return;
-          s.getAudioTracks().forEach(function (t) {
-            if (t.readyState === 'live' && !t.enabled) {
-              t.enabled = true;
-            }
-          });
-        });
-      } catch (e) {}
-    };
+    // --- REMOVED: the audio-track "health monitor" ---
+    //
+    // It re-enabled every disabled local audio track on a 2-second interval, to
+    // prevent one-way audio. But track.enabled = false is EXACTLY how the web
+    // app mutes the microphone — so tapping mute silenced you for at most two
+    // seconds and then the shell turned your microphone back on, while the mute
+    // button kept rendering as muted. The user believed they were muted, said
+    // something private, and the other side heard it.
+    //
+    // The shell cannot tell "accidentally disabled" from "the user pressed mute"
+    // — both are the same one-bit state — so there is no safe version of this
+    // check to keep. If one-way audio is a real problem it has to be fixed in the
+    // web app, which is the only layer that knows the user's intent. A mute
+    // button that does not mute is categorically worse than the bug this was
+    // reaching for.
 
     // --- Incoming-call (ringing) detection ---
     // FIXED: The old logic was too broad — it matched "is calling" or "incoming call"
@@ -296,13 +296,47 @@ export const CALL_WATCH_JS = `(() => {
         var pc = new Orig(arguments[0], arguments[1]);
         peers.add(pc);
 
+        // A peer connection is only TERMINAL when it is closed. 'disconnected'
+        // is explicitly recoverable in the WebRTC spec — it is what a two-second
+        // tunnel or a Wi-Fi/LTE handoff looks like — and 'failed' is what the web
+        // app answers with an ICE restart on the SAME connection.
+        //
+        // Treating either as the end of the call was severe, because recompute()
+        // runs the irreversible teardown: track.stop() on every local track (the
+        // microphone and camera are then dead for the REST of the call, since
+        // stop() cannot be undone), plus reporting the call ended to CallKit and
+        // the Android call service. Nothing ever re-added the connection, so one
+        // network blip left the shell permanently convinced there was no call.
+        //
+        // So: close is immediate; disconnected/failed only count if they are
+        // still unresolved after a grace window, matching the web app's own
+        // reconnect behaviour. Recovery cancels the timer.
+        var deadT = null;
+        var clearDead = function () {
+          if (deadT) { clearTimeout(deadT); deadT = null; }
+        };
+        var finish = function () {
+          clearDead();
+          peers.delete(pc);
+          recompute();
+        };
         var cleanup = function () {
-          if (pc.connectionState === 'closed' ||
-              pc.connectionState === 'failed' ||
-              pc.connectionState === 'disconnected' ||
-              pc.iceConnectionState === 'closed') {
-            peers.delete(pc);
-            recompute();
+          var cs = pc.connectionState;
+          if (cs === 'closed' || pc.iceConnectionState === 'closed') {
+            finish();
+            return;
+          }
+          if (cs === 'connected' || cs === 'completed') {
+            // Recovered — cancel any pending teardown.
+            clearDead();
+            return;
+          }
+          if (cs === 'failed' || cs === 'disconnected') {
+            if (!deadT) deadT = setTimeout(function () {
+              deadT = null;
+              var now = pc.connectionState;
+              if (now !== 'connected' && now !== 'completed') finish();
+            }, 15000);
           }
         };
 
@@ -311,7 +345,6 @@ export const CALL_WATCH_JS = `(() => {
           if (pc.connectionState === 'connected') {
             forceSpeakerOnConnect();
             // BUG #2 FIX: Ensure audio tracks are enabled on connect
-            setTimeout(ensureAudioTracksEnabled, 200);
           }
           recompute();
           cleanup();
@@ -319,7 +352,6 @@ export const CALL_WATCH_JS = `(() => {
         pc.addEventListener('iceconnectionstatechange', function () {
           if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
             forceSpeakerOnConnect();
-            setTimeout(ensureAudioTracksEnabled, 200);
           }
           cleanup();
         });
@@ -333,11 +365,14 @@ export const CALL_WATCH_JS = `(() => {
               ev.track.enabled = true;
             }
           } catch (e) {}
-          setTimeout(ensureAudioTracksEnabled, 100);
+          // (The local-track "health monitor" that used to run here was removed:
+          //  it re-enabled the user's microphone after they muted it. Enabling a
+          //  REMOTE track above is unrelated — that is the audio arriving from
+          //  the other party, which the local mute button does not control.)
         });
 
         var origClose = pc.close.bind(pc);
-        pc.close = function () { peers.delete(pc); recompute(); return origClose(); };
+        pc.close = function () { clearDead(); peers.delete(pc); recompute(); return origClose(); };
         recompute();
         return pc;
       };
@@ -378,22 +413,20 @@ export const CALL_WATCH_JS = `(() => {
         window.__relayLastConstraints = c;
         return origGUM(c).then(function (stream) {
           localStreams.add(stream);
-          // BUG #2 FIX: Immediately ensure all audio tracks are enabled.
-          stream.getAudioTracks().forEach(function (t) {
-            t.enabled = true;
-          });
+          // Deliberately does NOT force enabled = true here. A freshly acquired
+          // track is already enabled, so this only ever mattered when something
+          // had disabled it — i.e. when the user had muted — which made it one
+          // more way for the shell to override a mute it cannot interpret.
           stream.getTracks().forEach(function (t) {
             t.addEventListener('ended', function () {
               recompute();
             });
-            // BUG #2 FIX: If a track gets muted externally, re-enable it.
-            t.addEventListener('mute', function () {
-              if (t.kind === 'audio' && state.active) {
-                setTimeout(function () {
-                  if (t.readyState === 'live') t.enabled = true;
-                }, 100);
-              }
-            });
+            // NOTE: no 'mute' handler. There used to be one that set
+            // enabled = true 100ms after any mute event — the same defeat of
+            // the user's mute button, just on a rarer trigger. A track's muted
+            // property is set by the user agent and is read-only; flipping
+            // enabled does not clear it, so the handler could not even achieve
+            // what it was written for.
           });
           recompute();
           return stream;
@@ -408,7 +441,13 @@ export const CALL_WATCH_JS = `(() => {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
         localStreams.forEach(function (s) {
           s.getVideoTracks().forEach(function (t) {
-            try { t.enabled = false; setTimeout(function () { t.enabled = true; }, 60); } catch (e) {}
+            // Restore the PRIOR value, so kicking a frozen preview cannot turn a
+            // camera back on that the user had switched off.
+            try {
+              var was = t.enabled;
+              t.enabled = false;
+              setTimeout(function () { t.enabled = was; }, 60);
+            } catch (e) {}
           });
         });
       } catch (e) {}
@@ -418,7 +457,6 @@ export const CALL_WATCH_JS = `(() => {
       if (document.visibilityState === 'visible') {
         setTimeout(function () { try { window.__relayReacquireCamera(); } catch (e) {} }, 150);
         // BUG #2 FIX: Re-enable audio tracks when app comes back to foreground
-        setTimeout(ensureAudioTracksEnabled, 200);
         recompute();
       }
     });
@@ -505,11 +543,6 @@ export const CALL_WATCH_JS = `(() => {
         lastUnread = n;
       } catch (e) {}
     };
-
-    // BUG #2 FIX: Periodic audio health check — ensures tracks stay enabled
-    setInterval(function () {
-      if (state.active) ensureAudioTracksEnabled();
-    }, 2000);
 
     // Poll the DOM for the incoming-call UI and react to changes.
     setInterval(detectRinging, 1200);
