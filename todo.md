@@ -1,5 +1,17 @@
 # Project TODO
 
+## v2.106.95 — the in-call surface speaks Arabic
+- [x] `dict/calls.ts` filled (it shipped as `{}` while being imported and spread — a wired surface contributing nothing)
+- [x] 79 markup sites annotated (`data-i18n` / `-aria` / `-title` / `-placeholder` / `-msg`) + `applyEngineLabels`
+- [x] Translator injected at the React/engine boundary; a language change re-labels the LIVE call's DOM rather than re-injecting the markup
+- [x] On-hold bar: one key with a `{who}` placeholder, replacing a sentence assembled around a span (untranslatable in Arabic)
+- [x] Runtime-written names and the staged call status go through the engine translator, not markup annotations
+- [x] Ring card's three answer labels wired (never annotated; their keys had readers elsewhere so the dead-key sweep reported them covered)
+- [x] `engineLabels.test.ts` (11) — sweeps, so the next control added is covered rather than exempt
+- [x] Fixed two guards crying wolf on correct source: the backtick check's slice assumed `RELAY_CSS` was the last declaration; the CSS rule sweep read HTML comments as selectors
+- [x] Recorded the pathspec-commit rule in CLAUDE.md after a bare `git commit` published five agents' staged half-work
+
+
 Hosted website for the RELAY chat / voice / video application (Manus hosting).
 
 ## Server (signaling + WebRTC plumbing)
