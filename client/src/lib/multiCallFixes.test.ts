@@ -52,7 +52,15 @@ describe("multi-call engine fixes (source-pinned)", () => {
        consolidated once already and every reader must agree with the cap the picker
        showed the user. */
     expect(engine).not.toMatch(/SFU_MAX/);
-    expect(engine).toMatch(/function transportMax\(\): number \{ return MESH_MAX; \}/);
+    /* #170 rewrote this from the one-line body `{ return MESH_MAX; }` — which
+       this test's own comment two lines up already says is NOT the property —
+       to what it stands for: ONE definition, reached by every reader, whose
+       default is the mesh number. The body now returns `roomPartyMax`, which
+       the server states on the room ack, so the picker cannot offer a party the
+       accept then refuses. Freezing the old spelling would have forbidden
+       exactly that fix. */
+    expect(engine).toMatch(/function transportMax\(\): number \{ return roomPartyMax; \}/);
+    expect(engine).toMatch(/let roomPartyMax = MESH_MAX;/);
     expect(engine).toMatch(/const cap = transportMax\(\);/);
     expect(engine).toMatch(/deduped\.slice\(0, cap\)/);
     // The handle still exposes the cap for the picker, through the same definition.

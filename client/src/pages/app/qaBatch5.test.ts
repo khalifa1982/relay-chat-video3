@@ -26,7 +26,11 @@ describe("v2.99.27 QA M19/L7 — group-call picker reserves the caller's slot + 
     // The property is "one fewer than the transport cap", not the arithmetic's old
     // spelling — v2.106.48 routes every cap site through `transportMax()`.
     expect(ENGINE).toMatch(/const cap = transportMax\(\) - 1;/);
-    expect(ENGINE).toMatch(/function transportMax\(\): number \{ return MESH_MAX; \}/);
+    /* #170: the property is "one definition, defaulting to the mesh number",
+       not the body's old spelling — which is what the comment above already
+       said and what the previous assertion contradicted. */
+    expect(ENGINE).toMatch(/function transportMax\(\): number \{ return roomPartyMax; \}/);
+    expect(ENGINE).toMatch(/let roomPartyMax = MESH_MAX;/);
   });
   it("the picker rejects the caller's own number (toggle + addManual)", () => {
     expect(PICKER).toMatch(/if \(number === engine\.pin\) return;/);

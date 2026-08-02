@@ -1,5 +1,118 @@
 # Project TODO
 
+## v2.107.9 — THE TRANSPORT SEAM: `aloneInCall()` STOPS COUNTING MESH PEERS (#170)
+
+The owner's sequencing, verbatim: *"Abstracting transportMax() and aloneInCall()
+behind a transport-aware seam is the first thing increment 2 does, before any call
+is allowed onto a node… Don't cut any call onto a node until the transport-aware
+seam is in."* This is that, and nothing else.
+
+**THE BUG IS A CALL-DROPPER, NOT A CODE SMELL.** Every "how many other people are on
+this call" question in `relayClient.ts` read `peers`, the MESH peer-connection map.
+That is the right answer only while the media is a mesh: under mediasoup the
+participants are consumers on a node and `peers` is EMPTY for a live six-party call,
+so `aloneInCall()` answers "alone" and every teardown gate hanging off it fires
+mid-call — the 1:1 auto-end, the fatal-error teardown, the group-dial bootstrap
+promotion. It is dormant today only because no call is on a node yet.
+
+**THREE READS WERE GENUINELY TRANSPORT-BLIND AND FOUR WERE NOT, and separating them
+is most of the work.** Moved behind the seam: `aloneInCall()`; the add-person
+occupancy check, which would otherwise let a party be pushed past the cap the server
+is about to refuse at; and `getRoster()`, whose own comment already claimed "both
+transports" while reading the mesh map alone, so the in-call save-to-contacts chip
+would have offered nobody. **Deliberately LEFT reading `peers`**: `applyMeshVideoCaps`
+(per-sender bitrate on mesh senders), the chat delivery check (data channels are
+per-mesh-peer, and mediasoup has no SCTP at all), the screen-share video-slot check
+(inspects mesh `RTCRtpSender`s) and `createPeer`'s conference flip (`createPeer` IS
+the mesh path). Those are ABOUT mesh objects; moving them would be wrong.
+
+**ONE FUNCTION, NOT A COUNT AND A LIST.** `remoteParticipants()` is the single
+answer and `remoteParticipantCount()` is its length — two implementations of "who is
+on the call" is exactly how a teardown gate and a roster come to disagree about
+whether anybody is there.
+
+**THE MESH BRANCH IS BYTE-IDENTICAL AND THAT IS DELIBERATE.** `sigRoster` does not
+replace `peers` on the mesh, because the two legitimately differ: the ICE-failure
+paths remove a peer whose media died while the server still lists them as a room
+member, and letting the roster decide there would change how a WORKING transport
+tears a dead call down. Mesh keeps counting `peers`; only mediasoup reads the roster.
+
+**NOTHING CAN SELECT MEDIASOUP YET, AND THE REASON IS THE INTERESTING PART.** The
+obvious source for the flag is `RoomMeta.voip` — and it is wrong: that records which
+node a room was ASSIGNED to, which is not the same claim as "this call's media is on
+that node". The pool is live and rooms already carry assignments while every one of
+them still runs the mesh, so deriving the transport from the assignment would flip
+LIVE mesh calls onto the roster branch and change their teardown behaviour today.
+The flag moves when the media does. Pinned: every write to `callTransport` assigns
+`"mesh"`.
+
+**THE ROSTER FOLLOWS SIGNALING, NEVER MEDIA.** Filled from the server's own
+room-entry acks and `peer-joined`; dropped in the `peer-left` CASE and NOT inside
+`removePeer`, because that function is also the mesh's media-failure teardown (a
+wedged ICE connection, a quiet re-offer rebuild) — cases where the person is still
+very much a member of the room. In `onPeerJoined` the roster is recorded BEFORE the
+already-have-a-peer early return, or it would inherit a mesh-shaped exit.
+
+**ONE RECORDER FOR FIVE DOORS, AND IT CLOSED AN EXISTING GAP.** There are five ways
+into a room (`room`, `joined`, `rejoin`, `resumed`, `merged`); three called the
+device and role recorders and **`merged` called neither**, so a member the server
+moved into a merged call arrived with no device chip and no role badge. That is the
+shape a sixth path inherits by accident, so `recordRoomMembers` is now the one
+funnel and the roster and the cap are not given the chance to be the next thing
+forgotten. A room-entry ack REPLACES the roster rather than merging — a swap, a
+merge and a resume all move you to a DIFFERENT room.
+
+**THE CAP IS THE SERVER'S TO STATE, BECAUSE THE SERVER IS WHAT REFUSES.** The client
+carried its own copy of the number, so the moment mediasoup's cap differs the picker
+would offer a party the accept then bounces with `full` — "a party built past the
+cap half-connects and reads as our bug", as that code's own comment already said.
+New `roomPartyCap()` on the server is read by all four enforcement sites AND stamped
+as `maxParty` on every room-entry ack; the client reads it and defaults to the mesh
+number, so a server that does not send it — every build before this one, and the
+whole of a rolling deploy — behaves exactly as before. **`roomPartyCap()` is
+deliberately NOT transport-aware yet**: returning the mediasoup 10 for a room that
+merely carries an assignment would put ten people on a MESH call, ~45 peer
+connections, which is the load v2.99.84 measured and the reason the cap is 6.
+
+**THE STAMP IS IN `safeSend`, NOT AT THE TWELVE EMITTERS.** A layering smudge taken
+deliberately: there are twelve emitters across five frame types, and this release
+exists because five client handlers had each grown a different subset of the
+bookkeeping — a per-emitter stamp is the same trap on the other side of the wire,
+and the thirteenth emitter would simply not have one. In the ONE sender it becomes a
+property that can be asserted, and the test does assert it both ways (every entry
+emitter reaches `safeSend`; no other frame type is stamped).
+
+**21 of 21 tripwires verified by MUTATION** off a confirmed-green baseline from
+byte-exact backups, the mutator aborting unless its target occurs exactly once and
+treating a changed test TOTAL as a harness failure. No survivors, no aborts, both
+sources byte-identical afterwards. The behavioural half is real rather than pinned:
+the server tests drive the actual registry through invite/accept and read the acks,
+and the client's counting decision is re-declared and DRIVEN (a source assertion
+cannot say whether a mediasoup call with a populated roster reads as "alone"), with
+a parity assertion that the shipped source is the function being driven.
+
+**THREE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY, and two contradicted their own
+comments.** `multiCallFixes` and `qaBatch5` each froze the one-line body
+`{ return MESH_MAX; }` while their surrounding comments said the property is "the
+VALUES and the single source, not the expression's old spelling" — so they forbade
+exactly the fix the owner asked for. `relay.test.ts` counted readers of `ROOM_MAX`
+at ">= 5" under a title about the cap being ONE constant; it now requires the
+constant to have exactly ONE reader (the accessor), which is stricter.
+
+**THE `fnBody` RETURN-TYPE TRAP FIRED FOR THE SIXTH RECORDED TIME**, in my own test
+helper: for `function remoteParticipants(): Array<{…}>` the first `{` after the
+declaration is the RETURN TYPE, and for `setRoomRoster(members?: Array<{…}>)` it is
+the PARAMETER type — two assertions failed against perfectly correct source because
+they were reading a type annotation. Fixed as the class (the brace must be reached
+with parens closed and no generic open) rather than the instance.
+
+**NOT VERIFIED ON A CALL, said plainly**: no second browser here, so what is proven
+is that the count is transport-independent, that the mesh answer is unchanged, and
+that the cap the client shows is the number the server refuses at — not that a real
+six-party call survives a transport it cannot yet be placed on.
+
+`server/transportSeam.test.ts` (26). 6411 tests.
+
 ## v2.107.8 — A MESSAGE FINALLY SHOWS ON THE PHONE, AND THE CALL PUSH MUST NOT COPY IT
 
 The owner uploaded `relaymessagenotifications.md`: a chat message arriving while the
