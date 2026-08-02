@@ -1,5 +1,130 @@
 # Project TODO
 
+## v2.107.7 — THE KNEE IS MEASURED, AND IT SAYS THE CAP IS ON THE WRONG THING
+
+The owner's next SFU task, verbatim: *"drive one node to the degradation knee for voice rooms
+and video rooms separately, then cap = knee × cores × 0.8."* New `voip-node/loadtest.mjs` +
+`loadtestCore.mjs` do that, and running them produced a finding that changes the answer rather
+than filling in a number.
+
+**THE HEADLINE: COST IS LINEAR IN CONSUMERS, NOT IN ROOMS — AND `NODE_MAX_ROUTERS` COUNTS
+ROOMS.** Three shapes, one worker each, same box:
+
+| shape | consumers/room | knee (rooms/core) | core/room | core/consumer |
+|---|---|---|---|---|
+| voice, 6-party | 30 | 120 | 0.008 | 0.00026 |
+| video, 6-party | 60 | 40 | 0.00045·60 | 0.00045 |
+| video, 10-party | 180 | 12–16 | 0.083 | 0.00042 |
+
+Cost per ROOM varies **10×** across shapes a user can create today; cost per CONSUMER holds to
+within **6%** for the two video shapes, and voice consumers are ~58% of a video one. So
+`cap = knee × cores × 0.8` gives **96 / 32 / 9** rooms-per-core depending on which shape you
+measured — an 8× spread — and a single room-count ceiling is necessarily wrong for every shape
+but the one it was tuned against. At the app's own mediasoup cap of 10 parties, 9 rooms/core on a
+2-core node is **18 rooms/node**, i.e. `NODE_MAX_ROUTERS = 40` is *over* twice too generous for
+the worst shape while being far too restrictive for a 1:1 voice call. **The recommendation is
+therefore a consumer-weighted ceiling, not a bigger number** — and the machinery already exists,
+because the node record publishes `consumers` and `PENDING_CONSUMER_WEIGHT` is already a constant.
+Deliberately NOT changed in this release: it is a real admission-policy change and the owner holds
+that decision.
+
+**THE ROOM-COUNT KNEE IS ALSO THE LESS REPRODUCIBLE NUMBER, which is a second argument for the
+same conclusion.** Two runs of the identical 6-party video sweep put the knee at 40 and at 32
+(a threshold-boundary flip on a shared box), while the per-consumer slope read 0.00045 both times.
+The figure fitted from the linear region is the stable one.
+
+**FIVE MEASUREMENT DEFECTS FOUND BY RUNNING IT, EVERY ONE OF WHICH WOULD HAVE PRODUCED A
+CONFIDENT WRONG NUMBER RATHER THAN A CRASH** — which is the failure that matters for a tool the
+fleet gets sized on, and each is now pinned:
+1. **RTCP counted as delivered media** (read 100.37%). `rtcpMux` shares the port and every
+   consumer sends a report about once a second; at a 0.98 threshold that hides 2% of real loss.
+2. **RTX and bandwidth-probation padding counted too** (read 100.89%) — traffic the router
+   *generates*, so it has no counterpart in the sent count. RFC 5761's payload-type range catches
+   only the first, which is why the sink's allow-list is an exact `(ssrc, payloadType)` pair built
+   from each consumer's own `rtpParameters` — and from the CONSUMER's ssrc, since the router
+   rewrites it on the way out.
+3. **The fan-out denominator multiplied by the number of KINDS as well as participants.** `sent`
+   already counts every packet of every kind, and each packet reaches only the other
+   participants' consumers *of its own kind*. On any video run that halves the ratio, reports
+   ~50% delivery at the first step, and declares a knee of zero rooms.
+4. **`ru_utime` treated as microseconds when mediasoup reports MILLISECONDS.** Node CPU was
+   understated 1000× and every step printed `node 0.00 core` while the box saturated — a harness
+   reporting an idle node is the one reading that makes a knee unfindable. `process.cpuUsage()`
+   really is µs, so the two lines must scale differently. **The agent does NOT have this bug** —
+   it reports `loadavg()[0] / cores` — so production `cpuLoad` was never affected.
+5. **The per-consumer cost measured AT the knee**, where CPU has pegged and consumers keep being
+   added, so `cpu / consumers` FALLS: 0.00035 at the knee against 0.00046 unsaturated, a third
+   low. It is fitted between two unsaturated steps now, which also cancels fixed per-room cost.
+
+Plus two build failures: a **port collision** (the first pool, 50000-59998, sits inside Linux's
+default ephemeral range 32768-60999, so a sink bound with `bind(0)` was handed a port the explicit
+allocator later reached), and a **missing import** after the module split — whose only symptom in
+the parent was `ERR_IPC_CHANNEL_CLOSED`, which says the channel closed and never that the child
+threw. Both fixed, and the parent now reports a dead generator as a dead generator.
+
+**THE MEASUREMENT IS AN OUTCOME, NOT A CPU READING**, because a percentage does not say whether
+calls still work. Delivery at the sinks over packets actually sent is the verdict; per-worker CPU
+is the explanation. The curve is textbook: CPU rises linearly, pegs at exactly 1.00 core, and
+delivery falls the instant it does.
+
+**PLAIN RTP IN, SRTP OUT, OVER REAL UDP.** Ingest is a comedia `PlainTransport`; egress is a
+`PlainTransport` with `enableSrtp`, so the router does real per-consumer encryption — a large part
+of what an SFU spends CPU on and invisible to a `DirectTransport` harness. Consumers for one
+participant share ONE egress transport, which is how a real participant works. The synthetic
+payloads are legitimate for *this* measurement and not for others: a router never decodes, it
+rewrites headers, reads the payload descriptor and re-encrypts — but mediasoup DOES parse the VP8
+descriptor, so every frame is marked a keyframe (`P=0` plus the `9d 01 2a` start code) or a
+consumer waiting on a keyframe would read as 100% loss.
+
+**THE GENERATOR CAN VOID THE RESULT, and that is the most important assertion in the test file.**
+It shares the box, so when it saturates first its own limit reads as the node's — and delivery
+then looks *perfect*, because everything it managed to send arrived. It reports SCHEDULED vs SENT
+and any shortfall makes the step `void` with its own exit code, so "unsafe", "inconclusive" and
+"broken" are distinguishable by marker. **Stated plainly: every knee measured on a shared box is
+a FLOOR, not the true knee.** The error is in the safe direction and `× 0.8` compounds it.
+
+**THE WINDOW IS AIRTIGHT.** The sender is frozen, the CPU read against the same instant, and only
+then does the wire drain before arrivals are counted — otherwise packets sent between the closing
+sample and the read of the sinks count as delivered but not sent, and packets sent just before it
+have not arrived. Both were measured (100.89% and 99.55%); with the freeze it is 100.00% exactly,
+which is what makes a ratio below 100% mean real loss.
+
+**THE SAFETY GATE HAS NO OVERRIDE, AND FAILS CLOSED.** On a media node it refuses unless the node
+is draining AND its agent is stopped — draining stops the app assigning NEW rooms, a stopped agent
+proves there are no CURRENT ones — and an unknown `systemctl` answer is refused, which is the
+opposite direction from the agent's own drain check for a reason: the agent guessing wrong costs
+capacity, this guessing wrong costs somebody's live call. It keys on `/opt/relay-voip` existing
+(the v2.106.33 host-evidence reasoning), so on a dev box it is vacuous rather than overridden —
+and such a run is LABELLED, because a 4-core sandbox number must never read as a fleet number.
+Dry run is the default.
+
+**`--workers=1` MEASURES ONE CORE DIRECTLY**, which is the quantity the owner's formula needs;
+dividing a whole-node knee assumes the cores scale linearly and that nothing else competed.
+
+**THE PURE HALF IS SPLIT OUT, AND THAT IS A HARD REQUIREMENT RATHER THAN A STYLE CHOICE.**
+`voip-node` is not a pnpm workspace member, so CI's root install never fetches mediasoup: a test
+importing the harness would pass wherever somebody had built the worker and fail in CI. Same
+reason `record.mjs` is split from `index.js`, and the same v2.99.71 trap. `loadtestCore.mjs`
+imports nothing at all, asserted.
+
+**TWO PRE-EXISTING PINS REWRITTEN, AND THE SECOND WAS A REAL WEAKNESS FOUND BY MUTATION.**
+`voipDeploy.test.ts` froze the exact `for f in index.js record.mjs sign.mjs` line, so a
+legitimately-shipped module broke it while a module added WITHOUT being checked would have left it
+green; the expected set is derived from what the payload actually contains now, which catches that
+direction too. And its ordering assertion compared `indexOf("node --check")` — a phrase that also
+appears in the COMMENT above the loop — so moving the real check to after the restart passed. Both
+now anchor on the command. **My own new pin hit the same two traps in one sitting**: a forward
+`indexOf("for f in ")` found the env-file loop (there are two), and walking back from the phrase
+landed on it again.
+
+**NOT RUN ON A MEDIA NODE, said plainly.** Every number here is from a 4-core Xeon @ 2.10GHz with
+the generator sharing it; a c6i.large is 2 vCPU of faster silicon, so its per-core figure is
+likely HIGHER, which is favourable and unmeasured. `NODE_MAX_ROUTERS` stays **40**. The harness
+lands on every node with the next `voip-deploy` (the whole directory is tarred to
+`/opt/relay-voip/agent/`, and both new modules are now `node --check`ed before any restart);
+running it needs the owner to drain one node and stop its agent. `server/voipLoadTest.test.ts`
+(45). 6349 tests.
+
 ## v2.107.6 — THE ROUTER CAP BECOMES A HARD ADMISSION GATE, AND THE CORRECTION FOR IT WAS DEAD CODE
 
 Owner, 2026-08-02: *"the assigner must treat the cap as hard admission — at cap, next node; all

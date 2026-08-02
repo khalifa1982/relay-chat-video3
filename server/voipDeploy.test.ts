@@ -203,12 +203,41 @@ describe("voip-deploy cannot report success over a broken node", () => {
     /* A syntax error would otherwise surface as a crash-looping unit whose journal nobody
        reads until a call fails — and that mistake has already been made once in agent.mjs
        (v2.106.36, caught by `node --check` rather than by review). */
-    const check = REMOTE.indexOf("node --check");
+    /* THE ORDERING IS COMPARED ON THE COMMAND, NOT THE PHRASE — found by mutation. This used to
+       compare `indexOf("node --check")`, and that phrase also appears in the COMMENT explaining
+       the loop, which sits above it and stays put. So moving the real check to AFTER the restart
+       left this green: the pin was reading prose. */
+    const check = REMOTE.indexOf('node --check "$AGENT_DIR/');
     const restart = REMOTE.indexOf("systemctl restart");
     expect(check).toBeGreaterThan(0);
     expect(restart).toBeGreaterThan(check);
-    expect(REMOTE).toMatch(/for f in index\.js record\.mjs sign\.mjs; do/);
     expect(REMOTE).toMatch(/does not parse — NOT restarting/);
+
+    /* PINNED AS THE PROPERTY, NOT THE LIST. This asserted the exact
+       `for f in index.js record.mjs sign.mjs` line, so adding a legitimately-shipped module
+       broke it while saying nothing about the rule it stands for — and, worse, a module added
+       WITHOUT being checked would have left it perfectly green. Deriving the expected set from
+       what the payload actually contains catches that direction too. */
+    /* ANCHORED BACKWARDS FROM `node --check`, because there are TWO `for f in` loops in this
+       script — the other one walks the candidate env-file paths — and a forward `indexOf` finds
+       that one, whose body contains no module at all. My first draft did exactly that and read
+       an empty list. Walking back from the check also avoids freezing a filename, which is the
+       whole point of deriving the set. */
+    /* …and anchored on the COMMAND rather than the phrase, because `node --check` also appears
+       in the comment explaining the loop, several lines ABOVE it — so walking back from the
+       phrase landed on the env loop again. The prose-anchor trap, twice in one assertion. */
+    const nodeCheck = REMOTE.indexOf('node --check "$AGENT_DIR/');
+    const loopAt = REMOTE.lastIndexOf("for f in ", nodeCheck);
+    expect(nodeCheck, "the script must node --check each shipped module").toBeGreaterThan(0);
+    expect(loopAt, "…inside a loop over the shipped modules").toBeGreaterThan(0);
+    const loop = REMOTE.slice(loopAt);
+    const checked = (loop.slice(0, loop.indexOf(";")).match(/[\w.]+\.m?js/g) ?? []).sort();
+    const shipped = fs
+      .readdirSync("voip-node")
+      .filter((f) => /\.m?js$/.test(f) && !f.endsWith(".d.mts"))
+      .sort();
+    expect(shipped.length, "voip-node must ship at least the agent + record + signer").toBeGreaterThanOrEqual(3);
+    expect(checked, "every shipped module must be node --check'ed before a restart").toEqual(shipped);
   });
 
   it("it PROVES the service came back rather than assuming it did", () => {
