@@ -109,7 +109,14 @@ describe("2 — recording shows you are talking, and is not a one-way trip to Se
 
   it("a missing analyser degrades to 0 instead of failing the recording", () => {
     expect(VOICE).toMatch(/if \(!analyser \|\| !levelBuf\) return 0;/);
-    expect(VOICE).toMatch(/catch \{\s*\n\s*ac = null;/);
+    /* The PROPERTY is that a failed analyser setup degrades to no meter rather than
+       failing the recording — `ac` and `analyser` both drop to null and `level()` answers
+       0. This froze the catch body's exact first line, so it forbade #160's fix: that
+       catch now CLOSES the context before dropping it, because nulling alone left an open
+       AudioContext unreachable (`releaseAudio()` reads the already-nulled `ac`) and on iOS
+       an open context keeps the audio session claimed. */
+    expect(VOICE).toMatch(/ac = null;\s*\n\s*analyser = null;/);
+    expect(VOICE).toMatch(/void ac\?\.close\?\.\(\);[\s\S]{0,40}ac = null;/);
   });
 
   it("pause and resume exist, and paused time is EXCLUDED from the duration", () => {
