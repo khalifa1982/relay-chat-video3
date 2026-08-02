@@ -98,14 +98,14 @@ import FirebaseMessaging`;
   private var currentCallIsVideo: Bool = false
 
   // ─── APNs Alert Token (overrides must be in class body, not extension) ────
-  override func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+  public override func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
     // Pass APNs token to Firebase Messaging so it can generate an FCM token
     Messaging.messaging().apnsToken = deviceToken
     NSLog("[RELAY Alert] APNs device token registered with Firebase Messaging")
     super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
   }
 
-  override func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+  public override func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
     NSLog("[RELAY Alert] Failed to register for remote notifications: %@", error.localizedDescription)
     super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
   }
@@ -324,7 +324,7 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessa
   }
 
   // MessagingDelegate — called when FCM token is available or refreshed
-  func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+  public func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
     guard let fcmToken = fcmToken else { return }
     NSLog("[RELAY Alert] FCM token received: %@", String(fcmToken.prefix(12)) + "...")
     // Inject the alert FCM token into WebView for the web app to register with its server
