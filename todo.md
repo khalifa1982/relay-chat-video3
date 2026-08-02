@@ -1,5 +1,18 @@
 # Project TODO
 
+## v2.106.97 — "last seen …" speaks Arabic; the audit corrected my own count
+- [x] Split `lastSeenBand` (no words) from the two renderers, so English and Arabic cannot disagree about which band a moment is in
+- [x] Whole key per band for the plural — Arabic needs one/two/few/many where English suffixes
+- [x] Two date keys rather than a sometimes-empty `{year}`; digits Western, meridiem translated
+- [x] `lastSeen.test.ts` (13), 6/6 mutations bite, sources byte-identical
+- [x] I claimed 8 readers; there were 2, one of them dead code — `peerStatus` deleted with its 3 stale prose references
+- [x] Deleting it exposed a live untranslated string: the dialer's chosen-status chip rendered "Travelling ✈️" / "Away" raw
+- [x] 3 pins repointed from the untranslated implementation to the property; one 700-char window re-bounded by the memo's own end
+- [x] Both dead-key sweeps widened where they can read the new renderer; only runtime-chosen keys NAMED
+- [ ] `describePeerPresence` is a third English presence formatter and uses `toLocaleString()` (browser locale, not the app's)
+- [ ] Contacts' compact `relativeTime` has the same two problems
+- [ ] Nobody has read these screens in Arabic on a real device
+
 ## v2.106.96 — the last five screens speak Arabic (#156 done)
 - [x] 411 new dictionary keys across profile (169) / messages (104) / history (41) / status (40) / contacts (33) / dialer (18) / auth (6)
 - [x] ~430 call sites wired; a sweep for a bare title/placeholder/aria literal on those six screens returns zero

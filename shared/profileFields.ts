@@ -199,42 +199,105 @@ export function formatElapsedSince(lastSeenMs: number, nowMs: number): string {
  * because "Jul 23" reads as this year and would otherwise be wrong by twelve
  * months without saying so.
  */
-export function formatLastSeen(lastSeenMs: number, nowMs: number): string {
-  if (!Number.isFinite(lastSeenMs) || lastSeenMs <= 0) return "";
+export type LastSeenBand =
+  | { kind: "none" }
+  | { kind: "justNow" }
+  | { kind: "minutes"; minutes: number }
+  | { kind: "today"; clock: LastSeenClock }
+  | { kind: "yesterday"; clock: LastSeenClock }
+  | { kind: "date"; month: number; day: number; year: number | null; clock: LastSeenClock };
+
+/** A wall clock with its meridiem kept SEPARATE, because "AM" is a word. */
+export type LastSeenClock = { hour12: number; minute: number; pm: boolean };
+
+/**
+ * WHICH BAND a timestamp falls in — the one rule, with no words in it.
+ *
+ * WHY THIS IS SPLIT OUT (v2.106.97)
+ * ---------------------------------
+ * `formatLastSeen` returned a finished English sentence, and it has readers on four
+ * screens, so localising it by mapping its OUTPUT would be the very thing this
+ * dictionary forbids: a copy edit silently drops the translation, and two states
+ * sharing an English word are forced to share an Arabic one. It also cannot be done
+ * by interpolation, because the plural is not a suffix — English needs one/other
+ * while Arabic needs zero/one/two/few/many, so the whole KEY has to change per band
+ * (the `guestExpiryKey` rule).
+ *
+ * So the banding is a pure function with two renderers over it: this file's English
+ * one below, which is unchanged to the byte and is what the dictionary's own
+ * fallback promises, and the client's translated one. One rule, so the two can never
+ * disagree about which band a timestamp is in — which is the divergence that would
+ * show as an Arabic screen saying "yesterday" where the English one says "today".
+ */
+export function lastSeenBand(lastSeenMs: number, nowMs: number): LastSeenBand {
+  if (!Number.isFinite(lastSeenMs) || lastSeenMs <= 0) return { kind: "none" };
   const diff = nowMs - lastSeenMs;
-  if (diff < 0) return "last seen just now";
-  if (diff < 60_000) return "last seen just now";
-  if (diff < 60 * 60_000) {
-    const m = Math.floor(diff / 60_000);
-    return `last seen ${m} minute${m === 1 ? "" : "s"} ago`;
-  }
+  if (diff < 60_000) return { kind: "justNow" }; // includes a clock that has gone backwards
+  if (diff < 60 * 60_000) return { kind: "minutes", minutes: Math.floor(diff / 60_000) };
   const then = new Date(lastSeenMs);
   const now = new Date(nowMs);
-  const time = formatClock(then);
+  const clock = lastSeenClock(then);
   const sameDay =
     then.getFullYear() === now.getFullYear() &&
     then.getMonth() === now.getMonth() &&
     then.getDate() === now.getDate();
-  if (sameDay) return `last seen today at ${time}`;
+  if (sameDay) return { kind: "today", clock };
   const yest = new Date(nowMs - 24 * 60 * 60_000);
   const isYesterday =
     then.getFullYear() === yest.getFullYear() &&
     then.getMonth() === yest.getMonth() &&
     then.getDate() === yest.getDate();
-  if (isYesterday) return `last seen yesterday at ${time}`;
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const day = `${months[then.getMonth()]} ${then.getDate()}`;
-  const year = then.getFullYear() === now.getFullYear() ? "" : `, ${then.getFullYear()}`;
-  return `last seen on ${day}${year} at ${time}`;
+  if (isYesterday) return { kind: "yesterday", clock };
+  return {
+    kind: "date",
+    month: then.getMonth(),
+    day: then.getDate(),
+    /* NULL rather than the year itself when it matches now, because "Jul 23" reads
+       as this year and would otherwise be wrong by twelve months without saying so
+       (v2.99.66). Which means the renderer picks a DIFFERENT key, not a blank. */
+    year: then.getFullYear() === now.getFullYear() ? null : then.getFullYear(),
+    clock,
+  };
 }
 
-function formatClock(d: Date): string {
-  let h = d.getHours();
-  const m = d.getMinutes();
-  const ampm = h >= 12 ? "PM" : "AM";
-  h = h % 12;
-  if (h === 0) h = 12;
-  return `${h}:${String(m).padStart(2, "0")} ${ampm}`;
+export const LAST_SEEN_MONTHS_EN = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+] as const;
+
+/** English rendering of a band. Byte-identical to what this function always returned. */
+export function formatLastSeen(lastSeenMs: number, nowMs: number): string {
+  const b = lastSeenBand(lastSeenMs, nowMs);
+  switch (b.kind) {
+    case "none":
+      return "";
+    case "justNow":
+      return "last seen just now";
+    case "minutes":
+      return `last seen ${b.minutes} minute${b.minutes === 1 ? "" : "s"} ago`;
+    case "today":
+      return `last seen today at ${formatClockOf(b.clock)}`;
+    case "yesterday":
+      return `last seen yesterday at ${formatClockOf(b.clock)}`;
+    case "date": {
+      const day = `${LAST_SEEN_MONTHS_EN[b.month]} ${b.day}`;
+      const year = b.year == null ? "" : `, ${b.year}`;
+      return `last seen on ${day}${year} at ${formatClockOf(b.clock)}`;
+    }
+  }
+}
+
+export function lastSeenClock(d: Date): LastSeenClock {
+  const h = d.getHours();
+  return { hour12: h % 12 === 0 ? 12 : h % 12, minute: d.getMinutes(), pm: h >= 12 };
+}
+
+/** `3:05` — the DIGITS only. Western digits everywhere, per v2.106.84. */
+export function formatClockDigits(c: LastSeenClock): string {
+  return `${c.hour12}:${String(c.minute).padStart(2, "0")}`;
+}
+
+function formatClockOf(c: LastSeenClock): string {
+  return `${formatClockDigits(c)} ${c.pm ? "PM" : "AM"}`;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────

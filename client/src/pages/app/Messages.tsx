@@ -96,7 +96,7 @@ import { dayKey, dayLabel, groupMessagesByDay } from "@/app/messageDays";
 import { matchQuery } from "@/app/searchMatch";
 import { describeProfileStatus } from "@shared/profileStatus";
 import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
-import { formatLastSeen } from "@shared/profileFields";
+import { lastSeenLabel } from "@/app/lastSeen";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { GroupCallScreen, PartyLinesSection } from "./GroupCallScreen";
 import { AvatarPicker } from "@/app/AvatarPicker";
@@ -2045,11 +2045,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       onSearch: () => setSearchOpen(true),
       muted,
       onToggleMute: () => setMuted(!muted),
+      /* TRANSLATED (v2.106.97). `lastSeenLabel` picks a whole KEY per band from
+         the same `lastSeenBand` the English `formatLastSeen` renders, so the two
+         can never disagree about which band a timestamp is in — and the plural is
+         a key rather than an `{n} minute{s}` suffix, which Arabic cannot express. */
       lastSeenText: thread?.peerLastSeenAt
-        ? formatLastSeen(new Date(thread.peerLastSeenAt).getTime(), Date.now()) || null
+        ? lastSeenLabel(new Date(thread.peerLastSeenAt).getTime(), Date.now(), t) || null
         : null,
     }),
-    [muted, setMuted, thread?.peerLastSeenAt]
+    [muted, setMuted, thread?.peerLastSeenAt, t]
   );
 
   // Tapping the header: a GROUP opens its own info sheet, where until now the tap did

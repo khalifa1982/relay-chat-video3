@@ -32,51 +32,24 @@ import { GroupCallScreen } from "./GroupCallScreen";
 import {
   effectiveStatus,
   formatElapsedSince,
-  formatLastSeen,
   type StatusOverride,
 } from "@shared/profileFields";
 
-/**
- * Compact presence line for a looked-up peer: carrier-style "on a call"
- * (v2.88, amber) / "online now" / "away" / "travelling" / WhatsApp-style
- * "last seen …" when offline. Exported for tests.
- */
-export function peerStatus(p: {
-  isOnline: boolean;
-  /** Signed in but backgrounded (v2.99.92) — reads as "away". */
-  idle?: boolean;
-  lastSeenAt: string | Date | null | undefined;
-  statusOverride?: string | null;
-  /** Busy line (v2.88): the peer is in a live call right now. */
-  inCall?: boolean;
-}): { text: string; key: TKey | null; online: boolean; busy?: boolean } {
-  /* `key` rides ALONGSIDE `text` rather than replacing it (v2.106.84). This
-     function is shared by the Dialer, the profile popup, Contacts and History, and
-     the surfaces the Arabic sweep has not reached yet still render `text` — so the
-     key is additive and nothing breaks in step.
-
-     The alternative — a `text → key` lookup at each render site — is what this
-     dictionary's own rule forbids: a copy edit to the English would silently drop
-     the translation, and two states sharing a word would be forced to share an
-     Arabic one.
-
-     `key` is NULL only for the last-seen fallback, which is a FORMATTED relative
-     time ("last seen 3h ago") rather than a fixed phrase. Translating that means
-     translating `formatLastSeen` itself, which is its own piece of work; null is
-     the honest answer until then, and a null key renders the English. */
-  // Busy wins over everything: knowing they'll bounce you matters MORE than
-  // knowing they're online.
-  if (p.inCall) return { text: "on a call", key: "presence.onCall", online: true, busy: true };
-  const eff = effectiveStatus(!!p.isOnline, (p.statusOverride ?? "") as StatusOverride, !!p.idle);
-  if (eff === "online") return { text: "online now", key: "presence.online", online: true };
-  if (eff === "away") return { text: "away", key: "presence.away", online: true };
-  if (eff === "travel") return { text: "travelling ✈️", key: "presence.travelling", online: false };
-  const ts = p.lastSeenAt ? new Date(p.lastSeenAt).getTime() : 0;
-  const seen = formatLastSeen(ts, Date.now());
-  return seen
-    ? { text: seen, key: null, online: false }
-    : { text: "offline", key: "presence.offline", online: false };
-}
+/* NO `peerStatus` HERE ANY MORE (v2.106.97), and the reason is worth recording
+   because its own comment claimed the opposite.
+ *
+ * It described itself as "shared by the Dialer, the profile popup, Contacts and
+ * History" and was imported by NONE of them — nor by any test. What each of those
+ * screens actually renders is `peerPresenceLines` below, `describePeerPresence` in
+ * `shared/profileFields.ts`, or its own formatter.
+ *
+ * It is deleted rather than left, on v2.106.91's rule: an exported value nothing
+ * consumes reads as a contract, and this one carried a false statement about which
+ * screens depend on it — so the next person needing a presence line would have
+ * wired a fifth surface to a function no other surface uses. It also carried the
+ * last standing claim that "translating `formatLastSeen` is its own piece of work",
+ * which stopped being true in this release: `client/src/app/lastSeen.ts` renders it
+ * from the shared `lastSeenBand`. */
 
 /**
  * The dialer preview's presence line, to the owner's order (v2.99.90): *"it shows
@@ -84,9 +57,9 @@ export function peerStatus(p: {
  * is online, then last login, number of hours."*
  *
  * So: **whether they are here NOW**, then **how long since they were**, as an
- * elapsed duration and never a calendar date. `peerStatus` above folds the two
- * together into one string and is left ALONE, because it is what Contacts and the
- * profile popup render — the owner asked for the clock form there in v2.99.66.
+ * elapsed duration and never a calendar date. The clock form the owner asked for
+ * in v2.99.66 is a DIFFERENT line and lives in `lastSeenBand` +
+ * `client/src/app/lastSeen.ts`, which the conversation header renders.
  *
  * The elapsed figure is withheld while they are ONLINE or on a call: "last login
  * 3s ago" next to "online now" restates the same fact, and it would need a
@@ -108,14 +81,20 @@ export function peerPresenceLines(
   nowMs: number
 ): {
   presence: string;
-  /** The dictionary key for `presence` — see `peerStatus` for why it rides
-   *  alongside the text rather than replacing it. Never null here: this line is
-   *  always one of four fixed phrases. */
+  /** The dictionary key for `presence`. It rides ALONGSIDE the text rather than
+   *  replacing it (v2.106.84) so a surface the Arabic sweep has not reached still
+   *  renders something; a `text -> key` lookup at each render site is what this
+   *  dictionary's rule forbids, since a copy edit would silently drop the
+   *  translation. Never null here: this line is always one of four fixed
+   *  phrases. */
   presenceKey: TKey;
   online: boolean;
   busy: boolean;
   elapsed: string;
   chosen: string;
+  /** The dictionary key for `chosen`, riding alongside the text for the same
+   *  reason `presenceKey` does. Null when they have chosen nothing. */
+  chosenKey: TKey | null;
 } {
   const busy = !!p.inCall;
   const eff = effectiveStatus(!!p.isOnline, (p.statusOverride ?? "") as StatusOverride, !!p.idle);
@@ -143,8 +122,11 @@ export function peerPresenceLines(
   // `away`, but nobody selected it, so labelling it the same would put words in
   // their mouth — the presence line above already says "away" for that case.
   const override = (p.statusOverride ?? "") as StatusOverride;
-  const chosen = override === "travel" ? "Travelling ✈️" : override === "away" ? "Away" : "";
-  return { presence, presenceKey, online: liveNow, busy, elapsed, chosen };
+  const chosenKey: TKey | null =
+    override === "travel" ? "dialer.chosenTravelling" : override === "away" ? "dialer.chosenAway" : null;
+  // DERIVED from the key rather than written twice, so the two can never disagree.
+  const chosen = chosenKey ? translate("en", chosenKey) : "";
+  return { presence, presenceKey, online: liveNow, busy, elapsed, chosen, chosenKey };
 }
 
 /** Sentinel for the bottom-left cell, which holds nothing at all. */
@@ -853,9 +835,9 @@ export default function DialerPage() {
                           {/* The status they PICKED — not their bio, not their story
                               media. Its own chip so it reads as a label they chose
                               rather than as live presence. */}
-                          {st.chosen && (
+                          {st.chosenKey && (
                             <span className="inline-flex items-center rounded-full border border-border bg-card/60 px-2 py-0.5 text-[0.7rem] font-medium text-foreground">
-                              {st.chosen}
+                              {t(st.chosenKey)}
                             </span>
                           )}
                         </span>
