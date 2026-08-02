@@ -18248,6 +18248,68 @@ One additive nullable column, one additive index, no new dependency, no new env 
       showing COMING SOON with a disabled CTA and the gold sweep, switching back, and the back link
       returning to idle. **43/43 pass, zero page errors on every path.** 3259 tests.
 
+## v2.106.94 — the add-to-contacts label overlapped the preview line; edit a photo before sending (#144)
+
+Owner, with a screenshot of the live Dialer and the pink Add-to-contacts button circled:
+**"You see the over lap / Many suggestions not been implemented"**. This is the first half.
+
+### The overlap — measured, not read
+
+- **The row had been "measured clean" twice and was overlapping in production.** v2.106.78 placed
+  the button at the owner's 34px and reported 40/40; v2.106.79 added the words beneath it and
+  recorded plainly that nobody had confirmed they clear on a 320px phone. They do not.
+- **Measured against the real built stylesheet at 320/360/375/390/430** (the screenshot is 1125px
+  at DPR 3 = 375 CSS px):
+  - the label collides with the name/tier line at **every** width — "Add to contacts" written
+    across "Registered", which is exactly what the owner circled;
+  - at **320px** the label also runs 6.6px past the card and the page scrolls sideways.
+- **The arithmetic says it could never have fitted.** The button is 48px centred on a 28px digit
+  run, so it hangs ~10px below the digits before the label starts; the label then needs 4px of
+  offset plus 9.5px of text. `mt-3` is 12px. And because the label is absolutely positioned it
+  takes no space — nothing failed, it just drew over what was underneath.
+- **Two defects, two fixes, neither sufficient alone** (proven by measuring them separately):
+  - `mt-3 mb-1.5` -> `mt-5 mb-1` — 20px is the first value at which every width is clean (16px is
+    still 1px short). Net +6px; part-absorbed from the block's own bottom margin, since the card's
+    `gap` already separates it from the row below.
+  - the label anchors `end-0` instead of `left-1/2 -translate-x-1/2` — its trailing edge pinned to
+    the button's own, so it cannot overflow at any width by construction. **Logical**, so it
+    mirrors in Arabic rather than needing an RTL-sweep exemption. Verified LTR **and** RTL, 10/10.
+- **Two pre-existing pins rewritten to the property, and both had frozen a literal that WAS the
+  defect** — one required the centring verbatim, one froze `mt-3 mb-1.5` under a title about there
+  being "real space". The clearance is now a bound (>= the measured 20px), not a frozen number.
+- **4/4 tripwires bit** by mutation off a confirmed-green baseline; source byte-identical after.
+- **Three harness defects of my own**, each caught by reading the numbers rather than the verdict:
+  a 320px request returning `innerWidth` 327 (the mobile layout viewport widening to fit
+  overflowing content — real behaviour, but it made the reading imprecise); a margin sweep written
+  as `mt-[18px]`/`mt-[22px]`, which are absent from the pre-built stylesheet and emitted **nothing**
+  while the run reported a result; and the `not.toMatch` guarding the centring matching my own
+  comment explaining the reversal (the prose trap, twentieth time) — now on `codeOnly` with a
+  companion assertion proving the reason really is recorded.
+
+### #144 — edit a photo before it is sent
+
+- Rotate, freeform drag-crop with corner handles, 1:1 and 16:9 presets, Reset.
+- **`planEdit` (pure) decides; `renderEdit` only executes.** That split is what makes "the rotation
+  reached the output" assertable — a preview-only rotate is the classic silent no-op here and is
+  invisible to any test that reads a style.
+- Cancel hands back the caller's own `File` **object**, so skipping is indistinguishable from never
+  opening the editor. The edited file rejoins the **same** `uploadFile` path, so the downscale, the
+  <=512px thumbnail, the caption and the disappearing timer all still apply; the sheet uploads
+  nothing itself.
+- The gif gate **delegates** to `isDownscalableImage` rather than restating it (asserted as
+  agreement over every mime); the working canvas is bounded by the same 2048 the downscaler uses,
+  not a second literal. Zero new dependencies, canvas only.
+- The crop overlay's `left`/`top` are deliberately **physical**: they are inline styles in the
+  image's own coordinate space, and a photo does not flip in Arabic.
+- 12/12 mutations bit, no survivors.
+- **Video trimming is out of scope with the reason**: it needs decode + re-encode; WebCodecs is
+  absent on the browsers this app already works around, and the alternative re-encodes in real time
+  (a 60s clip costs 60s plus a generation of quality loss).
+- **Stated plainly**: cropping is pointer-only (rotate, presets and Use photo are keyboard-reachable
+  and the whole frame is selected by default), and nobody has dragged a crop box on a real phone.
+
+No schema change, no new dependency, no new env var, no server change. 5819 tests.
+
 ## v2.106.93 — the PIN reveal, for a guest AND a member (#162); six more screens speak Arabic (#156)
 
 **(1) #162 — the reveal now happens for everybody, and it is armed on a state TRANSITION.**

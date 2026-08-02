@@ -305,14 +305,27 @@ describe("the dialer preview, in the owner's order", () => {
   it("there is real space between the number, the information and the pad", () => {
     // Owner: "it's showing you the dialed number, then the information, then the pad
     // is all together attached. Make space between the little bit."
-    const cls = 'className="mt-3 mb-1.5 text-[0.78rem] min-h-4 text-muted-foreground"';
-    expect(DIALER).toContain(cls);
+    //
+    // THE PROPERTY IS THE SPACE, NOT THE LITERAL. This used to freeze the exact
+    // string `mt-3 mb-1.5`, and that value turned out to be the DEFECT: 12px above
+    // is less than the add-to-contacts label needs, so the label drew across the
+    // name line and the owner sent a screenshot of it ("You see the over lap").
+    // Freezing the literal forbade the fix while saying nothing about the rule it
+    // stood for — which is only that this block is separated from BOTH neighbours.
+    // The floor lives in dialerToneLayout.test.ts, where the measurement is; here
+    // the property is that both margins are real.
+    const m = DIALER.match(
+      /className="mt-(\d+(?:\.\d+)?) mb-(\d+(?:\.\d+)?) text-\[0\.78rem\] min-h-4 text-muted-foreground"/,
+    );
+    expect(m, "found the information block").not.toBeNull();
+    expect(Number(m![1]), "space above the information block").toBeGreaterThan(0);
+    expect(Number(m![2]), "space below it").toBeGreaterThan(0);
     // The cramped original is gone, checked against CODE so the comment explaining
     // the change cannot satisfy the assertion.
     expect(codeOnly(DIALER)).not.toMatch(/mt-1\.5 text-\[0\.78rem\]/);
     // …and the class really is on the information block, i.e. the element carrying
     // the live-region role, not some other div.
-    const at = DIALER.indexOf(cls);
+    const at = DIALER.indexOf(m![0]);
     expect(DIALER.slice(at, at + 200)).toMatch(/aria-live="polite"/);
   });
 });

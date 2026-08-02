@@ -24,6 +24,7 @@ import { ENGINE } from "./engine";
 import { ALERTS } from "./alerts";
 import { VOICEMAIL } from "./voicemail";
 import { VIDEOREC } from "./videorec";
+import { IMAGEEDIT } from "./imageedit";
 import { PEER } from "./peer";
 import { GROUPCALL } from "./groupcall";
 
@@ -45,6 +46,7 @@ export const ALL_DICT = {
   ...ALERTS,
   ...VOICEMAIL,
   ...VIDEOREC,
+  ...IMAGEEDIT,
   ...PEER,
   ...GROUPCALL,
 } as const;

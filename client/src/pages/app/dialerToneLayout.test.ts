@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
+import { codeOnly } from "../../../../server/testing/codeOnly";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const DIALER = read("client/src/pages/app/Dialer.tsx");
@@ -170,10 +171,37 @@ describe("v2.99.36 (3) — the Save-to-contacts pill is never clipped", () => {
     expect(body, "it hangs BELOW the icon rather than sharing a column").toMatch(
       /absolute top-full/,
     );
-    /* Centring is direction-INDEPENDENT, so the physical pair is correct here and
-       a logical `start-1/2` would push the label the wrong way in RTL. Pinned so
-       nobody "fixes" it into a logical property that breaks Arabic. */
-    expect(body).toMatch(/left-1\/2 -translate-x-1\/2/);
+    /* THE LABEL IS ANCHORED BY ITS TRAILING EDGE, AND THIS ASSERTION REPLACES ONE
+       THAT FROZE A DEFECT. v2.106.79 required the physical centring pair
+       (`left-1/2 -translate-x-1/2`) on the reasoning that centring is
+       direction-independent — true, and beside the point: it said nothing about
+       whether the label FITS, and that release recorded plainly that nobody had
+       measured it. Measured (dist/ stylesheet, 320/360/375/390/430), a centred
+       label overflows the card by 6.6px at 320px and the page scrolls sideways,
+       because the button already sits near the trailing edge and the label is
+       wider than the button.
+
+       `end-0` pins the label's trailing edge to the button's own, which cannot
+       overflow at any width by construction — and being LOGICAL it mirrors in
+       Arabic, so it needs no exemption from the RTL sweep. `start-0` would be the
+       wrong side (the label would run toward the digits), so it is forbidden by
+       name. */
+    expect(body, "anchored by its trailing edge").toMatch(/absolute top-full end-0/);
+    /* Read on COMMENT-STRIPPED source: the comment above the label necessarily
+       quotes the centring pair in order to record why it was replaced, and a raw
+       `not.toMatch` matches that prose — text ABOUT a pattern satisfying a search
+       FOR it. The companion assertion below proves the reason really is written
+       down, so the strip cannot be hiding a live centring instead. */
+    const codeBody = codeOnly(body);
+    expect(codeBody, "not centred — a centred label overflows at 320px").not.toMatch(
+      /left-1\/2 -translate-x-1\/2/,
+    );
+    expect(codeBody, "not anchored on the leading edge, which points at the digits").not.toMatch(
+      /top-full start-0/,
+    );
+    expect(body, "the reversal's reason is recorded in place").toMatch(
+      /left-1\/2 -translate-x-1\/2/,
+    );
     /* The button's own aria-label already names the action; the label must not be
        announced a second time. */
     const labelIdx = body.indexOf("Add to contacts<");
@@ -184,5 +212,30 @@ describe("v2.99.36 (3) — the Save-to-contacts pill is never clipped", () => {
     /* ALREADY SAVED still renders NOTHING AT ALL — the owner said so twice, and
        the label must not resurrect a chip for a number that needs no action. */
     expect(body).toMatch(/if \(isAlready\) return null;/);
+  });
+
+  it("the preview block leaves enough room below the button for that label", () => {
+    /* Owner, with a screenshot of the live Dialer and one word: "You see the over
+       lap". "Add to contacts" was written across "Registered".
+
+       THE ARITHMETIC IS WHY IT WAS ALWAYS GOING TO COLLIDE, and it is why this is
+       a BOUND rather than a frozen literal: the add button is 48px centred on a
+       28px digit run, so it hangs ~10px below the digits before the label starts;
+       the label then needs its own 4px offset plus 9.5px of text. `mt-3` is 12px
+       and could never hold ~13.5px of content — and because the label is
+       absolutely positioned it takes no space, so nothing failed. It simply drew
+       over whatever was underneath.
+
+       MEASURED against the real built stylesheet at 320/360/375/390/430 (the
+       owner's screenshot is 1125px at DPR 3, i.e. 375): at 12px the label's bottom
+       lands 5px BELOW the name line's top at every width; at 16px it is still 1px
+       short; at 20px there is a 3px gap and every width comes back clean.
+
+       So the rule is "at least 20px", not "exactly mt-5" — a later retune upward
+       is free, and only a retune back UNDER the measured floor bites. */
+    const m = DIALER.match(/className="mt-(\d+) mb-\d+ text-\[0\.78rem\] min-h-4/);
+    expect(m, "found the preview block's spacing").not.toBeNull();
+    const steps = Number(m![1]);
+    expect(steps * 4, "at least the measured 20px of clearance").toBeGreaterThanOrEqual(20);
   });
 });
