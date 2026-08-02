@@ -17,6 +17,7 @@
 import { Platform } from "react-native";
 import type { WebView } from "react-native-webview";
 import { RELAY_APP_URL } from "./relay-config";
+import { nativeEventJs, navigateJs } from "./native-bridge";
 
 // Only import on iOS — these modules are iOS-only
 let VoipPushNotification: any = null;
@@ -225,9 +226,7 @@ export function onVoipWebViewReady() {
     // For cold start, load the call URL directly
     if (webViewRef?.current) {
       const callUrl = `${RELAY_APP_URL}?nativeCall=${encodeURIComponent(callId)}&mode=${encodeURIComponent(mode)}&action=answer`;
-      webViewRef.current.injectJavaScript(
-        `window.location.href = ${JSON.stringify(callUrl)}; true;`
-      );
+      webViewRef.current.injectJavaScript(navigateJs(callUrl));
     }
   }
 }
@@ -261,41 +260,27 @@ function injectTokenIntoWebView(token: string) {
   }
   pendingTokenInjection = false;
 
-  const js = `
-    try {
-      window.dispatchEvent(new CustomEvent('relay:native', {
-        detail: { type: 'pushToken', kind: 'apns-voip', token: '${token}' }
-      }));
-    } catch(e) { console.warn('[RELAY native bridge] token inject error:', e); }
-    true;
-  `;
-  webViewRef.current.injectJavaScript(js);
+  // SECURITY: serialized, not interpolated (see lib/native-bridge.ts). The token
+  // is vendor-supplied rather than user-supplied, but the identical shape at the
+  // sibling call sites WAS arbitrary JS execution in the authenticated origin,
+  // and a rule applied at only some sites is the bug that keeps recurring here.
+  webViewRef.current.injectJavaScript(
+    nativeEventJs({ type: "pushToken", kind: "apns-voip", token }),
+  );
 }
 
 function injectCallAnswered(callId: string, mode: string) {
   if (!webViewRef?.current) return;
 
-  const js = `
-    try {
-      window.dispatchEvent(new CustomEvent('relay:native', {
-        detail: { type: 'callAnswered', callId: '${callId}', mode: '${mode}' }
-      }));
-    } catch(e) { console.warn('[RELAY native bridge] callAnswered inject error:', e); }
-    true;
-  `;
-  webViewRef.current.injectJavaScript(js);
+  webViewRef.current.injectJavaScript(
+    nativeEventJs({ type: "callAnswered", callId, mode }),
+  );
 }
 
 function injectCallDeclined(callId: string) {
   if (!webViewRef?.current || !isWebViewReady) return;
 
-  const js = `
-    try {
-      window.dispatchEvent(new CustomEvent('relay:native', {
-        detail: { type: 'callDeclined', callId: '${callId}' }
-      }));
-    } catch(e) { console.warn('[RELAY native bridge] callDeclined inject error:', e); }
-    true;
-  `;
-  webViewRef.current.injectJavaScript(js);
+  webViewRef.current.injectJavaScript(
+    nativeEventJs({ type: "callDeclined", callId }),
+  );
 }

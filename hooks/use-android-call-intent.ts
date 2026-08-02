@@ -17,6 +17,13 @@ import { useCallback, useEffect, useRef } from "react";
 import { Platform, Linking } from "react-native";
 import type { WebView } from "react-native-webview";
 import { RELAY_APP_URL } from "@/lib/relay-config";
+import {
+  nativeEventJs,
+  navigateJs,
+  isCallAction,
+  isCallMode,
+  sanitizeCallId,
+} from "@/lib/native-bridge";
 
 // On Android, react-native passes intent extras as URL query params
 // when the app is launched via an intent with data.
@@ -67,24 +74,18 @@ export function useAndroidCallIntent(
         return;
       }
 
+      // SECURITY: built via nativeEventJs, which SERIALIZES the detail rather
+      // than interpolating it into JS source. These values come from a
+      // `relay://` link that any app or web page can fire, and interpolating
+      // them was arbitrary JS execution in the authenticated RELAY origin.
       if (action === "answer") {
-        // Inject callAnswered event into WebView
-        const js = `
-          window.dispatchEvent(new CustomEvent('relay:native', {
-            detail: { type: 'callAnswered', callId: '${callId}', mode: '${mode}' }
-          }));
-          true;
-        `;
-        webViewRef.current.injectJavaScript(js);
+        webViewRef.current.injectJavaScript(
+          nativeEventJs({ type: "callAnswered", callId, mode }),
+        );
       } else if (action === "decline") {
-        // Inject callDeclined event into WebView
-        const js = `
-          window.dispatchEvent(new CustomEvent('relay:native', {
-            detail: { type: 'callDeclined', callId: '${callId}' }
-          }));
-          true;
-        `;
-        webViewRef.current.injectJavaScript(js);
+        webViewRef.current.injectJavaScript(
+          nativeEventJs({ type: "callDeclined", callId }),
+        );
       }
     },
     [webViewRef]
@@ -136,17 +137,11 @@ export function useAndroidCallIntent(
       if (action === "answer") {
         // For cold start answer, navigate WebView to the call URL
         const callUrl = `${RELAY_APP_URL}?nativeCall=${encodeURIComponent(callId)}&mode=${encodeURIComponent(mode)}&action=answer`;
-        webViewRef.current?.injectJavaScript(
-          `window.location.href = ${JSON.stringify(callUrl)}; true;`
-        );
+        webViewRef.current?.injectJavaScript(navigateJs(callUrl));
       } else if (action === "decline") {
-        const js = `
-          window.dispatchEvent(new CustomEvent('relay:native', {
-            detail: { type: 'callDeclined', callId: '${callId}' }
-          }));
-          true;
-        `;
-        webViewRef.current?.injectJavaScript(js);
+        webViewRef.current?.injectJavaScript(
+          nativeEventJs({ type: "callDeclined", callId }),
+        );
       }
     }
   }, [webViewReady, webViewRef]);
@@ -161,10 +156,13 @@ function parseCallUrl(
     // Expected format: scheme://call?nativeCall=X&mode=Y&action=Z
     // Or: https://your-chat.io/app?nativeCall=X&mode=Y&action=Z
     const urlObj = new URL(url);
-    const callId = urlObj.searchParams.get("nativeCall");
+    // A `relay://` link is attacker-reachable, so accept ONLY the shapes the
+    // native call layer actually emits. Escaping already makes injection
+    // impossible; this additionally keeps junk out of the call UI.
+    const callId = sanitizeCallId(urlObj.searchParams.get("nativeCall"));
     const mode = urlObj.searchParams.get("mode");
     const action = urlObj.searchParams.get("action");
-    if (callId && mode && action) {
+    if (callId && isCallMode(mode) && isCallAction(action)) {
       return { callId, mode, action };
     }
   } catch {

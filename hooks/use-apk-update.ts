@@ -96,6 +96,10 @@ export function useApkUpdate() {
 
   // Track retry attempts to prevent infinite download loops.
   const retryCountRef = useRef(0);
+  /** Content-Length of the in-flight download, for the size check. */
+  const expectedBytesRef = useRef<number | null>(null);
+  /** Sticky: a digest has disagreed at least once for this update. */
+  const sawMismatchRef = useRef(false);
   // Maximum number of automatic retries when verification fails.
   const MAX_RETRIES = 1;
 
@@ -119,6 +123,7 @@ export function useApkUpdate() {
       setStatus("downloading");
       setProgress(0);
       readyFileRef.current = null;
+      expectedBytesRef.current = null;
 
       const resumable = FileSystem.createDownloadResumable(
         apkUrl,
@@ -126,6 +131,7 @@ export function useApkUpdate() {
         {},
         (p) => {
           if (p.totalBytesExpectedToWrite > 0) {
+            expectedBytesRef.current = p.totalBytesExpectedToWrite;
             setProgress(p.totalBytesWritten / p.totalBytesExpectedToWrite);
           }
         },
@@ -137,13 +143,27 @@ export function useApkUpdate() {
       }
       setProgress(1);
 
-      // Integrity verification: verify the downloaded APK before installing.
-      // Uses a timeout-guarded approach so verification never blocks the update
-      // indefinitely on slower devices. If verification times out, we still
-      // install (HTTPS provides transport integrity). If the file is clearly
-      // corrupt (size mismatch, hash mismatch), we delete and retry once.
+      // Integrity verification before handing the file to the package installer.
+      // Android's own signature check is the real trust anchor (it refuses an
+      // update signed with a different key), so this is defence in depth against
+      // a corrupt or partial download — and it must never strand a user on an old
+      // build. It is therefore allowed to time out on a slow device.
+      //
+      // But once a digest has actually DISAGREED, the timeout allowance is
+      // withdrawn for the retry: previously a mismatching file was deleted,
+      // re-downloaded, and then installed anyway if the second hash ran slowly,
+      // which turned a DETECTED bad file into an install.
       setStatus("verifying");
-      const verifyResult = await verifyDownloadedApk(result.uri, m.sha256);
+      const verifyResult = await verifyDownloadedApk(
+        result.uri,
+        m.sha256,
+        // The size the download actually reported. This argument existed and was
+        // never passed, so the documented size check was dead at the only call
+        // site — the sole remaining check was "the file is non-empty".
+        expectedBytesRef.current,
+        { allowSkipOnTimeout: !sawMismatchRef.current },
+      );
+      if (verifyResult.mismatch) sawMismatchRef.current = true;
       if (!verifyResult.shouldInstall) {
         // File is corrupt — delete it.
         await deleteApkFile(result.uri);
@@ -165,8 +185,9 @@ export function useApkUpdate() {
         );
       }
 
-      // Success — reset retry counter for future updates.
+      // Success — reset per-update state for the next update.
       retryCountRef.current = 0;
+      sawMismatchRef.current = false;
       readyFileRef.current = result.uri;
       // Fully downloaded + verified — wait for the user to apply (or auto-apply).
       setStatus("ready");
