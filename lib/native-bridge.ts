@@ -64,6 +64,43 @@ export function navigateJs(url: string): string {
   return `window.location.href = ${jsLiteral(url)}; true;`;
 }
 
+/** What kind of token the native layer is handing over. */
+export type PushTokenKind = "fcm" | "apns" | "apns-voip" | "expo";
+
+/**
+ * Hand the page this device's push token.
+ *
+ * TWO ENVELOPES, ON PURPOSE. The web app accepts both a `relay:native`
+ * CustomEvent carrying `{type:'pushToken', kind, token}` and the older
+ * `postMessage`/`SET_PUSH_TOKEN` shape, and it de-duplicates by (kind, token) —
+ * so sending both costs one extra dispatch and nothing else, while covering a
+ * deployed web build that only implements one of them. Getting this wrong is
+ * silent: the app looks fine and simply never rings when it is closed.
+ *
+ * Note this is `injectJavaScript`, NOT `WebView.postMessage`. On Android the
+ * latter dispatches its MessageEvent on `document`, and a MessageEvent does not
+ * bubble, so a `window`-level listener — which is the only kind the page has, and
+ * the only kind the spec asks for — never sees it. On iOS the same call
+ * dispatches on `window`. That platform difference is the whole reason Android
+ * push registration never worked.
+ */
+export function pushTokenJs(token: string, kind: PushTokenKind): string {
+  return `
+    try {
+      window.dispatchEvent(new CustomEvent(${jsLiteral(NATIVE_EVENT)}, {
+        detail: ${jsLiteral({ type: "pushToken", kind, token })}
+      }));
+    } catch (e) { console.warn('[RELAY native bridge] push token event failed:', e); }
+    try {
+      window.postMessage(
+        ${jsLiteral(JSON.stringify({ type: "SET_PUSH_TOKEN", kind, token }))},
+        window.location.origin
+      );
+    } catch (e) { console.warn('[RELAY native bridge] push token post failed:', e); }
+    true;
+  `;
+}
+
 /* ── Deep-link input validation ───────────────────────────────────────────
  * Escaping alone makes injection impossible, but a `relay://` link is still
  * attacker-controlled input driving the CALL UI, so the values are also
