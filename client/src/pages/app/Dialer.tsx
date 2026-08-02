@@ -48,7 +48,7 @@ import {
  * screens depend on it — so the next person needing a presence line would have
  * wired a fifth surface to a function no other surface uses. It also carried the
  * last standing claim that "translating `formatLastSeen` is its own piece of work",
- * which stopped being true in this release: `client/src/app/lastSeen.ts` renders it
+ * which stopped being true in this release: `client/src/app/presenceCopy.ts` renders it
  * from the shared `lastSeenBand`. */
 
 /**
@@ -59,7 +59,7 @@ import {
  * So: **whether they are here NOW**, then **how long since they were**, as an
  * elapsed duration and never a calendar date. The clock form the owner asked for
  * in v2.99.66 is a DIFFERENT line and lives in `lastSeenBand` +
- * `client/src/app/lastSeen.ts`, which the conversation header renders.
+ * `client/src/app/presenceCopy.ts`, which the conversation header renders.
  *
  * The elapsed figure is withheld while they are ONLINE or on a call: "last login
  * 3s ago" next to "online now" restates the same fact, and it would need a
