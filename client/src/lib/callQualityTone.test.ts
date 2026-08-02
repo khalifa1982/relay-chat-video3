@@ -26,7 +26,19 @@ import { summarizeStats, callQualityTone, callStatsVerdict, type StatEntry } fro
 
 const R = (p: string) => fs.readFileSync(path.resolve(__dirname, "..", "..", "..", p), "utf8");
 const ASSETS_RAW = R("client/src/lib/relayAssets.ts");
-const ASSETS = codeOnly(ASSETS_RAW);
+/**
+ * `codeOnly` strips `/* *\/` and `//` comments — it does NOT strip HTML comments,
+ * which is what RELAY_MARKUP is full of. That gap turned this file's rule sweep
+ * into a prose reader: a `<!-- … -->` in the markup explaining why the signal chip
+ * only renders with a real verdict happens to name `.call-qual.is-good`, and the
+ * sweep's `[^{}]*` selector run then reached forward ~50 lines to the next brace
+ * pair it could find and reported ITS contents as the rule's body. The rule under
+ * test was never read at all — the assertion failed against a fragment of an
+ * unrelated comment.
+ *
+ * A CSS rule can only live in the CSS literal, so that is what the sweep is given.
+ */
+const ASSETS = codeOnly(ASSETS_RAW).replace(/<!--[\s\S]*?-->/g, "");
 const CLIENT = codeOnly(R("client/src/lib/relayClient.ts"));
 
 /** A succeeded candidate pair plus its two candidate ends (mirrors callStats.test.ts). */

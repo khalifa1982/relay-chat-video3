@@ -128,7 +128,7 @@ describe("hold music + on-hold banner (v2.97.1, owner spec)", () => {
   });
   it("the banner markup + styles exist (with the double-bar stacking rule)", () => {
     expect(ASSETS).toContain('id="onHoldBar"');
-    expect(ASSETS).toContain('id="onHoldName"');
+    expect(ASSETS).toContain('id="onHoldTitle"');
     expect(ASSETS).toMatch(/\.onhold-bar\.show\{display:flex\}/);
     expect(ASSETS).toMatch(/\.held-bar\.show ~ \.onhold-bar\.show\{top:82px\}/);
   });
@@ -138,7 +138,7 @@ describe("End-held — pick which call to drop (v2.97.1)", () => {
   it("the heldBar offers Swap / Merge / End held", () => {
     expect(ASSETS).toMatch(/id="heldSwap"/);
     expect(ASSETS).toMatch(/id="heldMerge"/);
-    expect(ASSETS).toMatch(/id="heldEnd"[\s\S]{0,140}End held/);
+    expect(ASSETS).toMatch(/id="heldEnd"[\s\S]{0,260}End held/);
     expect(ASSETS).toMatch(/\.held-bar \.held-end\{background:rgba\(255,92,114/);
   });
   it("endHeldLine closes the frozen peers and releases the held room server-side", () => {

@@ -291,4 +291,15 @@ export const CALLS = {
   "calls.callingEllipsis": { en: "Calling…", ar: "جارٍ الاتصال…" },
   "calls.messageEveryone": { en: "Message everyone…", ar: "راسل الجميع…" },
   "calls.leave": { en: "Leave", ar: "مغادرة المكالمة" },
+
+  /* THE STAGED CALL STATUS. Written by `setCallStatus`, so these cannot be markup
+     annotations — the applier would overwrite a live "Connected" with the idle
+     default. The engine resolves them through its injected translator and
+     re-applies on a language change. */
+  "calls.statusCalling": { en: "Calling…", ar: "جارٍ الاتصال…" },
+  "calls.statusRinging": { en: "Ringing…", ar: "جارٍ الرنين…" },
+  "calls.statusConnecting": { en: "Connecting…", ar: "جارٍ التوصيل…" },
+  "calls.statusEncrypting": { en: "Securing connection…", ar: "جارٍ تأمين الاتصال…" },
+  "calls.statusLive": { en: "Connected", ar: "متصل" },
+  "calls.statusReconnecting": { en: "Reconnecting…", ar: "إعادة الاتصال…" },
 } as const satisfies Record<string, Entry>;

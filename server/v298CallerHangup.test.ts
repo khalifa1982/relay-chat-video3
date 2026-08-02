@@ -20,7 +20,10 @@ const ASSETS = readFileSync(join(__dirname, "..", "client/src/lib/relayAssets.ts
 
 describe("caller-side End Call redesign (v2.98.0)", () => {
   it("adds a real 'End Call' caption, hidden everywhere except the pre-connect dial screen", () => {
-    expect(ASSETS).toMatch(/<span class="hangup-lbl">End Call<\/span>/);
+    /* Matched on the CLASS plus its text rather than the exact tag, so a
+       translation annotation (or any other attribute) on the element does not
+       break a pin about the caption EXISTING. */
+    expect(ASSETS).toMatch(/<span class="hangup-lbl"[^>]*>End Call<\/span>/);
     expect(ASSETS).toMatch(/\.hangup-lbl\{display:none\}/);
     expect(ASSETS).toMatch(/#call\.pre-connect \.ctrl\.hangup \.hangup-lbl\{display:block/);
   });

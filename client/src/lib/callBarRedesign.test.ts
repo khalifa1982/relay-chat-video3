@@ -45,15 +45,32 @@ const CLIENT_CODE = CLIENT.replace(/\/\*[\s\S]*?\*\//g, "")
   .split("\n").filter((l) => !/^\s*(\/\/|\*)/.test(l)).join("\n");
 
 /** A named template literal's raw interior, straight out of the source text. */
-function literal(name: string): string {
+/**
+ * Where the literal REALLY ends: the first UNESCAPED backtick after it opens.
+ *
+ * The previous version bounded the region at the next `\nexport const ` and took
+ * the LAST backtick inside it — which silently assumed RELAY_CSS was the final
+ * declaration in the file. It stopped being true the moment real code was appended
+ * after it (`applyEngineLabels`, whose `querySelectorAll(...)` legitimately uses a
+ * template literal), and the guard then reported an "interior backtick" in correct
+ * source: a guard crying wolf, which is how a real finding gets waved through.
+ */
+function literalEnd(name: string): { open: number; end: number } {
   const at = SRC.indexOf(`export const ${name}`);
   expect(at, name).toBeGreaterThan(0);
   const open = SRC.indexOf("`", at);
-  const nextExport = SRC.indexOf("\nexport const ", open);
-  const region = SRC.slice(open + 1, nextExport > 0 ? nextExport : SRC.length);
-  const close = region.lastIndexOf("`");
-  expect(close, `${name}: unterminated`).toBeGreaterThan(0);
-  return region.slice(0, close);
+  for (let i = open + 1; i < SRC.length; i++) {
+    if (SRC[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (SRC[i] === "`") return { open, end: i };
+  }
+  throw new Error(`${name}: unterminated`);
+}
+function literal(name: string): string {
+  const { open, end } = literalEnd(name);
+  return SRC.slice(open + 1, end);
 }
 const CSS = literal("RELAY_CSS");
 /** CSS with comments stripped — this repo has matched its own prose 18+ times. */
@@ -191,7 +208,16 @@ describe("the template literals are intact", () => {
     for (const name of ["RELAY_CSS", "RELAY_MARKUP"]) {
       const body = literal(name);
       expect(body.length, name).toBeGreaterThan(2000);
-      expect(body.includes("`"), `${name}: a backtick inside the literal`).toBe(false);
+      /* "The body contains no backtick" is now VACUOUS — `literal()` bounds the slice
+         at the first unescaped backtick, so it never can. The property that still
+         has teeth is that the literal ends where it is MEANT to: its terminator is
+         immediately followed by `;`. A stray backtick in a comment ends the string
+         early, and there the next characters are ordinary prose instead. */
+      const { end } = literalEnd(name);
+      expect(
+        SRC.slice(end, end + 2),
+        `${name}: terminated early — a stray backtick inside it`,
+      ).toBe("`;");
     }
   });
 });
