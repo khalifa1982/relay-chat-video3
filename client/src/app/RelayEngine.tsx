@@ -581,7 +581,12 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
             onClick={() => setFitContain((v) => !v)}
             className={
               "inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold shadow-lg backdrop-blur-md active:scale-95 transition-transform " +
-              (fitContain ? "bg-[color:var(--relay-online,#06d6a0)] text-black" : "bg-black/60 text-white hover:bg-black/75")
+              /* `.rcta`, not the presence green. Fit-to-frame being ON is a STATE of a
+                 control, and green in this app means ONLINE — it is what every presence
+                 LED is drawn with, which is why v2.99.86 moved DND off it, v2.106.9 the
+                 speaking tile and v2.106.11 the push banner. The recipe carries only
+                 colour and shadow, so the pill's own geometry is untouched. */
+              (fitContain ? "rcta" : "bg-black/60 text-white hover:bg-black/75")
             }
             aria-label={t("engine.fitLabel")}
             title={fitContain ? t("engine.fitOnHint") : t("engine.fitOffHint")}
@@ -665,7 +670,10 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
           aria-label={t("engine.reconnectingLabel")}
         >
           <div className="flex flex-col items-center gap-3">
-            <Loader2 className="size-10 animate-spin text-[color:var(--relay-online,#06d6a0)]" />
+            {/* Accent, not the presence green: a spinner reports that WE are working, not
+                that anybody is online — and this one spins precisely while the connection
+                is in doubt, which is when a green would be at its most misleading. */}
+            <Loader2 className="size-10 animate-spin text-primary" />
             <div className="text-lg font-semibold text-white">{t("engine.reconnecting")}</div>
             <div className="max-w-xs text-sm text-white/70">{t("engine.reconnectingBody")}</div>
           </div>
@@ -705,7 +713,12 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
             <button
               type="button"
               onClick={() => { handleRef.current?.approveKnock(knockReq.roomId, knockReq.pin); setKnockReq(null); }}
-              className="rounded-lg bg-[color:var(--relay-online,#06d6a0)] px-3 py-1.5 text-xs font-semibold text-black active:scale-95 transition-transform"
+              /* BOARD 5b, and its two halves used to disagree about green: History's own
+                 LiveRejoinCard carries a comment citing rule 3 as the reason IT moved off
+                 the presence green, and this — the other end of the same knock — kept it
+                 on a CTA. `.rcta` is the shared primary recipe, so the two ends now read
+                 as one feature. */
+              className="rcta rounded-lg px-3 py-1.5 text-xs font-semibold active:scale-95 transition-transform"
             >
               {t("engine.approve")}
             </button>
@@ -767,7 +780,9 @@ function InCallSaveContacts({
       type="button"
       disabled={upsert.isPending}
       onClick={() => upsert.mutate({ number: candidate.pin, displayName: candidate.name || undefined })}
-      className="fixed top-3 start-3 z-[70] grid size-10 place-items-center rounded-full bg-black/60 text-[color:var(--relay-online,#06d6a0)] shadow-lg backdrop-blur-md hover:bg-black/75 active:scale-95 transition-transform outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+      /* Accent, not the presence green: saving somebody to your contacts is an ACTION,
+         and this button sits on a call screen that draws real presence elsewhere. */
+      className="fixed top-3 start-3 z-[70] grid size-10 place-items-center rounded-full bg-black/60 text-primary shadow-lg backdrop-blur-md hover:bg-black/75 active:scale-95 transition-transform outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
       aria-label={`Save ${candidate.name || candidate.pin} to contacts`}
       title={`Save ${candidate.name || candidate.pin} to contacts`}
     >

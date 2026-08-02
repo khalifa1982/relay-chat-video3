@@ -87,7 +87,20 @@ describe("role badge is wired into every primary identity surface", () => {
   }
   it("the incoming-call ring card tints its badge by tier + shows the tiny tier caption", () => {
     const client = read("client/src/lib/relayClient.ts");
-    expect(client).toMatch(/guest: \["#4c9bff", "Guest"\], registered: \["#22c55e", "Registered"\], admin: \["#eab308", "Admin"\]/);
+    /* THE PROPERTY, NOT THE INLINE LITERAL. This used to pin the colour map written out
+       verbatim at the ring card's own call site — which meant it required the
+       DUPLICATION: the identical map also existed in the dial card, and board 1h needed
+       it a third time, so a single shared `TIER_META` is what one caller being described
+       three ways in one call is prevented by. What matters here is that the ring card
+       tints BY TIER from that one table, and that the three tiers still carry their
+       three hues. */
+    expect(client).toMatch(/const TIER_META: Record<PeerTier, \{ color: string; label: string \}>/);
+    for (const [tier, hex] of [["guest", "#4c9bff"], ["registered", "#22c55e"], ["admin", "#eab308"]] as const) {
+      expect(client, tier).toContain(`${tier}: { color: "${hex}"`);
+    }
+    // …and the ring card really reads it, rather than keeping a private copy.
+    const ring = client.slice(client.indexOf("function presentRingProfile"));
+    expect(ring.slice(0, ring.indexOf("\n  }\n"))).toMatch(/const meta = TIER_META\[role\];/);
     const assets = read("client/src/lib/relayAssets.ts");
     expect(assets).toMatch(/id="ringRoleTxt"/);
     expect(assets).toMatch(/\.ring-role-txt\{font-style:normal;font-size:7\.5px/);

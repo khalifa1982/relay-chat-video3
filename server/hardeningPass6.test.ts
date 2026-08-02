@@ -76,10 +76,13 @@ describe("M37 — mutual-consent video can't be bypassed by an unsolicited accep
   });
 
   it("is per-call state, dropped wherever the ACTIVE CALL changes", () => {
-    // hangUp still clears it…
-    expect(ENGINE).toMatch(
-      /videoApproved = false; callIsGroup = false;[^\n]*\n\s*videoOfferedForRoom = null; videoOfferPending = false;/,
-    );
+    /* hangUp still clears it… ADJACENCY IS NOT THE PROPERTY, and this pin used to require
+       it: the two resets had to be on consecutive lines, so v2.107.1 adding a third
+       per-call clear between them (board 1h's chip subject) broke a guard that says
+       nothing about whether the video offer is actually dropped. What matters is that
+       BOTH reset in the same teardown, so it is bounded by that teardown instead. */
+    const teardown = ENGINE.slice(ENGINE.indexOf("videoApproved = false; callIsGroup = false;"));
+    expect(teardown.slice(0, 800)).toMatch(/videoOfferedForRoom = null; videoOfferPending = false;/);
     // …and so do the two paths that switch calls without hanging up. This is
     // belt-and-braces: the room check alone already refuses a stale offer.
     const reset = ENGINE.slice(ENGINE.indexOf("function resetVideoConsent"), ENGINE.indexOf("function videoGateActive"));

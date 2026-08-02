@@ -133,13 +133,21 @@ type Filter = "all" | "dialed" | "received" | "missed";
  *
  * `dir="ltr"` + bidi isolation because an Arabic display name would otherwise
  * reorder the digits and the brackets around them.
+ *
+ * `--relay-green-text`, NOT `--relay-online`, and the difference is MEASURED rather
+ * than a naming preference. Green really is this app's word for a RELAY number — the
+ * top bar has rendered the viewer's own that way since v2.99.86 — but that release
+ * measured the LED hue at **4.46:1 as small text, which FAILS AA**, and added the
+ * darker sibling (5.92:1 light / 9.27:1 dark) precisely for a number at this size.
+ * This tag was on the LED hue at 12.5px while `Contacts.tsx` rendered THE SAME FACT in
+ * the AA-measured one: one number, two greens, and the unreadable one here.
  */
 function PinTag({ number }: { number: string | null | undefined }) {
   if (!number || !/^\d{6}$/.test(number)) return null;
   return (
     <span
       dir="ltr"
-      className="ms-1.5 shrink-0 font-mono text-[12.5px] font-bold text-[color:var(--relay-online,#06d6a0)] [unicode-bidi:isolate]"
+      className="ms-1.5 shrink-0 font-mono text-[12.5px] font-bold text-[color:var(--relay-green-text)] [unicode-bidi:isolate]"
     >
       ({number})
     </span>
@@ -1501,10 +1509,18 @@ function ConferenceItem({
             >
               <span className="max-w-[10rem] truncate" dir="auto">{p.name}</span>
               <RoleBadge role={p.role ?? null} size={11} className="self-center" />
+              {/* Same token as PinTag above, for the same measured reason — this one
+                  inherits the chip's 11px, i.e. smaller still.
+                  The comment sits ABOVE the ternary rather than inside it: after `?` the
+                  parser wants ONE expression and reads a braced JSX comment there as an
+                  object literal, which is the exact parse error v2.106.93 recorded in
+                  this same file. (And a JSX comment may not itself contain the closing
+                  block-comment sequence — writing one out here is what broke the second
+                  attempt.) */}
               {p.number ? (
                 <span
                   dir="ltr"
-                  className="font-mono font-bold text-[color:var(--relay-online,#06d6a0)] [unicode-bidi:isolate]"
+                  className="font-mono font-bold text-[color:var(--relay-green-text)] [unicode-bidi:isolate]"
                 >
                   ({p.number})
                 </span>

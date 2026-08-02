@@ -416,7 +416,17 @@ describe("green means ONLINE, and only online", () => {
        narrowly: only the text token, only where a number is what renders. Painting a
        number with the LED hue stays a violation — it would both fail AA and put a
        presence hue on a fact that is not presence. */
-    const NUMBER = /\.number\b|formatPin\(/;
+    /* `{number}` joined `.number` in v2.107.1, and the widening makes the rule STRICTER in
+       effect rather than looser. The number exemption used to require a property ACCESS,
+       so a component that destructures its prop — `function PinTag({ number })`, whose
+       whole job is to render one — had no `.number` anywhere in its element and was
+       flagged for a correct, AA-measured number green. That is the guard crying wolf on
+       correct code, which this file has had to fix four times already, and it is what
+       kept History.tsx pinned to the LED hue: the only way to satisfy the sweep there was
+       to leave the unreadable token in place. The added alternative is a JSX child that is
+       exactly `{number}` — it cannot match prose (stripped) and cannot match a longer
+       identifier. Both directions are pinned below. */
+    const NUMBER = /\.number\b|\{number\}|formatPin\(/;
     const LED = /relay-online/;
     const GREEN = /relay-online|relay-green-text/;
 
@@ -485,7 +495,12 @@ describe("green means ONLINE, and only online", () => {
       "client/src/app/LiveStats.tsx",
       "client/src/app/MissedCalls.tsx",
       "client/src/app/OnboardingGate.tsx",
-      "client/src/app/RelayEngine.tsx",
+      /* RelayEngine.tsx CAME OFF in v2.107.1. Its four greens were a Fit-toggle STATE,
+         a reconnecting SPINNER, the knock-approve CTA and the add-to-contacts button —
+         four actions and a state, none of them a presence claim. The CTA one mattered
+         most: board 5b has two halves, and History's own LiveRejoinCard carries a
+         comment citing THIS rule as the reason it moved off green, while the other end
+         of the same knock still filled its primary button with the LED hue. */
       "client/src/app/TopBar.tsx",
       "client/src/lib/linkify.tsx",
       "client/src/pages/app/Admin.tsx",
@@ -496,7 +511,15 @@ describe("green means ONLINE, and only online", () => {
          gone); the file's remaining green use is EARNED, because its element
          window carries `st.online`. Left on the list it would have been a
          permanent exemption nobody notices. */
-      "client/src/pages/app/History.tsx",
+      /* History.tsx CAME OFF in v2.107.1, and its entry had been hiding a MEASURED
+         accessibility defect rather than a vocabulary one. Both its greens were the
+         peer's 6-digit number — which green legitimately means here (v2.106.43) — but
+         painted with the LED hue, and v2.99.86 measured THAT hue at 4.46:1 as small
+         text, which fails AA, and added `--relay-green-text` (5.92:1 / 9.27:1) for
+         exactly a number at this size. Contacts.tsx already rendered the SAME FACT in
+         the readable token, so one number had two greens and this screen had the one
+         you could not read. The rule's own case below says it: a number may use the
+         text token and may NOT use the LED. */
       "client/src/pages/app/Join.tsx",
       "client/src/pages/app/Profile.tsx",
       "client/src/pages/app/ProfileHubSections.tsx",
@@ -571,6 +594,14 @@ describe("green means ONLINE, and only online", () => {
     expect(greenIsEarned(txt, `${txt} Unread`)).toBe(false);
     expect(greenIsEarned(led, `${led} {c.number}`)).toBe(false); // LED may NOT be a number
     expect(greenIsEarned(txt, `${txt} {c.number}`)).toBe(true); // the named exemption
+    /* …and the destructured-prop form of the same exemption (v2.107.1). BOTH directions,
+       because the widening must not have handed the LED hue a way in: a number may be
+       drawn in the AA-measured token and may NOT be drawn in the LED one, however it
+       reached the JSX. */
+    expect(greenIsEarned(txt, `${txt} ({number})`)).toBe(true);
+    expect(greenIsEarned(led, `${led} ({number})`)).toBe(false);
+    // Still an identifier, not a word: a longer name is not the exemption.
+    expect(greenIsEarned(txt, `${txt} {numberOfPeople}`)).toBe(false);
     expect(greenIsEarned(led, `p.isOnline ? ${led} : muted`)).toBe(true);
     expect(greenIsEarned(led, `${led} 3 online`)).toBe(true);
 
