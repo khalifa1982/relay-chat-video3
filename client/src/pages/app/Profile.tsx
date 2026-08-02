@@ -101,7 +101,16 @@ import {
   clearBiometric,
 } from "@/app/biometric";
 import { useTheme } from "@/contexts/ThemeContext";
-import { useLocale } from "@/app/i18n";
+import { useLocale, useT, type TKey } from "@/app/i18n";
+
+/**
+ * The translator's shape, so a helper OUTSIDE a component can still speak both
+ * languages. A module-level function cannot call a hook, and one that returns a
+ * finished English sentence is exactly how a screen ends up 95% translated with its
+ * toasts and its status pill still in English — so `t` is passed in. Same contract as
+ * `MissedCalls.tsx` and `inviteMessage.ts`.
+ */
+type T = (key: TKey, vars?: Record<string, string | number>) => string;
 
 /**
  * Profile page (`/app/profile`) — the app's control centre (v2.99.89).
@@ -169,6 +178,7 @@ export default function ProfilePage() {
   // Read at the hub so the Appearance row can show which theme is live, rather than
   // making the reader open the pane to find out.
   const { theme } = useTheme();
+  const { t, tn } = useLocale();
   // Whether to DRAW the Admin row. Called unconditionally, above the `!me` early
   // return, because a hook cannot sit behind a branch. React Query dedupes by key,
   // so this is the same single request the admin page itself makes.
@@ -185,7 +195,7 @@ export default function ProfilePage() {
   async function saveName() {
     const next = name.trim();
     if (!next) {
-      setError("Display name can't be empty.");
+      setError(t("profile.nameEmpty"));
       return;
     }
     if (next === me?.displayName) return;
@@ -206,12 +216,12 @@ export default function ProfilePage() {
     updateProfile.mutate({ avatarUrl: null });
   }
 
-  const copyNumber = () => copyNumberToClipboard(me?.number ?? "");
+  const copyNumber = () => copyNumberToClipboard(me?.number ?? "", t);
 
   if (!me) {
     return (
       <div className="h-full grid place-items-center text-muted-foreground">
-        Loading profile…
+        {t("profile.loading")}
       </div>
     );
   }
@@ -227,18 +237,20 @@ export default function ProfilePage() {
   const st = selfStatus(me.statusOverride);
 
   /* Every pane's title in one place, so the header of a pane and the label of the
-     row that opens it cannot drift apart. */
+     row that opens it cannot drift apart — now in one place in BOTH languages.
+     `theme` reuses `appearance.title` rather than minting a rival: the pane's heading
+     and the settings inside it are the same fact, and two keys would let them drift. */
   const paneTitle: Record<Pane, string> = {
-    name: "Name & photo",
-    number: "My RELAY number",
-    status: "Status",
-    about: "About & contact info",
-    pin: "Sign-in PIN",
-    lock: "App lock",
-    devices: "Devices",
-    privacy: "Story privacy",
-    notifs: "Notifications",
-    theme: "Appearance",
+    name: t("profile.paneName"),
+    number: t("profile.paneNumber"),
+    status: t("profile.paneStatus"),
+    about: t("profile.paneAbout"),
+    pin: t("profile.panePin"),
+    lock: t("profile.paneLock"),
+    devices: t("profile.paneDevices"),
+    privacy: t("profile.panePrivacy"),
+    notifs: t("profile.paneNotifs"),
+    theme: t("appearance.title"),
   };
 
   const openPane = (p: Pane) => {
@@ -291,7 +303,7 @@ export default function ProfilePage() {
           aria-live="polite"
         >
           <Check className="h-4 w-4" strokeWidth={3} />
-          <span>Saved</span>
+          <span>{t("profile.saved")}</span>
         </div>
       )}
 
@@ -316,8 +328,8 @@ export default function ProfilePage() {
                   type="button"
                   onClick={() => setPickerOpen(true)}
                   disabled={updateProfile.isPending}
-                  title="Tap to set your avatar"
-                  aria-label={me.avatarUrl ? "Change avatar" : "Add an avatar"}
+                  title={t("profile.tapAvatar")}
+                  aria-label={t(me.avatarUrl ? "profile.changeAvatar" : "profile.addAvatar")}
                   className="relative grid size-24 place-items-center rounded-full outline-none transition active:scale-95 focus-visible:ring-2 focus-visible:ring-primary/60 disabled:opacity-70"
                   style={{ background: "linear-gradient(135deg,#3FE0C5,#6EE7FF)" }}
                 >
@@ -368,7 +380,9 @@ export default function ProfilePage() {
                   that change there instead. So the hero goes back to what it was, byte
                   for byte, and the build stamp returns to the footer where it lived. */}
               <div className="flex items-center gap-2">
-                <h1 className="text-xl font-extrabold tracking-tight">{me.displayName || "You"}</h1>
+                <h1 className="text-xl font-extrabold tracking-tight">
+                  {me.displayName || t("profile.you")}
+                </h1>
                 {/* v2.99.6: three-tier badge (Guest/Registered/Admin) — me.verified
                     keeps the fallback for a cached whoami without `role`. */}
                 <RoleBadge role={roleFromFlags(me.role, me.verified)} size={18} />
@@ -382,7 +396,7 @@ export default function ProfilePage() {
                   type="button"
                   onClick={() => openPane("number")}
                   className="rounded-full border border-border bg-card/60 px-3 py-1.5 transition active:opacity-70 hover:bg-card"
-                  aria-label={`Your RELAY number is ${formatPin(me.number)} — open number settings`}
+                  aria-label={t("profile.numberAria", { number: formatPin(me.number) })}
                 >
                   <span
                     dir="ltr"
@@ -394,8 +408,8 @@ export default function ProfilePage() {
                 <button
                   type="button"
                   onClick={() => setQrOpen(true)}
-                  aria-label="Show the QR code for your number"
-                  title="Share your number by QR"
+                  aria-label={t("profile.showQr")}
+                  title={t("profile.shareByQr")}
                   className="grid size-9 place-items-center rounded-full border border-border bg-card/60 text-foreground transition active:opacity-70 hover:bg-card"
                 >
                   <QrCode className="size-4" />
@@ -403,8 +417,8 @@ export default function ProfilePage() {
                 <button
                   type="button"
                   onClick={copyNumber}
-                  aria-label="Copy your number"
-                  title="Copy your number"
+                  aria-label={t("profile.copyMyNumber")}
+                  title={t("profile.copyMyNumber")}
                   className="grid size-9 place-items-center rounded-full border border-border bg-card/60 text-foreground transition active:opacity-70 hover:bg-card"
                 >
                   <Copy className="size-4" />
@@ -422,49 +436,49 @@ export default function ProfilePage() {
                   className="size-2 rounded-full"
                   style={{ background: st.color, boxShadow: `0 0 8px ${st.color}` }}
                 />
-                {st.label}
+                {t(st.labelKey)}
                 <ChevronRight className="size-3.5 opacity-60" />
               </button>
             </section>
 
             {/* ── grouped rows ─────────────────────────────────────────────── */}
-            <HubGroup title="Account">
+            <HubGroup title={t("profile.groupAccount")}>
               <HubRow
                 icon={<User className="size-4" />}
                 tint="#3FE0C5"
                 label={paneTitle.name}
-                sub={me.displayName || "Set a name"}
+                sub={me.displayName || t("profile.subSetName")}
                 onClick={() => openPane("name")}
               />
               <HubRow
                 icon={<Hash className="size-4" />}
                 tint="#6EE7FF"
                 label={paneTitle.number}
-                sub={`${formatPin(me.number)} · QR, copy, change`}
+                sub={t("profile.subNumber", { number: formatPin(me.number) })}
                 onClick={() => openPane("number")}
               />
               <HubRow
                 icon={<Sparkles className="size-4" />}
                 tint="#f59e0b"
                 label={paneTitle.status}
-                sub={st.label}
+                sub={t(st.labelKey)}
                 onClick={() => openPane("status")}
               />
               <HubRow
                 icon={<AtSign className="size-4" />}
                 tint="#a855f7"
                 label={paneTitle.about}
-                sub="Bio, email, mobile, links"
+                sub={t("profile.subAbout")}
                 onClick={() => openPane("about")}
               />
             </HubGroup>
 
-            <HubGroup title="Privacy & security">
+            <HubGroup title={t("profile.groupPrivacy")}>
               <HubRow
                 icon={<KeyRound className="size-4" />}
                 tint="#38bdf8"
                 label={paneTitle.pin}
-                sub="Sign in with four digits"
+                sub={t("profile.subPin")}
                 onClick={() => openPane("pin")}
               />
               <HubRow

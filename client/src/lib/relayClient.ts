@@ -14,6 +14,55 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { MediaPipeline, FILTERS, type FilterId, type FilterDef } from "./mediaPipeline";
+
+/* ────────────────────────────────────────────────────────────────────────────────
+   THE ENGINE'S OWN TRANSLATOR.
+
+   Most call copy is STATIC and is handled declaratively by `data-i18n` in
+   RELAY_MARKUP plus `applyEngineLabels`. A handful of strings are not: they are
+   FALLBACKS the engine writes at runtime when a signaling frame carries no name
+   ("Someone is calling"), and one is a whole SENTENCE with the name substituted
+   into it. Those cannot be markup annotations — the applier would overwrite a live
+   caller's name with the word "Someone" on the next language change.
+
+   So React hands the translator over (RelayEngine.tsx), exactly as it hands over
+   `applyEngineLabels`. NOT a hook, NOT an import of the i18n module: this file is
+   dynamically imported to keep it out of the entry chunk and runs with no provider
+   above it.
+
+   `T` FAILS SOFT TO ENGLISH. A missing translator, an unknown key, or a throw all
+   yield the English fallback the call site already had — because on a live call an
+   English label is merely untranslated, while a blank one or a raw `calls.someone`
+   is the failure people actually ship.
+──────────────────────────────────────────────────────────────────────────────── */
+type EngineTranslator = (key: string, vars?: Record<string, string | number>) => string;
+let engineT: EngineTranslator | null = null;
+/** Re-render the copy the engine writes itself; set by startRelay. */
+let engineRelabel: (() => void) | null = null;
+
+function T(key: string, fallback: string, vars?: Record<string, string | number>): string {
+  try {
+    const v = engineT?.(key, vars);
+    /* A key that resolves to ITSELF means the lookup failed. */
+    return v && v !== key ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function setEngineTranslator(t: EngineTranslator | null): void {
+  engineT = t;
+  /* A language switch has to reach the strings the APPLIER cannot: they are written
+     by the engine with a name interpolated, so nothing in the DOM records their key.
+     Without this the on-hold bar would sit in the previous language until the next
+     unrelated state change. */
+  try {
+    engineRelabel?.();
+  } catch {
+    /* Relabelling is cosmetic; it must never take down a live call. */
+  }
+}
+
 import { computeLayout } from "./callLayout";
 import { buildAudioOutputList } from "./audioOutputs";
 import { detectDeviceType } from "./deviceType";
@@ -598,7 +647,7 @@ export function startRelay(root: HTMLElement): RelayHandle {
   }
   function onVideoRequest(m: Msg) {
     if (!inCall) return;
-    const nm = $("vaName"); if (nm) nm.textContent = m.fromName || nameOf(m.from || "") || "They";
+    const nm = $("vaName"); if (nm) nm.textContent = m.fromName || nameOf(m.from || "") || T("calls.they", "They");
     $("videoAsk")?.classList.add("show");
   }
   function onVideoAccept() {
@@ -2858,7 +2907,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   // ---------- call waiting ----------
   function showCallWaiting(name: string, number?: string, flag?: string) {
     const cw = $("callWaiting"); if (!cw) return;
-    const n = $("cwName"); if (n) n.textContent = name || "Someone";
+    const n = $("cwName"); if (n) n.textContent = name || T("calls.someone", "Someone");
     const num = $("cwNum"); if (num) num.textContent = number || "";
     const fl = $("cwFlag"); if (fl) fl.textContent = flag || "";
     cw.classList.add("show");
@@ -3114,15 +3163,25 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   }
   /** The "you're on hold" banner + music, driven by peersHoldingUs. Group
    *  calls only mark the holder's tile (the others are still talking). */
+  /* The one piece of engine-written copy a language switch cannot otherwise reach:
+     the applier reads a `data-i18n` KEY off the DOM, and this sentence has the
+     name interpolated into it, so nothing in the DOM records which key produced it.
+     `setEngineTranslator` calls this. */
+  engineRelabel = updateOnHoldState;
+
   function updateOnHoldState() {
     const held = inCall && !callIsGroup && peersHoldingUs.size > 0;
     const bar = $("onHoldBar");
     if (bar) {
       bar.classList.toggle("show", held);
       if (held) {
-        const nmEl = $("onHoldName");
+        const nmEl = $("onHoldTitle");
         const first = Array.from(peersHoldingUs)[0];
-        if (nmEl) nmEl.textContent = first ? nameOf(first) : "They";
+        /* ONE key carrying the WHOLE sentence. Arabic leads with the verb, so the
+           name does not sit before the same words — assembling this from a span
+           plus " put you on hold" is untranslatable by construction. */
+        const who = (first ? nameOf(first) : "") || T("calls.they", "They");
+        if (nmEl) nmEl.textContent = T("calls.onHoldTitle", `${who} put you on hold`, { who });
       }
     }
     if (held) startHoldMusic(); else stopHoldMusic();
@@ -6674,7 +6733,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       // (or a promoted voice call could wrongly show a stale one).
       const vWrap = $("acceptVideoWrap"); if (vWrap) vWrap.style.display = promotedRing.video ? "" : "none";
       const ringAv = $("ringAv"); if (ringAv) ringAv.textContent = initials(promotedRing.fromName || "?");
-      const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = promotedRing.fromName || "Someone";
+      const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = promotedRing.fromName || T("calls.someone", "Someone");
       const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = "is calling you…";
       const ringPin2 = $("ringPin");
       if (ringPin2) ringPin2.textContent = promotedRing.from.length === 6 ? promotedRing.from.slice(0, 3) + "-" + promotedRing.from.slice(3) : promotedRing.from;

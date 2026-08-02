@@ -23,7 +23,7 @@ export const RELAY_MARKUP = `
       <div class="relay-brand"><span class="dot"></span>RELAY</div>
       <p class="tag">Pick a name, get a number, dial anyone.<br>Voice &middot; video &middot; chat &mdash; straight in the browser.</p>
       <div class="relay-field">
-        <label>Display name</label>
+        <label data-i18n="calls.displayName">Display name</label>
         <input id="nameInput" maxlength="20" placeholder="e.g. Khalifa" autocomplete="off">
       </div>
       <button id="joinBtn" class="relay-btn relay-btn-primary">Get my number &rarr;</button>
@@ -45,11 +45,11 @@ export const RELAY_MARKUP = `
     <div class="lobby-body">
       <div class="dial-wrap">
         <div class="mycode">
-          <div class="lbl">Your number</div>
+          <div class="lbl" data-i18n="calls.yourNumber">Your number</div>
           <div class="num" id="bigCode">000000</div>
-          <button class="copy" id="copyBtn">Copy number</button>
+          <button class="copy" id="copyBtn" data-i18n="calls.copyNumber" data-i18n-title="calls.tipCopy">Copy number</button>
         </div>
-        <div class="display empty" id="dialDisplay">Enter a number</div>
+        <div class="display empty" id="dialDisplay" data-i18n="calls.enterANumber">Enter a number</div>
         <div class="pad" id="pad"></div>
         <div class="dial-actions">
           <button class="back-key" id="backKey">&#9003;</button>
@@ -71,53 +71,85 @@ export const RELAY_MARKUP = `
   </section>
 
   <section id="call" class="relay-screen">
+    <!-- Board 1h — THE TOP CHIP. One glass pill carrying who you are talking to,
+         how long for, and that the media is encrypted; the signal chip sits opposite.
+         #callRoomLbl and #timer keep their ids and .ct keeps its place inside
+         .call-head, so setCallStatus() — which finds both by id and puts the st-*
+         classes on .ct — is untouched by the regrouping. -->
     <div class="call-head">
-      <div class="ct"><span class="live-dot"></span> <span id="callRoomLbl">In call</span></div>
-      <div class="call-head-right">
+      <div class="ct"><span class="live-dot"></span>
+        <!-- SLOTS, both collapsed while empty (the .ring-presence / .dc-role pattern
+             this file already uses). Nothing writes them today, so the pill renders
+             exactly the status and timer it always did; wiring the callee's name and
+             tier is then one write in the engine rather than a markup change. -->
+        <span class="hchip-who" id="callWho"></span>
+        <span class="hchip-role" id="callWhoRole" style="display:none"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1l2.6 2.5 3.6-.4 1 3.5 3.2 1.8-1.5 3.3 1.5 3.3-3.2 1.8-1 3.5-3.6-.4L12 23l-2.6-2.6-3.6.4-1-3.5-3.2-1.8 1.5-3.3-1.5-3.3 3.2-1.8 1-3.5 3.6.4z"/></svg></span>
+        <span id="callRoomLbl">In call</span>
         <div class="timer" id="timer">00:00</div>
+        <!-- STATIC because it is STATICALLY TRUE: every WebRTC media path is
+             DTLS-SRTP by specification, so this is a property of the transport
+             rather than a state somebody has to report. It is the one glyph in this
+             chip that needs no engine at all. -->
+        <span class="hchip-lock" role="img" title="Encrypted call" aria-label="Encrypted call"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 11h14v10H5z"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+      </div>
+      <div class="call-head-right">
+        <!-- Board 1h's signal-bars chip. It renders ONLY while the engine has a real
+             verdict to show (see the CSS): four bars asserting a healthy call on zero
+             evidence would be the same lie .call-qual.is-good already refuses to tell. -->
+        <span class="sig" id="callSignal" role="img" title="Call quality" aria-label="Call quality"><i></i><i></i><i></i><i></i></span>
       </div>
     </div>
     <div id="connSeq" class="conn-seq">
       <div class="conn-seq-card">
-        <div class="conn-step" data-i="0"><span class="conn-tick"></span><span class="conn-lbl">Transmission Connected</span></div>
-        <div class="conn-step" data-i="1"><span class="conn-tick"></span><span class="conn-lbl">Encryption</span></div>
-        <div class="conn-step" data-i="2"><span class="conn-tick"></span><span class="conn-lbl">Join the Call</span></div>
+        <div class="conn-step" data-i="0"><span class="conn-tick"></span><span class="conn-lbl" data-i18n="calls.transmissionConnected">Transmission Connected</span></div>
+        <div class="conn-step" data-i="1"><span class="conn-tick"></span><span class="conn-lbl" data-i18n="calls.encryption">Encryption</span></div>
+        <div class="conn-step" data-i="2"><span class="conn-tick"></span><span class="conn-lbl" data-i18n="calls.joinTheCall">Join the Call</span></div>
       </div>
     </div>
     <div id="callWaiting" class="call-waiting">
       <div class="cw-info"><span class="cw-pulse"></span>
         <span class="cw-flag" id="cwFlag"></span>
-        <span class="cw-meta"><b id="cwName">Someone</b><span class="cw-num" id="cwNum"></span><span class="cw-sub">Incoming call &middot; answer to hold your current call</span></span>
+        <span class="cw-meta"><b id="cwName">Someone</b><span class="cw-num" id="cwNum"></span><span class="cw-sub" data-i18n="calls.incomingCallSub">Incoming call &middot; answer to hold your current call</span></span>
       </div>
       <div class="cw-actions">
-        <button id="cwDecline" class="cw-btn cw-decline">Reject</button>
-        <button id="cwSwitch" class="cw-btn cw-switch">Answer</button>
+        <button id="cwDecline" class="cw-btn cw-decline" data-i18n="calls.reject">Reject</button>
+        <button id="cwSwitch" class="cw-btn cw-switch" data-i18n="calls.answer">Answer</button>
       </div>
     </div>
     <div id="videoAsk" class="video-ask">
       <div class="va-info"><span class="va-cam">&#127909;</span>
-        <span class="va-meta"><b id="vaName">Someone</b><span class="va-sub">wants to start video &mdash; accepting turns on BOTH cameras</span></span>
+        <span class="va-meta"><b id="vaName">Someone</b><span class="va-sub" data-i18n="calls.wantsVideoSub">wants to start video &mdash; accepting turns on BOTH cameras</span></span>
       </div>
       <div class="va-actions">
-        <button id="vaDecline" class="va-btn va-decline" type="button">Not now</button>
-        <button id="vaAccept" class="va-btn va-accept" type="button">Turn on video</button>
+        <button id="vaDecline" class="va-btn va-decline" type="button" data-i18n="calls.notNow">Not now</button>
+        <button id="vaAccept" class="va-btn va-accept" type="button" data-i18n="calls.turnOnVideo">Turn on video</button>
       </div>
     </div>
     <div id="heldBar" class="held-bar">
       <div class="held-info"><span class="held-pulse"></span>
-        <span class="held-meta"><b>On hold</b><span class="held-name" id="heldName"></span></span>
+        <span class="held-meta"><b data-i18n="calls.onHold">On hold</b><span class="held-name" id="heldName"></span></span>
       </div>
       <div class="held-actions">
-        <button id="heldSwap" class="held-btn held-swap" title="Switch to the held call">Swap</button>
-        <button id="heldMerge" class="held-btn held-merge" title="Merge both calls into a conference">Merge</button>
-        <button id="heldEnd" class="held-btn held-end" title="Hang up the HELD call — this call stays connected">End held</button>
+        <button id="heldSwap" class="held-btn held-swap" title="Switch to the held call" data-i18n-title="calls.tipSwap" data-i18n="calls.swap">Swap</button>
+        <button id="heldMerge" class="held-btn held-merge" title="Merge both calls into a conference" data-i18n-title="calls.tipMerge" data-i18n="calls.merge">Merge</button>
+        <button id="heldEnd" class="held-btn held-end" title="Hang up the HELD call — this call stays connected" data-i18n-title="calls.tipEndHeld" data-i18n="calls.endHeld">End held</button>
       </div>
     </div>
     <!-- Being HELD (v2.97.1): shown to the party who was parked — with light
          hold music playing — until the holder swaps back or hangs up. -->
     <div id="onHoldBar" class="onhold-bar">
       <span class="oh-pulse"></span>
-      <span class="oh-meta"><b><span id="onHoldName">They</span> put you on hold</b><span class="oh-sub">Hang tight &mdash; you&rsquo;ll hear them the moment they&rsquo;re back</span></span>
+      <!-- ONE ELEMENT FOR THE WHOLE SENTENCE, deliberately. This used to read
+           a "They" span followed by "put you on hold" — a sentence assembled
+           around a span, which is untranslatable: Arabic leads with the verb, so the
+           name does not sit before the same words. It carries NO data-i18n, because
+           the engine writes it WITH the name substituted; the applier would write the
+           raw "{who} put you on hold" over the top. updateOnHoldState() owns it, and
+           setEngineTranslator re-runs that so a language switch mid-hold is picked
+           up rather than stranding the bar in the previous language.
+           NOTE: no backticks in here — RELAY_MARKUP is a template literal and a
+           backtick in a comment terminates it (the v2.99.16 build break). -->
+      <span class="oh-meta"><b id="onHoldTitle">They put you on hold</b><span class="oh-sub" data-i18n="calls.onHoldSub">Hang tight &mdash; you&rsquo;ll hear them the moment they&rsquo;re back</span></span>
     </div>
     <div class="call-main">
       <!-- OUTGOING dial card. v2.105.24 added the photo, the presence/status line and the
@@ -144,11 +176,11 @@ export const RELAY_MARKUP = `
           <div class="dc-who"><span class="dc-name" id="dcName"></span><span class="dc-role" id="dcRole"></span></div>
           <div class="dc-presence" id="dcPresence"></div>
           <div class="dc-last" id="dcLast"></div>
-          <div class="dc-mode" id="dcMode">Voice call</div>
+          <div class="dc-mode" id="dcMode" data-i18n="calls.voiceCall">Voice call</div>
           <!-- STAYS LAST. The v2.98.3 clearance under the hang-up button is measured from
                the bottom-most row, so the two new rows go ABOVE the mode chip rather than
                being appended after the status. -->
-          <div class="dc-status"><span class="dc-dot"></span><span id="dcStatusTxt">Calling&hellip;</span></div>
+          <div class="dc-status"><span class="dc-dot"></span><span id="dcStatusTxt" data-i18n="calls.callingEllipsis">Calling&hellip;</span></div>
         </div>
       </div>
       <div class="grid" id="videoGrid"></div>
@@ -160,7 +192,7 @@ export const RELAY_MARKUP = `
         <div class="chat-emojis" id="chatEmojis"></div>
         <div class="chat-input">
           <button type="button" class="chat-emoji-btn" id="chatEmojiBtn" title="Emoji" aria-label="Insert emoji"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c.9 1.2 2.1 1.9 3.5 1.9s2.6-.7 3.5-1.9"/><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none"/></svg></button>
-          <input id="chatField" placeholder="Message everyone&hellip;" maxlength="500">
+          <input id="chatField" placeholder="Message everyone&hellip;" data-i18n-placeholder="calls.messageEveryone" maxlength="500">
           <button id="chatSend">&uarr;</button>
         </div>
       </div>
@@ -168,30 +200,30 @@ export const RELAY_MARKUP = `
     <div id="filterDock" class="filter-dock">
       <div class="filter-dock-head">
         <span class="t">Filters <span id="filterLoading" class="loading-dot" style="display:none"></span></span>
-        <button id="filterClose" class="x" aria-label="Close filters">&times;</button>
+        <button id="filterClose" class="x" aria-label="Close filters" data-i18n-aria="calls.closeFilters">&times;</button>
       </div>
       <div id="filterStrip" class="filter-strip"></div>
     </div>
 
     <div class="controls">
       <div class="addpad" id="addpad">
-        <div class="addpad-head"><span>Add person</span><button id="addClose" type="button" aria-label="Cancel" title="Cancel">&#10005;</button></div>
+        <div class="addpad-head"><span data-i18n="calls.addPerson">Add person</span><button id="addClose" type="button" aria-label="Cancel" title="Cancel" data-i18n-aria="calls.cancel" data-i18n-title="calls.cancel">&#10005;</button></div>
         <input id="addInput" maxlength="7" inputmode="numeric" placeholder="000000">
         <div class="addpad-keys" id="addKeys"></div>
-        <button id="addGo">Add to call</button>
-        <div class="addpad-hint">Invites automatically once you enter all 6 digits</div>
+        <button id="addGo" data-i18n="calls.addToCall">Add to call</button>
+        <div class="addpad-hint" data-i18n="calls.autoInviteHint">Invites automatically once you enter all 6 digits</div>
       </div>
       <div class="audio-menu" id="audioMenu"></div>
       <div class="tile-menu" id="tileMenu">
-        <div class="tm-head"><span id="tmName">Participant</span><button id="tmClose" type="button" aria-label="Close" title="Close">&#10005;</button></div>
+        <div class="tm-head"><span id="tmName" data-i18n="calls.participant">Participant</span><button id="tmClose" type="button" aria-label="Close" title="Close" data-i18n-aria="calls.close" data-i18n-title="calls.close">&#10005;</button></div>
         <div class="tm-acts" id="tmActs"></div>
       </div>
       <div class="host-panel" id="hostPanel">
-        <div class="host-head"><span>Host controls</span><button id="hostClose" type="button" aria-label="Close" title="Close">&#10005;</button></div>
+        <div class="host-head"><span data-i18n="calls.hostControls">Host controls</span><button id="hostClose" type="button" aria-label="Close" title="Close" data-i18n-aria="calls.close" data-i18n-title="calls.close">&#10005;</button></div>
         <div class="host-actions">
-          <button id="muteAllBtn" type="button">Mute all</button>
-          <button id="unmuteAllBtn" type="button">Unmute all</button>
-          <button id="gridBtn" type="button">Grid view</button>
+          <button id="muteAllBtn" type="button" data-i18n="calls.muteAll">Mute all</button>
+          <button id="unmuteAllBtn" type="button" data-i18n="calls.unmuteAll">Unmute all</button>
+          <button id="gridBtn" type="button" data-i18n="calls.gridView">Grid view</button>
         </div>
         <div class="host-list" id="hostList"></div>
       </div>
@@ -207,25 +239,25 @@ export const RELAY_MARKUP = `
              carry TWO icons each (v2.96.1): the normal glyph and a SLASHED
              "off" glyph swapped by the .off class — and their labels swap the
              same way (Mute/Unmute · Cam off/Cam on). -->
-        <button class="ctrl" id="micBtn" title="Microphone — tap to mute or unmute yourself" aria-label="Mute or unmute microphone">
+        <button class="ctrl" id="micBtn" title="Microphone — tap to mute or unmute yourself" data-i18n-title="calls.tipMic" aria-label="Mute or unmute microphone" data-i18n-aria="calls.micAria">
           <span class="ctrl-ic"><svg class="ic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><svg class="ic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></span>
-          <span class="ctrl-lbl"><span class="lbl-on">Mute</span><span class="lbl-off">Unmute</span></span>
+          <span class="ctrl-lbl"><span class="lbl-on" data-i18n="calls.mute">Mute</span><span class="lbl-off" data-i18n="calls.unmute">Unmute</span></span>
         </button>
-        <button class="ctrl" id="camBtn" title="Camera — tap to turn your video on or off" aria-label="Turn camera on or off">
+        <button class="ctrl" id="camBtn" title="Camera — tap to turn your video on or off" data-i18n-title="calls.tipCam" aria-label="Turn camera on or off" data-i18n-aria="calls.camAria">
           <span class="ctrl-ic"><svg class="ic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg><svg class="ic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
-          <span class="ctrl-lbl"><span class="lbl-on">Cam off</span><span class="lbl-off">Cam on</span></span>
+          <span class="ctrl-lbl"><span class="lbl-on" data-i18n="calls.camOff">Cam off</span><span class="lbl-off" data-i18n="calls.camOn">Cam on</span></span>
         </button>
-        <button class="ctrl" id="flipCamBtn" title="Switch between the front and back camera">
+        <button class="ctrl" id="flipCamBtn" title="Switch between the front and back camera" data-i18n-title="calls.tipFlip">
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg></span>
-          <span class="ctrl-lbl">Flip</span>
+          <span class="ctrl-lbl" data-i18n="calls.flip">Flip</span>
         </button>
-        <button class="ctrl" id="screenBtn" title="Share your screen with everyone on the call" style="display:none">
+        <button class="ctrl" id="screenBtn" title="Share your screen with everyone on the call" data-i18n-title="calls.tipShare" style="display:none">
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
-          <span class="ctrl-lbl">Share</span>
+          <span class="ctrl-lbl" data-i18n="calls.share">Share</span>
         </button>
-        <button class="ctrl ctrl-text" id="qualityBtn" title="Video quality — switch between HD and Data saver">
+        <button class="ctrl ctrl-text" id="qualityBtn" title="Video quality — switch between HD and Data saver" data-i18n-title="calls.tipQuality">
           <span class="ctrl-ic"><span id="qualityTxt">HD</span></span>
-          <span class="ctrl-lbl">Quality</span>
+          <span class="ctrl-lbl" data-i18n="calls.quality">Quality</span>
         </button>
         <!-- v2.105.21: the call-quality readout. OPT-IN and remembered — v2.99.67
              removed the old always-on debug floater at the owner's request, so this
@@ -233,35 +265,35 @@ export const RELAY_MARKUP = `
              a diagnosing session needs. (Deliberately not naming that removed panel
              here: the v2.99.36 guard forbids its name anywhere in this markup, and a
              stricter guard is worth more than my choice of words.) -->
-        <button class="ctrl" id="statsBtn" title="Call quality — round trip, packet loss, and whether media is going through a TURN relay">
+        <button class="ctrl" id="statsBtn" title="Call quality — round trip, packet loss, and whether media is going through a TURN relay" data-i18n-title="calls.tipStats">
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="M6 20V10"/><path d="M12 20V4"/><path d="M18 20v-7"/></svg></span>
-          <span class="ctrl-lbl">Stats</span>
+          <span class="ctrl-lbl" data-i18n="calls.stats">Stats</span>
         </button>
-        <button class="ctrl" id="audioBtn" title="Sound output — loudspeaker, earpiece or Bluetooth" style="display:none">
+        <button class="ctrl" id="audioBtn" title="Sound output — loudspeaker, earpiece or Bluetooth" data-i18n-title="calls.tipSound" style="display:none">
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg></span>
-          <span class="ctrl-lbl">Sound</span>
+          <span class="ctrl-lbl" data-i18n="calls.sound">Sound</span>
         </button>
-        <button class="ctrl" id="pipBtn" title="Picture-in-Picture — keeps the call visible when you switch apps" style="display:none">
+        <button class="ctrl" id="pipBtn" title="Picture-in-Picture — keeps the call visible when you switch apps" data-i18n-title="calls.tipPip" style="display:none">
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="5" rx="1" fill="currentColor" stroke="none"/></svg></span>
-          <span class="ctrl-lbl">PiP</span>
+          <span class="ctrl-lbl" data-i18n="calls.pip">PiP</span>
         </button>
-        <button class="ctrl" id="filterBtn" title="Camera filters — color effects, background blur, face fun">
+        <button class="ctrl" id="filterBtn" title="Camera filters — color effects, background blur, face fun" data-i18n-title="calls.tipFilters">
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4"/><circle cx="17" cy="7" r="4"/><circle cx="12" cy="16" r="4"/></svg></span>
-          <span class="ctrl-lbl">Filters</span>
+          <span class="ctrl-lbl" data-i18n="calls.filters">Filters</span>
         </button>
-        <button class="ctrl" id="addBtn" title="Add another person to this call">
+        <button class="ctrl" id="addBtn" title="Add another person to this call" data-i18n-title="calls.tipAdd">
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
-          <span class="ctrl-lbl">Add</span>
+          <span class="ctrl-lbl" data-i18n="calls.add">Add</span>
         </button>
-        <button class="ctrl" id="hostBtn" title="Host controls — mute, pin, promote or remove participants" style="display:none">
+        <button class="ctrl" id="hostBtn" title="Host controls — mute, pin, promote or remove participants" data-i18n-title="calls.tipHost" style="display:none">
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l1.8-9 4.7 3.8L12 5l2.5 6.8L19.2 8 21 17z"/><path d="M5 21h14"/></svg></span>
-          <span class="ctrl-lbl">Host</span>
+          <span class="ctrl-lbl" data-i18n="calls.host">Host</span>
         </button>
-        <button class="ctrl" id="chatBtn" title="In-call chat with everyone on the line">
+        <button class="ctrl" id="chatBtn" title="In-call chat with everyone on the line" data-i18n-title="calls.tipChat">
           <span class="ctrl-ic"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/></svg><span class="badge" id="chatBadge" style="display:none">0</span></span>
-          <span class="ctrl-lbl">Chat</span>
+          <span class="ctrl-lbl" data-i18n="calls.chat">Chat</span>
         </button>
-        <button class="ctrl hangup" id="hangBtn" title="Leave">
+        <button class="ctrl hangup" id="hangBtn" title="Leave" data-i18n-title="calls.leave">
           <!-- Material "call end": a DRAWN horizontal handset, no CSS transform.
                The old pickup-receiver rotated via an inline style rendered
                UNROTATED on some Android WebViews — an ANSWER icon on the End
@@ -270,7 +302,7 @@ export const RELAY_MARKUP = `
           <!-- Visible on the pre-connect dial screen only (v2.98 redesign) —
                grounds the lone red circle with a real label, like the ring
                card's Voice/Video/Decline captions. -->
-          <span class="hangup-lbl">End Call</span>
+          <span class="hangup-lbl" data-i18n="calls.endCall">End Call</span>
         </button>
       </div>
     </div>
@@ -299,41 +331,41 @@ export const RELAY_MARKUP = `
     <div class="who"><span id="ringWho">Someone</span><span class="ring-verified" id="ringVerified" style="display:none" title="Verified account"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.7l2.6 2.5 3.6-.5 1.1 3.4 3.2 1.7-1.3 3.2 1.3 3.2-3.2 1.7-1.1 3.4-3.6-.5-2.6 2.5-2.6-2.5-3.6.5-1.1-3.4-3.2-1.7L2.8 12 1.5 8.8l3.2-1.7 1.1-3.4 3.6.5z"/><path d="M10.7 15.3l-2.9-2.9 1.3-1.3 1.6 1.6 4.6-4.6 1.3 1.3z" fill="#04201B"/></svg><i class="ring-role-txt" id="ringRoleTxt"></i></span><span class="ring-flag" id="ringFlag"></span></div>
     <div class="ring-pin" id="ringPin"></div>
     <div class="ring-presence" id="ringPresence"></div>
-    <div class="sub" id="ringSub">is calling you&hellip;</div>
+    <div class="sub" id="ringSub" data-i18n="calls.isCallingYou">is calling you&hellip;</div>
     <div class="ring-actions">
       <div class="ra">
-        <button class="rc rc-voice" id="acceptVoiceBtn" title="Answer with microphone only (camera off)">
+        <button class="rc rc-voice" id="acceptVoiceBtn" title="Answer with microphone only (camera off)" data-i18n-title="calls.tipAnswerVoice">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/><path d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.9V21a1 1 0 1 0 2 0v-3.1A7 7 0 0 0 19 11z"/></svg>
         </button>
-        <span class="ra-lbl">Voice</span>
+        <span class="ra-lbl" data-i18n="calls.voice">Voice</span>
       </div>
       <div class="ra" id="acceptVideoWrap">
-        <button class="rc rc-video" id="acceptBtn" title="Answer with the camera on">
+        <button class="rc rc-video" id="acceptBtn" title="Answer with the camera on" data-i18n-title="calls.tipAnswerVideo">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/></svg>
         </button>
-        <span class="ra-lbl">Video</span>
+        <span class="ra-lbl" data-i18n="calls.video">Video</span>
       </div>
       <div class="ra">
-        <button class="rc rc-decline" id="declineBtn" title="Decline the call">
+        <button class="rc rc-decline" id="declineBtn" title="Decline the call" data-i18n-title="calls.tipDecline">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.7l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.1-.7-.28-.79-.73-1.68-1.36-2.66-1.85-.33-.16-.56-.51-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
         </button>
-        <span class="ra-lbl">Decline</span>
+        <span class="ra-lbl" data-i18n="calls.decline">Decline</span>
       </div>
     </div>
     <div class="ring-extra">
-      <button class="rx" id="toVoicemailBtn" type="button" title="Decline — they'll be offered to leave you a voice message">
+      <button class="rx" id="toVoicemailBtn" type="button" title="Decline — they'll be offered to leave you a voice message" data-i18n-title="calls.tipDeclineVoicemail">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6.5" cy="12" r="3.2"/><circle cx="17.5" cy="12" r="3.2"/><path d="M6.5 15.2h11"/></svg>
         Send to voicemail
       </button>
-      <button class="rx" id="typeReplyBtn" type="button" title="Text them instead — sending declines the call">
+      <button class="rx" id="typeReplyBtn" type="button" title="Text them instead — sending declines the call" data-i18n-title="calls.tipQuickReply">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/></svg>
         Message&hellip;
       </button>
     </div>
     <div class="quick-replies" id="quickReplies">
-      <button type="button" class="qr-opt" data-msg="I'll call you back shortly.">I'll call you back shortly</button>
-      <button type="button" class="qr-opt" data-msg="Can't talk right now — text me.">Can't talk right now — text me</button>
-      <button type="button" class="qr-opt" data-msg="On my way.">On my way</button>
+      <button type="button" class="qr-opt" data-msg="I'll call you back shortly." data-i18n-msg="calls.quickBackShortlyMsg" data-i18n="calls.quickBackShortly">I'll call you back shortly</button>
+      <button type="button" class="qr-opt" data-msg="Can't talk right now — text me." data-i18n-msg="calls.quickCantTalkMsg" data-i18n="calls.quickCantTalk">Can't talk right now — text me</button>
+      <button type="button" class="qr-opt" data-msg="On my way." data-i18n-msg="calls.quickOnMyWayMsg" data-i18n="calls.quickOnMyWay">On my way</button>
       <div class="custom-reply">
         <input id="customReplyInput" maxlength="300" placeholder="Or type your own&hellip;">
         <button id="customReplySend" type="button" aria-label="Send the message and decline the call">&uarr;</button>
@@ -1499,4 +1531,172 @@ export const RELAY_CSS = `
    single most dangerous thing this bar could say. */
 .relay-root .ctrl.off .ctrl-ic{background:rgba(255,92,114,.20);border-color:rgba(255,92,114,.45);color:var(--danger)}
 
+/* ── BOARD 1h — IN-CALL VIDEO CHROME ─────────────────────────────────────────────────
+   The frame's own chrome, on top of the bar, the accent and the tiles that already
+   shipped: a top chip (name + tier badge + mono timer + lock), a signal-bars chip,
+   and the self view as a 92x126 PiP labelled YOU.
+
+   DECLARED LAST on purpose. Several of these refine rules of the same specificity
+   (.call-head .timer, .relay-tile .nm), so ORDER is what decides — v2.99.84 measured
+   its own override doing literally NOTHING for exactly this reason while reading as
+   correct, so a later edit that moves this block up silently un-does it.
+
+   NO ANIMATION IS ADDED HERE, and that is a decision rather than an omission. All
+   three surfaces sit over LIVE VIDEO, where nothing behind them can ever be cached,
+   and the frame draws every one of them at rest. The house rule (transform/opacity
+   only, inside the reduced-motion gate) is satisfied by there being no motion at all,
+   which is both cheaper and impossible to get wrong.
+
+   THE HEAD STAYS IN FLOW rather than floating over the grid, which is the one place
+   this deviates from the frame. Full-bleed video under the chips would mean making
+   #call a positioned ancestor, and .filter-dock is a direct child of #call that today
+   anchors to .relay-root — re-anchoring a shipped surface is not this frame's business.
+   The chips get the frame's material, contents and geometry; the video starts below. */
+
+/* The bar itself stops being a bar: no divider, no fill, just two floating pills. */
+.relay-root .call-head{padding:10px 16px;gap:10px;border-bottom:none;background:none}
+
+/* ── the top chip ── */
+.relay-root .call-head .ct{gap:9px;min-width:0;padding:7px 13px;border-radius:16px;
+  font-size:13px;background:rgba(10,14,16,.92);border:1px solid rgba(255,255,255,.12)}
+/* .ct keeps color:var(--muted) so .ct.st-reconnecting still recolours the status
+   label — that signal predates this frame and is not ours to spend. Only the name
+   opts out of it, because the name is the chip's subject rather than its state. */
+.relay-root .call-head .hchip-who{font-weight:700;color:#eafff6;min-width:0;max-width:38vw;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.relay-root .call-head .hchip-who:empty{display:none}
+.relay-root .call-head .hchip-role{flex:0 0 auto;display:inline-flex;align-items:center;color:#22c55e}
+.relay-root .call-head .hchip-role svg{width:12px;height:12px;display:block}
+/* MONO, ACCENT, and it may never shrink: a truncated duration is a wrong number
+   rather than a shortened one. JetBrains Mono, not the frame's IBM Plex Mono —
+   index.html loads JetBrains and Space Mono and does NOT load IBM Plex, so naming
+   it here would silently fall through to the system mono. tabular-nums so the pill
+   does not twitch as the seconds roll. */
+.relay-root .call-head .ct .timer{flex:0 0 auto;font-size:12px;font-weight:600;
+  color:var(--accent);letter-spacing:.02em;font-variant-numeric:tabular-nums}
+.relay-root .call-head .hchip-lock{flex:0 0 auto;display:inline-flex;align-items:center;color:var(--accent)}
+.relay-root .call-head .hchip-lock svg{width:11px;height:11px;display:block}
+/* …but NOT while the call is still being placed. DTLS-SRTP is a property of an
+   ESTABLISHED transport, and during pre-connect there is no transport yet — so a lock
+   there would be claiming a guarantee that has not been made. The connection sequence
+   already has its own Encryption step for that phase. */
+.relay-root #call.pre-connect .call-head .hchip-lock{display:none}
+
+/* ── the signal-bars chip ──
+   HIDDEN BY DEFAULT, and shown only when the engine has published a real verdict.
+   The tone classes come from callQualityTone via renderCallQuality, so this chip and
+   the 5c readout can never disagree about the call — there is one measurement and two
+   renderings of it. It follows that the chip is live only while Stats is on, because
+   that is the only time collectCallQuality runs at all; a chip that showed four bars
+   the rest of the time would be asserting a healthy call on zero evidence, which is
+   the same lie .call-qual.is-good already refuses to tell.
+   The tone rules are their OWN rules rather than a comma-list with the base one: an
+   engine without :has() drops them and the chip simply stays hidden, so unsupported
+   degrades to no claim rather than to a false one. */
+.relay-root .call-head .sig{flex:0 0 auto;display:none;align-items:flex-end;gap:2px;
+  padding:8px 10px;border-radius:12px;
+  background:rgba(10,14,16,.92);border:1px solid rgba(255,255,255,.12)}
+.relay-root .call-head .sig i{display:block;width:3px;border-radius:1px;background:rgba(255,255,255,.25)}
+.relay-root .call-head .sig i:nth-child(1){height:5px}
+.relay-root .call-head .sig i:nth-child(2){height:8px}
+.relay-root .call-head .sig i:nth-child(3){height:11px}
+.relay-root .call-head .sig i:nth-child(4){height:14px}
+/* :not(.pre-connect) because the tone class survives the end of a call — the readout
+   is hidden by display:none during the next dial but keeps whatever class it last
+   had, so without this the chip would report the PREVIOUS call's quality while the
+   new one is still ringing. */
+.relay-root #call:not(.pre-connect):has(.call-qual.is-good) .call-head .sig{display:flex}
+.relay-root #call:not(.pre-connect):has(.call-qual.is-good) .call-head .sig i{background:var(--accent)}
+.relay-root #call:not(.pre-connect):has(.call-qual.is-warn) .call-head .sig{display:flex}
+.relay-root #call:not(.pre-connect):has(.call-qual.is-warn) .call-head .sig i:nth-child(-n+2){background:var(--warn)}
+
+/* ── the self PiP ──
+   Board 1h draws a 1:1 video call as full-bleed remote plus a 92x126 self card, which
+   is the phone convention; the app draws two equal tiles. So this applies to EXACTLY
+   that case — the default equal grid holding exactly two tiles — and to nothing else.
+   Spotlight, compact and screen-max are excluded by name, so every other layout keeps
+   the arrangement layoutGrid() computes.
+   The stacking is done with grid-area, NOT position:absolute: .grid sets no position,
+   so an absolutely-positioned tile would escape to .relay-root and could then overlap
+   the control bar. A grid item stays inside its container by construction.
+   The !important is the one piece of cleverness here and it is doing real work:
+   layoutGrid() writes gridTemplateColumns inline, and only !important outranks that.
+   It is confined to the two template properties — per-tile placement is left alone,
+   because layoutGrid() already resets those to "" in the default branch.
+   :has() unsupported means the whole rule is dropped and the 2-up grid renders exactly
+   as it does today, which is the safe direction to fail in. */
+.relay-root #videoGrid:not(.spotlight):not(.compact):has(> .relay-tile:nth-child(2)):not(:has(> .relay-tile:nth-child(3))){
+  grid-template-columns:1fr!important;grid-template-rows:1fr!important}
+.relay-root #videoGrid:not(.spotlight):not(.compact):has(> .relay-tile:nth-child(2)):not(:has(> .relay-tile:nth-child(3))) > .relay-tile{
+  grid-area:1/1}
+.relay-root #videoGrid:not(.spotlight):not(.compact):has(> .relay-tile:nth-child(2)):not(:has(> .relay-tile:nth-child(3))) > .relay-tile.you{
+  width:92px;height:126px;justify-self:end;align-self:end;margin:0 14px 14px 0;z-index:6;
+  border-radius:16px;border:1.5px solid rgba(255,255,255,.25);box-shadow:0 12px 34px rgba(0,0,0,.5)}
+/* The YOU label is the tile's OWN name band, retreated to the frame's corner type —
+   not a second label, so it still carries whatever the band carries and cannot come to
+   disagree with it. The digits go the way they already go on a spotlight thumb: at
+   92px there is no room, and the band is nowrap + overflow:hidden, so keeping them
+   would eat the name. A text-shadow rather than the band's pill because the frame
+   draws bare letters, and bare white letters over live video need the shadow. */
+.relay-root #videoGrid:not(.spotlight):not(.compact):has(> .relay-tile:nth-child(2)):not(:has(> .relay-tile:nth-child(3))) > .relay-tile.you .nm{
+  left:6px;right:auto;bottom:5px;gap:3px;padding:0;border-radius:0;
+  font-size:8.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  max-width:calc(100% - 12px);color:rgba(255,255,255,.8);
+  background:none;backdrop-filter:none;-webkit-backdrop-filter:none;
+  text-shadow:0 1px 3px rgba(0,0,0,.75)}
+.relay-root #videoGrid:not(.spotlight):not(.compact):has(> .relay-tile:nth-child(2)):not(:has(> .relay-tile:nth-child(3))) > .relay-tile.you .nm .nm-pin,
+.relay-root #videoGrid:not(.spotlight):not(.compact):has(> .relay-tile:nth-child(2)):not(:has(> .relay-tile:nth-child(3))) > .relay-tile.you .tile-info{
+  display:none}
+
 `;
+
+/* ────────────────────────────────────────────────────────────────────────────────
+   THE CALL SURFACE SPEAKS ARABIC.
+
+   The engine writes raw DOM from plain functions, so it cannot call a hook — which
+   dict/engine.ts recorded as the reason its copy was "unreachable from this
+   dictionary". Right about the CONSTRAINT, wrong about the conclusion: a plain
+   function cannot call a hook, but it does not have to. The translator is HANDED to
+   it at the one boundary where React already meets the engine (RelayEngine.tsx).
+
+   THE MARKUP KEEPS ITS ENGLISH. Every annotated element still carries its English
+   text, so if this never runs — a missing provider, a mount race, an unresolvable
+   key — the bar reads English rather than blank. On a live call an UNLABELLED
+   control is far worse than an untranslated one, the same fail-soft rule useLocale
+   already follows.
+
+   IT READS THE KEY, NEVER THE CURRENT TEXT, and that is what makes it idempotent: a
+   version that decided from what the element currently says could turn English into
+   Arabic once and never back, so switching back mid-call would strand the bar in
+   Arabic. Reading the attribute means it can be re-applied any number of times, in
+   either direction — which is exactly what the language-change effect does, over the
+   LIVE call's DOM, instead of re-injecting RELAY_MARKUP and destroying its listeners
+   and media elements.
+──────────────────────────────────────────────────────────────────────────────── */
+const I18N_TARGETS = [
+  { attr: "data-i18n", apply: (el: Element, v: string) => void (el.textContent = v) },
+  { attr: "data-i18n-aria", apply: (el: Element, v: string) => el.setAttribute("aria-label", v) },
+  { attr: "data-i18n-title", apply: (el: Element, v: string) => el.setAttribute("title", v) },
+  {
+    attr: "data-i18n-placeholder",
+    apply: (el: Element, v: string) => el.setAttribute("placeholder", v),
+  },
+  { attr: "data-i18n-msg", apply: (el: Element, v: string) => el.setAttribute("data-msg", v) },
+] as const;
+
+export function applyEngineLabels(root: ParentNode, t: (key: string) => string): void {
+  for (const { attr, apply } of I18N_TARGETS) {
+    for (const el of Array.from(root.querySelectorAll(`[${attr}]`))) {
+      const key = el.getAttribute(attr);
+      if (!key) continue;
+      try {
+        const value = t(key);
+        /* A key that resolves to ITSELF means the lookup failed; leaving the English
+           in place beats printing calls.mute on somebody's screen. */
+        if (value && value !== key) apply(el, value);
+      } catch {
+        /* Per-element, so one bad key cannot cost the other forty their labels. */
+      }
+    }
+  }
+}

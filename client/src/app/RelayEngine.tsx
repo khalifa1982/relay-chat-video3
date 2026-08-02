@@ -3,6 +3,7 @@ import {
   useContext,
   useEffect,
   useRef,
+  useCallback,
   useState,
   type ReactNode,
 } from "react";
@@ -13,7 +14,7 @@ import { Loader2, PhoneOff, UserPlus, Minimize2, Maximize2, Scan, GripHorizontal
 // it's several hundred KB that only matters once a signed-in user is inside
 // /app, so it must not sit in the entry chunk the keypad paints from.
 import type { RelayHandle, RelayPhase } from "@/lib/relayClient";
-import { useT } from "./i18n";
+import { useT, type TKey } from "./i18n";
 import { isNativeAndroid, nativeEnsureNotifPermission, nativeGetPushToken } from "@/lib/nativeBridge";
 import { VoicemailPrompt, type FailedDialInfo } from "./VoicemailPrompt";
 import { trpc } from "@/lib/trpc";
@@ -84,6 +85,35 @@ export const useRelayEngine = () => useContext(RelayEngineContext);
  */
 export function RelayEngineProvider({ children }: { children: ReactNode }) {
   const t = useT();
+  /* `t` is memoized on the locale, so its IDENTITY changing is exactly the signal
+     that the language changed — which is what the re-apply effect below keys on.
+     It is also mirrored into a ref, because the mount effect must not re-run (and
+     tear down a live call) merely because somebody switched language. */
+  const tAnyRef = useRef<(k: string, vars?: Record<string, string | number>) => string>(
+    () => "",
+  );
+  const applyLabelsRef = useRef<((root: ParentNode, t: (k: string) => string) => void) | null>(null);
+  /* Same ref treatment as the applier, and for the same reason: the language effect
+     must not re-import the engine module (nor re-run the mount effect, which would
+     tear down a live call). */
+  const setEngineTranslatorRef = useRef<
+    ((t: ((k: string, vars?: Record<string, string | number>) => string) | null) => void) | null
+  >(null);
+  /* THE CAST IS DELIBERATE AND IS CHECKED SOMEWHERE STRONGER THAN THE TYPE SYSTEM.
+     `t` accepts a `TKey` union; `applyEngineLabels` accepts a plain string, because
+     the keys it reads come out of `data-i18n` attributes inside a template literal —
+     text TypeScript cannot see into, so no type could ever check them. Widening the
+     applier's parameter to `TKey` would only move the cast, AND would couple the
+     engine's asset module to the React i18n tree, which is exactly the dependency
+     the engine must not have.
+     `engineLabels.test.ts` sweeps every `data-i18n*` value in the markup and asserts
+     it is a real key — a check the compiler could not perform, and one that also
+     catches a typo in an attribute the type system would have waved through. */
+  const tAny = useCallback(
+    (k: string, vars?: Record<string, string | number>) => t(k as TKey, vars),
+    [t],
+  );
+  tAnyRef.current = tAny;
   // Read the identity directly (no heartbeat side effect — that's owned by
   // AppShell's useIdentity); we only need name + number to auto-register.
   const whoami = trpc.identity.whoami.useQuery(undefined, { staleTime: 30_000 });
@@ -280,6 +310,26 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     if (ready && me?.number) handleRef.current?.setPreferredPin(me.number);
   }, [me?.number, ready]);
 
+  /* A MID-CALL LANGUAGE SWITCH RE-LABELS THE ENGINE IN PLACE.
+     The markup is injected ONCE (`innerHTML = RELAY_MARKUP`) and must stay injected
+     — re-rendering it would destroy the live call's DOM, its listeners and its media
+     elements. So the language is re-APPLIED over the existing nodes instead, which
+     works because `applyEngineLabels` reads the `data-i18n` KEY rather than the
+     current text: applying Arabic over English and English back over Arabic both
+     land on the same result, and applying twice is a no-op.
+     A no-op before the engine has mounted (the ref is null), which is the ordinary
+     first run — the mount does its own first application. */
+  useEffect(() => {
+    const el = engineRoot.current;
+    if (!el || !applyLabelsRef.current) return;
+    applyLabelsRef.current(el, tAny);
+    /* The declarative half above covers every `data-i18n` element. The engine ALSO
+       writes copy with a name interpolated (the on-hold sentence), which carries no
+       key in the DOM and so cannot be re-applied from markup — handing it the new
+       translator makes it re-render that itself. */
+    setEngineTranslatorRef.current?.(tAny);
+  }, [t]);
+
   useEffect(() => {
     if (!inApp || !me) return;
     const el = engineRoot.current;
@@ -293,14 +343,28 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     let timer: ReturnType<typeof setInterval> | null = null;
     let giveUp: ReturnType<typeof setTimeout> | null = null;
     void (async () => {
-      const [{ startRelay }, { RELAY_MARKUP, RELAY_CSS }] = await Promise.all([
-        import("@/lib/relayClient"),
-        import("@/lib/relayAssets"),
-      ]);
+      const [{ startRelay, setEngineTranslator }, { RELAY_MARKUP, RELAY_CSS, applyEngineLabels }] =
+        await Promise.all([
+          import("@/lib/relayClient"),
+          import("@/lib/relayAssets"),
+        ]);
       if (cancelled) return;
       setEngineCss(RELAY_CSS);
       el.innerHTML = RELAY_MARKUP;
+      /* THE ONE BOUNDARY WHERE THE TRANSLATOR CROSSES INTO THE IMPERATIVE ENGINE.
+         `dict/engine.ts` recorded the engine's copy as unreachable because raw-DOM
+         functions cannot call a hook — true, and they do not have to: this component
+         already holds `t`, so it hands it over. The applier is kept on a ref so the
+         language-change effect below can re-run it without a second import and
+         without racing this one. See `applyEngineLabels` in lib/relayAssets.ts. */
+      applyLabelsRef.current = applyEngineLabels;
+      applyEngineLabels(el, tAnyRef.current);
       handle = startRelay(el);
+      /* AFTER startRelay, deliberately: the engine wires its own relabel hook
+         inside that call, and setEngineTranslator invokes it. Handing the
+         translator over earlier would relabel nothing. */
+      setEngineTranslatorRef.current = setEngineTranslator;
+      setEngineTranslator(tAnyRef.current);
       handle.setOnStateChange(setPhase);
       handle.setOnPinChange(setPin);
       handle.setOnRejoinChange(setRejoining);
