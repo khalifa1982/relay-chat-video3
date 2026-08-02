@@ -139,4 +139,54 @@ export const PEER = {
   "peer.profileStatus.travel": { en: "Travelling", ar: "مسافر" },
   "peer.profileStatus.free": { en: "Free to talk", ar: "متفرّغ للحديث" },
   "peer.profileStatus.busy": { en: "Busy", ar: "مشغول" },
+
+  /* ── "last seen …" ──────────────────────────────────────────────────────
+     ONE WHOLE KEY PER BAND rather than a sentence assembled around a count,
+     for the reason `peer.guestExpiresIn*` above is: English pluralises with a
+     suffix and Arabic does not — it needs one/two/few/many, and the noun
+     itself changes — so `{n} minute{s}` cannot be translated at all. The band
+     is chosen by `lastSeenBand` in `shared/profileFields.ts`, which is the
+     SAME function the English renderer reads, so the two can never disagree
+     about which band a timestamp is in.
+     Every number here is interpolated and stays WESTERN (v2.106.84): a
+     substituted "5" beside an Arabic-Indic numeral on one line reads as a
+     rendering fault, and a clock is read aloud as the digits shown. */
+  "peer.lastSeenJustNow": { en: "last seen just now", ar: "شوهد للتو" },
+  "peer.lastSeenMinute": { en: "last seen 1 minute ago", ar: "شوهد قبل دقيقة واحدة" },
+  "peer.lastSeenTwoMinutes": { en: "last seen 2 minutes ago", ar: "شوهد قبل دقيقتين" },
+  "peer.lastSeenMinutesFew": {
+    en: "last seen {count} minutes ago",
+    ar: "شوهد قبل {count} دقائق",
+  },
+  "peer.lastSeenMinutesMany": {
+    en: "last seen {count} minutes ago",
+    ar: "شوهد قبل {count} دقيقة",
+  },
+  "peer.lastSeenToday": { en: "last seen today at {time}", ar: "شوهد اليوم في {time}" },
+  "peer.lastSeenYesterday": { en: "last seen yesterday at {time}", ar: "شوهد أمس في {time}" },
+  /* Two date keys rather than an optional year fragment: Arabic puts the year
+     elsewhere in the phrase, so a `{year}` that is sometimes empty would leave
+     a dangling separator in one language or the other. */
+  "peer.lastSeenOnDate": {
+    en: "last seen on {month} {day} at {time}",
+    ar: "شوهد في {day} {month} الساعة {time}",
+  },
+  "peer.lastSeenOnDateYear": {
+    en: "last seen on {month} {day}, {year} at {time}",
+    ar: "شوهد في {day} {month} {year} الساعة {time}",
+  },
+  "peer.clockAm": { en: "AM", ar: "ص" },
+  "peer.clockPm": { en: "PM", ar: "م" },
+  "peer.month.0": { en: "Jan", ar: "يناير" },
+  "peer.month.1": { en: "Feb", ar: "فبراير" },
+  "peer.month.2": { en: "Mar", ar: "مارس" },
+  "peer.month.3": { en: "Apr", ar: "أبريل" },
+  "peer.month.4": { en: "May", ar: "مايو" },
+  "peer.month.5": { en: "Jun", ar: "يونيو" },
+  "peer.month.6": { en: "Jul", ar: "يوليو" },
+  "peer.month.7": { en: "Aug", ar: "أغسطس" },
+  "peer.month.8": { en: "Sep", ar: "سبتمبر" },
+  "peer.month.9": { en: "Oct", ar: "أكتوبر" },
+  "peer.month.10": { en: "Nov", ar: "نوفمبر" },
+  "peer.month.11": { en: "Dec", ar: "ديسمبر" },
 } as const satisfies Record<string, Entry>;

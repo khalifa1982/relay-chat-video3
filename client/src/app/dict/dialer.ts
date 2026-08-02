@@ -2,7 +2,7 @@
  * Strings owned by the dialer surface, plus the PRESENCE vocabulary.
  *
  * ── WHY PRESENCE LIVES HERE AND IS KEYED RATHER THAN MAPPED ───────────────────
- * `peerStatus` / `peerPresenceLines` are pure functions shared by the Dialer, the
+ * `peerPresenceLines` is a pure function shared by the Dialer, the
  * profile popup, Contacts and History, and they return finished English strings.
  * The tempting way to translate their output is a `text → key` lookup at each
  * render site, and that is precisely what this dictionary's own rule forbids: a
@@ -21,8 +21,18 @@ export const DIALER = {
   "presence.onCall": { en: "on a call", ar: "في مكالمة" },
   "presence.online": { en: "online now", ar: "متصل الآن" },
   "presence.away": { en: "away", ar: "بعيد" },
-  "presence.travelling": { en: "travelling ✈️", ar: "مسافر ✈️" },
+  /* NO `presence.travelling`. Its only reader was `peerStatus`, deleted in
+     v2.106.97 as dead code, and its lowercase form belonged to that function's
+     register — a phrase sitting alongside "online now" / "away" / "offline".
+     `peerPresenceLines` reports a travelling peer as OFFLINE and puts the
+     travelling-ness on its own chip, which is a standalone LABEL and is
+     capitalised; those two keys are below. */
   "presence.offline": { en: "offline", ar: "غير متصل" },
+
+  /* The status the person PICKED, rendered as its own chip rather than folded
+     into the presence line. Capitalised because it is a label, not a phrase. */
+  "dialer.chosenTravelling": { en: "Travelling ✈️", ar: "مسافر ✈️" },
+  "dialer.chosenAway": { en: "Away", ar: "بعيد" },
 
   // ── The keypad card ──
   "dialer.myNumber": { en: "MY NUMBER", ar: "رقمي" },

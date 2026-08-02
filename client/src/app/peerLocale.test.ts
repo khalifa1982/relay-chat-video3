@@ -126,9 +126,31 @@ describe("every user-visible string on the peer surfaces goes through the dictio
       "peer.guestExpiresInTwoDays",
       "peer.guestExpiresInDaysFew",
       "peer.guestExpiresInDaysMany",
+      /* Reached through `lastSeenMinutesKey`, which picks the plural form — the
+         same shape, and the same reason: Arabic needs one/two/few/many where
+         English suffixes, so the whole KEY changes per band. */
+      "peer.lastSeenMinute",
+      "peer.lastSeenTwoMinutes",
+      "peer.lastSeenMinutesFew",
+      "peer.lastSeenMinutesMany",
+      /* Reached as `peer.month.${n}` — a key built from the month INDEX, which no
+         static reader can follow. Pinned at the selector instead: `lastSeen.test.ts`
+         drives all twelve and asserts each resolves to real Arabic. */
+      ...(Array.from({ length: 12 }, (_, i) => `peer.month.${i}`) as TKey[]),
+      /* Picked by a ternary INSIDE the call — `t(c.pm ? "peer.clockPm" : ...)` —
+         so the literal `t("key"` shape this sweep looks for cannot see them. Driven
+         in `lastSeen.test.ts`, which asserts a clock renders the Arabic meridiem
+         and not "PM". */
+      "peer.clockAm",
+      "peer.clockPm",
     ]);
+    /* `lastSeen.ts` is a SECOND renderer of `peer.*` — the translated "last seen …"
+       line the conversation header shows (v2.106.97). It is read here rather than
+       exempted, so its keys are genuinely covered and only the ones no static
+       reader can follow need naming below. */
+    const RENDERERS = CODE + "\n" + read("client/src/app/lastSeen.ts");
     const dead = PEER_KEYS.filter(
-      (k) => !INDIRECT.has(k) && !CODE.includes(`t("${k}"`),
+      (k) => !INDIRECT.has(k) && !RENDERERS.includes(`t("${k}"`),
     );
     expect(dead, `declared but never rendered: ${dead.join(", ")}`).toEqual([]);
 

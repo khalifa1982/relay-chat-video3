@@ -234,7 +234,7 @@ export function historyPeerKey(it: Item): string {
  * English leaves the row untranslatable, and mapping that English back to a key at the
  * render site is the `text → key` lookup the dictionary's own rule forbids — a copy
  * edit would silently drop the translation. So it returns `{ text, key, vars }`, the
- * same shape `peerStatus` uses, and `text` is DERIVED from the key rather than written
+ * same shape `peerPresenceLines` uses, and `text` is DERIVED from the key rather than written
  * twice so the two halves cannot come to disagree.
  *
  * `key` is NULL for a person's own NAME, which is data rather than copy and is the

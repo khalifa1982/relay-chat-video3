@@ -300,13 +300,31 @@ describe("the dialer preview, in the owner's order", () => {
     const iBadge = block.indexOf("<RoleBadge");
     const iPresence = block.indexOf("{t(st.presenceKey)}");
     const iElapsed = block.indexOf('t("dialer.ago"');
-    const iChosen = block.indexOf("{st.chosen}");
+    /* The chip is TRANSLATED as of v2.106.97, so it renders `t(st.chosenKey)`
+       rather than the English `chosen` string. What this pin is about is the
+       ORDER, so it matches the chip whichever of the two carries it — and the
+       fact that the label goes through the dictionary is asserted separately
+       below, where breaking it means an English word on an Arabic screen. */
+    const iChosen = Math.max(block.indexOf("{t(st.chosenKey)}"), block.indexOf("{st.chosen}"));
     for (const [n, i] of [["badge", iBadge], ["presence", iPresence], ["elapsed", iElapsed], ["chosen", iChosen]] as const) {
       expect(i, `${n} is rendered`).toBeGreaterThan(-1);
     }
     expect(iBadge).toBeLessThan(iPresence);
     expect(iPresence).toBeLessThan(iElapsed);
     expect(iElapsed).toBeLessThan(iChosen);
+  });
+
+  it("the chosen-status chip goes through the dictionary, not a hardcoded word", () => {
+    /* It rendered `"Travelling ✈️"` / `"Away"` as raw English until v2.106.97 —
+       found because deleting the dead `peerStatus` left `presence.travelling`
+       with no reader and the dead-key sweep said so. The English is DERIVED from
+       the key rather than written twice, so the two cannot come to disagree. */
+    expect(DIALER).toMatch(/\{t\(st\.chosenKey\)\}/);
+    expect(DIALER).not.toMatch(/"Travelling ✈️"/);
+    expect(DIALER).toMatch(/chosenKey \? translate\("en", chosenKey\) : ""/);
+    for (const k of ["dialer.chosenTravelling", "dialer.chosenAway"]) {
+      expect(DIALER).toContain(k);
+    }
   });
 
   it("the elapsed figure is bidi-isolated so RTL cannot reorder '2d 4h'", () => {

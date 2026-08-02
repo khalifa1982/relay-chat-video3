@@ -152,16 +152,27 @@ describe("2b — search and notifications live in the peer profile", () => {
 
   it("tapping the name passes this conversation's actions to the profile", () => {
     expect(MESSAGES).toMatch(/openPeerProfile\(thread\.peerNumber, peerProfileChat\)/);
-    const memo = MESSAGES.slice(
-      MESSAGES.indexOf("const peerProfileChat"),
-      MESSAGES.indexOf("const peerProfileChat") + 700
-    );
+    /* Bounded by the memo's OWN end rather than a fixed character count: a
+       comment added inside it used to push the dep array out of the window, so
+       the pin failed on correct source (the recurring fixed-slice fragility). */
+    const memoAt = MESSAGES.indexOf("const peerProfileChat");
+    const memoEnd = MESSAGES.indexOf("\n  );", memoAt);
+    expect(memoAt).toBeGreaterThan(0);
+    expect(memoEnd).toBeGreaterThan(memoAt);
+    const memo = MESSAGES.slice(memoAt, memoEnd);
     expect(memo).toMatch(/onSearch: \(\) => setSearchOpen\(true\)/);
     expect(memo).toMatch(/onToggleMute: \(\) => setMuted\(!muted\)/);
     expect(memo).toMatch(/lastSeenText:/);
-    expect(memo).toMatch(/formatLastSeen\(/);
-    // Rebuilt when mute changes, or the popup would act on a stale value.
-    expect(memo).toMatch(/\[muted, setMuted, thread\?\.peerLastSeenAt\]/);
+    /* The PROPERTY is that the popup gets this conversation's last-seen line —
+       not which function renders it. This froze `formatLastSeen(`, the ENGLISH
+       renderer, so it forbade translating the line while saying nothing about
+       whether the line is passed at all (v2.106.97 wired `lastSeenLabel`, which
+       picks a key per band from the same shared `lastSeenBand`). */
+    expect(memo).toMatch(/lastSeenText: thread\?\.peerLastSeenAt/);
+    expect(memo).toMatch(/lastSeen(Label|Text|Band)\(/);
+    // Rebuilt when mute changes, or the popup would act on a stale value — and
+    // when the LANGUAGE changes, or it keeps the sentence from the old one.
+    expect(memo).toMatch(/\[muted, setMuted, thread\?\.peerLastSeenAt, t\]/);
   });
 
   it("the popup renders them only when opened from a conversation", () => {
