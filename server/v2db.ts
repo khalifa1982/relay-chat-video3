@@ -5460,6 +5460,37 @@ export async function getConversationParticipantIds(
 }
 
 /**
+ * The two facts a MESSAGE NOTIFICATION needs about a conversation: is it a group,
+ * and what is it called (2026-08-02).
+ *
+ * Its own tiny reader rather than a field on an existing one, because the send path
+ * is the only caller and it needs exactly two columns — the thread projections are
+ * far heavier and re-running one per message would put a real query on the hot send
+ * path to decide a banner's title.
+ *
+ * FAILS SOFT TO NULL, and the caller reads null as "not a group". A push that names
+ * the sender instead of the group is a slightly worse notification; a send that
+ * throws because a decoration lookup hiccuped is a lost message.
+ */
+export async function getConversationPushHeader(
+  conversationId: number
+): Promise<{ isGroup: boolean; title: string | null } | null> {
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    const [row] = await db
+      .select({ kind: conversations.kind, title: conversations.title })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    if (!row) return null;
+    return { isGroup: row.kind === "group", title: row.title ?? null };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Soft-delete (unsend) a message. Only the original sender may delete, and only
  * their own message. Sets `deletedAt` and nulls the body/attachment so the row
  * stops appearing (listMessages/listThreads already filter `deletedAt`). Returns

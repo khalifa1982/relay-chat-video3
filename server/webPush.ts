@@ -175,6 +175,29 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
   const fcmTokens = subs.filter(s => s.kind === "fcm").map(s => s.endpoint);
   let fcmDelivered = 0;
   if (fcmTokens.length > 0) {
+    // THE OS-DISPLAYED BLOCK GOES ON EVERYTHING EXCEPT A RING, and this one
+    // condition is the load-bearing line of the message-notification feature
+    // (2026-08-02).
+    //
+    // Why it is needed at all: a data-only FCM message is displayed by NOTHING
+    // unless the app itself posts a notification from `onMessageReceived`. RELAY's
+    // own shell does that (`RelayFcmService` → `showGeneric`), but the shipping
+    // Expo shell has no such service, so every message push arrived and showed
+    // nothing on the phone — the reported symptom. A `notification` block is
+    // rendered by the OS with no app code at all, which is what makes this work on
+    // both shells and on iOS in the same payload.
+    //
+    // Why a RING must be excluded: for a message carrying `notification`, Android
+    // displays it itself and does NOT call `onMessageReceived` while backgrounded.
+    // A ring depends on that callback to raise the full-screen lock-screen
+    // Activity (v2.86), so including the block here would silently replace the
+    // CallKit-style ring with an ordinary banner — a regression nothing in the push
+    // logs would show. Calls stay exactly as they were, which is also what the
+    // owner's spec asks for.
+    const display =
+      payload.kind === "incoming-call"
+        ? null
+        : { title: payload.title, body: payload.body ?? "", collapseId: payload.tag ?? "" };
     const r = await sendFcmData(fcmTokens, {
       kind: payload.kind,
       title: payload.title,
@@ -191,7 +214,7 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
       ...(payload.kind === "incoming-call" && payload.call
         ? buildCallPush({ type: "incoming_call", nowMs: Date.now(), ...payload.call })
         : {}),
-    });
+    }, display);
     fcmDelivered = r.delivered;
     await Promise.all(r.invalidTokens.map(t => deletePushSubscription(t).catch(() => {})));
   }

@@ -120,6 +120,7 @@ import {
   setIdentityAccountType,
   upsertContact,
   getConversationParticipantIds,
+  getConversationPushHeader,
   recentAutoReplyExists,
   getPublicStats,
   upsertPushSubscription,
@@ -156,6 +157,7 @@ import { sendEmail, emailEnabled, wrapEmailDocument } from "./email";
 import { appBaseUrl } from "./appUrl";
 import { unsubscribeHeaders, unsubscribeLink } from "./unsubscribe";
 import { vapidConfig, sendPushToIdentity, isAllowedWebPushEndpoint } from "./webPush";
+import { messagePushPreview, messagePushTitle, messagePushBody } from "./messagePush";
 import { classifyNativeToken, isVoipDeclaration, type NativeTokenKind } from "./expoPush";
 import { fcmConfig } from "./fcm";
 import { apnsVoipConfigured, apnsVoipConfig, apnsCredentialExpiry } from "./apnsVoip";
@@ -3011,12 +3013,19 @@ export const v2MessagesRouter = router({
       // never did: a phone with RELAY installed and closed stayed silent until
       // its owner happened to open the app. So push every OFFLINE recipient.
       //
-      // Content-free by the same rule as the email (owner: "WITHOUT the
-      // content") — the sender's name, never a word of the message. One tag per
-      // conversation, so ten messages replace each other instead of stacking
-      // ten notifications. `sendPushToIdentity` already no-ops when the user
-      // turned push off or has no subscription, so this needs no gate of its
-      // own; everything is best-effort and never affects the delivered message.
+      // THE BANNER NOW QUOTES THE MESSAGE, WHICH REVERSES THIS LINE'S OWN
+      // EARLIER RULE (2026-08-02). It read "content-free by the same rule as the
+      // email (owner: 'WITHOUT the content')"; the owner's message-notification
+      // spec asks for a preview, so the preview ships and the EMAIL keeps its
+      // rule — an inbox holds the disclosure indefinitely, a banner does not.
+      // `server/messagePush.ts` owns the wording, including the two cases that
+      // still refuse to quote (an expiring message, and a caption-less
+      // attachment), and in a group the TITLE is the group with the sender
+      // leading the body. One tag per conversation, so ten messages replace each
+      // other instead of stacking ten notifications.
+      // `sendPushToIdentity` already no-ops when the user turned push off or has
+      // no subscription, so this needs no gate of its own; everything is
+      // best-effort and never affects the delivered message.
       let offlinePeerIds: number[] = [];
       const presenceById = new Map<number, PresenceLite>();
       try {
@@ -3028,13 +3037,24 @@ export const v2MessagesRouter = router({
           // three sites that ask this question cannot drift apart.
           offlinePeerIds = peerIds.filter((pid) => presenceNeedsNotification(presenceById.get(pid)));
           // A voicemail already pushed its own, better-worded notification.
-          if (!input.meta?.voicemail) {
+          if (!input.meta?.voicemail && offlinePeerIds.length > 0) {
             const from = me.displayName || me.number;
+            // Read ONLY when there is somebody to notify, so a conversation whose
+            // members are all online costs no extra query at all.
+            const header = await getConversationPushHeader(input.conversationId);
+            const isGroup = header?.isGroup === true;
+            const preview = messagePushPreview({
+              kind: input.kind,
+              body: trimmedBody,
+              meta: input.meta ?? null,
+            });
+            const title = messagePushTitle({ isGroup, groupTitle: header?.title, senderName: from });
+            const body = messagePushBody({ isGroup, senderName: from, preview });
             for (const pid of offlinePeerIds) {
               sendPushToIdentity(pid, {
                 kind: "message",
-                title: from,
-                body: "Sent you a message — tap to read it.",
+                title,
+                body,
                 tag: `relay-msg-${input.conversationId}`,
                 url: `/app/messages?c=${input.conversationId}`,
               }).catch(() => {});

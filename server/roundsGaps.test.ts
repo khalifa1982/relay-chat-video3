@@ -79,17 +79,40 @@ describe("R7 GAP1 — a new message wakes an offline recipient's device", () => 
     expect(send).toMatch(/url: `\/app\/messages\?c=\$\{input\.conversationId\}`/);
   });
 
-  it("carries the sender's name but NOT a word of the message (owner's rule)", () => {
+  /* REWRITTEN 2026-08-02, AND WHAT IT USED TO ASSERT IS NOW THE DEFECT.
+   *
+   * This test was titled "carries the sender's name but NOT a word of the message
+   * (owner's rule)" and required `body: "Sent you a message — tap to read it."`
+   * verbatim while forbidding `trimmedBody`. That was right for v2.99.42, which
+   * applied the EMAIL's content-free rule to the push as well — and the owner's
+   * message-notification spec now asks for a preview ("first 120 chars / 📷
+   * Photo"), so a test in that shape does not protect anything: it forbids the
+   * change while saying nothing about the properties that still matter.
+   *
+   * A test that freezes what somebody is asking you to change is worse than no
+   * test, because it argues back. So this now pins the rule that DID survive —
+   * the push and the email are different channels with different lifetimes, and
+   * only the push learned to quote — plus the exceptions, which are in
+   * `messageNotifications.test.ts` where the wording itself is driven. */
+  it("the push quotes the message through the shared composer; the email does not", () => {
     const push = send.slice(send.indexOf("NEW-MESSAGE WEB PUSH"), send.indexOf("Offline-message EMAIL"));
-    expect(push).toMatch(/title: from/);
-    expect(push).toMatch(/body: "Sent you a message — tap to read it\."/);
-    // The message body must never reach the notification.
-    expect(push).not.toMatch(/trimmedBody/);
-    expect(push).not.toMatch(/input\.body/);
+    // The wording is not composed here — two copies is how a group banner and a
+    // DM banner come to describe one message differently.
+    expect(push).toMatch(/messagePushPreview\(/);
+    expect(push).toMatch(/messagePushTitle\(/);
+    expect(push).toMatch(/messagePushBody\(/);
+    // …and it is fed the message that was actually STORED.
+    expect(push).toMatch(/body: trimmedBody/);
+    const email = send.slice(send.indexOf("Offline-message EMAIL"));
+    expect(email, "the email keeps the content-free rule").not.toMatch(/trimmedBody|messagePushPreview/);
   });
 
   it("doesn't double-notify a voicemail (which pushes its own)", () => {
-    expect(send).toMatch(/if \(!input\.meta\?\.voicemail\) \{/);
+    // The CONDITION, not its exact spelling — it legitimately gained a second
+    // conjunct (skip the conversation-header read when nobody is offline).
+    const at = send.indexOf("!input.meta?.voicemail");
+    expect(at, "the voicemail exclusion must still gate the message push").toBeGreaterThan(0);
+    expect(send.slice(at, at + 120)).toMatch(/offlinePeerIds\.length > 0/);
   });
 
   it("never lets a notification failure affect the delivered message", () => {
