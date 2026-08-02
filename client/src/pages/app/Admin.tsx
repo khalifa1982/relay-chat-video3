@@ -67,6 +67,7 @@ import {
   X,
   Trash2,
   MoreVertical,
+  Radio,
 } from "lucide-react";
 import { RoleBadge } from "@/app/VerifiedBadge";
 import type { IdentityRole } from "@/app/VerifiedBadge";
@@ -76,6 +77,10 @@ import { useLiveStats } from "@/app/useLiveStats";
 import { PIN_INPUT_MAXLENGTH, capPinInput, pinDigits } from "@/app/pinInput";
 import { useLocale, useT } from "@/app/i18n";
 import type { TKey } from "@/app/i18n";
+/* The VERDICT is imported eagerly (it is a five-line pure function), while the
+   probe itself — which touches RTCPeerConnection — is loaded only when the button
+   is pressed, so this page costs nothing extra to open. */
+import { relayProbeVerdict } from "@/lib/relayProbe";
 
 /** The translator, as the render sites receive it. Named so a module-level helper can
  *  take one as a parameter — a constant or a plain function cannot call a hook. */
@@ -435,6 +440,11 @@ export default function Admin() {
       {/* FLEET state, above the per-person search, because it describes the whole
           deployment rather than anybody in particular (v2.105.22). */}
       <MediaCheck />
+
+      {/* Directly under the media card, because it answers the half that card
+          cannot: MediaCheck reports which relays are ADVERTISED, this reports
+          whether they actually accept a credential (v2.107.10). */}
+      <RelaySelfTest />
 
       <form
         onSubmit={(e) => {
@@ -1153,6 +1163,147 @@ function MediaCheck() {
           stats: <span className="font-semibold">Stats</span>,
         })}
       </p>
+    </div>
+  );
+}
+
+/**
+ * The force-relay self-test (v2.107.10).
+ *
+ * WHY IT IS HERE AND NOT IN THE CALL UI. v2.99.67 removed the in-call Diagnostics
+ * panel because it was a permanent floater nobody had asked for, and this answers
+ * a question about the FLEET rather than about a call — so it sits beside the
+ * media card, which already reports what TURN the fleet advertises. This reports
+ * what those relays actually DO when handed a live credential, which is the half
+ * a config readout cannot answer.
+ *
+ * IT NEEDS NO CALL. The credentials come from `/api/relay/ice`, which mints
+ * short-lived ones for exactly this purpose, so the credential question is
+ * answerable at any moment rather than only while something is ringing.
+ *
+ * IT OPENS NO CAMERA AND NO MICROPHONE — a data channel is all that is needed to
+ * make the browser gather, which is what makes this safe to put behind a button.
+ */
+function RelaySelfTest() {
+  const t = useT();
+  const [state, setState] = useState<
+    | { phase: "idle" }
+    | { phase: "running" }
+    | { phase: "done"; result: import("@/lib/relayProbe").RelayProbeResult }
+    | { phase: "failed" }
+  >({ phase: "idle" });
+
+  async function run() {
+    setState({ phase: "running" });
+    try {
+      const [{ probeRelayReachability }, res] = await Promise.all([
+        import("@/lib/relayProbe"),
+        fetch("/api/relay/ice", { credentials: "same-origin" }),
+      ]);
+      const body = (await res.json()) as {
+        iceServers?: Array<{ urls: string; username?: string; credential?: string }>;
+      };
+      const servers = body.iceServers || [];
+      const result = await probeRelayReachability({
+        servers,
+        makePc: (cfg) =>
+          new RTCPeerConnection(cfg as RTCConfiguration) as unknown as import(
+            "@/lib/relayProbe"
+          ).ProbePc,
+      });
+      setState({ phase: "done", result });
+    } catch {
+      // A failure to even ASK is its own outcome and must not read as "the relay
+      // is down" — those are different next steps.
+      setState({ phase: "failed" });
+    }
+  }
+
+  const busy = state.phase === "running";
+  return (
+    <div
+      className="rsheet space-y-2 rounded-[20px] border bg-card p-4"
+      style={{ borderColor: GOLD_HAIRLINE }}
+    >
+      <h3 className={GOLD_LABEL}>{t("admin.relay.label")}</h3>
+      <p className="text-[10.5px] leading-relaxed text-muted-foreground">
+        {t("admin.relay.hint")}
+      </p>
+      {state.phase === "done" && <RelayVerdict result={state.result} />}
+      {state.phase === "failed" && (
+        <p className="text-xs text-destructive">{t("admin.relay.failed")}</p>
+      )}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="rounded-[13px]"
+        disabled={busy}
+        onClick={() => void run()}
+      >
+        {busy ? (
+          <>
+            <Loader2 className="me-1.5 size-3.5 animate-spin" />
+            {t("admin.relay.running")}
+          </>
+        ) : (
+          <>
+            <Radio className="me-1.5 size-3.5" aria-hidden="true" />
+            {state.phase === "done" ? t("admin.relay.again") : t("admin.relay.run")}
+          </>
+        )}
+      </Button>
+    </div>
+  );
+}
+
+/** The verdict row plus, when there are any, the raw gathering errors. Split out
+ *  so the four outcomes read as four cases rather than a chain of ternaries. */
+function RelayVerdict({ result }: { result: import("@/lib/relayProbe").RelayProbeResult }) {
+  const t = useT();
+  const verdict = relayProbeVerdict(result);
+  const label =
+    verdict === "ok"
+      ? t("admin.relay.ok", {
+          relays: result.relayUrls.length || result.relayCandidates,
+          total: result.turnUrls.length,
+          ms: result.ms,
+        })
+      : verdict === "unauthorized"
+        ? t("admin.relay.unauthorized")
+        : verdict === "unreachable"
+          ? t("admin.relay.unreachable")
+          : t("admin.relay.noTurn");
+  const detail =
+    verdict === "ok"
+      ? t("admin.relay.okDetail")
+      : verdict === "unauthorized"
+        ? t("admin.relay.unauthorizedDetail")
+        : verdict === "unreachable"
+          ? t("admin.relay.unreachableDetail")
+          : undefined;
+  return (
+    <div className="space-y-1.5">
+      <ul className="text-xs">
+        <Row ok={verdict === "ok"} label={label} detail={detail} />
+      </ul>
+      {result.errors.length > 0 && (
+        <>
+          <p className="text-[10.5px] text-muted-foreground">
+            {t("admin.relay.errors", { count: result.errors.length })}
+          </p>
+          {/* The URL and the STUN code VERBATIM: 401 vs 701 vs a timeout are three
+              different problems, and paraphrasing them is how the actual code gets
+              lost. LTR-isolated — a URL inside an RTL paragraph reorders. */}
+          <ul className="space-y-0.5 text-[10.5px] text-muted-foreground">
+            {result.errors.slice(0, 8).map((e, i) => (
+              <li key={i} className="font-mono [unicode-bidi:isolate]" dir="ltr">
+                {(e.url || "?") + " · " + (e.code ?? "?") + (e.text ? " · " + e.text : "")}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }

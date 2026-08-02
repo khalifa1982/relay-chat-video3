@@ -90,6 +90,7 @@ import {
   wireToEngineRoute,
   type EngineRouteId,
 } from "./nativeAudioRoute";
+import { usableIceServers } from "./iceGuard";
 
 interface IceConfig {
   iceServers: Array<{ urls: string; username?: string; credential?: string }>;
@@ -110,12 +111,31 @@ interface IceConfig {
  *   - bundlePolicy "max-bundle": one transport for audio+video → a single ICE
  *     check list instead of one per m-line.
  *   - rtcpMuxPolicy "require": RTCP shares the RTP port (half the candidates).
+ *
+ * AND IT IS THE ONE PLACE A CREDENTIAL-LESS TURN ENTRY CAN BE STOPPED (v2.107.10).
+ * A TURN server with no username/credential does not throw — it is accepted,
+ * gathers nothing, and the call quietly has no relay path. Every caller that
+ * swaps in fresh servers comes through here, so filtering the entry out makes
+ * that outcome unreachable by construction rather than by remembering to check.
+ * `usableIceServers` only ever drops an entry it can positively identify as TURN,
+ * so STUN and anything unparseable pass through untouched.
  */
 function buildIceConfig(
   servers: IceConfig["iceServers"]
 ): IceConfig {
+  const { kept, dropped } = usableIceServers(servers);
+  if (dropped.length) {
+    /* console.warn rather than diag(): this function is module scope, and the
+       severity is right — it should never happen, and when it does the operator
+       needs the URL rather than a line in a rolling in-memory buffer. */
+    console.warn(
+      "[relay] dropped " + dropped.length + " TURN entr" +
+        (dropped.length === 1 ? "y" : "ies") + " with no credentials: " +
+        dropped.map(d => d.urls).join(", "),
+    );
+  }
   return {
-    iceServers: servers,
+    iceServers: kept,
     iceCandidatePoolSize: 4,
     bundlePolicy: "max-bundle",
     rtcpMuxPolicy: "require",
@@ -4466,10 +4486,19 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
          ("add these three fields to the call debug logging"), and the log is what
          survives being copied out of a session. Logged only when it CHANGES, or a
          2s poller would bury every other line in the diag buffer. */
-      const sig = `${stats.encoder ?? "-"}|${stats.limitedBy ?? "-"}|${stats.up?.fps ?? "-"}`;
+      const sig = `${stats.encoder ?? "-"}|${stats.limitedBy ?? "-"}|${stats.up?.fps ?? "-"}|${stats.audioIn?.state ?? "-"}`;
       if (sig !== qualLastSig) {
         qualLastSig = sig;
         diag(`enc=${stats.encoder ?? "none"} limited=${stats.limitedBy ?? "none"} fps=${stats.up?.fps ?? "-"}`);
+        /* THE AUDIO LINE IS SEPARATE, and it is the one worth having in a copied
+           log: the counters name WHY a call was silent, which no other line here
+           can. Only on a change, or a 2s poller buries the buffer. */
+        if (stats.audioIn) {
+          diag(
+            `audio-in ${stats.audioIn.state} pkt=${stats.audioIn.packets} ` +
+              `energy=${stats.audioIn.energy ?? "-"} playoutSec=${stats.audioIn.playoutSec ?? "-"}`,
+          );
+        }
       }
     } catch { /* the readout is decoration — never let it disturb a call */ }
   }

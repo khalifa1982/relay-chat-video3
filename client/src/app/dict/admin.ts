@@ -272,6 +272,55 @@ export const ADMIN = {
     ar: "أثناء المكالمة، اضغط {stats} في شريط التحكم لمعرفة زمن الذهاب والإياب وفقد الحزم وما إذا كانت الوسائط تمرّ عبر مُرحِّل.",
   },
 
+  /* ── The force-relay self-test (v2.107.10) ─────────────────────────────────────
+     Three verdicts rather than a pass/fail, because they need three different
+     next steps: a refused credential is a shared-secret problem, no answer at all
+     is a firewall/host problem, and each sends somebody to a different file. */
+  "admin.relay.label": { en: "TURN relay self-test", ar: "اختبار مُرحِّل TURN" },
+  "admin.relay.hint": {
+    en: "Builds a relay-only connection with live credentials, so nothing but TURN can answer. No camera, no microphone, no call.",
+    ar: "ينشئ اتصالاً عبر المُرحِّل فقط ببيانات اعتماد حيّة، فلا يمكن لغير TURN أن يستجيب. بدون كاميرا أو ميكروفون أو مكالمة.",
+  },
+  "admin.relay.run": { en: "Run the test", ar: "شغّل الاختبار" },
+  "admin.relay.again": { en: "Run it again", ar: "أعد التشغيل" },
+  "admin.relay.running": { en: "Gathering relay candidates…", ar: "جارٍ جمع مرشّحات المُرحِّل…" },
+  "admin.relay.failed": {
+    en: "The test could not run — the ICE endpoint did not answer.",
+    ar: "تعذّر تشغيل الاختبار — لم تستجب نقطة نهاية ICE.",
+  },
+  "admin.relay.ok": {
+    en: "Relay works — {relays} of {total} server(s) answered in {ms}ms.",
+    ar: "المُرحِّل يعمل — استجاب {relays} من {total} خادم خلال {ms} مللي ثانية.",
+  },
+  "admin.relay.okDetail": {
+    en: "The credentials this fleet mints are accepted. A call with no audio is failing somewhere other than TURN.",
+    ar: "بيانات الاعتماد التي يصدرها هذا الأسطول مقبولة. أي مكالمة بلا صوت تفشل في مكان آخر غير TURN.",
+  },
+  "admin.relay.unauthorized": {
+    en: "TURN refused the credentials (401).",
+    ar: "رفض TURN بيانات الاعتماد (401).",
+  },
+  "admin.relay.unauthorizedDetail": {
+    en: "The shared secret on the relay does not match the one this fleet signs with, or the credential had already expired.",
+    ar: "السر المشترك على المُرحِّل لا يطابق الذي يوقّع به هذا الأسطول، أو أن بيانات الاعتماد كانت قد انتهت صلاحيتها.",
+  },
+  "admin.relay.unreachable": {
+    en: "No relay candidate, and nothing was refused.",
+    ar: "لا يوجد أي مرشّح مُرحِّل، ولم يُرفض شيء.",
+  },
+  "admin.relay.unreachableDetail": {
+    en: "Nothing answered within the budget — a blocked port or an unreachable host, not a credential problem.",
+    ar: "لم يستجب شيء خلال المهلة — منفذ محجوب أو مضيف غير قابل للوصول، وليست مشكلة بيانات اعتماد.",
+  },
+  "admin.relay.noTurn": {
+    en: "No TURN server is configured, so there is nothing to test.",
+    ar: "لا يوجد خادم TURN مُهيّأ، فلا شيء لاختباره.",
+  },
+  "admin.relay.errors": {
+    en: "{count} gathering error(s) — the URL, STUN code and text are listed below.",
+    ar: "{count} من أخطاء الجمع — عنوان URL ورمز STUN والنص مذكورة أدناه.",
+  },
+
   // ── The media pool's reason lines ────────────────────────────────────────────
   /* Deliberately NOT one "pool unhealthy" sentence: an empty registry and a saturated
      fleet are the same empty list and opposite jobs. Telling somebody to add a node

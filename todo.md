@@ -1,5 +1,137 @@
 # Project TODO
 
+## v2.107.10 — THE APP CAN NOW SAY WHY A CALL WAS SILENT (audio-failure incident)
+
+Owner, with an uploaded root-cause document: *"The TURN credential race is failing
+~90% of calls right now… 303 sessions, only 32 relayed any audio — 273 relayed zero
+media, 251 arrived with username=<> (blank)… This is now the top production bug."*
+The document's fix was a client-side reordering; the owner then chose three
+alternatives I proposed instead — **"Yes ship it"**.
+
+**THE UPLOADED DIAGNOSIS IS REFUTED BY THIS REPO'S OWN SOURCE, and saying so
+mattered more than implementing it.** Three facts, each checked before anything
+was changed:
+
+1. **`bundlePolicy: "max-bundle"` + `rtcpMuxPolicy: "require"`** means audio and
+   video share ONE ICE transport and ONE candidate pair. The document's central
+   premise — *"video frequently finds a direct path… audio, when the network
+   requires a relayed path, needs TURN"* — describes per-m-line negotiation this
+   app does not do. **"Video fine, audio dead" cannot be an ICE outcome here**,
+   so a fix aimed at it would have been aimed at nothing.
+2. **The pre-ack config is STUN-only** (`buildIceConfig([{urls:"stun:…"}])`), and
+   TURN credentials arrive on the room ack. A peer connection built "too early"
+   therefore produces **no coturn session at all** rather than a blank-username
+   one — the opposite of the observed symptom.
+3. **`iceServers()` has no path that emits a credential-less TURN entry.** Every
+   `list.push` with a `turn:`/`turns:` url carries the minted `username` +
+   `credential` on the same object; now asserted per-push rather than in the
+   aggregate, so a new emitter that forgot them cannot hide behind its neighbours.
+
+**AND THERE IS A CONCRETE ALTERNATIVE ACCOUNT OF THE BLANK SESSIONS.**
+`iceCandidatePoolSize: 4` under `max-bundle` pre-gathers four candidate sets, uses
+one and **discards three** — each having already opened a TURN connection it then
+abandons before answering the 401 challenge. That predicts 75–83% blank sessions;
+the owner measured **82.8%** (251 of 303). **Dropping the pool to 1 was NOT done**:
+it changes ICE timing on every call and that is the owner's call to make, not a
+change to slip in during an outage on a theory.
+
+**THE REAL GAP IS THAT THE APP COULD NOT ANSWER THE QUESTION.** `totalAudioEnergy`
+— the counter that caught v2.106.51, where 508 packets a side arrived and energy
+read exactly 0 — **was absent from the readout entirely**, so a silent call could
+not be told apart from a transport failure and the incident had to be argued from
+coturn logs. That is what these three deliverables fix.
+
+**(1) INBOUND AUDIO EVIDENCE.** `CallStats.audioIn` carries packets, energy and
+`totalSamplesDuration`, and `audioInboundState` turns them into a claim:
+
+  * **`not-playing`** — packets arrived and **nothing was rendered**
+    (`totalSamplesDuration === 0`). The v2.106.51 signature verbatim: the
+    transport is perfect and the person hears silence. Worded on the readout
+    ("audio not playing out") and a **POOR** verdict, because every other
+    threshold here says a 1ms-RTT zero-loss silent call is fine.
+  * **`no-sound`** — arrived and rendered, every sample zero. Overwhelmingly a
+    **muted far side**, so deliberately NOT a fault: a readout that accuses the
+    app every time somebody mutes is one nobody believes on the day it is right.
+    It is also the honest answer when the UA reports no sample duration, because
+    there the two causes cannot be separated and claiming either would be a guess.
+  * **`unknown`** below **`AUDIO_MIN_PACKETS` (150, ~3s)** — higher than the loss
+    floor on purpose, or the first moments of every healthy call would accuse
+    themselves.
+
+**AN UNLABELLED INBOUND STREAM IS NEVER GUESSED AT**: attribution requires an
+explicit `kind`/`mediaType` of audio, since guessing "no frame size ⇒ audio" would
+put a video leg's counters behind a sentence about somebody's microphone. Null
+when there is no audio stream at all — never a zero-filled record, because "no
+stream" and "a stream that delivered nothing" are different findings. **The raw
+counters render ALWAYS, not only when something is wrong**: the point of a number
+is that it can be compared, and "what does a working call read" is exactly what an
+outage makes unanswerable if the figure only appears during one.
+
+**(2) THE FORCE-RELAY SELF-TEST** (the document's own item #3), in the admin panel
+beside the media card. It builds a connection with `iceTransportPolicy: "relay"`
+against **live credentials from `/api/relay/ice`**, so nothing but TURN can answer
+and **no call is needed** — the credential question is answerable at any moment.
+**THREE VERDICTS, because they need three different next steps**: a relay
+candidate means the minted credentials WORK (so a silent call is failing somewhere
+other than TURN); **401 means coturn REFUSED them**, which is the document's
+hypothesis confirmed; and neither, within the budget, means **nothing answered** —
+a blocked port or unreachable host, not a credential problem. Collapsing those into
+a boolean would send somebody to the wrong file, which is what this whole exercise
+is about. **`ok` outranks `unauthorized`** when one relay answers and another
+refuses, since media can still be relayed and condemning the fleet over one
+misconfigured host is the false alarm that teaches an operator to stop reading it —
+the 401 survives in `errors`, printed with its URL and STUN code verbatim.
+**A DATA CHANNEL, NEVER MEDIA**: without a media section the offer gathers nothing
+and a healthy relay would read "unreachable", and a data channel needs no
+permission — no camera, no microphone, which is what makes this safe behind a
+button. It never throws (a diagnostic that explodes tells you less than one that
+reports "unreachable"), is bounded by a timeout, closes its connection, and opens
+none at all when no TURN is configured.
+
+**(3) THE BLANK-CREDENTIAL GUARD.** `usableIceServers` drops any TURN entry lacking
+a username or credential, applied in `buildIceConfig` — the ONE funnel every ICE
+swap passes through — so the document's stated mechanism becomes **unreachable by
+construction** rather than by review, whatever future path might otherwise
+reintroduce it. **It drops the entry rather than refusing to build**: this is the
+call path, so failing shut would make a config mistake cost every call outright,
+while failing open costs only the relay leg, which a credential-less entry was
+never going to provide. **Only a positively-identified TURN url is ever dropped** —
+STUN carries no credentials by design and an unparseable entry is KEPT, because
+dropping what we do not understand is the direction that costs somebody a call.
+The drop is a loud `console.warn` naming the URL.
+
+**29 of 29 tripwires verified by MUTATION** off a confirmed-green baseline from
+byte-exact backups, the mutator aborting unless its target occurs exactly once and
+treating a changed test TOTAL as a harness failure; all six sources byte-identical
+afterwards. **ONE SURVIVED THE FIRST RUN AND IT WAS THE PIN-THE-PRESENCE-NOT-THE-
+RENDER CLASS**, in my own test: the mount assertion was `toMatch(/<RelaySelfTest \/>/)`,
+which `{false && <RelaySelfTest />}` satisfies untouched — so the card could have
+become unreachable with every assertion green. It now requires the element to begin
+its own line, which a gate or ternary cannot do, and it bites. **ONE OF MY OWN
+ASSERTIONS WAS WRONG ABOUT THE CODE**, caught by failing on correct source: the
+server's TURN urls are string-CONCATENATED, not template literals, so a
+`` /urls: `turns?:/ `` sweep matched zero pushes and read as a failure against a
+perfectly good `iceServers()`; rewritten to walk each `list.push` with a vacuity
+guard, which is stricter than what it replaced.
+
+**A GUARD THAT WOULD HAVE BEEN THE WORST OUTCOME IS PINNED**: a change to
+`buildIceConfig` that quietly dropped `max-bundle` would make the audio/video split
+the report describes **newly possible** — so the tuning is asserted to survive the
+filter, and a mutation removing it bites.
+
+**NOT VERIFIED ON A CALL, said plainly**: there is no second browser and no route
+to the fleet here, so what is proven is that the app can now distinguish a silent
+call from a transport failure, that the relay test reports its three outcomes
+correctly, and that a credential-less entry cannot reach a peer connection — not
+that the owner's next call has audio. **The two questions the owner has not
+answered are NOT actioned**: whether to drop `iceCandidatePoolSize` to 1, and
+whether the failing calls are 1:1 voice specifically.
+
+`client/src/lib/iceGuard.ts` + `client/src/lib/relayProbe.ts` +
+`client/src/lib/audioEvidence.test.ts` (39). No schema change, no new dependency,
+no new env var. 6450 tests.
+
+
 ## v2.107.9 — THE TRANSPORT SEAM: `aloneInCall()` STOPS COUNTING MESH PEERS (#170)
 
 The owner's sequencing, verbatim: *"Abstracting transportMax() and aloneInCall()
