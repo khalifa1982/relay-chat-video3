@@ -282,7 +282,11 @@ describe("what the owner actually sees", () => {
     const card = pendingCard();
     expect(card).toMatch(/\{p\.label\}/);
     expect(card).toMatch(/\{p\.detail\}/);
-    expect(card).toMatch(/new Date\(p\.createdAt\)\.toLocaleString\(\)/);
+    /* v2.106.98: the property is that a LOCALISED date-and-time is shown, not that
+       it is produced by an empty arglist — which formats in the BROWSER's language
+       and so was the defect on a screen the user may have set to Arabic. The pin now
+       requires the stamp AND that it names the app's locale. */
+    expect(card).toMatch(/formatDateTimeIn\(locale, p\.createdAt\)/);
     expect(card).toMatch(/\{p\.ip\}/);
   });
 

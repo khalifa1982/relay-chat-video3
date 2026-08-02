@@ -17,8 +17,8 @@ import { useIdentity } from "./useIdentity";
 import { RoleBadge, roleFromFlags } from "./VerifiedBadge";
 import { StatusViewer, type FeedGroup } from "@/pages/app/Status";
 import { profileStatusMeta, type ProfileStatus } from "@shared/profileStatus";
-import { describePeerPresence } from "@shared/profileFields";
-import { useT, type TKey } from "./i18n";
+import { presenceLabel } from "./presenceCopy";
+import { useT, useLocale, type TKey } from "./i18n";
 
 /**
  * Peer identity surfaces (v2.96, owner spec):
@@ -421,6 +421,7 @@ export function GuestExpiryNote({
 
 export function PeerOverlaysHost() {
   const t = useT();
+  const { locale } = useLocale();
   const [, setLocation] = useLocation();
   const engine = useRelayEngine();
   // Who WE are — needed only to answer "is this story mine?" for the synthetic
@@ -539,6 +540,14 @@ export function PeerOverlaysHost() {
   });
 
   const p = lookup.data;
+  /* TRANSLATED (v2.106.98). Derived ONCE and read by both surfaces below — the
+     popup and the full profile — so the two can never describe one person
+     differently, which is the divergence a per-site call would allow. The state
+     itself comes from `peerPresenceState`, which the English renderer also reads.
+     Empty for a suppressed presence, which is what makes the `&&` guards below
+     still hide the line rather than print "Offline" about somebody the server
+     declined to describe (v2.95). */
+  const presenceLine = p ? presenceLabel(p, t, { locale }) : "";
   const feedStatusInfo = usePeerStatusMap().get(profileNumber ?? "");
   /* Prefer the feed (it's already cached and covers contacts); fall back to the
      per-number lookup so an "everyone" story from a non-contact still lights the
@@ -684,9 +693,9 @@ export function PeerOverlaysHost() {
               {/* Prefer the caller's full last-seen line when it has one: the
                   chat header can only fit a short "8h" style stamp, and the owner
                   asked for the date AND time to be readable somewhere. */}
-              {(chatActions?.lastSeenText || describePeerPresence(p)) && (
+              {(chatActions?.lastSeenText || presenceLine) && (
                 <div className={"mt-1.5 text-xs " + (p.isOnline && !p.idle ? "text-[color:var(--relay-online,#06d6a0)]" : "text-muted-foreground")}>
-                  {p.isOnline ? describePeerPresence(p) : (chatActions?.lastSeenText || describePeerPresence(p))}
+                  {p.isOnline ? presenceLine : (chatActions?.lastSeenText || presenceLine)}
                 </div>
               )}
               <ProfileStatusChip status={p.profileStatus} note={p.statusNote} />
@@ -919,9 +928,9 @@ export function PeerOverlaysHost() {
             >
               {p.number.length === 6 ? `${p.number.slice(0, 3)}-${p.number.slice(3)}` : p.number}
             </div>
-            {describePeerPresence(p) && (
+            {presenceLine && (
               <div className={"mt-2 text-sm " + (p.isOnline && !p.idle ? "text-[color:var(--relay-online,#06d6a0)]" : "text-muted-foreground")}>
-                {describePeerPresence(p)}
+                {presenceLine}
               </div>
             )}
             <ProfileStatusChip status={p.profileStatus} note={p.statusNote} size="md" />

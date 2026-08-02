@@ -30,7 +30,10 @@
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { relativeTime } from "./Contacts";
+/* v2.106.98 moved `relativeTime` beside its band in `shared/profileFields.ts` — an
+   English renderer of a shared decision is the dictionary's fallback, not a page's
+   private helper. Every assertion below is unchanged, which is the point. */
+import { relativeTime } from "@shared/profileFields";
 import { formatLastSeen } from "../../../../shared/profileFields";
 import { codeOnly } from "../../../../server/testing/codeOnly";
 
@@ -144,17 +147,28 @@ describe("the two last-seen formatters agree about the unusable cases", () => {
 });
 
 describe("the guard is structural, not incidental", () => {
-  const SRC = codeOnly(readFileSync("client/src/pages/app/Contacts.tsx", "utf8"));
+  /* v2.106.98 moved the totality rules into `compactAgoBand`, so BOTH the English
+     `relativeTime` and the translated `compactAgoLabel` inherit them — which is the
+     whole reason to split. These pins follow the rule to where it lives rather than
+     freezing the page it used to live on. */
+  const SRC = codeOnly(readFileSync("shared/profileFields.ts", "utf8"));
+  const BAND = (() => {
+    const at = SRC.search(/export function compactAgoBand\(/);
+    expect(at, "compactAgoBand not found").toBeGreaterThanOrEqual(0);
+    // Bounded by the function's OWN end, never a fixed slice and never `indexOf`
+    // unguarded — an absent needle answers -1 and `slice(start, -1)` runs to EOF.
+    const end = SRC.indexOf("\n}", at);
+    expect(end, "unterminated body").toBeGreaterThan(at);
+    const body = SRC.slice(at, end);
+    expect(body.length, "slice collapsed").toBeGreaterThan(80);
+    return body;
+  })();
 
   it("the finite check is present and precedes the arithmetic", () => {
     // Pinned as an ORDER because a check that runs after the subtraction protects
     // nothing — `diff` would already be NaN.
-    const at = SRC.search(/export function relativeTime/);
-    expect(at).toBeGreaterThanOrEqual(0);
-    const body = SRC.slice(at, SRC.indexOf("\n}", at));
-    expect(body.length).toBeGreaterThan(80);
-    const guard = body.search(/Number\.isFinite\(ms\)/);
-    const math = body.search(/Date\.now\(\) - ms/);
+    const guard = BAND.search(/Number\.isFinite\(ms\)/);
+    const math = BAND.search(/nowMs - ms/);
     expect(guard, "no finite guard").toBeGreaterThanOrEqual(0);
     expect(math).toBeGreaterThan(0);
     expect(guard).toBeLessThan(math);
@@ -162,9 +176,19 @@ describe("the guard is structural, not incidental", () => {
 
   it("it never calls .getTime() on a value it has not proven is a Date", () => {
     // The exact shape of the defect: `.getTime()` on the raw parameter.
-    const at = SRC.search(/export function relativeTime/);
-    const body = SRC.slice(at, SRC.indexOf("\n}", at));
-    expect(body).toMatch(/d instanceof Date \? d : new Date\(/);
-    expect(body).not.toMatch(/\bd\.getTime\(\)/);
+    expect(BAND).toMatch(/d instanceof Date \? d : new Date\(/);
+    expect(BAND).not.toMatch(/\bd\.getTime\(\)/);
+  });
+
+  it("the two renderers read the band rather than re-deriving it", () => {
+    /* The property the split exists for: one decision, two vocabularies. A second
+       copy of the thresholds is how the Contacts row and the profile popup come to
+       bucket the same moment differently. */
+    const EN = SRC.slice(SRC.search(/export function relativeTime\(/));
+    expect(EN).toMatch(/compactAgoBand\(d, Date\.now\(\)\)/);
+    expect(EN.slice(0, EN.indexOf("\n}"))).not.toMatch(/86400|3600|< 60\b/);
+    const COPY = codeOnly(readFileSync("client/src/app/presenceCopy.ts", "utf8"));
+    expect(COPY).toMatch(/compactAgoBand\(d, opts\.nowMs \?\? Date\.now\(\)\)/);
+    expect(COPY).not.toMatch(/86400|3600/);
   });
 });

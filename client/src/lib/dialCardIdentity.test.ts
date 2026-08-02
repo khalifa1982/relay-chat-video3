@@ -201,8 +201,17 @@ describe("v2.105.24 — the formatters are SHARED, never copied", () => {
     const shared = read("shared/profileFields.ts");
     expect(shared).toMatch(/export function describePeerPresence\(/);
     const overlays = read("client/src/app/PeerOverlays.tsx");
-    expect(overlays).toMatch(/import \{ describePeerPresence \} from "@shared\/profileFields"/);
+    /* v2.106.98 put a TRANSLATED renderer in front of it. The property this pin
+       stands for is unchanged and is what is asserted: the popup does not carry its
+       own copy of the presence rule. Both renderers read `peerPresenceState`, so the
+       dial card and the popup still cannot disagree about whether somebody is idle. */
+    expect(overlays).toMatch(/import \{ presenceLabel \} from "\.\/presenceCopy"/);
     expect(overlays).not.toMatch(/function (?:presenceLine|describePeerPresence)\(/);
+    const copy = read("client/src/app/presenceCopy.ts");
+    expect(copy).toMatch(/peerPresenceState\(d\)/);
+    expect(shared).toMatch(/export function peerPresenceState\(/);
+    // The English renderer reads the same state, so the two vocabularies share one decision.
+    expect(shared).toMatch(/describePeerPresence[\s\S]{0,200}peerPresenceState\(d\)/);
   });
 });
 

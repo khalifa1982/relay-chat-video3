@@ -62,7 +62,8 @@ import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { PeerAvatar, openPeerProfile } from "@/app/PeerOverlays";
 import { presenceDot } from "@/app/presenceDot";
 import { matchQuery } from "@/app/searchMatch";
-import { useT, type TKey } from "@/app/i18n";
+import { useT, useLocale, type TKey } from "@/app/i18n";
+import { compactAgoLabel } from "@/app/presenceCopy";
 
 /** The four tag recipes in index.css. A STATIC map, never a composed string: the class
  *  names have to exist literally somewhere the CSS can be found by, and this is that place. */
@@ -166,52 +167,6 @@ export function contactCountKey(n: number): TKey {
   return n <= 10 ? "contacts.contactCountFew" : "contacts.contactCountMany";
 }
 
-/**
- * "last seen …" for one row.
- *
- * TOTAL BY CONSTRUCTION, and that is not defensiveness for its own sake — it is a
- * blast-radius fix with a demonstrated failure mode. The previous shape took
- * `Date | string | null` and called `.getTime()` on whatever was not a string, so a
- * value of any OTHER type threw a TypeError out of the render — and because this is
- * called from a row inside the list, React unwound the whole page and the error
- * boundary replaced the entire Contacts screen with "An unexpected error occurred."
- * Measured, not theorised: driving the real bundle with one numeric `lastSeenAt`
- * rendered ZERO contacts and that message.
- *
- * Today the server sends a Drizzle `timestamp`, i.e. a real Date that superjson
- * revives as a Date, so the throwing path is not reachable through the ordinary
- * wire — this is about the cost when it is wrong, not a claim that it is. One row
- * losing its "last seen" line is a cosmetic degradation; the entire address book
- * disappearing is the failure the owner would report as "the contact is not
- * showing". A whole screen must not rest on one field's runtime type.
- *
- * It also accepts a NUMBER now, because that is what the sibling formatter in
- * `shared/profileFields.ts` takes (`formatLastSeen(lastSeenMs)`) — two functions
- * answering one question with different input types is how a future caller passes
- * the wrong one, and that formatter is likewise total (`!Number.isFinite` → "").
- */
-export function relativeTime(d: Date | string | number | null | undefined): string {
-  if (d === null || d === undefined || d === "") return "never";
-  // Only three shapes can be a time. Everything else is coerced by `new Date()` into
-  // something that looks plausible and is not: `new Date(true)` is one millisecond
-  // after the epoch, so a boolean would render as "1/1/1970" — no crash, and still a
-  // date printed about somebody nobody has a time for. Caught by this file's own test.
-  if (!(d instanceof Date) && typeof d !== "string" && typeof d !== "number") return "never";
-  const date = d instanceof Date ? d : new Date(d);
-  const ms = date.getTime();
-  // An unparseable date yields NaN, which would make every comparison below false and
-  // fall through to `toLocaleDateString()` → the literal text "Invalid Date" in the row.
-  // `<= 0` matches `formatLastSeen`'s own rule in `shared/profileFields.ts`, which is
-  // the whole point of touching this: 0 is what a null column becomes on plenty of
-  // paths, and the two formatters disagreeing about it is the divergence being closed.
-  if (!Number.isFinite(ms) || ms <= 0) return "never";
-  const diff = (Date.now() - ms) / 1000;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)}d ago`;
-  return date.toLocaleDateString();
-}
 
 export default function ContactsPage() {
   const t = useT();
@@ -821,6 +776,9 @@ function ContactRow({
   onSetCategory: (cat: Category) => void;
 }) {
   const t = useT();
+  /* The row's date fallback (beyond a week) is a REGIONAL format rather than a
+     translation, so it needs the app's language and not the browser's. */
+  const { locale } = useLocale();
   return (
     /* BOARD 1e — TWO LINES, AND THE REASON IS A MEASUREMENT RATHER THAN THE FRAME.
        At 390px the single-line row spent its width like this: 32px of list padding, 42px
@@ -983,15 +941,15 @@ function ContactRow({
           ) : c.isOnline ? (
             <span className="text-[color:var(--relay-online)]">{t("contacts.rowOnline")}</span>
           ) : (
-            /* STILL ENGLISH, AND DELIBERATELY SO. `relativeTime` is a relative-time
-               formatter of exactly the same class as `formatLastSeen`, which five other
-               surfaces share and which is being translated as its own piece of work.
-               Translating this one alone would make a contact's row and that same
-               person's profile popup answer the same question in two languages; and
-               translating the "last seen" wrapper WITHOUT the duration would assemble a
-               sentence from a fragment, which is the one thing the dictionary's rules
-               forbid outright. Named in the release notes rather than half-done. */
-            <>last seen {relativeTime(c.lastSeenAt)}</>
+            /* ONE KEY CARRYING THE WHOLE SENTENCE, not "last seen" plus a duration.
+               v2.106.97 recorded why this had to wait for `formatLastSeen`: translating
+               the wrapper without the duration assembles a sentence from a fragment,
+               which Arabic cannot reassemble, and translating the row alone would have
+               made it and the profile popup answer one question in two languages. Both
+               are translated now and both read the SAME band, so neither objection
+               stands. `{ago}` is substituted by name, so Arabic is free to put it
+               somewhere else in the sentence. */
+            <>{t("contacts.rowLastSeen", { ago: compactAgoLabel(c.lastSeenAt, t, { locale }) })}</>
           )}
         </span>
         {/* Inline actions: Message / Video / Voice + overflow menu — circular

@@ -1,5 +1,22 @@
 # Project TODO
 
+## v2.106.98 — dates, numbers and presence follow the APP's language, not the browser's
+- [x] `client/src/app/dateLocale.ts` — one reader; Arabic pins `-u-nu-latn` (Western digits, engine-independent), English pins NOTHING (forcing en-US would move every British/Australian/Indian user's date format)
+- [x] `describePeerPresence` split into `peerPresenceState` + `presenceLabel`; English byte-identical, asserted
+- [x] Contacts' `relativeTime` split into `compactAgoBand` + `compactAgoLabel`, and MOVED beside its band in `shared/` (an English fallback is the dictionary's, not a page's)
+- [x] `Messages.tsx`'s `timeAgo` carried a byte-identical copy of the same four thresholds — now reads the shared band
+- [x] 8 empty-arglist `toLocale*String()` sites converted (LoginScreen count, InviteCard, Profile ×3, Messages, Status, Contacts)
+- [x] Unit is a WHOLE key per band per unit — `٢ ساعة` is wrong where `ساعتان` is right; all four Arabic forms asserted distinct, the dual carries no digit
+- [x] Suppressed presence renders "" and has NO dictionary key — the absence is asserted, so it cannot be "fixed" into a privacy leak
+- [x] The byte-identity test caught a real unintended English copy change (`nobody on the line` vs the shipped `0 on the line`) — English restored, only Arabic gains a zero form
+- [x] `InviteCard.tsx` had ZERO `t(` calls — the first screen a shared `/i/<pin>` link lands on, ~20 strings now translated
+- [x] Standing guard: no client screen may use an empty-arglist locale formatter; 3 exemptions NAMED (2 vendored shadcn + the dev TURN probe) with a staleness check so the list cannot rot
+- [x] 7 pre-existing pins repointed; two had frozen the DEFECT (the empty arglist verbatim)
+- [x] `lastSeen.ts` renamed `presenceCopy.ts` — it now holds last-seen, presence, occupancy and compact-ago
+- [x] 13/13 tripwires verified by mutation off a green baseline; 5 sources byte-identical afterwards; 6169 tests
+- [ ] `formatElapsedSince` is still English-abbreviated (`3h 20m`) — a COMPOUND duration needs a plural per unit, its own piece of work; substituted by name so Arabic controls placement
+- [ ] Nobody has switched the app to Arabic on a real device and looked at a date
+
 ## v2.106.97 — "last seen …" speaks Arabic; the audit corrected my own count
 - [x] Split `lastSeenBand` (no words) from the two renderers, so English and Arabic cannot disagree about which band a moment is in
 - [x] Whole key per band for the plural — Arabic needs one/two/few/many where English suffixes
@@ -9,8 +26,8 @@
 - [x] Deleting it exposed a live untranslated string: the dialer's chosen-status chip rendered "Travelling ✈️" / "Away" raw
 - [x] 3 pins repointed from the untranslated implementation to the property; one 700-char window re-bounded by the memo's own end
 - [x] Both dead-key sweeps widened where they can read the new renderer; only runtime-chosen keys NAMED
-- [ ] `describePeerPresence` is a third English presence formatter and uses `toLocaleString()` (browser locale, not the app's)
-- [ ] Contacts' compact `relativeTime` has the same two problems
+- [x] `describePeerPresence` is a third English presence formatter and uses `toLocaleString()` (browser locale, not the app's) — DONE in v2.106.98
+- [x] Contacts' compact `relativeTime` has the same two problems — DONE in v2.106.98
 - [ ] Nobody has read these screens in Arabic on a real device
 
 ## v2.106.96 — the last five screens speak Arabic (#156 done)

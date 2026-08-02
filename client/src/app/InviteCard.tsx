@@ -1,6 +1,8 @@
 import { PhoneCall, Users, Crown, Shield } from "lucide-react";
 import { RoleBadge, type IdentityRole } from "./VerifiedBadge";
 import { formatElapsedSince } from "@shared/profileFields";
+import { useT, useLocale, type TKey } from "./i18n";
+import { formatDateIn } from "./dateLocale";
 
 /**
  * #109 — the invite screen's card: WHAT you are about to join and WHO is already
@@ -145,10 +147,25 @@ function Disc({
  * just now" about somebody who has been there an hour is a false statement about
  * the viewer's own data.
  */
-export function joinedLine(joinedAt: number | null, now: number): string {
+export function joinedLine(
+  joinedAt: number | null,
+  now: number,
+  t: (k: TKey, v?: Record<string, string | number>) => string,
+): string {
   if (!joinedAt || !Number.isFinite(joinedAt) || joinedAt > now) return "";
   const ago = formatElapsedSince(joinedAt, now);
-  return ago ? `joined ${ago} ago` : "";
+  /* ONE key carrying the whole sentence with `{ago}` substituted by name — "joined"
+     + a duration + "ago" is a sentence assembled from fragments, and Arabic leads
+     with the verb so it cannot be reassembled from the English seams. */
+  return ago ? t("invite.joined", { ago }) : "";
+}
+
+/** Occupancy is banded, because Arabic's dual is a word rather than "2 " + a noun. */
+export function inviteLineCountKey(n: number): TKey {
+  if (n <= 0) return "invite.lineCountNobody";
+  if (n === 1) return "invite.lineCountOne";
+  if (n === 2) return "invite.lineCountTwo";
+  return n <= 10 ? "invite.lineCountFew" : "invite.lineCountMany";
 }
 
 export function InviteCard({
@@ -173,6 +190,10 @@ export function InviteCard({
   /** The action area — a name field + Join for a guest, Join alone once signed in. */
   children?: React.ReactNode;
 }) {
+  const t = useT();
+  /* The created-on date is a REGIONAL format rather than a translation, so it
+     follows the app's language and not the browser's. */
+  const { locale } = useLocale();
   const isLine = !!line;
   const title = isLine ? line.title : person?.displayName || "";
   const notFound = personResolved && !isLine && !person;
@@ -182,7 +203,7 @@ export function InviteCard({
       <div className="mb-1 flex justify-center">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-[color:var(--relay-online,#06d6a0)]/30 bg-[color:var(--relay-online,#06d6a0)]/10 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[color:var(--relay-online,#06d6a0)]">
           {isLine ? <Users className="size-3.5" /> : <PhoneCall className="size-3.5" />}
-          {isLine ? "Party line" : "Call invite"}
+          {isLine ? t("invite.kindLine") : t("invite.kindCall")}
         </span>
       </div>
 
@@ -201,7 +222,7 @@ export function InviteCard({
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-lg font-semibold leading-tight">
           <span className="truncate" dir="auto">
-            {title || (notFound ? "Number not found" : "—")}
+            {title || (notFound ? t("invite.notFoundTitle") : "—")}
           </span>
           {!isLine && <RoleBadge role={person?.role} size={15} />}
         </div>
@@ -215,23 +236,20 @@ export function InviteCard({
         </div>
         <div className="mt-1 text-xs text-muted-foreground">
           {isLine ? (
-            <>
-              {line.rosterKnown
-                ? line.liveCount > 0
-                  ? `${line.liveCount} on the line now`
-                  : "Nobody on the line yet — you'd be first"
-                : "Open the line to see who's on it"}
-              {" · created "}
-              {new Date(line.createdAt).toLocaleDateString()}
-            </>
+            t("invite.lineCreated", {
+              who: line.rosterKnown
+                ? t(inviteLineCountKey(line.liveCount), { count: line.liveCount })
+                : t("invite.lineRosterUnknown"),
+              when: formatDateIn(locale, line.createdAt),
+            })
           ) : notFound ? (
-            "There's no RELAY user with this number"
+            t("invite.notFoundBody")
           ) : person ? (
             person.inCall
-              ? "On a call right now"
+              ? t("invite.peerInCall")
               : person.isOnline
-                ? "Online now"
-                : "Offline — you can't call them right now"
+                ? t("invite.peerOnline")
+                : t("invite.peerOffline")
           ) : (
             ""
           )}
@@ -250,7 +268,7 @@ export function InviteCard({
               <RoleBadge role={line.owner.role} size={13} />
             </div>
             <div className="text-[0.7rem] uppercase tracking-[0.14em] text-muted-foreground">
-              Creator
+              {t("invite.creator")}
             </div>
           </div>
         </div>
@@ -260,7 +278,7 @@ export function InviteCard({
       {isLine && line.members.length > 0 && (
         <div className="mb-4">
           <div className="mb-2 text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground">
-            On the line
+            {t("invite.onTheLine")}
           </div>
           <ul className="flex flex-col gap-2">
             {line.members.map((m, i) => (
@@ -274,29 +292,29 @@ export function InviteCard({
                     <RoleBadge role={m.role} size={12} />
                     {m.callRole === "host" && (
                       <span
-                        title="Host of this call"
+                        title={t("invite.hostTitle")}
                         className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[0.62rem] font-semibold uppercase tracking-wide text-amber-400"
                       >
-                        <Crown className="size-3" aria-hidden /> Host
+                        <Crown className="size-3" aria-hidden /> {t("invite.host")}
                       </span>
                     )}
                     {m.callRole === "cohost" && (
                       <span
-                        title="Co-host — can moderate this call"
+                        title={t("invite.cohostTitle")}
                         className="inline-flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[0.62rem] font-semibold uppercase tracking-wide text-violet-300"
                       >
-                        <Shield className="size-3" aria-hidden /> Co-host
+                        <Shield className="size-3" aria-hidden /> {t("invite.cohost")}
                       </span>
                     )}
                     {m.isOwner && m.callRole !== "host" && (
                       <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[0.62rem] font-semibold uppercase tracking-wide text-muted-foreground">
-                        Creator
+                        {t("invite.creator")}
                       </span>
                     )}
                   </div>
-                  {joinedLine(m.joinedAt, now) && (
+                  {joinedLine(m.joinedAt, now, t) && (
                     <div className="text-[0.7rem] text-muted-foreground">
-                      {joinedLine(m.joinedAt, now)}
+                      {joinedLine(m.joinedAt, now, t)}
                     </div>
                   )}
                 </div>

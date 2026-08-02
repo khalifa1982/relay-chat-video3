@@ -188,7 +188,10 @@ describe("Messages.tsx — v2.71 iMessage-grade chat UI", () => {
     expect(iSeen).toBeGreaterThan(-1);
     expect(iTyping < iSeen, "presence/last-seen is a LATER arm, so typing wins").toBe(true);
     // The stamp still goes INSIDE the sentence rather than being glued after it.
-    expect(SRC).toMatch(/t\("msg\.lastSeen", \{ when: timeAgo\(t, thread\.peerLastSeenAt\) \}\)/);
+    /* The stamp still goes INSIDE the sentence rather than being glued to it, which
+       is the property. v2.106.98 added the locale, because the >1-week fallback is a
+       DATE and was formatting in the browser's language rather than the app's. */
+    expect(SRC).toMatch(/t\("msg\.lastSeen", \{ when: timeAgo\(t, thread\.peerLastSeenAt, locale\) \}\)/);
   });
   it("the message ⋮ menu opens toward the screen INTERIOR, never off the edge (v2.99.0)", () => {
     /* Own messages (justify-end) put the ⋮ at the row's far START, so the menu must

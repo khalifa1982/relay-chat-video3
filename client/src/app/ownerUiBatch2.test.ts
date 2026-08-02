@@ -25,6 +25,12 @@ import path from "node:path";
 import { formatLastSeen } from "@shared/profileFields";
 import { copyOnScreen, expandCopy } from "../../../server/testing/copyOnScreen";
 
+/* v2.106.98: the row's last-seen line went through the dictionary, so the anchor is
+   the KEY rather than the English literal it used to freeze. Anchoring on the key is
+   also what makes it survive a copy edit — the property these pins stand for is where
+   the line SITS, never what it says. */
+const LAST_SEEN_ANCHOR = 'contacts.rowLastSeen';
+
 const root = path.resolve(__dirname, "..", "..", "..");
 const read = (...p: string[]) => fs.readFileSync(path.resolve(root, ...p), "utf8");
 const MESSAGES = read("client", "src", "pages", "app", "Messages.tsx");
@@ -189,10 +195,14 @@ describe("2b — search and notifications live in the peer profile", () => {
      * `chatActions?.lastSeenText || presenceLine(p)`, so it broke the moment v2.105.24
      * moved that rule into `shared/profileFields.ts` as `describePeerPresence` (a third
      * surface, the outgoing dial card, needed the same answer) while saying nothing about
-     * whether the precedence still held. */
-    expect(OVERLAYS).toMatch(/chatActions\?\.lastSeenText \|\|\s*describePeerPresence\(p\)/);
+     * whether the precedence still held. And it froze it AGAIN in v2.106.98, which
+     * put a TRANSLATED renderer in front of the English one — so what is pinned is
+     * the precedence itself, plus the fact that this screen still owns no copy of
+     * the presence rule. */
+    expect(OVERLAYS).toMatch(/chatActions\?\.lastSeenText \|\|\s*presenceLine/);
+    expect(OVERLAYS).toMatch(/const presenceLine = p \? presenceLabel\(p, t, \{ locale \}\) : ""/);
     // Imported, never re-implemented locally: two copies is the divergence this move fixed.
-    expect(OVERLAYS).toMatch(/import \{ describePeerPresence \} from "@shared\/profileFields"/);
+    expect(OVERLAYS).toMatch(/import \{ presenceLabel \} from "\.\/presenceCopy"/);
     expect(OVERLAYS).not.toMatch(/function (?:presenceLine|describePeerPresence)\(/);
   });
 });
@@ -313,7 +323,7 @@ describe("5 — contacts keep the pin and the presence line apart, and every sta
      Anchored on the PIN'S OWN CODE now, which no comment can move. */
   /** The presence line's own element, wherever in the row it now sits. */
   const presenceEl = () => {
-    const at = CONTACTS.indexOf("last seen {relativeTime(c.lastSeenAt)}");
+    const at = CONTACTS.indexOf(LAST_SEEN_ANCHOR);
     expect(at, "the presence line").toBeGreaterThan(-1);
     return CONTACTS.slice(CONTACTS.lastIndexOf("<span", CONTACTS.lastIndexOf("{c.blocked ?", at)), at + 200);
   };
@@ -323,7 +333,7 @@ describe("5 — contacts keep the pin and the presence line apart, and every sta
        must never come back is the two being concatenated into one run. Which line each sits on
        is the owner's call and has now changed twice; that they are distinct elements has not. */
     const pinAt = CONTACTS.indexOf("{c.number.length === 6 ? c.number.slice(0, 3)");
-    const seenAt = CONTACTS.indexOf("last seen {relativeTime(c.lastSeenAt)}");
+    const seenAt = CONTACTS.indexOf(LAST_SEEN_ANCHOR);
     expect(pinAt).toBeGreaterThan(-1);
     expect(seenAt).toBeGreaterThan(-1);
     // Distinct elements: there is a tag boundary between them, whichever order they are in.

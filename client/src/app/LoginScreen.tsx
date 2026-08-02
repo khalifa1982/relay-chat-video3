@@ -50,7 +50,8 @@ import { useIdentity } from "./useIdentity";
 import { GuestRestore } from "./GuestRestore";
 import { RelayBackground } from "./RelayBackground";
 import { useLiveStats } from "./useLiveStats";
-import { useT } from "./i18n";
+import { useT, useLocale } from "./i18n";
+import { formatNumberIn } from "./dateLocale";
 import { RELAY_ACCENT, RELAY_BUSINESS_GOLD } from "@/lib/relayBackground";
 
 /* ── tokens (spec §5) ─────────────────────────────────────────────────────── */
@@ -378,6 +379,10 @@ function StatTile({
 }: {
   icon: React.ReactNode; value: number | null; label: string; delay: number; accent: string; big?: boolean;
 }) {
+  /* A COUNT read aloud on the entry screen, so it follows the app's language: an
+     Arabic screen showing `١٬٢٠٤` where the English one shows `1,204` is the same
+     surprise as a date in the wrong format. */
+  const { locale } = useLocale();
   const [flash, setFlash] = useState(false);
   const prev = useRef<number | null>(null);
   useEffect(() => {
@@ -409,7 +414,7 @@ function StatTile({
           transition: "transform .35s cubic-bezier(.34,1.56,.64,1), color .35s, text-shadow .35s",
         }}
       >
-        {value == null ? "—" : value.toLocaleString()}
+        {value == null ? "—" : formatNumberIn(locale, value)}
       </div>
       <div style={{ ...mono(9.5), color: T.faint2, marginTop: 4 }}>{label}</div>
     </div>

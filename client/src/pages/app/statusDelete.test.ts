@@ -144,7 +144,10 @@ describe("the client reads the verdict instead of discarding it", () => {
 describe("when a story was posted", () => {
   it("keeps the relative time but exposes the exact one", () => {
     // "i dunno … when i posted it" — "16h ago" genuinely does not answer that.
-    expect(STATUS).toMatch(/title=\{new Date\(item\.createdAt\)\.toLocaleString\(\)\}/);
+    /* The property is that the EXACT time is exposed on hover beside the relative
+       one — not that an empty arglist produces it, which formats in the BROWSER's
+       language and so was the defect on a screen set to Arabic (v2.106.98). */
+    expect(STATUS).toMatch(/title=\{formatDateTimeIn\(locale, item\.createdAt\)\}/);
     /* `timeAgo` became `timeAgoText(iso, t)` when the four relative-time bands moved
        into the dictionary — a module-level function cannot call a hook, so the
        translator is passed in. The property is unchanged: the relative time is rendered
