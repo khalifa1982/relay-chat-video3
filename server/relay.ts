@@ -3655,6 +3655,43 @@ export function partyLineRosterFor(number: string): PartyLineRoster | null {
   return partyLineRosterOf(reg, number);
 }
 
+/**
+ * HOW MANY ROOMS WE HAVE PUT ON EACH NODE SINCE IT LAST REPORTED — the hard-admission input.
+ *
+ * A node's `routers` figure is its own report from up to one pool refresh ago, so on its own
+ * it cannot bound a burst: every dial inside that window reads the same number and a node one
+ * room under the ceiling is eligible for all of them. This supplies the missing term, and it
+ * is the only place in the process that can, because the pool cannot see the registry.
+ *
+ * DERIVED, NOT ACCUMULATED, and that is the load-bearing choice. A counter would have to be
+ * incremented somewhere and decremented somewhere else; the obvious increment site is
+ * `planDialTransport`, which runs on EVERY invite — including an add-person invite into a call
+ * that already has its room — so a six-party dial would count as six rooms and the cap would
+ * refuse at about seven real ones. Worse than the defect. Counting `roomMeta` instead is exact
+ * (one room, one router), cannot leak, cannot double-count a room, and self-corrects the
+ * moment `reapRoom` removes it.
+ *
+ * `sinceMs` is the pool's own `lastReadAt`, supplied by the caller so the rule "since the node
+ * last reported" lives with the snapshot rather than here. BOTH SIDES ARE THIS PROCESS'S OWN
+ * `Date.now()` — `assignedAt` is stamped by `planRoomTransport` and `lastReadAt` by
+ * `refreshVoipPool` — so there is no cross-clock comparison, which is the v2.106.32 defect.
+ *
+ * A room hydrated from a previous leader keeps its original `assignedAt`, so after one refresh
+ * it correctly stops counting as pending and is represented by the node's own report instead.
+ */
+export function voipPendingRooms(sinceMs: number): Map<string, number> {
+  const out = new Map<string, number>();
+  const reg = activeRegistry;
+  if (!reg) return out;
+  reg.roomMeta.forEach((m) => {
+    const v = m.voip;
+    if (v && v.assignedAt > sinceMs) {
+      out.set(v.instanceId, (out.get(v.instanceId) ?? 0) + 1);
+    }
+  });
+  return out;
+}
+
 /* ── Tiered busy-state (v2.91, Redis bus) ────────────────────────
  * On a multi-instance deploy the ALB pins ALL /api/relay/* traffic to ONE
  * signaling node (see docs-aws-scale-out.md); the OTHER instances' registries

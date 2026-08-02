@@ -1,5 +1,124 @@
 # Project TODO
 
+## v2.107.6 — THE ROUTER CAP BECOMES A HARD ADMISSION GATE, AND THE CORRECTION FOR IT WAS DEAD CODE
+
+Owner, 2026-08-02: *"the assigner must treat the cap as hard admission — at cap, next node; all
+nodes full → 1:1 falls back to P2P mesh, groups get 'busy.' Over-cap must be unreachable, not
+merely discouraged."*
+
+**HALF OF IT ALREADY HELD AND IS PINNED RATHER THAN REBUILT.** v2.106.59 already keys
+`refused: "pool-saturated"` on `all-saturated` + `isGroupParty`, and a 1:1 already falls back to
+the mesh because `selectVoipNode` returns null — so "all nodes full" behaves exactly as asked.
+What was missing is that the fleet could be pushed **past** the ceiling in the first place.
+
+**TWO INDEPENDENT DEFECTS, AND THE FIRST IS THAT THE MECHANISM WAS INERT.** `nodeLoadScore` has
+taken a `pendingRooms` argument since v2.106.54, with a comment stating exactly why ("without it
+a burst of dials inside one 5s refresh window all rank against the same stale snapshot and pile
+onto one node") — and **no production caller ever supplied one**. `planDialTransport`, the only
+assigner on the live dial path, passed nothing. So the correction was dead code, and the
+consequence is worse than an unbounded ceiling: with pending at 0 every dial in a burst scores
+*identically*, so the sort is identical, so they do not merely exceed the cap — **they all pick
+the same head node**. A node at `NODE_MAX_ROUTERS - 1` took the whole burst.
+
+**THE SECOND: `pending` REACHED ONLY THE RANKING.** `partitionNodes` called
+`isNodeEligible(n, nowMs, ttlMs)` and its opts did not even accept a pending map, so the
+exclusion `n.routers < NODE_MAX_ROUTERS` read a report up to one refresh old. **A score cannot
+bound a burst**, and that is the whole reason this belongs in the exclusion: a score is a
+preference *between* nodes, so when the fleet is near its ceiling — exactly the case the cap
+exists for — there is no better node to prefer and the burst lands anyway. Only the exclusion can
+say no. Pinned by driving a single-node fleet, where the ranking-only reading returns the node and
+the exclusion refuses it.
+
+**THE COUNT IS DERIVED, NOT ACCUMULATED, AND REJECTING A COUNTER IS THE LOAD-BEARING DECISION.**
+The obvious increment site is `planDialTransport` — and it **runs on every invite**, including an
+add-person invite into a call that already has its room, so a six-party dial would count as six
+rooms and the cap would refuse at about seven real ones. That is a worse bug than the one being
+fixed, because it refuses group calls that should succeed. New `voipPendingRooms(sinceMs)` counts
+`roomMeta` entries whose `voip.assignedAt` is newer than the pool's own `lastReadAt` instead:
+exact (one room, one router), cannot leak, cannot double-count a room, has no decrement to forget,
+and self-corrects the moment `reapRoom` removes it. **Both sides of that comparison are this
+process's own `Date.now()`** — `assignedAt` is stamped by `planRoomTransport`, `lastReadAt` by
+`refreshVoipPool` — so there is no cross-clock comparison, which is the v2.106.32 defect. A room
+hydrated from a previous leader keeps its original stamp, so after one refresh it correctly stops
+counting as pending and is represented by the node's own report.
+
+**IT IS UNWEIGHTED IN THE CAP, unlike the score.** One pending room is exactly one future router,
+so `PENDING_CONSUMER_WEIGHT` — which exists because `nodeLoadScore` measures CONSUMERS — would
+make the cap wrong by that factor and refuse at 38. **AND IT DELIBERATELY DOES NOT TOUCH THE CPU
+CEILING**: a pending room has no measured CPU cost, and inventing one would be a guess presented
+as a reading, excluding healthy nodes during any burst. Both directions are mutation-verified.
+
+**ONE READER, because two copies of "how many rooms have we just put here" is how the ceiling and
+the preference come to disagree about the same node** — and then one of them is wrong about
+capacity while both look reasonable. `pendingCountFor` is shared by the exclusion and the ranking,
+with `rankNodes`' own inline copy deleted; a mutation reinstating a second reader bites.
+
+**THE REASON CALL NEEDED IT TOO.** `planRoomTransport` runs the funnel twice — once for the list,
+once for the reason — and the group refusal is keyed on the *reason*. Leaving pending out of the
+second call would make the selector refuse a burst-saturated node while the reason still said
+`ok`, i.e. a group call quietly placed on a mesh it is too big for instead of told to wait. That is
+the drift the comment inside `rankNodes` warns about, arriving through a second call site rather
+than a second filter.
+
+**THE SOURCE IS WIRED AT THE COMPOSITION ROOT, NOT AT A CALL SITE.** Wiring it where
+`planDialTransport` is *called* would be a step somebody can forget, and forgetting it means
+over-cap is reachable again — the property that must not be forgettable. `_core/index.ts` already
+imports both halves, and having the pool import the registry would close a cycle, so
+`setVoipPendingSource(voipPendingRooms)` sits beside `startVoipPool` (the `setNumberChangeHook`
+pattern). **IT FAILS OPEN, and the direction is stated because it is the wrong-looking one**: a
+throwing or absent source drops the correction and leaves the ceiling applied to the node's own
+report — i.e. the pre-correction behaviour — because treating an unreadable count as "assume full"
+would let one broken counter refuse every call on the fleet.
+
+**`poolState` GETS IT AS WELL**, so the warning line and the selector cannot describe different
+pools. From the refresh timer it is empty anyway (the tick reads state immediately after
+installing a snapshot), but *true because of when it is called* is not a property, and
+`/api/health` plus the admin diagnostics read that surface at arbitrary moments.
+
+**A BURST NEVER TURNS AN UNRELATED REASON INTO "SATURATED"** — the v2.105.10 rule, since a
+standing false alarm is what hides a real one: an empty registry still reports `no-nodes` however
+much is pending, because "add a node" and "your agent is not running" need different responses.
+
+**THE RESIDUAL IS RECORDED AS A DECISION RATHER THAN HIDDEN, and its premise is asserted so the
+note cannot quietly become false**: `planDialTransport` runs synchronously at the top of the
+invite handler, but the room — and therefore its `assignedAt` — is written inside `ensureDialRoom`,
+which on the party-line path runs *after* an await. Two dials in flight through that resolver can
+both plan before either records, so each can take the same last slot. That window is one DB round
+trip (~1-5ms) against the ~5s snapshot window this release closes, so the overshoot goes from
+unbounded-per-refresh to bounded-by-in-flight-dials. Closing it fully needs a reserve/commit/
+release protocol on the dial path — the `tryReserveNumber` shape from v2.99.30/M20 — which is a
+bigger change to call setup than the evidence currently justifies.
+
+**15 of 15 tripwires verified by MUTATION** off a baseline confirmed GREEN first (209 passed),
+from byte-exact backups, the mutator aborting unless its target occurs exactly once and treating a
+changed test TOTAL as a harness failure rather than a bite; no survivors, no aborts, all four
+sources byte-identical afterwards — including the exclusion reverted to ignore pending verbatim,
+`planDialTransport` reverted to passing none, the weight applied to the cap, pending moved onto
+the CPU ceiling, the reason call stripped, a second inline reader reinstated, the cutoff flipped to
+`>=`, the source handed `Date.now()` instead of the snapshot's own read time, and the composition
+root's wiring removed.
+
+**ONE PRE-EXISTING PIN REWRITTEN TO THE PROPERTY, and it is the same class its own comment
+records one line earlier**: `groupLock.test.ts` froze the import's exact single-symbol form
+`import { attachRelay } from "../relay"` and broke the moment that import legitimately took a
+second symbol. An import's FORMATTING is not a property and says nothing about the health
+endpoint's media block, which is what that test is for; it now asserts the signaling layer is
+actually MOUNTED (`attachRelay(`), which is strictly stronger — a file can import a symbol and
+never call it.
+
+**NOTHING HERE CAN FIRE IN PRODUCTION YET**: with no `REDIS_URL` the snapshot is empty, so
+`voipPendingRooms` counts nothing, the reason is `no-nodes` and every call takes the mesh exactly
+as before. It goes live with the fleet.
+
+**THE KNEE MEASUREMENT IS STILL OWED AND CANNOT BE PRODUCED FROM HERE**, said plainly: driving one
+node to its degradation knee needs real mediasoup workers and real clients, and this sandbox has
+no AWS credentials and no route to the fleet. `NODE_MAX_ROUTERS` is deliberately UNCHANGED at 40
+(320 rooms across 8 nodes, below the 500-1000 target) rather than raised on a guess — v2.106.54
+chose 40 and recorded that a node past its limit "degrades for everybody already on it". What this
+release guarantees is that whatever the number becomes, it cannot be exceeded.
+
+`server/voipHardAdmission.test.ts` (31). 6304 tests.
+
 ## v2.107.5 — mediasoup increment 1: the room remembers its node, and one funnel carries ops to it
 
 Owner: *"Ok start mediasoup client seam"*, plus the capacity requirement in the same breath —

@@ -493,7 +493,16 @@ describe("/api/health says which media transport the fleet is on (v2.105.20)", (
        plainly. What is inside it beyond that is free to grow. */
     expect(CORE).toMatch(/mesh: true/);
     expect(CORE).toMatch(/media: [({]/);
-    expect(CORE).toMatch(/import \{ attachRelay \} from "\.\.\/relay"/);
+    /* THIS FROZE THE IMPORT'S EXACT SINGLE-SYMBOL FORM — `import { attachRelay } from
+       "../relay"` — and broke the moment that import legitimately took a second symbol
+       (#171's `voipPendingRooms`). It is the same class the paragraph above records, one
+       line further down: an import's FORMATTING is not a property, and pinning it says
+       nothing about the media block this test is for.
+       THE PROPERTY, and it is stricter than what it replaces: the signaling layer is
+       actually MOUNTED here, which is what makes the mesh the transport this endpoint is
+       reporting. A file can import a symbol and never call it. */
+    expect(CORE).toMatch(/from "\.\.\/relay"/);
+    expect(CORE).toMatch(/\battachRelay\(/);
   });
 
   it("the media-node pool is COUNTS, never an address — the unauthenticated line", () => {

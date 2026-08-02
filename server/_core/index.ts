@@ -11,7 +11,7 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./static";
-import { attachRelay } from "../relay";
+import { attachRelay, voipPendingRooms } from "../relay";
 import { registerV2Upload, uploadRateGate } from "../v2upload";
 import { registerV2Events, publishToIdentity, publishPresenceTo } from "../v2events";
 import { registerV2Offline } from "../v2offline";
@@ -37,7 +37,7 @@ import { createRateLimiter, clientIpOf } from "../rateLimit";
 import { registerLocalAuth } from "../authLocal";
 import { appBaseUrl } from "../appUrl";
 import { INSTANCE_ID, busStrict, busAuthStats, busCommandClient } from "../redisBus";
-import { poolState, startVoipPool } from "../voipPool";
+import { poolState, setVoipPendingSource, startVoipPool } from "../voipPool";
 import { clusterEnabled } from "../relayCluster";
 import { registerDomainMigration } from "../domainMigration";
 
@@ -676,6 +676,12 @@ async function startServer() {
    * reasons it is, because "add a node" and "your agent is not running" need different
    * actions from whoever reads the log. */
   startVoipPool(busCommandClient());
+  /* THE HARD-ADMISSION TERM, wired here because this is the one place that already imports
+     both halves. The pool owns the node ceiling; the registry owns "what have we assigned since
+     that node last reported". Neither can see the other, and having the pool import the
+     registry would close a cycle. On an API-tier instance with no registry the source answers
+     empty rather than guessing, so the ceiling falls back to the node's own report. */
+  setVoipPendingSource(voipPendingRooms);
 
   // Stale-presence sweep — once a minute, flip users whose heartbeat
   // expired to offline. For EACH reaped user, broadcast an offline SSE event to
