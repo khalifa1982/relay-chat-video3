@@ -96,7 +96,6 @@ import {
 import { presenceDot } from "@/app/presenceDot";
 import { dayKey, dayLabel, groupMessagesByDay } from "@/app/messageDays";
 import { matchQuery } from "@/app/searchMatch";
-import { describeProfileStatus } from "@shared/profileStatus";
 import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
 import { lastSeenLabel } from "@/app/presenceCopy";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
@@ -688,10 +687,16 @@ export default function MessagesPage({
     // relative-with-only-absolute-children) is what keeps WebKit from
     // collapsing the list area.
     <div className="flex-1 flex md:p-6 gap-0 md:gap-6 min-h-0">
-      {/* ── thread list (always visible on desktop; hidden when a thread is open on mobile) ── */}
+      {/* ── thread list (always visible on desktop; hidden when a thread is open on mobile) ──
+          360px, not 340 (v2.107.4). Board 1j specifies desktop as 1200 = 280 sidebar +
+          360 thread list + chat pane, and this 20px was the LAST measured delta between
+          the app and that frame — the only thing left of 1j once its "88px icon rail" was
+          settled as SUPERSEDED (the frame's own subtitle reads "labelled sidebar (matches
+          1i)", and the handoff README unifies desktop on the 280px sidebar, so the rail
+          must not be built). Phone is untouched: the width is `md:` only. */}
       <aside
         className={
-          "md:w-[340px] md:shrink-0 md:rounded-2xl md:glass-surface-md flex-col min-h-0 " +
+          "md:w-[360px] md:shrink-0 md:rounded-2xl md:glass-surface-md flex-col min-h-0 " +
           (activeConvoId == null ? "flex flex-1 md:flex-initial" : "hidden md:flex")
         }
       >
@@ -1405,11 +1410,6 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // is deliberately unused: the state that matters lives in localStorage plus an
   // in-memory Set, so the render just re-asks `isGroupHidden` below.
   useGroupLocks();
-  // The group's status as ONE string, from the shared formatter — so the header and
-  // any later surface cannot phrase the same status differently (v2.101.1).
-  const groupStatusText = isGroup
-    ? describeProfileStatus(thread?.groupStatus, thread?.groupStatusNote)
-    : null;
   // v2.102.1 — tapping the header opens the GROUP's own info sheet (below).
   const [groupInfoOpen, setGroupInfoOpen] = useState(false);
   const [muted, setMuted] = useThreadMuted(conversationId);
@@ -2651,19 +2651,27 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 {thread.peerNumber.slice(0, 3)}-{thread.peerNumber.slice(3)}
               </span>
             )}
-            {/* The GROUP's own 6-digit id (v2.102.0), in the same place a person's
-                sits — so the two read as the same kind of fact. dir="ltr" so an RTL
-                locale cannot reorder the digits. */}
-            {isGroup && thread?.groupNumber && /^\d{6}$/.test(thread.groupNumber) && (
-              <span className="font-mono text-muted-foreground" dir="ltr">
-                {thread.groupNumber.slice(0, 3)}-{thread.groupNumber.slice(3)}
-              </span>
-            )}
-            {/* The group's status label, from the SAME vocabulary a person's uses. */}
-            {isGroup && groupStatusText && (
-              <span className="truncate text-muted-foreground">{groupStatusText}</span>
-            )}
-            {((!isGroup && thread?.peerNumber) || (isGroup && thread?.groupNumber)) && (
+            {/* A GROUP's HEADER CARRIES ITS NAME, ITS SIZE AND WHO IS HERE — NOTHING
+                ELSE (v2.107.3, owner, restating it: *"inside the group and the bar, you
+                remove the group ID and you remove the group status, and you just put the
+                group name up and online users and the total members"*).
+
+                The 6-digit id and the status label used to sit here, ahead of the member
+                counts. Both were pushed off by the same reasoning — that a group's id
+                should read like a person's PIN (v2.102.0) and its status like a person's
+                (v2.101.1) — and both are the wrong call for THIS bar: a header you are
+                looking at while reading a conversation answers "who am I talking to and
+                who is here", and the id is a thing you go and LOOK UP rather than a thing
+                you need on screen the whole time.
+
+                NEITHER IS LOST, which is what makes the removal safe rather than
+                destructive: both live on in the group's own details sheet, one tap away
+                on this very header — that sheet is where the id is copied and shared and
+                where the status is SET. What is removed is the duplication, not the fact.
+
+                A 1:1 header is UNTOUCHED and still shows the person's PIN, so the
+                separator below stays gated on `!isGroup`. */}
+            {!isGroup && thread?.peerNumber && (
               <span className="text-muted-foreground/40">·</span>
             )}
             {/* TYPING IS ANNOUNCED ONCE, and this arm is the one that goes.

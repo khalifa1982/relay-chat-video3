@@ -1,5 +1,361 @@
 # Project TODO
 
+## v2.107.4 — the last three measured gaps to the design board, and two items declined with a reason
+
+Owner: *"Do the changes quick and finish all chapters."*
+
+**The frame ledger was re-audited first, because "what is left" is a question the notes
+have been wrong about before.** `design_handoff_relay_app/MISSING-FRAMES.md` records its own
+correction at v2.107.1: it listed eight frames as outstanding when seven had shipped in a
+single release whose changelog wrote up only half of what it contained. Counting from the
+artefact rather than the notes — `grep -o 'id="[1-5][a-k]"' 'Relay App Redesign.dc.html'`
+— gives **42 frames, all with their layout built.** So there are no chapters left to write;
+what remains is FIDELITY, the class of thing where every source pin passes and the screen
+is still wrong.
+
+Three of those, each checked against the board's own markup before anything moved.
+
+### 1 — the speaking sound-wave was PRESENCE GREEN for anyone with reduced motion on
+
+The five rainbow hues lived INSIDE `prefers-reduced-motion: no-preference`, together with
+the bounce, over a flat `#22c55e` base.
+
+**Colour is not motion.** A viewer who asked for less motion got five bars in the one colour
+this app reserves for ONLINE — the rule v2.106.9 moved the speaking TILE off green to
+protect, and then left this — and `#22c55e` is also the Registered badge's own hex, which
+renders on the same screen. It also made the still frame look nothing like the moving one,
+which is the v2.99.86 class.
+
+The five hues now sit outside the gate, so the rainbow the owner chose in v2.99.85 applies
+to everybody and only the bounce is gated. The base becomes the cycling accent rather than a
+sixth colour, so a bar added later reads as "active" instead of "online". Green survives as
+one of five, which is a different claim from five green bars.
+
+### 2 — the desktop thread list was 340px against board 1j's 360
+
+That 20px was the entire remaining delta once 1j's "88px icon rail" was settled as
+**superseded** rather than outstanding: the frame's own subtitle reads *"labelled sidebar
+(matches 1i)"* and the handoff README unifies desktop on the 280px sidebar, so the rail must
+not be built. The width is `md:` only — a bare `w-[360px]` would pin the phone's full-bleed
+list to a fixed width, and a mutation that drops the prefix bites.
+
+### 3 — the invite landing hand-rolled the glass material
+
+Board 4h's card is the shared glass recipe; `InviteCard` wrote its values out by hand
+(`border-border/60 bg-card/60 backdrop-blur-2xl`) and was therefore free to drift from the
+four other cards that carry `.rglass`. That is precisely the shape v2.106.40 had to fix in
+place, when `Admin.tsx` had patched the same defect at ONE of five call sites and the other
+four stayed broken. A fifth private copy is how that happens again. The blur stays: the
+no-backdrop-filter rule is scoped to CALL surfaces, and an invite landing is not one.
+
+### Two board items are DECLINED, and the reason is pinned rather than left implicit
+
+**1b's swipe tray is not built.** It reveals exactly two accent pucks — message and call —
+and this app renders both (and video) as always-visible round actions on every History row.
+A gesture would be a second way to do one thing, and the harder one to find. That is the
+inverse of the v2.99.85 finding that made the message ⋮ permanently visible, because
+"appears on hover" was what made it undiscoverable. Pinned as the REASON: if those actions
+ever stop being inline, the test goes red and the swipe has to be reconsidered.
+
+**The call-back disc keeps its green.** The obvious fidelity move is to take it off
+`#22c55e` — the board draws its swipe pucks in the accent, and a History row also renders a
+presence LED and a Registered badge in that same green, which is three greens on one row.
+It is not taken, and that is a decision: green-means-CALL is the hue language the owner
+chose for the Dialer's own action row (v2.77, v2.99.90 — green Voice / sky Video / violet
+Group), and History's three discs are that row repeated. Changing it here alone would make
+two screens disagree about what the call button looks like, which is worse than the
+collision it fixes. **Flagged for the owner instead of reversed unilaterally.**
+
+### verification
+
+`client/src/app/fidelityTail.test.ts` (11). **10 of 10 tripwires verified by MUTATION** off
+a confirmed-green baseline from byte-exact backups, the mutator aborting unless its target
+occurs exactly once and treating a changed test TOTAL as a harness failure; all four sources
+byte-identical afterwards. That includes the wave defect reinstated **verbatim** as it stood
+at HEAD, both declines' stated reasons falsified, and a swipe row planted in the call log.
+
+**THE BACKTICK TRAP FIRED FOR THE SIXTH RECORDED TIME, in my own CSS comment.** I wrote the
+gate's name in backticks inside `RELAY_CSS`, which is a template literal, so it terminated
+early and five test files failed to parse. Worth stating plainly: **the standing guard for
+this cannot report it** — it asserts the PARSED `RELAY_CSS` contains no backtick, and a
+terminated literal can never contain the character that ended it. The transform is what
+catches it, and did.
+
+**TWO WEAKNESSES IN MY OWN TESTS, both found by the mutation run rather than by reading**:
+a file-wide match for `t("history.callBack")` is satisfied four times over, so it would pass
+with a row's own action deleted — it is pinned on the `RoundAction` element now; and the
+replacement then counted a disc's `title=` as if it were its `label=`, so a mutation that
+repointed the label and left the tooltip survived. Both fixed, both re-verified.
+
+**Not verified on a device, said plainly**: nobody has watched a speaking tile with reduced
+motion on, or opened an invite link, on the owner's phone.
+
+No schema change, no new dependency, no new env var, no server change. 6231 tests.
+
+## v2.107.3 — the group header stops repeating what its own details sheet already holds
+
+Owner, restating something they say they have explained several times:
+
+> *"I told you inside the group and the bar, you remove the group ID and you remove the
+> group status, and you just put the group name up and online users and the total
+> members. I explained to you several times, but I don't see you implemented."*
+
+**They are right, and the reason it survived several requests is written down in a test.**
+`server/groupIdentity.test.ts` carried a pin titled *"the header shows the group's id and
+its status, and NO tier badge"* — an assertion that REQUIRED exactly what the owner asked
+to remove. Anybody who did the work would have turned that pin red and, reading its title,
+would reasonably have concluded the current behaviour was deliberate. A test that freezes
+the thing somebody is asking you to change is worse than no test, because it argues back.
+
+### what the header carried, and what it carries now
+
+Before, a group conversation's subline read:
+
+```
+114-212 · Away · 5 members · 3 online
+```
+
+Now it reads:
+
+```
+5 members · 3 online
+```
+
+with the group's NAME as the headline above it, unchanged. A 1:1 header is **untouched** —
+it still shows the person's PIN, which is why the separator that follows it stays gated on
+`!isGroup` rather than being deleted outright.
+
+### why both facts were on the header in the first place, and why that was the wrong call
+
+Neither arrived by accident. v2.102.0 gave a group its own 6-digit id and reasoned that it
+should read like a person's PIN; v2.101.1 gave a group a status and reasoned that it should
+read like a person's. Each is coherent on its own and both are wrong for THIS bar: a header
+you are looking at *while reading a conversation* answers "who am I talking to, and who is
+here". An id is a thing you go and LOOK UP when you want to share the group — it is not a
+thing you need on screen the whole time you are reading.
+
+### neither fact is lost, which is what makes the removal safe
+
+Both live on in the group's own details sheet, **one tap away on this very header** — that
+sheet is where the id is copied and shared, and it is where the status is SET (its
+`ProfileStatusPicker` is the only place in the app a group's status can be chosen at all).
+What is removed is the duplication, not the fact. That is asserted rather than assumed: a
+test pins that the sheet still renders the grouped number, still formats the status through
+the shared `describeProfileStatus`, still carries the picker, and that tapping the header is
+what opens it.
+
+### the pin is rewritten to the property, and one of my own assertions was too narrow
+
+The replacement asserts what the header MUST carry — the name as headline, the member count,
+the online count, and no tier badge (a tier describes a person's account; a group has none)
+— plus the two removals.
+
+**A mutation run then caught a real gap in my own first draft.** I had written the removal as
+*"`describeProfileStatus` does not appear"*, i.e. a ban on one IDENTIFIER. A mutation that
+reinstated the status through a plain local instead **SURVIVED it**. Banning a name is not
+the property. Whatever route a reinstatement takes it has to read one of the two wire fields
+— `thread.groupStatus` and `thread.groupNumber` are the only source of either fact in that
+component — so the assertion is now that **every such read is inside the sheet's own mount**,
+compared by count. It is deliberately scoped to `thread?.`, because the thread LIST
+legitimately reads `t.groupNumber` on a row and that is a different surface the owner did not
+ask about.
+
+**12 of 12 tripwires verified by MUTATION** off a confirmed-green baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once and treating a changed
+test TOTAL as a harness failure; both sources byte-identical afterwards. That includes the
+defect reinstated **verbatim** (the const plus its render, exactly as it stood at HEAD) and
+reinstated by two OTHER routes, so a future return through a different spelling still bites.
+
+**Two bad needles of my own were reported rather than counted**: one referenced
+`groupStatusText`, a local this release deletes, so it could never compile and never created
+the defect it named — re-run as a genuine verbatim reinstatement, it bit; and two aborted at
+zero occurrences on an import name and an indentation I had guessed at rather than read.
+
+**Not verified on a device, said plainly**: nobody has opened a group conversation on the
+owner's phone and looked at the bar. What is proven is that the two facts are off that header,
+that they are still reachable one tap away, and that a reinstatement by any of three routes
+goes red.
+
+No schema change, no new dependency, no new env var, no server change. 6220 tests.
+
+## v2.107.2 — four screens the owner could not read, and one of them had been "fixed" in the wrong place
+
+Owner, with four screenshots:
+
+> *"Redesign these screens to make sure that it's showing because it's overlapping and
+> cannot see"*
+>
+> *"For this group call area, make it more friendly, more clear because you're so much
+> talks routine and it's not clear"*
+>
+> *"The status page, my own status if I click on it, if you see the top bar doesn't show
+> because it's over lap on the top navigation bar, so make it low. I circled the red one
+> When I record the voice, it doesn't show me that it's, uh, like the wave volume. When I
+> talk, it's, like, balding. It doesn't work."*
+
+Four reports, four different mechanisms. **Two of them were already "fixed" — one by a
+pin that froze the defect, one by a release that put the right fix in the one place it
+cannot work.** Two were measured rather than guessed at, and one of those measurements
+refuted my own first theory.
+
+### 1 — the roster name was the only thing in the row that could shrink
+
+The member row was ONE flex line: a 34px avatar, a `min-w-0 flex-1` name column, then
+two `shrink-0` buttons. `shrink-0` means the buttons keep their width whatever happens,
+so the name column absorbed every shortfall.
+
+**MEASURED against the real built stylesheet at 320/360/375/390/430**, over four name
+shapes (short, typical, a 21-character Latin name, Arabic):
+
+| width | name box | needs | verdict |
+|---|---|---|---|
+| 320 | **0.0px** | 105–178 | an ellipsis and nothing else |
+| 375 | 51.3px | 105 | truncated |
+| 430 | 106.3px | 178 | truncated |
+
+**15 of 20 name cells truncated, including at 430px.** At 320 the box is literally zero
+wide — which is the owner's "M..". Two lines: **0 of 20**, at every width.
+
+This is the **v2.106.41 Contacts-row class in a second place** — there the fix was the
+same, and for the same reason.
+
+**THE COST IS STATED RATHER THAN BURIED: 61px → 102px per row.** It is paid ONLY by an
+admin, because the controls line sits inside the same `iAmAdmin && !m.isCreator` gate
+the buttons always carried — an ordinary member's row is unchanged. **Shrinking the
+buttons was the cheaper fix and is refused**: `min-h-11` is the 44px touch floor this
+codebase applies everywhere, and one of the two being shrunk would be Remove.
+
+The indent is **logical** (`ps-[42px]` = 34px avatar + the identity line's own 8px gap),
+so an Arabic sheet indents from the trailing edge instead of leaving the buttons under
+nothing. And **the admin condition is not restated on the button** now that it is the
+line's own gate — two individually-removable copies of one rule is dead weight that
+reads as load-bearing (v2.105.17). `!m.isMe` IS genuinely narrower, so it stays.
+
+### 2 — the party-lines section said one thing twice, in two voices
+
+**MY FIRST DIAGNOSIS WAS WRONG AND THE MEASUREMENT IS WHAT SAID SO.** I expected the
+"New line" button to be clipping and planned a `min-w-0` fix. Measured in EN and AR at
+all five widths: the button is **92.3px at every width, never clipped, never off-screen,
+no page overflow.** There was nothing to fix there, and shipping that change would have
+been motion aimed at nothing.
+
+What IS real is the prose. At 320px the section carried a mono uppercase caption (29px)
+above a paragraph (64px) — **93px of explanation above a 36px field, 59% of the whole
+section** — and the two said the same thing. That is the owner's *"so much talks routine
+and it's not clear"* exactly. **Re-measured after: 48px at 320, 32px from 360 up** (the
+section body 157px → 104px), with the button still 92.3px and no overflow.
+
+`groupcall.lineHint` is **DELETED**, not shortened, and deleting the KEY as well as the
+render site is the load-bearing half: a key with no reader reads as coverage, which is
+what `dictCoverage` exists to catch. **A mono uppercase run at `.18em` tracking is a
+three-or-four-word section LABEL** — asking it to carry a sentence is part of what made
+this hard to read, so the surviving line is plain readable type. That deviates from the
+board's caption style deliberately, and only where the caption was restating its
+neighbour. The capacity still comes from `engine.maxParticipants`, never a literal 10 —
+every call runs the mesh, whose cap is 6.
+
+### 3 — a stacking context trapped the story viewer under the navigation
+
+`StatusViewer` is `fixed inset-0 z-[100]`, and **that 100 was never competing with the
+app shell at all.** `AppShell` wraps `{children}` in `relative z-10` — a deliberate
+correctness rule, because `RelayBackground`'s canvas is `fixed; z-index: 0` and would
+otherwise paint over unpositioned page content — and **`position` plus a non-auto
+`z-index` CREATES a stacking context**. So the viewer's 100 resolves INSIDE that
+wrapper, and against the wrapper's own siblings it is the wrapper's **10** that
+competes. It loses to the top bar and the tab bar, both `z-30`.
+
+The viewer's progress bars and header rendered underneath the navigation. Raising the
+number cannot fix that; only leaving the context can, so it is portalled to
+`document.body`.
+
+**THE COMPOSER IN THE SAME FILE WAS PORTALLED FOR THE SAME CLASS OF REASON IN v2.99.49
+AND THIS ONE WAS NOT** — the fixed-in-one-of-N-places pattern this repo keeps paying
+for. A test now counts both.
+
+Its chrome also takes `max(12px, env(safe-area-inset-top))`, so it clears a notch while
+a device with no inset keeps exactly the 12px it had. The PREMISE is asserted too: if
+AppShell ever stops creating that context the test goes red and whoever changed it sees
+the reasoning rather than a portal that looks like belt-and-braces.
+
+### 4 — the recording waveform, fixed in the one place the fix cannot work
+
+**v2.106.89 DIAGNOSED THIS CORRECTLY AND THEN PUT THE CURE WHERE IT IS INERT.** Its
+reasoning is right and is kept: WebKit starts an `AudioContext` created outside a user
+gesture **SUSPENDED**, a suspended context does not run its graph, so
+`getByteTimeDomainData` keeps returning the all-128 midpoint fill and `level()` returns
+**exactly 0** for the whole take. The composer's 30 bars are driven by nothing else, so
+they sit flat at their floor — the owner's *"balding"*.
+
+**WHAT THAT RELEASE MISSED IS THAT `resume()` NEEDS THE GESTURE TOO.** It called
+`ac.resume()` immediately AFTER `await getUserMedia`, by which point the gesture is
+spent — and on WebKit a resume from outside a gesture does not start the context either.
+The line was added, read as the cure, and changed nothing on the one engine it was
+written for. That is why the owner is reporting it again.
+
+The gesture is live for exactly one window: **the synchronous prefix of
+`startVoiceRecording`**. The mic button's `onClick` calls `startRecording()`, which calls
+that function directly, whose first await is the `getUserMedia`. So the context is now
+constructed **and resumed** there, and **only the graph** is wired after the stream
+exists — `createMediaStreamSource` genuinely needs the stream, `new AudioContext()` does
+not, and putting it after the await is precisely what left it suspended.
+
+**A REFUSED MICROPHONE MUST STILL CLOSE IT** (#160's rule): the context is already open
+by the time permission is refused, and on iOS an open context keeps the audio session
+claimed with nothing left holding a reference to it.
+
+### the pins that broke, and why every one of them was frozen on the wrong thing
+
+Nine failures across seven files. Every one was a pre-existing pin frozen on a literal
+this release legitimately moves — and **one of them froze the defect outright**:
+
+- **`voiceAndStamps`** asserted `ac = new Ctor()` comes AFTER the recorder, i.e. after
+  the await. It REQUIRED the bug while reading as a guard. Rewritten to the opposite
+  property, with the resume pinned alongside it and both counted at exactly one, so a
+  second construction after the await cannot creep back.
+- **`mediaRelease`** anchored on `const stream = await …`, which became `stream = await
+  …` when the acquisition moved into a try/catch. `indexOf` answered -1, `slice(-1)` read
+  the file's LAST CHARACTER, and the match count came back `undefined` — the
+  negative-index trap this repo records at v2.99.78 / v2.106.56 / v2.106.65. Re-anchored,
+  with the anchor's existence asserted first so it can never silently read nothing again.
+- **`dialPadStory`** sliced from the JSX comment reading "progress bars", which this
+  release reworded — the prose-anchor trap.
+- **`groupRoster` ×2 and `groupProfileEditor`** froze the single expression
+  `{iAmAdmin && !m.isCreator && !m.isMe && (`, one particular way of spelling three
+  rules. They now assert the three rules directly, so the row may be rearranged again
+  and a genuinely dropped rule still bites.
+- **`groupcallLocale` ×2 and `partyLinesFrame`** froze the deleted `lineHint` key.
+
+### two mistakes of my own, both caught by a failure rather than by reading
+
+**RUNNING PRETTIER REFORMATTED 1,400 LINES.** The repo's `.prettierrc` (printWidth 80,
+`arrowParens: "avoid"`) does not match how the code is actually checked in, so `prettier
+--write` on five touched files produced a diff nobody could review — the v2.106.27
+lesson. Reverted and every edit re-applied by hand; the real diff is 237/138.
+
+**THE SELF-TERMINATING COMMENT, ONE RELEASE AFTER v2.107.1 RECORDED IT.** A block comment
+of mine quoted a JSX comment verbatim, whose closing sequence ended the block comment
+early and broke the parse. Rewritten as line comments that name the trap.
+
+And **the guard caught my own copy edit**: `copyOnScreen(R, "up to")` went red because
+the new sentence capitalises "Up to" as its opener. The property — this screen states a
+capacity in words the reader can see — is unchanged and still asserted.
+
+### verification
+
+`client/src/app/ownerBatchV21072.test.ts` (15). **18 of 18 tripwires verified by
+MUTATION** off a confirmed-GREEN baseline, from byte-exact backups, the mutator aborting
+unless its target occurs exactly once and treating a changed test TOTAL as a harness
+failure; **no survivors**, all five sources byte-identical afterwards. One aborted on a
+non-unique needle of mine and bit once re-anchored.
+
+**NOT VERIFIED ON A DEVICE, said plainly.** Every width here is measured in a real
+browser against the real built stylesheet, but nobody has opened a group's details, a
+story or the voice composer on the owner's phone — and the waveform fix in particular is
+about WebKit behaviour that this Chromium cannot exhibit either way. What is proven is
+that the context is opened and resumed while the gesture is live.
+
+No schema change, no new dependency, no new env var, no server change. 6220 tests.
+
 ## v2.107.1 — the in-call chip says who you are talking to, and a number stops being drawn in a green that fails AA
 
 Owner: *"make sure all designs should be implemented you choose any frame i dont care ..

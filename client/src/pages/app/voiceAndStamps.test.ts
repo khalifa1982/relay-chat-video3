@@ -154,9 +154,28 @@ describe("2 — recording shows you are talking, and is not a one-way trip to Se
     // legitimately cleans up on its own.
     const startGuard = VOICE.slice(VOICE.indexOf("    rec.start();"), VOICE.indexOf("if (opts?.maxMs"));
     expect(startGuard).toMatch(/releaseAudio\(\);/);
-    // The analyser really is set up after the recorder, which is why the construction
-    // guard has nothing to release.
-    expect(VOICE.indexOf("ac = new Ctor();")).toBeGreaterThan(VOICE.indexOf("rec = pick.mimeType"));
+    /* THE CONTEXT IS OPENED BEFORE THE AWAIT, AND THAT IS THE POINT (v2.107.2).
+       This assertion used to require `ac = new Ctor()` to come AFTER the recorder —
+       i.e. after `await getUserMedia` — which is EXACTLY the defect: WebKit starts a
+       context created outside a user gesture SUSPENDED, so `level()` returned 0 for
+       the whole take and the composer's 30 bars sat flat. It froze the bug while
+       reading as a guard. The property is the opposite one, and the resume must ride
+       with it, because a resume from outside a gesture does not start the context
+       either. */
+    const iCtor = VOICE.indexOf("ac = new Ctor();");
+    const iResume = VOICE.indexOf("void ac.resume?.()");
+    const iGum = VOICE.indexOf("await navigator.mediaDevices.getUserMedia");
+    expect(iCtor, "the context is constructed").toBeGreaterThan(0);
+    expect(iResume, "…and resumed").toBeGreaterThan(0);
+    expect(iGum, "…and the mic is acquired").toBeGreaterThan(0);
+    expect(iCtor, "constructed BEFORE the await, while the gesture is live").toBeLessThan(iGum);
+    expect(iResume, "resumed BEFORE the await too — resume needs the gesture").toBeLessThan(iGum);
+    // Exactly one of each, so a second construction after the await cannot creep back.
+    expect(VOICE.match(/ac = new Ctor\(\);/g)?.length, "one construction").toBe(1);
+    expect(VOICE.match(/void ac\.resume\?\.\(\)/g)?.length, "one resume").toBe(1);
+    // A refused permission still closes it — #160's rule, and the context is already
+    // open by then, so nulling alone would strand it holding the iOS audio session.
+    expect(VOICE).toMatch(/catch \(e\) \{[\s\S]{0,220}void ac\?\.close\?\.\(\)[\s\S]{0,160}throw e/);
   });
 
   it("the composer becomes a full recording bar, replacing the lone red Stop", () => {

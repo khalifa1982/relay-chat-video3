@@ -106,8 +106,18 @@ describe("the caption's capacity claim comes from the live transport", () => {
     // false claim about capacity (the v2.106.9 argument about the board's "2×4 fits
     // up to 8"). Read from the engine so it cannot go stale if the cap moves.
     expect(R).toMatch(/const lineCap = engine\.maxParticipants/);
-    expect(R).toMatch(/t\("groupcall\.lineHint", \{ max: lineCap \}\)/);
-    expect(copyOnScreen(R, "up to"), whyCopyMissing(R, "up to")).toBe(true);
+    /* v2.107.2 folded the mono caption into the one explanatory sentence — it said the
+       same thing in a harder-to-read voice, and MEASURED at 320px the two together put
+       93px of prose above a 36px field. The property is unchanged and is what is pinned:
+       ONE piece of copy states the capacity, and the number in it comes from the live
+       transport. `lineHint` is gone, so a caller re-adding a second caption would also
+       have to re-add a key, which `dictCoverage` then makes visible. */
+    expect(R).toMatch(/t\("groupcall\.lineAbout", \{ max: lineCap \}\)/);
+    expect(R, "the retired caption is not quietly restored").not.toMatch(/groupcall\.lineHint/);
+    // Capitalised, because v2.107.2 made it the closing sentence of the one
+    // explanatory line rather than the tail of a mono caption. The property is
+    // unchanged — this screen states a capacity in words the reader can see.
+    expect(copyOnScreen(R, "Up to"), whyCopyMissing(R, "Up to")).toBe(true);
     // MAX_PARTICIPANTS is cap−1 because it counts INVITEES; a party line's cap
     // counts everyone who dials in, the caller included. Reusing it would
     // understate a line's capacity by one.

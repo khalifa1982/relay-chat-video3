@@ -1146,10 +1146,31 @@ export function StatusViewer({
 
   if (!group || !item) return null;
 
-  return (
+  /* PORTALLED TO document.body (v2.107.2, owner: *"my own status if I click on it, if
+     you see the top bar doesn't show because it's over lap on the top navigation bar,
+     so make it low"*).
+
+     A STACKING CONTEXT TRAPS `z-index`, and this element's `z-[100]` was never
+     competing with the app shell at all. AppShell wraps `{children}` in `relative z-10`
+     — a deliberate correctness rule, because `RelayBackground`'s canvas is
+     `fixed; z-index: 0` and would otherwise paint over unpositioned page content — and
+     `position` plus a non-auto `z-index` CREATES a stacking context. So this viewer's
+     100 is resolved INSIDE that wrapper, and against the wrapper's own siblings it is
+     the wrapper's 10 that competes: it loses to the top bar and the tab bar, both
+     `z-30`. The viewer's progress bars and header rendered UNDERNEATH the navigation,
+     which is exactly what the owner circled.
+
+     Raising the number cannot fix that; only leaving the context can. The COMPOSER in
+     this same file was portalled for the same class of reason in v2.99.49 and this one
+     was not — the fixed-in-one-of-N-places pattern this repo keeps paying for. */
+  return createPortal(
     <div className="fixed inset-0 z-[100] flex flex-col bg-black text-white select-none">
-      {/* progress bars */}
-      <div className="flex gap-1 px-3 pt-3">
+      {/* Progress bars, clear of the notch / status bar. `max(12px, …)` so a device
+          with no inset keeps exactly the 12px this had before. */}
+      <div
+        className="flex gap-1 px-3"
+        style={{ paddingTop: "max(12px, env(safe-area-inset-top))" }}
+      >
         {group.items.map((it, idx) => (
           <div key={it.id} className="h-0.5 flex-1 overflow-hidden rounded-full bg-white/25">
             <div
@@ -1391,7 +1412,8 @@ export function StatusViewer({
       {showViewers && item && (
         <ViewersSheet statusId={item.id} onClose={() => { setShowViewers(false); setPaused(false); }} />
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 

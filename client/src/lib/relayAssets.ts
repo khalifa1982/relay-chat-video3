@@ -728,15 +728,31 @@ export const RELAY_CSS = `
    The bar used to be 5px tall and animate the height property to 18px — a layout+paint
    animation, five of them per speaking tile, compositing over live video every
    frame. scaleY is compositor-only and looks identical. */
-.relay-root .relay-tile .sound-wave i{width:3px;height:18px;border-radius:3px;background:#22c55e;display:block;
+/* v2.107.4 — THE FIVE HUES ARE COLOUR, NOT MOTION, SO THEY SIT OUTSIDE THE GATE.
+   They used to live INSIDE the prefers-reduced-motion gate together with the
+   animation, and the base was a flat #22c55e — so a viewer who asked for less motion
+   got five bars in the PRESENCE GREEN, which is wrong twice over: green means ONLINE
+   in this app and nothing else (v2.106.9 moved the speaking TILE off it for exactly
+   that reason, and left this), and #22c55e is also the Registered badge's own hex, which
+   renders on the same screen. It also made the still frame look nothing like the moving
+   one — the v2.99.86 class. The rainbow is a deliberate owner choice (v2.99.85) and now
+   applies to everybody; only the bounce is gated. The base is the accent rather than a
+   sixth colour, so a bar added later reads as "active" instead of as "online". */
+.relay-root .relay-tile .sound-wave i{width:3px;height:18px;border-radius:3px;
+  background:var(--rb,#3fe0c5);display:block;
   transform-origin:bottom center;transform:scaleY(.278)}
+.relay-root .relay-tile .sound-wave i:nth-child(1){background:#f43f5e}
+.relay-root .relay-tile .sound-wave i:nth-child(2){background:#f59e0b}
+.relay-root .relay-tile .sound-wave i:nth-child(3){background:#22c55e}
+.relay-root .relay-tile .sound-wave i:nth-child(4){background:#3b82f6}
+.relay-root .relay-tile .sound-wave i:nth-child(5){background:#a855f7}
 @media (prefers-reduced-motion: no-preference){
   .relay-root .relay-tile.speaking .sound-wave i{animation:relayWave .9s ease-in-out infinite}
-  .relay-root .relay-tile.speaking .sound-wave i:nth-child(1){animation-delay:0s;background:#f43f5e}
-  .relay-root .relay-tile.speaking .sound-wave i:nth-child(2){animation-delay:.12s;background:#f59e0b}
-  .relay-root .relay-tile.speaking .sound-wave i:nth-child(3){animation-delay:.24s;background:#22c55e}
-  .relay-root .relay-tile.speaking .sound-wave i:nth-child(4){animation-delay:.36s;background:#3b82f6}
-  .relay-root .relay-tile.speaking .sound-wave i:nth-child(5){animation-delay:.48s;background:#a855f7}
+  .relay-root .relay-tile.speaking .sound-wave i:nth-child(1){animation-delay:0s}
+  .relay-root .relay-tile.speaking .sound-wave i:nth-child(2){animation-delay:.12s}
+  .relay-root .relay-tile.speaking .sound-wave i:nth-child(3){animation-delay:.24s}
+  .relay-root .relay-tile.speaking .sound-wave i:nth-child(4){animation-delay:.36s}
+  .relay-root .relay-tile.speaking .sound-wave i:nth-child(5){animation-delay:.48s}
 }
 @keyframes relayWave{0%,100%{transform:scaleY(.278)}50%{transform:scaleY(1)}}
 /* Per-tile info chip: device type + live connection speed (e.g. "5.2 Mbps").

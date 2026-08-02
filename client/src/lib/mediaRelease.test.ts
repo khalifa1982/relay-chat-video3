@@ -119,8 +119,19 @@ describe("C — an acquisition that lands after the call ended is discarded", ()
 
 describe("D — the voice-note microphone is always released", () => {
   it("a recorder that fails to construct or start still stops the mic", () => {
-    const seg = VOICE.slice(VOICE.indexOf("const stream = await navigator.mediaDevices.getUserMedia"));
-    // both the construction and the start are guarded
+    /* ANCHORED ON THE AWAIT ITSELF, not on the declaration that used to precede it.
+       v2.107.2 moved the acquisition into a try/catch (so a refused permission closes
+       the level meter's context), which turned `const stream = await …` into
+       `stream = await …` — and `indexOf` answers -1 for an absent needle, so this
+       slice became `slice(-1)`, i.e. the LAST CHARACTER of the file, and the match
+       count came back `undefined`. The negative-index trap this repo records at
+       v2.99.78 / v2.106.56 / v2.106.65. The anchor is asserted to exist first, so it
+       can never silently read nothing again. */
+    const at = VOICE.indexOf("await navigator.mediaDevices.getUserMedia");
+    expect(at, "the mic acquisition must exist").toBeGreaterThan(0);
+    const seg = VOICE.slice(at);
+    expect(seg.length, "the slice must be real").toBeGreaterThan(400);
+    // both the recorder's construction and its start are guarded
     expect(seg.match(/stream\.getTracks\(\)\.forEach\(\(t\) => t\.stop\(\)\);\s*\n\s*throw e/g)?.length).toBe(2);
   });
   it("unmounting during the mic acquisition cancels the recording", () => {

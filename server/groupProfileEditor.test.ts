@@ -237,7 +237,23 @@ describe("the sheet itself", () => {
     // adminship is derived from having made the group, so no write could restore it) and
     // against yourself (that is leaving, which does not exist yet). The server refuses all
     // three regardless; this is about not offering them.
-    expect(SHEET).toMatch(/\{iAmAdmin && !m\.isCreator && !m\.isMe && \(/);
+    /* THE PROPERTY, NOT THE ARRANGEMENT (v2.107.2). This froze the single expression
+       `{iAmAdmin && !m.isCreator && !m.isMe && (` — one particular way of spelling
+       three rules — so it broke the moment the row split onto two lines and the
+       admin half became the CONTROLS LINE's own gate. What it stands for is that
+       Remove is offered only to an admin, never against the creator, and never
+       against yourself; all three are asserted directly, so the row may be
+       rearranged again and a genuinely dropped rule still bites.
+       `Remove` lives inside `iAmAdmin && !m.isCreator`, which is exactly the gate on
+       the line it sits in, and carries its own narrower `!m.isMe`. */
+    const lineGate = SHEET.indexOf("{iAmAdmin && !m.isCreator && (");
+    expect(lineGate, "the member controls are admin-only and spare the creator").toBeGreaterThan(0);
+    const selfGate = SHEET.indexOf("{!m.isMe && (", lineGate);
+    expect(selfGate, "…and Remove additionally spares yourself").toBeGreaterThan(lineGate);
+    const removeBtn = SHEET.indexOf("setRemoving({", selfGate);
+    expect(removeBtn, "…and that gate is the one wrapping Remove").toBeGreaterThan(selfGate);
+    // A constant would satisfy an `indexOf` while deciding nothing.
+    expect(codeOnly(SHEET)).not.toMatch(/\{(true|false) && !m\.isCreator/);
     // Adding widens to a plain member ONLY on the server's own answer, never inferred.
     expect(SHEET).toMatch(/\{\(iAmAdmin \|\| info\.data\?\.membersCanAdd\) && \(/);
     // And the toggle itself stays admin-only.

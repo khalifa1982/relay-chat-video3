@@ -26,6 +26,7 @@ const V2DB = read("server/v2db.ts");
 const ROUTERS = read("server/v2routers.ts");
 const SCHEMA = read("drizzle/schema.ts");
 const MESSAGES = read("client/src/pages/app/Messages.tsx");
+const SHEET = read("client/src/app/GroupInfoSheet.tsx");
 
 
 describe("the group id comes from the ONE shared allocator", () => {
@@ -374,16 +375,67 @@ describe("what the group's own identity looks like on screen", () => {
     expect(GA).toMatch(/<Users /);
   });
 
-  it("the header shows the group's id and its status, and NO tier badge", () => {
+  it("the group header carries the NAME, the size and who is here — and no tier badge", () => {
+    /* THE OWNER ASKED FOR THIS TWICE AND THIS PIN FROZE THE OPPOSITE (v2.107.3):
+       it asserted *"the header shows the group's id and its status"*, i.e. it required
+       exactly what they wanted removed — *"inside the group and the bar, you remove the
+       group ID and you remove the group status, and you just put the group name up and
+       online users and the total members"*.
+
+       What the header must carry is now asserted directly, and the two removals with it,
+       so a later change that reinstates either goes red instead of quietly returning. */
+    // The name is the headline.
+    expect(MESSAGES).toMatch(/\? thread\?\.title \|\| thread\?\.peerDisplayName \|\| t\("msg\.group"\)/);
+    // The size and the presence count are the subline.
+    expect(MESSAGES).toMatch(/groups\.memberCountOne" : "groups\.memberCountMany", \{ n \}/);
+    expect(MESSAGES).toMatch(/t\("groups\.onlineCount", \{ n: membersOnline \}\)/);
     // A tier describes a person's account; a group has none.
-    expect(MESSAGES).toMatch(/isGroup && thread\?\.groupNumber && \/\^\\d\{6\}\$\/\.test\(thread\.groupNumber\)/);
     expect(MESSAGES).toMatch(/\{thread && !isGroup && \(\s*\n\s*<RoleBadge/);
+    /* ── AND NEITHER THE ID NOR THE STATUS IS READ OUTSIDE THE SHEET ─────────────────
+       Banning one IDENTIFIER is not the property, which a mutation run proved: an
+       assertion that `describeProfileStatus` is absent SURVIVED a reinstatement that
+       rendered the status through a local variable instead. Whatever route a
+       reinstatement takes it must read one of the two wire fields — `thread.groupStatus`
+       / `thread.groupNumber` are the ONLY source of either fact in this component — so
+       the property with teeth is that every such read is inside the sheet's own mount.
+
+       Scoped to `thread?.` deliberately: the thread LIST legitimately reads
+       `t.groupNumber` on a row, which is a different surface and not what the owner
+       asked to change. */
+    const code = codeOnly(MESSAGES);
+    const mountAt = code.indexOf("<GroupInfoSheet");
+    expect(mountAt, "the sheet is mounted").toBeGreaterThan(-1);
+    const mount = code.slice(mountAt, code.indexOf("/>", mountAt) + 2);
+    expect(mount.length, "the mount slice is real").toBeGreaterThan(80);
+    for (const field of ["thread?.groupNumber", "thread?.groupStatus"]) {
+      const all = code.split(field).length - 1;
+      const inMount = mount.split(field).length - 1;
+      expect(inMount, `${field} reaches the sheet`).toBeGreaterThan(0);
+      expect(all, `${field} is read ONLY by the sheet, never by the header`).toBe(inMount);
+    }
   });
 
-  it("the status string comes from the SHARED formatter", () => {
-    // So the header and any later surface cannot phrase one status two ways.
-    expect(MESSAGES).toMatch(/describeProfileStatus\(thread\?\.groupStatus, thread\?\.groupStatusNote\)/);
-    expect(MESSAGES).toMatch(/import \{ describeProfileStatus \} from "@shared\/profileStatus"/);
+  it("neither fact is LOST — both live on in the group's own details sheet", () => {
+    /* That is what makes the removal safe rather than destructive. The sheet is one tap
+       away on the same header, it is where the id is copied and shared, and it is where
+       the status is SET — so this removes a duplication, not a capability. */
+    expect(SHEET, "the sheet renders the group's own number, grouped").toMatch(
+      /\{number\.slice\(0, 3\)\}-\{number\.slice\(3\)\}/,
+    );
+    expect(SHEET, "…and its status, through the shared formatter").toMatch(
+      /describeProfileStatus\(status, statusNote\)/,
+    );
+    // The status is not merely SHOWN there, it is SET there — which is why the header
+    // could only ever have been a duplicate of it.
+    expect(SHEET, "…and the sheet is where the status is chosen").toMatch(
+      /<ProfileStatusPicker/,
+    );
+    // …and the header is what opens it, so the two facts are genuinely one tap away
+    // rather than merely existing somewhere in the app.
+    expect(MESSAGES).toMatch(/<GroupInfoSheet/);
+    expect(codeOnly(MESSAGES), "tapping the group header opens the sheet").toMatch(
+      /if \(isGroup\) setGroupInfoOpen\(true\)/,
+    );
   });
 
   it("the Groups section already existed and still does", () => {

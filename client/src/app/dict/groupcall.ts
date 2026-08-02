@@ -88,15 +88,21 @@ export const GROUPCALL = {
   "groupcall.partyLines": { en: "Party lines", ar: "الخطوط الجماعية" },
   "groupcall.hide": { en: "Hide", ar: "إخفاء" },
   "groupcall.manage": { en: "Manage", ar: "إدارة" },
-  /* `{max}` is the live transport's own room cap, never a literal — every call runs the
+  /* ONE SENTENCE, NOT TWO PARAGRAPHS (v2.107.2, owner: *"make it more friendly, more
+     clear because you're so much talks routine and it's not clear"*). This section
+     carried a mono uppercase caption AND a paragraph, and they said the SAME thing —
+     MEASURED at 320px, 93px of prose sat above a 36px field, i.e. 59% of the whole
+     section was explanation. `groupcall.lineHint` is DELETED rather than shortened: a
+     mono uppercase run at `.18em` tracking is a three-or-four-word section LABEL, and
+     asking it to carry a sentence is part of what made this hard to read. That deviates
+     from the board's caption style deliberately, and only where the caption was
+     restating the paragraph beside it.
+
+     `{max}` is the live transport's own room cap, never a literal — every call runs the
      mesh, whose cap is 6, so a hardcoded 10 would be a false claim about capacity. */
-  "groupcall.lineHint": {
-    en: "Dial the number — you drop straight in · up to {max}",
-    ar: "اطلب الرقم لتدخل مباشرةً · حتى {max}",
-  },
   "groupcall.lineAbout": {
-    en: "A party line is a room with its own 6-digit number — anyone who dials it lands in the same call. No ringing, no invites: just share the number.",
-    ar: "الخط الجماعي غرفة لها رقمها الخاص من 6 أرقام — وكل من يطلبه ينضم إلى المكالمة نفسها. بلا رنين وبلا دعوات: شارك الرقم فحسب.",
+    en: "Your own room, with a number. Share it — anyone who dials walks straight in, no ringing. Up to {max}.",
+    ar: "غرفتك الخاصة ولها رقم. شاركه — وكل من يطلبه يدخل مباشرةً بلا رنين. حتى {max}.",
   },
   "groupcall.atCap": {
     en: "You have all {max} party lines — delete one to make room.",
