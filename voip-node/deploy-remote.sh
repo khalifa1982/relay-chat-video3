@@ -179,7 +179,10 @@ echo "entrypoint now: $(sha256sum "$ENTRY" 2>/dev/null | cut -d' ' -f1 || echo M
 # otherwise surface as a crash-looping unit whose journal nobody reads until a call fails —
 # and it is a mistake already made once in the agent (v2.106.36, caught by `node --check`
 # rather than by review).
-for f in index.js record.mjs sign.mjs; do
+# loadtest*.mjs are not started by the unit, but they ARE run by hand on a drained node — and a
+# syntax error found at that moment is found while the node is out of rotation and somebody is
+# waiting on a measurement. Cheaper to catch here.
+for f in index.js record.mjs sign.mjs loadtest.mjs loadtestCore.mjs; do
   [ -f "$AGENT_DIR/$f" ] || fail "REFUSED: $f missing from the payload" 96
   node --check "$AGENT_DIR/$f" || fail "REFUSED: $f does not parse — NOT restarting the service" 97
 done
