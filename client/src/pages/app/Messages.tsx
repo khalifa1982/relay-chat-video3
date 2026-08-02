@@ -687,10 +687,16 @@ export default function MessagesPage({
     // relative-with-only-absolute-children) is what keeps WebKit from
     // collapsing the list area.
     <div className="flex-1 flex md:p-6 gap-0 md:gap-6 min-h-0">
-      {/* ── thread list (always visible on desktop; hidden when a thread is open on mobile) ── */}
+      {/* ── thread list (always visible on desktop; hidden when a thread is open on mobile) ──
+          360px, not 340 (v2.107.4). Board 1j specifies desktop as 1200 = 280 sidebar +
+          360 thread list + chat pane, and this 20px was the LAST measured delta between
+          the app and that frame — the only thing left of 1j once its "88px icon rail" was
+          settled as SUPERSEDED (the frame's own subtitle reads "labelled sidebar (matches
+          1i)", and the handoff README unifies desktop on the 280px sidebar, so the rail
+          must not be built). Phone is untouched: the width is `md:` only. */}
       <aside
         className={
-          "md:w-[340px] md:shrink-0 md:rounded-2xl md:glass-surface-md flex-col min-h-0 " +
+          "md:w-[360px] md:shrink-0 md:rounded-2xl md:glass-surface-md flex-col min-h-0 " +
           (activeConvoId == null ? "flex flex-1 md:flex-initial" : "hidden md:flex")
         }
       >

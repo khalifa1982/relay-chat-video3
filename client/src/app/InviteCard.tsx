@@ -199,7 +199,16 @@ export function InviteCard({
   const notFound = personResolved && !isLine && !person;
 
   return (
-    <div className="rounded-3xl border border-border/60 bg-card/60 p-6 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150">
+    /* THE SHARED GLASS RECIPE, NOT A FOURTH HAND-ROLLED ONE (v2.107.4, board 4h).
+       This card was `border-border/60 bg-card/60 backdrop-blur-2xl` — the material the
+       board's 4h frame draws (a white .07 -> .02 gradient over a hairline, blurred) written
+       out by hand, and therefore free to drift from the four other cards that carry it.
+       `.rglass` IS that recipe, and it is the one v2.106.40 had to fix in place because
+       `Admin.tsx` had patched the same defect at ONE of five call sites while the other
+       four stayed broken. A fifth private copy is how that happens again.
+       The blur stays, because this card sits over the live background canvas and never
+       over live video — the no-backdrop-filter rule is scoped to call surfaces. */
+    <div className="rglass rounded-3xl p-6 shadow-2xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150">
       <div className="mb-1 flex justify-center">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-[color:var(--relay-online,#06d6a0)]/30 bg-[color:var(--relay-online,#06d6a0)]/10 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[color:var(--relay-online,#06d6a0)]">
           {isLine ? <Users className="size-3.5" /> : <PhoneCall className="size-3.5" />}

@@ -1,5 +1,97 @@
 # Project TODO
 
+## v2.107.4 — the last three measured gaps to the design board, and two items declined with a reason
+
+Owner: *"Do the changes quick and finish all chapters."*
+
+**The frame ledger was re-audited first, because "what is left" is a question the notes
+have been wrong about before.** `design_handoff_relay_app/MISSING-FRAMES.md` records its own
+correction at v2.107.1: it listed eight frames as outstanding when seven had shipped in a
+single release whose changelog wrote up only half of what it contained. Counting from the
+artefact rather than the notes — `grep -o 'id="[1-5][a-k]"' 'Relay App Redesign.dc.html'`
+— gives **42 frames, all with their layout built.** So there are no chapters left to write;
+what remains is FIDELITY, the class of thing where every source pin passes and the screen
+is still wrong.
+
+Three of those, each checked against the board's own markup before anything moved.
+
+### 1 — the speaking sound-wave was PRESENCE GREEN for anyone with reduced motion on
+
+The five rainbow hues lived INSIDE `prefers-reduced-motion: no-preference`, together with
+the bounce, over a flat `#22c55e` base.
+
+**Colour is not motion.** A viewer who asked for less motion got five bars in the one colour
+this app reserves for ONLINE — the rule v2.106.9 moved the speaking TILE off green to
+protect, and then left this — and `#22c55e` is also the Registered badge's own hex, which
+renders on the same screen. It also made the still frame look nothing like the moving one,
+which is the v2.99.86 class.
+
+The five hues now sit outside the gate, so the rainbow the owner chose in v2.99.85 applies
+to everybody and only the bounce is gated. The base becomes the cycling accent rather than a
+sixth colour, so a bar added later reads as "active" instead of "online". Green survives as
+one of five, which is a different claim from five green bars.
+
+### 2 — the desktop thread list was 340px against board 1j's 360
+
+That 20px was the entire remaining delta once 1j's "88px icon rail" was settled as
+**superseded** rather than outstanding: the frame's own subtitle reads *"labelled sidebar
+(matches 1i)"* and the handoff README unifies desktop on the 280px sidebar, so the rail must
+not be built. The width is `md:` only — a bare `w-[360px]` would pin the phone's full-bleed
+list to a fixed width, and a mutation that drops the prefix bites.
+
+### 3 — the invite landing hand-rolled the glass material
+
+Board 4h's card is the shared glass recipe; `InviteCard` wrote its values out by hand
+(`border-border/60 bg-card/60 backdrop-blur-2xl`) and was therefore free to drift from the
+four other cards that carry `.rglass`. That is precisely the shape v2.106.40 had to fix in
+place, when `Admin.tsx` had patched the same defect at ONE of five call sites and the other
+four stayed broken. A fifth private copy is how that happens again. The blur stays: the
+no-backdrop-filter rule is scoped to CALL surfaces, and an invite landing is not one.
+
+### Two board items are DECLINED, and the reason is pinned rather than left implicit
+
+**1b's swipe tray is not built.** It reveals exactly two accent pucks — message and call —
+and this app renders both (and video) as always-visible round actions on every History row.
+A gesture would be a second way to do one thing, and the harder one to find. That is the
+inverse of the v2.99.85 finding that made the message ⋮ permanently visible, because
+"appears on hover" was what made it undiscoverable. Pinned as the REASON: if those actions
+ever stop being inline, the test goes red and the swipe has to be reconsidered.
+
+**The call-back disc keeps its green.** The obvious fidelity move is to take it off
+`#22c55e` — the board draws its swipe pucks in the accent, and a History row also renders a
+presence LED and a Registered badge in that same green, which is three greens on one row.
+It is not taken, and that is a decision: green-means-CALL is the hue language the owner
+chose for the Dialer's own action row (v2.77, v2.99.90 — green Voice / sky Video / violet
+Group), and History's three discs are that row repeated. Changing it here alone would make
+two screens disagree about what the call button looks like, which is worse than the
+collision it fixes. **Flagged for the owner instead of reversed unilaterally.**
+
+### verification
+
+`client/src/app/fidelityTail.test.ts` (11). **10 of 10 tripwires verified by MUTATION** off
+a confirmed-green baseline from byte-exact backups, the mutator aborting unless its target
+occurs exactly once and treating a changed test TOTAL as a harness failure; all four sources
+byte-identical afterwards. That includes the wave defect reinstated **verbatim** as it stood
+at HEAD, both declines' stated reasons falsified, and a swipe row planted in the call log.
+
+**THE BACKTICK TRAP FIRED FOR THE SIXTH RECORDED TIME, in my own CSS comment.** I wrote the
+gate's name in backticks inside `RELAY_CSS`, which is a template literal, so it terminated
+early and five test files failed to parse. Worth stating plainly: **the standing guard for
+this cannot report it** — it asserts the PARSED `RELAY_CSS` contains no backtick, and a
+terminated literal can never contain the character that ended it. The transform is what
+catches it, and did.
+
+**TWO WEAKNESSES IN MY OWN TESTS, both found by the mutation run rather than by reading**:
+a file-wide match for `t("history.callBack")` is satisfied four times over, so it would pass
+with a row's own action deleted — it is pinned on the `RoundAction` element now; and the
+replacement then counted a disc's `title=` as if it were its `label=`, so a mutation that
+repointed the label and left the tooltip survived. Both fixed, both re-verified.
+
+**Not verified on a device, said plainly**: nobody has watched a speaking tile with reduced
+motion on, or opened an invite link, on the owner's phone.
+
+No schema change, no new dependency, no new env var, no server change. 6231 tests.
+
 ## v2.107.3 — the group header stops repeating what its own details sheet already holds
 
 Owner, restating something they say they have explained several times:
