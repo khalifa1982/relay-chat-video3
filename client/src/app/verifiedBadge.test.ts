@@ -66,7 +66,16 @@ describe("role badge is wired into every primary identity surface", () => {
     // v2.99.36: the Dialer preview computes the tier first (`tier`) and renders a
     // CAPTION-LESS mark with the tier word inline, because the stacked caption
     // overflowed the one-line row and collided with the keypad.
-    ["client/src/pages/app/Dialer.tsx", /const tier = roleFromFlags\(previewIdentity\.role, previewIdentity\.verified\);[\s\S]{0,1600}<RoleBadge role=\{tier\} size=\{13\} caption=\{false\} \/>/],
+    //
+    // SPLIT IN TWO for the same reason `Messages.tsx` was, four lines above: the
+    // fixed 1600-character window between the two anchors went stale the moment the
+    // profile button's `aria-label` moved into the dictionary (#156) and grew a
+    // comment recording why. That is the recurring fixed-slice fragility, and
+    // widening the cap only moves it one insertion along. The property is what the
+    // test is named for and it needs no window at all: the tier comes from the
+    // payload with a verified fallback, and it is RENDERED caption-less at 13px.
+    ["client/src/pages/app/Dialer.tsx", /const tier = roleFromFlags\(previewIdentity\.role, previewIdentity\.verified\);/],
+    ["client/src/pages/app/Dialer.tsx", /<RoleBadge role=\{tier\} size=\{13\} caption=\{false\} \/>/],
     ["client/src/app/PeerOverlays.tsx", /<RoleBadge role=\{roleFromFlags\(p\.role, p\.verified\)\}/],
   ];
   for (const [file, re] of sites) {

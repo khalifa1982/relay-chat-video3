@@ -2,6 +2,11 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { RINGTONE_NOTES, RINGTONE_LOOP_MS, RINGTONE_PEAK_GAIN } from "@shared/ringtone";
+/* Profile now renders through `dict/profile.ts`, so the two copy pins below ask the
+   PROPERTY (this sentence reaches this screen) rather than freezing the English
+   literal, which would have forbidden the translation while saying nothing about the
+   words. Strictly stronger: reaching the dictionary also proves an Arabic half exists. */
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
 
 /**
  * v2.84 — mobile call audio + hang-up icon + signature ringtone, static pins.
@@ -92,7 +97,9 @@ describe("signature ringtone — one shared spec, medium-loud", () => {
     expect(NOTIF).toMatch(/export function playRingtonePreview/);
     expect(NOTIF).toMatch(/RINGTONE_NOTES/);
     expect(PROFILE).toMatch(/playRingtonePreview\(\)/);
-    expect(PROFILE).toMatch(/Test ringtone/);
+    expect(copyOnScreen(PROFILE, "Test ringtone"), whyCopyMissing(PROFILE, "Test ringtone")).toBe(
+      true
+    );
   });
 });
 
@@ -100,7 +107,9 @@ describe("Profile — call-alert (push) management", () => {
   it("granting notifications also registers this device for call-alert pushes, with state shown", () => {
     expect(PROFILE).toMatch(/trpc\.push\.publicKey\.useQuery/);
     expect(PROFILE).toMatch(/ensurePushSubscription\(pubKey\.data\.key/);
-    expect(PROFILE).toMatch(/Call alerts on/);
+    expect(copyOnScreen(PROFILE, "Call alerts on"), whyCopyMissing(PROFILE, "Call alerts on")).toBe(
+      true
+    );
     expect(PROFILE).toMatch(/iosNeedsInstallForPush\(\)/);
   });
 });

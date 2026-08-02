@@ -22,6 +22,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "../../../server/testing/codeOnly";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "..", "..", "..");
 const read = (p: string) => codeOnly(fs.readFileSync(path.join(ROOT, p), "utf8"));
@@ -137,7 +138,7 @@ describe("group calls live in the group section", () => {
       MESSAGES.indexOf("function ConversationView("),
     );
     expect(sec.length).toBeGreaterThan(200);
-    expect(sec).toMatch(/Start a group call/);
+    expect(copyOnScreen(sec, "Start a group call")).toBe(true);
     expect(sec).toMatch(/<PartyLinesSection onJoined=\{\(\) => \{\}\} defaultOpen \/>/);
   });
 

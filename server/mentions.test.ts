@@ -258,7 +258,11 @@ describe("the group header's online count", () => {
 
   it("uses the AA-measured green text token, not the LED hue", () => {
     // The LED green fails contrast at this size (measured in v2.99.86).
-    const at = UI.indexOf("membersOnline} online");
+    /* Anchored on the KEY, not the words: the count is rendered from the group sheet's
+       own `groups.onlineCount` now (one vocabulary per noun), and an anchor made of copy
+       slides to -1 the moment a screen is translated — after which `slice(max(0,-301),
+       -1)` reads the START of the file and this passes on anything. */
+    const at = UI.indexOf('t("groups.onlineCount"');
     expect(at).toBeGreaterThan(0);
     expect(UI.slice(Math.max(0, at - 300), at)).toMatch(/--relay-green-text/);
   });
@@ -393,7 +397,15 @@ describe("green means ONLINE, and only online", () => {
        CONDITION. `p.isOnline && !p.idle ? green : muted` is a presence statement with no
        prose in it at all, and a text-only allow-list flags it: the first run of this
        sweep flagged four such sites and every one of them was correct. */
-    const PRESENCE = [/\btyping\b/, /\bonline\b/, /online now/, /\bisOnline\b/];
+    /* `onlineCount` is the THIRD kind of evidence and it is the same kind as `isOnline`:
+       a code identifier rather than prose. It exists because a count cannot be one
+       interpolated sentence — Arabic needs the dual at 2 and two more forms above it — so
+       the header selects a WHOLE KEY per band, `t(onlineCountKey(n), …)`. That key is
+       chosen at RUNTIME, which `expandCopy` cannot follow (the limit `guestExpiryKey`
+       already records), so the word "online" genuinely is not in the source any more and
+       a correctly-earned green read as a violation. Narrow on purpose: only an
+       identifier that says online-ness in its own name counts. */
+    const PRESENCE = [/\btyping\b/, /\bonline\b/, /online now/, /\bisOnline\b/, /\bonlineCount/];
 
     /* THE TWO GREEN TOKENS DO NOT CARRY THE SAME LICENCE, which is why this is a pair of
        rules rather than one flat list. `--relay-online` is the LED hue and means ONLINE,

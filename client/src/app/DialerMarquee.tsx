@@ -26,6 +26,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { prefersReducedMotion } from "@/lib/relayBackground";
+import { useT } from "./i18n";
 import {
   MARQUEE_TIMING,
   MARQUEE_MIN_VIEWPORT_H,
@@ -65,6 +66,19 @@ export function DialerMarquee({
     refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
+
+  /* THE TRANSLATOR RIDES A REF, FOR THE SAME REASON `slidesRef` DOES. The rAF loop
+     is set up by an effect keyed on `[slides]`, so the `t` captured in its closure
+     is the one from whichever render last ran that effect. A language switch
+     re-renders this component (the locale context changed) but does NOT change
+     `slides`, so the effect would not re-run and the marquee would keep painting the
+     previous language until somebody edited a contact. Reading through a ref means
+     the next painted frame is already in the new language, and — unlike adding `t`
+     to the effect's deps — it does so without tearing down and restarting the loop
+     mid-slide. */
+  const t = useT();
+  const tRef = useRef(t);
+  tRef.current = t;
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const promptRef = useRef<HTMLSpanElement | null>(null);
@@ -118,7 +132,8 @@ export function DialerMarquee({
     const paint = (f: ReturnType<typeof frameAt>) => {
       const p = promptRef.current;
       if (p) {
-        if (p.textContent !== f.promptText) p.textContent = f.promptText;
+        const promptText = f.promptKey ? tRef.current(f.promptKey) : "";
+        if (p.textContent !== promptText) p.textContent = promptText;
         p.style.opacity = String(f.promptOpacity);
         p.style.transform = f.promptShiftPx ? `translateY(${f.promptShiftPx}px)` : "";
       }
@@ -147,7 +162,10 @@ export function DialerMarquee({
         b.tabIndex = tappable ? 0 : -1;
         const label =
           tappable && live?.kind === "contact"
-            ? `Dial ${live.contact.name}, ${live.contact.number}`
+            ? tRef.current("dialer.marqueeDial", {
+                name: live.contact.name,
+                number: live.contact.number,
+              })
             : "";
         if (b.getAttribute("aria-label") !== label) b.setAttribute("aria-label", label);
       }
@@ -288,7 +306,9 @@ export function DialerMarquee({
         className="rmarquee-prompt absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-foreground/85"
         style={{ opacity: String(still.promptOpacity) }}
       >
-        {still.promptText}
+        {/* Rendered in JSX rather than through the ref, so this one is reactive for
+            free: a language switch re-renders and the still frame follows. */}
+        {still.promptKey ? t(still.promptKey) : ""}
       </span>
       <span
         aria-hidden="true"

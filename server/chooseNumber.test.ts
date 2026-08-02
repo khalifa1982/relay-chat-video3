@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeDesiredNumber, NUMBER_BEARING_COLUMNS } from "./v2db";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 
 /**
  * Locate a function EXACTLY by name. v2.105.8 reproduced the v2.104.0 collision in a
@@ -304,7 +305,12 @@ describe("the chooser is GONE from Profile (owner withdrew it)", () => {
   });
 
   it("the RANDOM regenerate is still there and is now the only number control", () => {
-    expect(PROFILE).toMatch(/Random number/);
+    /* Through `copyOnScreen`: this screen renders through `dict/profile.ts` now, so the
+       literal would have forbidden the translation while saying nothing about the words.
+       Strictly stronger — reaching the dictionary also proves an Arabic half exists. */
+    expect(copyOnScreen(PROFILE, "Random number"), whyCopyMissing(PROFILE, "Random number")).toBe(
+      true
+    );
     expect(PROFILE).toMatch(/identity\.regenerateNumber/);
   });
 

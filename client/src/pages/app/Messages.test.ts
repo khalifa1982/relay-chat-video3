@@ -50,7 +50,7 @@ describe("Messages.tsx — messaging overhaul", () => {
 
   it("the lightbox is dismissible (Escape + close button)", () => {
     expect(SRC).toMatch(/e\.key === "Escape" && onClose/);
-    expect(SRC).toMatch(/aria-label="Close preview"/);
+    expect(SRC).toMatch(/aria-label=\{t\("msg\.closePreview"\)\}/);
   });
 
   it("renders WhatsApp-style date dividers (Today / Yesterday) between days", () => {
@@ -171,14 +171,24 @@ describe("Messages.tsx — v2.71 iMessage-grade chat UI", () => {
        when neither. */
     const at = SRC.indexOf("{typers.length > 0");
     expect(at).toBeGreaterThan(-1);
-    const line = SRC.slice(at, at + 1800);
+    /* Bounded by the ternary chain's OWN last arm rather than by a fixed character
+       count: the 1,800-char window went stale the moment the group arm grew, which is
+       the recurring fixed-slice fragility (v2.99.78 and its recurrences). */
+    const end = SRC.indexOf('t("msg.offline")', at);
+    expect(end).toBeGreaterThan(at);
+    const line = SRC.slice(at, end);
     expect(line, "typing is the first arm").toMatch(/^\{typers\.length > 0[^?]*\? \(/);
-    expect(line.indexOf("typing…")).toBeGreaterThan(-1);
-    expect(
-      line.indexOf("typing…") < line.indexOf("last seen"),
-      "presence/last-seen is a LATER arm, so typing wins",
-    ).toBe(true);
-    expect(SRC).toMatch(/last seen \{timeAgo\(thread\.peerLastSeenAt\)\}/);
+    /* Anchored on the KEYS, not the words. Both are dictionary entries now, and an
+       ordering assertion whose anchors are copy answers -1 once the screen is
+       translated — which `<` then satisfies vacuously, so this would keep passing with
+       the precedence inverted (the negative-index trap, v2.99.78 / v2.106.65). */
+    const iTyping = line.indexOf('t("msg.typingNow")');
+    const iSeen = line.indexOf('t("msg.lastSeen"');
+    expect(iTyping).toBeGreaterThan(-1);
+    expect(iSeen).toBeGreaterThan(-1);
+    expect(iTyping < iSeen, "presence/last-seen is a LATER arm, so typing wins").toBe(true);
+    // The stamp still goes INSIDE the sentence rather than being glued after it.
+    expect(SRC).toMatch(/t\("msg\.lastSeen", \{ when: timeAgo\(t, thread\.peerLastSeenAt\) \}\)/);
   });
   it("the message ⋮ menu opens toward the screen INTERIOR, never off the edge (v2.99.0)", () => {
     /* Own messages (justify-end) put the ⋮ at the row's far START, so the menu must

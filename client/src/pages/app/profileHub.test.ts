@@ -24,6 +24,13 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+/* This page now renders through `dict/profile.ts`, so a pin that froze an English
+   literal would forbid the translation while saying nothing about the words. Each of
+   those is rewritten to the PROPERTY it always stood for — this sentence reaches this
+   screen — which `copyOnScreen` satisfies by the literal OR by a key whose English half
+   is that sentence, and which is strictly STRONGER, because reaching the dictionary also
+   proves an Arabic half exists. */
+import { copyOnScreen, whyCopyMissing } from "../../../../server/testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "..", "..", "..", "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -81,13 +88,19 @@ describe("nothing was lost in the restructure", () => {
   });
 
   it("keeps the guest upgrade CTA, sign-out and the build stamp on the hub", () => {
-    expect(PAGE).toMatch(/Keep this number forever/);
+    expect(copyOnScreen(PAGE, "Keep this number forever")).toBe(true);
     expect(PAGE).toMatch(/onClick=\{requestSignOut\}/);
-    expect(PAGE).toMatch(/RELAY v\{APP_VERSION\}/);
+    /* THE STAMP SHOWS THE REAL BUILD, which is the property the old `RELAY v{APP_VERSION}`
+       literal stood for: a hardcoded version string would satisfy any wording check and
+       then lie about what is deployed. So the constant must reach the render, and the
+       words around it must still be the stamp's. */
+    expect(PAGE).toMatch(/version: APP_VERSION/);
+    expect(copyOnScreen(PAGE, "auto-updates on publish")).toBe(true);
     // GuestRestore is deliberately a self-hiding BLOCK rather than a row: it renders
     // null unless this browser holds a recovery record that still resolves, and a row
     // that is usually a dead end is worse than a block that is usually absent.
-    expect(PAGE).toMatch(/<GuestRestore heading="Restore a previous number"/);
+    expect(PAGE).toMatch(/<GuestRestore heading=/);
+    expect(copyOnScreen(PAGE, "Restore a previous number")).toBe(true);
   });
 });
 
@@ -144,12 +157,16 @@ describe("the hero carries everything the owner listed", () => {
   it("what you can DO with the number is still here, and only the footer stamps the build", () => {
     // The controls are the reason this block exists and none of them is anywhere else.
     expect(HERO).toMatch(/openPane\("number"\)/);
-    expect(HERO).toMatch(/aria-label=\{`Your RELAY number is \$\{formatPin\(me\.number\)\}/);
+    /* The chip is LABELLED WITH THE NUMBER. The old pin froze the template literal; the
+       property is that the screen reader hears which number this opens, and that the
+       label is built from the shared formatter rather than a second grouping rule. */
+    expect(copyOnScreen(HERO, "Your RELAY number is")).toBe(true);
+    expect(HERO).toMatch(/aria-label=\{t\("profile\.numberAria", \{ number: formatPin\(me\.number\) \}\)\}/);
     // The stamp is back in the FOOTER, so the hero must not carry a second copy — one
     // screen printing the version twice is the repetition v2.103.1 was right about even
     // though it removed the wrong thing.
     expect(codeOnly(HERO)).not.toMatch(/APP_VERSION/);
-    expect((codeOnly(PROFILE).match(/RELAY v\{APP_VERSION\}/g) || []).length).toBe(1);
+    expect((codeOnly(PROFILE).match(/APP_VERSION/g) || []).length).toBe(2); // the import + the one render
   });
 
   it("the barcode — and it opens the real share sheet, not a picture of one", () => {
@@ -160,9 +177,14 @@ describe("the hero carries everything the owner listed", () => {
   });
 
   it("the status, and it is TAPPABLE rather than merely described", () => {
-    const status = HERO.slice(HERO.indexOf("{st.label}") - 900);
+    /* `selfStatus` returns a KEY now, not a finished English label — a module-level
+       function cannot call a hook, and one that returns a sentence is how a screen ends
+       up translated everywhere except its own status pill. The property is unchanged:
+       the pill shows the live status and opens the pane. */
+    const at = HERO.indexOf("{t(st.labelKey)}");
+    expect(at, "the pill renders the live status").toBeGreaterThan(-1);
+    const status = HERO.slice(Math.max(0, at - 900));
     expect(status).toMatch(/onClick=\{\(\) => openPane\("status"\)\}/);
-    expect(status).toMatch(/\{st\.label\}/);
   });
 
   it("wears the top bar's own breathing ring, anti-phased by a NEGATIVE DELAY", () => {
@@ -241,7 +263,12 @@ describe("panes are local state, not routes", () => {
 
   it("a pane has a way back", () => {
     expect(PAGE).toMatch(/onClick=\{\(\) => setPane\(null\)\}/);
-    expect(PAGE).toMatch(/aria-label="Back to profile"/);
+    // The arrow is LABELLED — an icon-only control with no accessible name is a dead
+    // end for a screen reader. The words themselves are pinned through the dictionary.
+    expect(PAGE).toMatch(/aria-label=\{t\("profile\.back"\)\}/);
+    expect(copyOnScreen(PAGE, "Back to profile"), whyCopyMissing(PAGE, "Back to profile")).toBe(
+      true
+    );
   });
 
   it("opening a pane scrolls the pane into view, not the window", () => {
@@ -285,7 +312,7 @@ describe("the overlays survive a pane change", () => {
     // `position: fixed` descendants — nested, the pill would centre itself on that
     // box instead of the viewport. This exact trap has now bitten `.addpad` and the
     // video-consent card (v2.99.54).
-    const pillAt = PAGE.indexOf("<span>Saved</span>");
+    const pillAt = PAGE.indexOf('<span>{t("profile.saved")}</span>');
     const wrapperAt = PAGE.indexOf("motion-safe:animate-in");
     expect(pillAt).toBeGreaterThan(-1);
     expect(wrapperAt).toBeGreaterThan(-1);
@@ -337,8 +364,11 @@ describe("no row is a dead end", () => {
        — the endpoint is deliberately left registered even though nothing calls it. */
     const num = PROFILE.slice(PROFILE.indexOf("function NumberAndFlag("));
     expect(num.length, "found NumberAndFlag").toBeGreaterThan(200);
-    expect(num).toMatch(/Random number/);
-    expect(codeOnly(num)).not.toMatch(/Choose my number/);
+    expect(copyOnScreen(num, "Random number"), whyCopyMissing(num, "Random number")).toBe(true);
+    /* ABSENT rather than merely absent-as-a-literal: asked through `copyOnScreen`, this
+       also fails if the control comes back through the dictionary, which a raw
+       `not.toMatch` would have missed once the screen was swept. */
+    expect(copyOnScreen(codeOnly(num), "Choose my number")).toBe(false);
     // No `{!isGuest && (` gate survives in this section — there is nothing to gate.
     expect([...codeOnly(num).matchAll(/\{!isGuest && \(/g)]).toHaveLength(0);
     // The SERVER still refuses a guest, so removing the UI weakened no rule.

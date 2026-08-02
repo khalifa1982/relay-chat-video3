@@ -212,7 +212,11 @@ describe("1b History", () => {
   });
 
   it("day headers are mono at the board's .26em", () => {
-    const header = elementWith(HISTORY_CODE, "{sec.label}");
+    /* Anchored on the day header's own RENDER EXPRESSION rather than on `{sec.label}`:
+       Today/Yesterday are dictionary keys now (a module-level `dayBucket` cannot call a
+       hook, so it returns one), and only an older day still falls through to a formatted
+       date. The property here is the header's TYPE TREATMENT, which is unaffected. */
+    const header = elementWith(HISTORY_CODE, "sec.labelKey ? t(sec.labelKey)");
     expect(header).toMatch(/font-mono/);
     expect(header).toMatch(/letterSpacing: "\.26em"/);
     expect(header).toMatch(/uppercase/);

@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { codeOnly } from "../../../server/testing/codeOnly";
+import { DICT } from "./i18n";
 
 const CLIENT = join(process.cwd(), "client", "src");
 const code = (p: string) => codeOnly(readFileSync(join(CLIENT, p), "utf8"));
@@ -67,7 +68,11 @@ describe("board 4e — the fullscreen media viewer carries its context", () => {
        plain `text` and the server runs a SQL `LIKE` over it. The property here is the
        INERTNESS, not the sentence, so it now anchors on the word the footer will always
        carry and asserts the honest wording separately. */
-    const at = src.indexOf("Encrypted in transit");
+    // Anchored on the key, not the sentence: the footer's copy is translated now, and
+    // an anchor made of copy silently slides to -1 the moment that happens — which
+    // `slice(-1, …)` then turns into a window over the END of the file (the recurring
+    // negative-index trap, v2.99.78 / v2.106.65).
+    const at = src.indexOf('t("msg.encryptedInTransit")');
     expect(at).toBeGreaterThan(-1);
     expect(src.slice(Math.max(0, at - 400), at)).toMatch(/pointer-events-none/);
     expect(src, "and it must not claim end-to-end").not.toMatch(/end-to-end/i);
@@ -85,7 +90,18 @@ describe("board 2c — the story viewer says where you are in the reel", () => {
   const src = code("pages/app/Status.tsx");
 
   it("renders the position out of the total", () => {
-    expect(src).toMatch(/\{ii \+ 1\} of \{group\.items\.length\}/);
+    /* THE "of" WAS A FRAGMENT BETWEEN TWO JSX EXPRESSIONS, which is a sentence glued at
+       the English seam and cannot be translated — Arabic does not necessarily put its
+       joining word between the same two numbers. It is ONE key with both numbers
+       interpolated now, so this pins the property (the position and the total both
+       reach the counter) rather than the arrangement. */
+    expect(src).toMatch(/t\("status\.slideOf", \{ index: ii \+ 1, total: group\.items\.length \}\)/);
+    const e = DICT["status.slideOf"];
+    expect(e.en).toBe("{index} of {total}");
+    for (const half of [e.en, e.ar]) {
+      expect(half).toContain("{index}");
+      expect(half).toContain("{total}");
+    }
   });
 
   it("withheld for a single-slide reel", () => {
@@ -94,7 +110,14 @@ describe("board 2c — the story viewer says where you are in the reel", () => {
   });
 
   it("the counter is LTR, because it is a number pair", () => {
-    const at = src.indexOf("{ii + 1} of {group.items.length}");
+    /* THE ANCHOR WAS THE ENGLISH LITERAL, and once the counter moved into the
+       dictionary `indexOf` answered -1 — after which `slice(Math.max(0, -201), -1)` is
+       the WHOLE FILE minus one character, which contains `dir="ltr"` somewhere and made
+       this pass VACUOUSLY. That is the negative-index trap this repo records at v2.99.78
+       and v2.106.65, and a vacuous pass is worse than a red test because it reports
+       safety. Re-anchored on the key, and the anchor is asserted to exist first. */
+    const at = src.indexOf('t("status.slideOf"');
+    expect(at, "the slide counter is still rendered").toBeGreaterThan(-1);
     expect(src.slice(Math.max(0, at - 200), at)).toMatch(/dir="ltr"/);
   });
 });

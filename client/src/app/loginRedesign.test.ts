@@ -274,7 +274,12 @@ describe("shipped capabilities the spec never mentions are still wired", () => {
 
   it("does NOT hijack the /i/<pin> call-link join screen", () => {
     // v2.94.5 made that one focused field so a shared link connects in one tap.
-    expect(GATE).toContain("if (!showJoin) return <LoginScreen />;");
+    /* The PROPERTY is that a join card WINS over the login screen — not that
+       exactly one kind of join card exists. A second was legitimately added (the
+       group-invite card), and freezing the single-condition form said nothing
+       about whether the call-link path is still protected. */
+    expect(GATE).toMatch(/if \(!showJoin(?: && !show\w+)*\) return <LoginScreen \/>;/);
+    expect(GATE, "the call-link card is still one of the guards").toContain("!showJoin");
     expect(GATE).toContain("showJoin = !!callTarget");
   });
 });

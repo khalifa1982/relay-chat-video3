@@ -118,7 +118,10 @@ describe("the pinned marker is not a presence statement", () => {
 
 describe("the compose chip is the accent chip, not a hand-rolled tint", () => {
   it("it uses the shared recipe and carries no inline colour", () => {
-    const at = MSG.indexOf('aria-label="New message"');
+    // Anchored on the ELEMENT rather than on its label: the label moved into the
+    // dictionary, and an anchor made of copy goes stale the moment a screen is
+    // translated — which is exactly when nobody is looking at this test.
+    const at = MSG.indexOf('aria-label={t("msg.newMessage")}');
     expect(at).toBeGreaterThan(-1);
     const btn = MSG.slice(at, at + 700);
     expect(btn).toMatch(/className="rchip-accent grid place-items-center w-\[34px\] h-\[34px\]/);

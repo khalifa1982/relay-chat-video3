@@ -290,7 +290,12 @@ describe("(3) a CHANGED group photo appears", () => {
   });
 
   it("all three surfaces use the ONE component — a copy is how a copy misses the fix", () => {
-    expect(MESSAGES.match(/<GroupAvatar/g) ?? []).toHaveLength(2); // row + chat header
+    /* AT LEAST the row and the chat header. Deliberately not an exact count: a
+       THIRD consumer arrived (the locked-group gate) and that is this rule
+       WORKING — one shared component — not breaking it. What stops a copy is the
+       raw-<img> sweep in the next test, which is a property; a frozen number just
+       forbids the next correct surface. */
+    expect((MESSAGES.match(/<GroupAvatar/g) ?? []).length).toBeGreaterThanOrEqual(2);
     // The sheet's hero keeps its own bespoke 26px-radius shape, so it is keyed instead.
     expect(SHEET).toMatch(/key=\{avatarUrl\}/);
   });

@@ -65,6 +65,9 @@ describe("notification center + Profile devices approval UI", () => {
     expect(prof).toMatch(/trpc\.otpAuth\.pendingSessions\.useQuery/);
     expect(prof).toMatch(/trpc\.otpAuth\.approveSession\.useMutation/);
     expect(prof).toMatch(/id="devices"/);
-    expect(prof).toMatch(/New sign-in waiting/);
+    expect(
+      copyOnScreen(prof, "New sign-in waiting"),
+      whyCopyMissing(prof, "New sign-in waiting")
+    ).toBe(true);
   });
 });

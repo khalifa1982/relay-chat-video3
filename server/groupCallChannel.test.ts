@@ -12,6 +12,7 @@
  * assert a media type nobody recorded — about the reader's own call history.
  */
 import { describe, expect, it } from "vitest";
+import { translate } from "../client/src/app/i18n";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
@@ -267,9 +268,15 @@ describe("it reaches History, and renders nothing when unknown", () => {
   });
 
   it("the row prints Voice or Video, and an EMPTY STRING for anything else", () => {
+    /* The two words are dictionary entries now, so the ternary carries `t(...)` rather than
+       the literals. THE PROPERTY IS THE THIRD ARM: a row whose channel was never recorded
+       must print NOTHING — #116's whole point is that a NULL column is not a confident
+       "Voice" nobody wrote down — and that is what is asserted here alongside the words. */
     expect(HISTORY).toMatch(
-      /conf\.channel === "voice" \? " · Voice" : conf\.channel === "video" \? " · Video" : ""/,
+      /conf\.channel === "voice" \? ` · \$\{t\("history\.voice"\)\}` : conf\.channel === "video" \? ` · \$\{t\("history\.video"\)\}` : ""/,
     );
+    expect(translate("en", "history.voice")).toBe("Voice");
+    expect(translate("en", "history.video")).toBe("Video");
   });
 
   it("the client type keeps it optional, so an older server's payload is fine", () => {
@@ -281,7 +288,7 @@ describe("it reaches History, and renders nothing when unknown", () => {
     // Parity is the point: both row kinds now say the same thing by the same word,
     // and the solo one has meant "how it was dialled" since v2.75.
     expect(HISTORY).toMatch(
-      /call\.channel === "voice" \? " · Voice" : call\.channel === "video" \? " · Video" : ""/,
+      /call\.channel === "voice" \? ` · \$\{t\("history\.voice"\)\}` : call\.channel === "video" \? ` · \$\{t\("history\.video"\)\}` : ""/,
     );
   });
 });

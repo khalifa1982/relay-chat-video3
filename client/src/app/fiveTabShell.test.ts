@@ -26,6 +26,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const SHELL = read("client/src/app/AppShell.tsx");
@@ -386,12 +387,18 @@ describe("the empty state and the search box ask the SCOPED list", () => {
 
   it("the empty copy names GROUPS on the groups tab", () => {
     expect(MESSAGES_CODE).toMatch(/only === "groups" \? \(/);
-    expect(MESSAGES_CODE).toMatch(/No groups yet\./);
-    expect(MESSAGES_CODE).toMatch(/No messages yet\./);
+    // The PROPERTY is that each scope names its own thing — asked through the dictionary
+    // so a translated screen still answers it, which a literal search cannot.
+    expect(copyOnScreen(MESSAGES_CODE, "No groups yet.")).toBe(true);
+    expect(copyOnScreen(MESSAGES_CODE, "No messages yet.")).toBe(true);
   });
 
   it("the header title names the tab", () => {
-    expect(MESSAGES_CODE).toMatch(/only === "groups" \? "Groups" : "Messages"/);
+    // The tab's own word either way; the words themselves are the nav vocabulary, so
+    // the title cannot come to disagree with the tab bar that led here.
+    expect(MESSAGES_CODE).toMatch(
+      /only === "groups" \? tr\("nav\.groups"\) : tr\("nav\.messages"\)/,
+    );
   });
 });
 

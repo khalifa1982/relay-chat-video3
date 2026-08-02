@@ -332,7 +332,11 @@ describe("board 3b — the filter chips", () => {
     expect(UI).toMatch(/const \[tagFilter, setTagFilter\] = useState<ContactTag \| null>\(null\)/);
     expect(UI).toMatch(/onClick=\{\(\) => setTagFilter\(null\)\}/);
     // Tapping the lit chip clears it, so All is reachable without aiming at it.
-    expect(UI).toMatch(/setTagFilter\(on \? null : t\)/);
+    /* The loop variable is `tag` now, not `t`: `t` is the TRANSLATOR on this screen, and
+       a map callback binding `t` to a ContactTag shadowed it silently. Removing the shadow
+       beats aliasing around it (the rule `Messages.tsx` records). The property — tapping the
+       lit chip clears it, so All is reachable without aiming at it — is unchanged. */
+    expect(UI).toMatch(/setTagFilter\(on \? null : tag\)/);
   });
 
   it("narrows the INPUT, so sections and counts cannot disagree with it", () => {
@@ -354,7 +358,7 @@ describe("board 3b — the filter chips", () => {
        What the pin exists for is unchanged: the lit chip wears the TAG's identity rather
        than the cycling accent, and no class name is composed at runtime (invisible to the
        JIT, renders unstyled — the trap recorded for the old tab accents). */
-    expect(UI, "a static per-tag lookup, never a composed class").toMatch(/TAG_CLASS\[t\]/);
+    expect(UI, "a static per-tag lookup, never a composed class").toMatch(/TAG_CLASS\[tag\]/);
     expect(UI).not.toMatch(/bg-\[\$\{/);
     // the recipes really exist, and light really overrides — else the class is a no-op
     const CSS = readFileSync(resolve(process.cwd(), "client/src/index.css"), "utf8");

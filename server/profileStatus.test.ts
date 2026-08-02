@@ -30,6 +30,7 @@ import {
 } from "../shared/profileStatus";
 import { effectiveStatus, sanitizeStatusOverride } from "../shared/profileFields";
 import { codeOnly } from "./testing/codeOnly";
+import { DICT } from "../client/src/app/i18n";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -41,6 +42,7 @@ const SECTIONS = read("client/src/pages/app/ProfileHubSections.tsx");
 // group now has a status too and two copies of the grid is how the two come to look
 // and behave differently. These pins follow it to the one place the rule now lives.
 const PICKER = read("client/src/app/ProfileStatusPicker.tsx");
+const SHARED = read("shared/profileStatus.ts");
 const GROUPSHEET = read("client/src/app/GroupInfoSheet.tsx");
 const OVERLAYS = read("client/src/app/PeerOverlays.tsx");
 
@@ -309,5 +311,92 @@ describe("the picker and the chip", () => {
   it("the emoji is aria-hidden — the label already says it", () => {
     const chip = OVERLAYS.slice(OVERLAYS.indexOf("export function ProfileStatusChip"));
     expect(chip.slice(0, 1600)).toMatch(/<span aria-hidden="true">\{meta\.emoji\}<\/span>/);
+  });
+});
+
+/**
+ * THE FIVE THE OWNER NAMED, IN BOTH LANGUAGES (#156).
+ *
+ * Owner: *"you are in work, vacation, travel, free, and you can put some notes on it…
+ * and everyone has emoji and color."* The picker rendered `meta.label` raw, so those
+ * five words sat in English inside an Arabic screen — while the SAME five were already
+ * translated for the profile chip in `PeerOverlays`.
+ */
+describe("the picker speaks both languages, and borrows rather than copies", () => {
+  it("every status carries the keys for its label AND its hint", () => {
+    // A sixth added to the shared module arrives carrying its own, rather than being
+    // silently untranslated until somebody notices.
+    for (const m of PROFILE_STATUS_META) {
+      expect(m.labelKey, m.key).toBeTruthy();
+      expect(m.hintKey, m.key).toBeTruthy();
+    }
+  });
+
+  it("the label keys are the ONES THE CHIP ALREADY USES, not a private copy", () => {
+    /* `dict/peer.ts` asks for exactly this in its own header: one fact with two keys is
+       how one fact acquires two different Arabic words. So the picker's grid and the
+       profile chip resolve the same five entries. */
+    for (const m of PROFILE_STATUS_META) {
+      expect(m.labelKey, m.key).toBe(`peer.profileStatus.${m.key}`);
+    }
+    const rival = Object.keys(DICT).filter((k) => /^profileStatus\.(work|vacation|travel|free|busy)$/.test(k));
+    expect(rival, `a rival label namespace: ${rival.join(", ")}`).toEqual([]);
+  });
+
+  it("every key it names really exists, in both halves", () => {
+    // The keys are plain strings on a `shared/` type (importing the client's `TKey`
+    // would make the server bundle depend on the browser's dictionary), so this is what
+    // catches a typo instead of the compiler.
+    for (const m of PROFILE_STATUS_META) {
+      for (const k of [m.labelKey, m.hintKey]) {
+        const e = DICT[k as keyof typeof DICT] as { en: string; ar: string } | undefined;
+        expect(e, `${m.key}: ${k} is not in the dictionary`).toBeTruthy();
+        expect(e!.ar, k).toMatch(/[؀-ۿ]/);
+        expect(e!.ar, k).not.toBe(e!.en);
+      }
+    }
+  });
+
+  it("the ENGLISH halves match the shared constant, so nothing reads differently", () => {
+    // `meta.label` / `meta.hint` remain the fallback for a surface with no translator
+    // (the server composes `describeProfileStatus`), so the two must agree or the same
+    // status would read one way on the chip and another in a notification.
+    for (const m of PROFILE_STATUS_META) {
+      expect((DICT[m.labelKey as keyof typeof DICT] as { en: string }).en, m.key).toBe(m.label);
+      expect((DICT[m.hintKey as keyof typeof DICT] as { en: string }).en, m.key).toBe(m.hint);
+    }
+  });
+
+  it("the picker RENDERS the key and keeps the English only as a fallback", () => {
+    /* The gap this closes is the pin-the-declaration class: naming a key says nothing
+       about whether the component applies it. Rendering `meta.label` would be English
+       forever, whatever the dictionary said. */
+    expect(PICKER).toMatch(/\{labelKey \? t\(labelKey as TKey\) : label\}/);
+    expect(PICKER).toMatch(/meta\.hintKey \? t\(meta\.hintKey as TKey\) : meta\.hint/);
+    // The note's own two strings are keyed too, not left behind.
+    expect(PICKER).toMatch(/\{t\("profileStatus\.note"\)\}/);
+    expect(PICKER).toMatch(/placeholder=\{t\("profileStatus\.notePlaceholder"\)\}/);
+    expect(PICKER).toMatch(/emptyHint \?\? t\("profileStatus\.none"\)/);
+  });
+
+  it("has NO English copy left", () => {
+    const offenders: string[] = [];
+    for (const re of [/>\s*([A-Z][a-z]+(?: [A-Za-z(),']+)+)\s*</g, /placeholder="([^"]+)"/g]) {
+      for (const m of codeOnly(PICKER).matchAll(re)) offenders.push(m[1]);
+    }
+    expect(offenders, `still English:\n${offenders.join("\n")}`).toEqual([]);
+  });
+
+  it("stays PRESENTATIONAL — a translator is ambient state, a mutation is not", () => {
+    /* `useT` is a read, like the `useState` beside it. What this shared component must
+       never own is a write: two callers (Profile and the group sheet) each own their
+       own, or one component's idea of where a status goes would decide for both. */
+    expect(codeOnly(PICKER)).not.toMatch(/useMutation|trpc\./);
+  });
+
+  it("`shared/` never imports the client's dictionary", () => {
+    // It is imported by the SERVER too; a client-type import would drag the browser's
+    // dictionary into the server bundle.
+    expect(SHARED).not.toMatch(/from "@\/|client\/src|\.\/i18n/);
   });
 });

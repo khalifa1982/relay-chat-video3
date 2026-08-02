@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { codeOnly } from "./testing/codeOnly";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const DB = read("server/v2db.ts");
@@ -206,9 +207,18 @@ describe("#118 — the viewer offers it only where it can work", () => {
     // pinned exactly, and a constant-false conjunct in front of it is forbidden.
     expect(admin).toMatch(/if \(\s*\n\s*!window\.confirm\(/);
     expect(admin).not.toMatch(/if \(\s*\n?\s*(false|true) &&/);
-    expect(admin).toMatch(/Remove \$\{who\}'s story from/);
-    expect(admin).toMatch(/every member/);
-    expect(admin).toMatch(/can't be undone/);
+    /* THE THREE COPY PINS GO THROUGH `copyOnScreen` — they froze English literals and
+       the sentence now lives in the dictionary. The property was never the template's
+       shape: it is that the confirmation names WHOSE story and WHICH group, says it
+       goes for everybody, and says it cannot be undone. Both facts are still
+       interpolated INTO one sentence rather than glued around it, so the Arabic can put
+       them where the language wants them — asserted separately below. */
+    for (const phrase of ["story from", "every member", "can't be undone"]) {
+      expect(copyOnScreen(VIEWER, phrase), whyCopyMissing(VIEWER, phrase)).toBe(true);
+    }
+    expect(admin).toMatch(/t\("status\.confirmRemove", \{/);
+    expect(admin).toMatch(/who,/);
+    expect(admin).toMatch(/group: group\?\.subject\.displayName \?\? t\("status\.thisGroup"\)/);
     // ...and it RETURNS on a refusal rather than falling through to the delete.
     expect(admin).toMatch(/\) \{\s*\n\s*return;\s*\n\s*\}/);
   });

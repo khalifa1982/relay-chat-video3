@@ -13,6 +13,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { codeOnly } from "../../../../server/testing/codeOnly";
 import { copyOnScreen } from "../../../../server/testing/copyOnScreen";
+import { translate } from "../../app/i18n";
+import { onlineCountKey, contactCountKey } from "./Contacts";
 
 const CONTACTS = readFileSync(new URL("./Contacts.tsx", import.meta.url), "utf8");
 
@@ -108,8 +110,11 @@ describe("the counts on each header", () => {
   it("the online count is GREEN, from the AA-measured text token", () => {
     // Not the LED green: that is 4.46:1 on the light card and fails AA for text this
     // small — measured in v2.99.86, which is why a separate text token exists.
-    expect(CONTACTS).toMatch(/\{onlineCount\}/);
-    const at = CONTACTS.indexOf("{onlineCount}");
+    /* Anchored on the count's RENDER EXPRESSION. It is `t(onlineCountKey(onlineCount), …)`
+       now — a whole key per plural band — so the bare `{onlineCount}` it used to look for
+       no longer exists, while the colour rule it is really about is unchanged. */
+    expect(CONTACTS).toMatch(/t\(onlineCountKey\(onlineCount\)/);
+    const at = CONTACTS.indexOf("t(onlineCountKey(onlineCount)");
     const around = CONTACTS.slice(at - 400, at);
     expect(around).toMatch(/text-\[color:var\(--relay-green-text\)\]/);
   });
@@ -138,13 +143,27 @@ describe("the counts on each header", () => {
        THE PROPERTY: every rendered number is explained. The online count now says "N online"
        in the row; the total keeps a title, because the section LABEL beside it already says
        what is being counted. */
-    expect(CONTACTS, "the online count carries its own word").toMatch(/\{onlineCount\} online/);
+    /* #156 — each of the three now goes through a BANDED key rather than a literal, because
+       a count cannot be one interpolated sentence in Arabic (the dual at 2 swallows the
+       numeral entirely). The property is unchanged and is asserted one level deeper: the
+       words are still produced, in every band, which is more than the literals proved. */
+    expect(CONTACTS, "the online count carries its own word").toMatch(
+      /t\(onlineCountKey\(onlineCount\)/,
+    );
     expect(CONTACTS, "the total is explained on hover, beside a label that names it").toMatch(
-      /title=\{`\$\{total\} contacts`\}/,
+      /title=\{t\(contactCountKey\(total\)/,
     );
     expect(CONTACTS, "…and the all-online section's single number too").toMatch(
-      /title=\{`\$\{total\} online`\}/,
+      /title=\{t\(onlineCountKey\(total\)/,
     );
+    for (const n of [1, 2, 7, 30]) {
+      expect(translate("en", onlineCountKey(n), { count: n })).toBe(
+        n === 1 ? "1 online" : `${n} online`,
+      );
+      expect(translate("en", contactCountKey(n), { count: n })).toBe(
+        n === 1 ? "1 contact" : `${n} contacts`,
+      );
+    }
   });
 });
 

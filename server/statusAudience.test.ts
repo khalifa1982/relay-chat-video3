@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 import { normalizeStatusAudience } from "./v2db";
 import { AUDIENCE_OPTIONS, audienceOption } from "../client/src/app/statusAudience";
 
@@ -326,8 +327,14 @@ describe("the two options are described the same way on every surface", () => {
       profile.indexOf("function StatusPrivacySection("),
       profile.indexOf("function DndSection("),
     );
-    expect(sec).toMatch(/already posted keeps the audience/i);
-    expect(sec).toMatch(/Blocking someone always hides/i);
+    expect(
+      copyOnScreen(sec, "already posted keeps the audience"),
+      whyCopyMissing(sec, "already posted keeps the audience")
+    ).toBe(true);
+    expect(
+      copyOnScreen(sec, "Blocking someone always hides"),
+      whyCopyMissing(sec, "Blocking someone always hides")
+    ).toBe(true);
     // Guests post statuses too — the section must not be gated on a user row.
     expect(sec).not.toMatch(/signedIn/);
   });

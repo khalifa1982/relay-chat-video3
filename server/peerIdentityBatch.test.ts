@@ -186,7 +186,7 @@ describe("media previews (v2.96)", () => {
   });
   it("generic files render as a styled card with a download affordance", () => {
     expect(MESSAGES).toMatch(/function FileCard\(/);
-    expect(MESSAGES).toMatch(/Tap to open or download/);
+    expect(copyOnScreen(MESSAGES, "Tap to open or download")).toBe(true);
   });
   it("a broken image falls back to the file card instead of a white rectangle", () => {
     expect(MESSAGES).toMatch(/onError=\{\(\) => setImgBroken\(true\)\}/);
@@ -244,7 +244,13 @@ describe("self-destructing messages (v2.96)", () => {
   it("expiring content never leaks: thread previews, search, reply quotes", () => {
     expect(V2DB).toMatch(/expire\?: unknown \} \| null\)\?\.expire != null[\s\S]{0,40}\? null/); // listThreads preview
     expect(V2DB).toMatch(/rows\.filter\(\(r\) => \(r\.meta as \{ expire\?: unknown \} \| null\)\?\.expire == null\)/); // search
-    expect(MESSAGES).toMatch(/return "⏱ Disappearing message";/); // reply quote
+    // The reply quote MASKS the body rather than quoting it. Pinned as the guard plus
+    // the words it substitutes: the sentence moved into the dictionary, and freezing the
+    // `return "…"` shape would have forbidden that while saying nothing about the leak.
+    expect(MESSAGES).toMatch(
+      /\?\.expire != null\) return t\("msg\.disappearingPreview"\)/,
+    ); // reply quote
+    expect(copyOnScreen(MESSAGES, "⏱ Disappearing message")).toBe(true);
   });
   it("the composer cycles off → view-once → 5s → 10s → 30s and resets per send", () => {
     expect(MESSAGES).toMatch(
@@ -257,7 +263,7 @@ describe("self-destructing messages (v2.96)", () => {
     // M11: content is withheld from list; reveal goes through the server
     // endpoint, which returns it once and burns it (no client consumeExpiring).
     expect(MESSAGES).toMatch(/await revealExpiringMutation\.mutateAsync\(\{ messageId: m\.id \}\)/);
-    expect(MESSAGES).toMatch(/Tap to view/);
+    expect(copyOnScreen(MESSAGES, "Tap to view")).toBe(true);
     expect(copyOnScreen(MESSAGES, "This message has disappeared")).toBe(true);
   });
   it("voice notes honor the composer's disappearing setting", () => {

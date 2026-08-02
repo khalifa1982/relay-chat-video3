@@ -118,9 +118,11 @@ describe("Messages wiring (v2.96.2)", () => {
     );
     expect(menu).toMatch(/videoRecorderSupported\(\) && \(/);
     expect(menu).toMatch(/setVideoRecOpen\(true\)/);
-    expect(menu).toMatch(/Record video/);
-    expect(menu).toMatch(/Photo &amp; video/);
-    expect(menu).toMatch(/Attach file/);
+    // Through the dictionary — see `ownerUiBatch2`: the rows are keyed now, and the
+    // property is that the recorder is OFFERED in the menu and gated on support.
+    expect(copyOnScreen(menu, "Record video")).toBe(true);
+    expect(copyOnScreen(menu, "Photo & video")).toBe(true);
+    expect(copyOnScreen(menu, "Attach file")).toBe(true);
   });
   it("a recorded clip rides the NORMAL attachment flow (caption + expire timer apply)", () => {
     expect(MESSAGES).toMatch(/maxMs=\{60_000\}/);

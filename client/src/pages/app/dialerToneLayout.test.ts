@@ -203,12 +203,28 @@ describe("v2.99.36 (3) — the Save-to-contacts pill is never clipped", () => {
       /left-1\/2 -translate-x-1\/2/,
     );
     /* The button's own aria-label already names the action; the label must not be
-       announced a second time. */
-    const labelIdx = body.indexOf("Add to contacts<");
-    const spanIdx = body.lastIndexOf("<span", labelIdx === -1 ? body.length : labelIdx);
-    expect(body.slice(spanIdx, labelIdx === -1 ? undefined : labelIdx)).toMatch(
-      /aria-hidden="true"/,
-    );
+       announced a second time.
+
+       RE-ANCHORED, AND THE OLD FORM IS WORTH RECORDING BECAUSE IT DID NOT GO RED.
+       It located the label by the literal `Add to contacts<`, and that literal moved
+       into the dictionary — so `indexOf` answered -1, the `=== -1` fallbacks turned
+       the slice into "from the last <span to the end of the body", and it happened
+       to land on the right element anyway. A pin that passes by luck is worse than
+       one that fails: it reports coverage it no longer has. The anchor is now the
+       label span's own positioning class, which no copy change can move, and it is
+       asserted to EXIST before anything is sliced from it. */
+    const posIdx = body.indexOf("absolute top-full end-0");
+    expect(posIdx, "found the label span").toBeGreaterThan(-1);
+    const spanIdx = body.lastIndexOf("<span", posIdx);
+    expect(spanIdx, "found its opening tag").toBeGreaterThan(-1);
+    const tagEnd = body.indexOf(">", posIdx);
+    expect(tagEnd, "the opening tag closes").toBeGreaterThan(posIdx);
+    expect(body.slice(spanIdx, tagEnd), "not announced twice").toMatch(/aria-hidden="true"/);
+    // …and that span really is the one carrying the visible words.
+    expect(
+      copyOnScreen(body.slice(tagEnd, body.indexOf("</span>", tagEnd)), "Add to contacts"),
+      "the label span carries the copy",
+    ).toBe(true);
     /* ALREADY SAVED still renders NOTHING AT ALL — the owner said so twice, and
        the label must not resurrect a chip for a number that needs no action. */
     expect(body).toMatch(/if \(isAlready\) return null;/);

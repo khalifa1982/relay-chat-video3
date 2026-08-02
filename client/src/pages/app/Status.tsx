@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Plus, X, Camera, Type, Trash2, Eye, ChevronLeft, ChevronRight, Send, Video, Smile, Users } from "lucide-react";
+import { Plus, X, Camera, Type, Trash2, Eye, ChevronDown, ChevronLeft, ChevronRight, Send, Video, Smile, Users } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,8 @@ import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 import { AUDIENCE_OPTIONS, audienceOption } from "@/app/statusAudience";
 import { EmojiPicker } from "@/app/EmojiPicker";
 import { REACTION_QUICK } from "@/lib/emojiCatalog";
-import { useT, useLocale } from "@/app/i18n";
+import { useT, useLocale, type TKey } from "@/app/i18n";
+import type { StatusAudience } from "@/app/statusAudience";
 
 /**
  * Rich user status (v2.95) — WhatsApp/story-style ephemeral updates: text,
@@ -27,17 +28,178 @@ import { useT, useLocale } from "@/app/i18n";
  *   tap to navigate, seen-by for your own).
  */
 
-// Text-status backgrounds (CSS gradients). The composer cycles through these.
-const BG_OPTIONS = [
-  "linear-gradient(135deg,#0ea5e9,#2563eb)",
-  "linear-gradient(135deg,#06d6a0,#0891b2)",
-  "linear-gradient(135deg,#8b5cf6,#d946ef)",
-  "linear-gradient(135deg,#f59e0b,#ef4444)",
-  "linear-gradient(135deg,#111827,#374151)",
-  "linear-gradient(135deg,#ec4899,#f43f5e)",
+/**
+ * Board 4b's five gradient swatches — the text story's background.
+ *
+ * ── THE 64-CHARACTER TRAP, WHICH IS WHY THESE ARE HEX AND NOT hsl() ────────────────
+ * The board writes its own background as
+ *   `linear-gradient(160deg,hsl(200 70% 30%),hsl(255 60% 32%) 60%,hsl(300 50% 28%))`
+ * and that string is **78 characters**. `sanitizeStatusBg` (server/v2routers.ts) does
+ * `v.trim().slice(0, 64)` BEFORE its allowlist regex runs, so the closing paren is cut,
+ * the gradient no longer matches, and the function returns **null** — the story would
+ * post with no background at all, silently, with nothing on either side saying why.
+ * Pasting the frame verbatim does not work. Every entry here is therefore the board's
+ * own colour converted to hex, which is both shorter and identical on screen, and the
+ * test beside this file drives the REAL sanitizer over the REAL array so a future
+ * addition cannot quietly cross that line again.
+ *
+ * ── ONE STRING PER OPTION, SO THE SWATCH CANNOT LIE ABOUT THE RESULT ───────────────
+ * The board draws each swatch as a small 2-stop 135deg gradient while rendering the
+ * SCREEN as a richer 3-stop 160deg one — a mock's shorthand for "this swatch is that
+ * background". Shipping that literally would mean the dot you tap is a different
+ * gradient from the story you get. There is exactly ONE value per option here, used
+ * for the canvas and for the swatch alike, so the swatch is a true miniature.
+ *
+ * Entry 0 is the board's own screen gradient (the one frame 4b actually renders, third
+ * stop included); 1–4 are its remaining swatch colours at the same 160deg. Nothing is
+ * invented. Stories already posted keep whatever `bgColor` they stored, so changing
+ * this list is not a migration.
+ */
+export const BG_OPTIONS = [
+  "linear-gradient(160deg,#175e82,#392183 60%,#6b246b)",
+  "linear-gradient(160deg,#24a866,#1f96ad)",
+  "linear-gradient(160deg,#e64d19,#c32273)",
+  "linear-gradient(160deg,#ecb613,#cf5417)",
+  "#0c1114",
 ];
 
 const DEFAULT_ITEM_MS = 5000; // text/image dwell time
+
+/**
+ * Board 4b's four composer tabs — Text · Photo · Video · Audio.
+ *
+ * The ids are the SERVER'S OWN status kinds ("image", not "photo"), so `mediaKindOf`
+ * lands on a tab directly and there is no id→kind translation table to get wrong. Only
+ * the visible LABEL says "Photo", which is the board's word and the one people use.
+ *
+ * `accept` is per tab rather than one shared `image/*,video/*,audio/*` input: the board
+ * asks for three separate media tabs, and a tab that opens a picker showing everything
+ * is three tabs pretending to be different. It is a HINT, never a guarantee — `pickFile`
+ * re-derives the real kind from the file it is handed.
+ *
+ * ── THE LABELS ARE KEYS, NOT WORDS ────────────────────────────────────────────────
+ * This constant is module-level and cannot call a hook, so it carries the KEY and the
+ * render site translates — the `labelKey` pattern `PROFILE_STATUS_META` and
+ * `CATEGORY_META` already use. The keys are `status.tab*` and are the tabs' OWN, which
+ * is the point: the near-miss `profile.photo` is "الصورة" WITH the definite article
+ * because it labels a row in Profile, and borrowing it would tie a tab here to a row
+ * there — one key with two meanings, the trap this codebase keeps removing.
+ */
+type ComposerTab = "text" | "image" | "video" | "audio";
+
+const MEDIA_TABS: readonly {
+  tab: Exclude<ComposerTab, "text">;
+  labelKey: TKey;
+  accept: string;
+}[] = [
+  { tab: "image", labelKey: "status.tabPhoto", accept: "image/*" },
+  { tab: "video", labelKey: "status.tabVideo", accept: "video/*" },
+  { tab: "audio", labelKey: "status.tabAudio", accept: "audio/*" },
+];
+
+/** The accept filter for a tab; the text tab has no picker, so it falls back to all. */
+function acceptForTab(tab: ComposerTab): string {
+  return MEDIA_TABS.find((m) => m.tab === tab)?.accept ?? "image/*,video/*,audio/*";
+}
+
+/**
+ * Board 4b's tab pill, and its chips further down, are WHITE ON A DARK SCRIM rather
+ * than the app's `.rchip-accent`.
+ *
+ * That is a contrast decision, not a style one. `.rchip-accent` colours its label with
+ * the cycling accent and is measured against the app's own `--card`; these float on an
+ * author-chosen gradient which may be the yellow/orange entry, where accent-on-gradient
+ * is unreadable. A dark scrim under white text is legible over all five by construction,
+ * and it is what the frame itself draws.
+ */
+function TabPill({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      /* `min-h-11` = 44px. The frame draws these pills at ~26px tall, which is under the
+         board's own rule 9 (>=44px hit targets on a 390x812 phone) — the drawn height is
+         a look, not a target, so the pill keeps the frame's 11px type and gains the
+         height it needs to be tappable. Caught by this file's own rule-9 sweep, which
+         measured the frame-faithful version at 34.5px. */
+      className={`inline-flex min-h-11 shrink-0 items-center rounded-full border px-3.5 py-2 text-[11px] transition-colors ${
+        active
+          ? "border-white/55 bg-black/40 font-bold text-white"
+          : "border-white/25 bg-black/25 font-semibold text-white/75 hover:bg-black/40"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+/** The frame's bottom-bar chip: an icon, a word, and a caret that reflects open state. */
+function GlassChip({
+  onClick,
+  expanded,
+  label,
+  children,
+}: {
+  onClick: () => void;
+  expanded: boolean;
+  /** Names the control for a screen reader; the visible text is the current VALUE. */
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={expanded}
+      aria-label={label}
+      className="inline-flex min-h-11 min-w-0 max-w-full items-center gap-1.5 rounded-full border border-white/30 bg-black/35 px-3 py-2 text-[11px] font-semibold text-white backdrop-blur-md"
+    >
+      {children}
+      <ChevronDown
+        className={`size-3.5 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
+        aria-hidden="true"
+      />
+    </button>
+  );
+}
+
+/**
+ * The audience options' words, keyed on the option's own VALUE.
+ *
+ * `statusAudience.ts` is the one place these options live and its header records why:
+ * two surfaces render them, and nothing FAILS when two screens promise different things
+ * about one setting. It is a plain module-level constant, so it cannot call a hook — the
+ * same constraint `CATEGORY_META` and `PROFILE_STATUS_META` are under, and the same
+ * answer: it carries the English, the KEY is named here, and the render site translates.
+ *
+ * Keyed on the value rather than looked up by the English text, because a text lookup
+ * silently drops the translation the moment somebody edits a word.
+ */
+const AUDIENCE_KEYS: Record<
+  StatusAudience,
+  { label: TKey; hint: TKey; posted: TKey }
+> = {
+  contacts: {
+    label: "status.audContacts",
+    hint: "status.audContactsHint",
+    posted: "status.postedContacts",
+  },
+  everyone: {
+    label: "status.audEveryone",
+    hint: "status.audEveryoneHint",
+    posted: "status.postedEveryone",
+  },
+};
+
+/**
+ * Fail closed on the way in, exactly as `audienceOption` does: anything that is not the
+ * literal "everyone" resolves to the PRIVATE option. A value we do not recognise must
+ * never be labelled as the wider one.
+ */
+function audienceKeys(v: string | null | undefined) {
+  return v === "everyone" ? AUDIENCE_KEYS.everyone : AUDIENCE_KEYS.contacts;
+}
 
 /**
  * One reel — everything a single ring in the strip stands for.
@@ -159,7 +321,7 @@ export function StatusStrip() {
           className="flex shrink-0 flex-col items-center gap-1.5 w-16"
         >
           <div className="relative">
-            <StatusAvatar name="You" url={myGroup?.subject.avatarUrl ?? null} ring={myGroup ? "seen" : "none"} />
+            <StatusAvatar name={t("status.you")} url={myGroup?.subject.avatarUrl ?? null} ring={myGroup ? "seen" : "none"} />
             <span
               onClick={(e) => { e.stopPropagation(); setComposerOpen(true); }}
               /* v2.106.66 — the ACCENT, per board 1c (`background:var(--rb)`, glyph
@@ -204,7 +366,7 @@ export function StatusStrip() {
 
         {others.length === 0 && !myGroup && (
           <span className="text-xs text-muted-foreground/80 ps-1">
-            Share a photo, video, or a line — visible for 24h to your contacts.
+            {t("status.emptyStrip")}
           </span>
         )}
       </div>
@@ -274,7 +436,35 @@ function StatusAvatar({
 
 function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: () => void }) {
   const t = useT();
-  const [mode, setMode] = useState<"text" | "media">("text");
+  /* `tn` keeps the group's name INSIDE the sentence for the audience note below. */
+  const { tn } = useLocale();
+  /* Resolved OUT HERE rather than inside the memo below. The group list maps over
+     threads, and naming that loop variable `t` would shadow the translator — the exact
+     collision `dict/messages.ts` records for the swipe-action builder. The loop variable
+     is renamed there too, because removing a shadow beats aliasing around it. */
+  const groupFallback = t("status.groupFallback");
+  /* Hoisted out of the swatch's own `aria-label`. Partly because five identical `t()`
+     calls in a map is waste, but mainly because writing the key INSIDE a template
+     literal attribute puts the string `status.` into an `aria-label=` in the source,
+     and `storyVsStatus.test.ts` reads visible-string attributes straight out of the
+     file — so the key's own prefix reads to that sweep as a story being called a
+     status. Resolving the word first keeps the attribute free of key names. */
+  const colorLabel = t("status.color");
+  /**
+   * Board 4b's four tabs. `mode` is DERIVED from the tab rather than being a second
+   * piece of state: they answer one question ("is this a text story or a media one"),
+   * and two independent flags is how a screen comes to show the text canvas while
+   * `submit()` posts a photo. Every existing `mode === "text"` reader is untouched.
+   */
+  const [tab, setTab] = useState<ComposerTab>("text");
+  const mode: "text" | "media" = tab === "text" ? "text" : "media";
+  /**
+   * Which bottom-bar chip has its panel open — at most ONE, which is why this is a
+   * single value rather than a boolean each. Two independent flags would let the
+   * audience and group panels stack and push the Post pill off the bottom, and that
+   * bar is the whole point of the column layout.
+   */
+  const [panel, setPanel] = useState<"audience" | "group" | null>(null);
   const [text, setText] = useState("");
   const [caption, setCaption] = useState("");
   const [bgIndex, setBgIndex] = useState(0);
@@ -285,6 +475,8 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
   // recording while on a call; this records in-page instead.
   const [recOpen, setRecOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  /** The frame's pencil tool puts the caret back in the canvas, not just the tab. */
+  const textRef = useRef<HTMLTextAreaElement>(null);
   const post = trpc.status.post.useMutation();
   /* Audience for THIS post (v2.99.55). Starts from the saved default and can be
      changed per post; `undefined` until the default loads, at which point the
@@ -307,13 +499,13 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
   const myGroups = useMemo(
     () =>
       (threads.data ?? [])
-        .filter((t) => t.kind === "group")
-        .map((t) => ({
-          id: t.conversationId,
-          title: t.title || "Group",
-          avatarUrl: t.groupAvatarUrl ?? null,
+        .filter((th) => th.kind === "group")
+        .map((th) => ({
+          id: th.conversationId,
+          title: th.title || groupFallback,
+          avatarUrl: th.groupAvatarUrl ?? null,
         })),
-    [threads.data],
+    [threads.data, groupFallback],
   );
   /** null ⇒ my own ring (the default, and every pre-v2.105.6 behaviour). */
   const [targetGroupId, setTargetGroupId] = useState<number | null>(null);
@@ -331,10 +523,36 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
     return () => URL.revokeObjectURL(u);
   }, [file]);
 
+  /**
+   * Open the one file input, narrowed to what this tab is for.
+   *
+   * The `accept` attribute is set IMPERATIVELY rather than from React state because the
+   * click has to happen in the SAME user gesture: setting state and clicking on the next
+   * render loses the gesture, and a file dialog opened outside one is refused by every
+   * browser — a picker that silently never appears.
+   *
+   * It is RESTORED to the full set afterwards so the element's declared attribute is
+   * never left narrowed for whoever opens it next.
+   */
+  function openPicker(accept: string) {
+    const el = fileRef.current;
+    if (!el) return;
+    el.accept = accept;
+    /* Clearing the value first is what makes re-picking THE SAME file fire `change`
+       again — without it a second attempt at the same photo does nothing at all. */
+    el.value = "";
+    el.click();
+    el.accept = "image/*,video/*,audio/*";
+  }
+
   function pickFile(f: File | null) {
     if (!f) return;
     setFile(f);
-    setMode("media");
+    /* Land on the tab that matches WHAT WAS ACTUALLY PICKED, not the one that was
+       open. The accept filters are a hint to the OS picker, not a guarantee — a file
+       manager will happily hand a .mp4 to an `image/*` input — so trusting the open
+       tab would label a video as a photo on the one screen that says which it is. */
+    setTab(mediaKindOf(f) ?? "image");
   }
 
   function mediaKindOf(f: File): "image" | "video" | "audio" | null {
@@ -383,10 +601,16 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           ...(targetGroupId != null ? { conversationId: targetGroupId } : {}),
         });
       }
+      /* ONE WHOLE SENTENCE PER OUTCOME, never a stem plus an interpolated tail. The
+         second arm used to be `Status posted — ${option.posted}.` — a sentence
+         assembled from a fragment, which cannot be translated at all: Arabic does not
+         put that qualifier where English does, so the two halves can only be glued back
+         into nonsense. (It also said STATUS about a STORY, which is the v2.101.0
+         vocabulary bug; both English halves are corrected in the dictionary.) */
       toast.success(
         targetGroup
-          ? `Story posted to ${targetGroup.title} — everyone in the group can see it for 24h.`
-          : `Status posted — ${audienceOption(effectiveAudience).posted}.`,
+          ? t("status.postedGroup", { group: targetGroup.title })
+          : t(audienceKeys(effectiveAudience).posted),
       );
       onPosted();
     } catch (e) {
@@ -406,39 +630,136 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
      happens to have a filter today. */
   return createPortal(
     <div className="fixed inset-0 z-[95] grid place-items-center bg-black/70 backdrop-blur-sm p-3" role="dialog" aria-modal="true">
-      <div className="relative w-[min(96vw,440px)] max-h-[92dvh] overflow-y-auto overflow-x-hidden rounded-3xl border border-border/60 bg-card shadow-2xl">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
-          <h2 className="font-bold">{t("status.newStory")}</h2>
-          <button type="button" onClick={onClose} aria-label={t("status.close")} className="rounded-full p-1.5 text-muted-foreground hover:bg-muted">
-            <X className="size-5" />
-          </button>
-        </div>
+      {/* BOARD 4b'S CANVAS.
+          A COLUMN, not a scrolling block: the frame puts the swatches and the
+          audience/Post row at the BOTTOM, and in a plain scroller they slide away as
+          the text grows — v2.106.86 is the same defect on the new-group sheet, where
+          the primary action left the screen entirely. Only the body scrolls; the
+          chrome is `shrink-0` either side of it.
+          `max-h-[92dvh]` is kept because it is the app's own bound for an overlay
+          sheet (GroupCallScreen 92dvh, AvatarPicker 88dvh) and the frame is drawn on a
+          390×812 phone, which this matches within a few px on a real handset. */}
+      <div className="relative flex h-[min(812px,92dvh)] w-[min(96vw,440px)] max-h-[92dvh] flex-col overflow-hidden rounded-3xl border border-border/60 bg-card shadow-2xl">
+        {/* The picked gradient is the SURFACE, full-bleed behind every tab — that is
+            what makes this read as a story rather than a form with a preview in it. */}
+        <div className="absolute inset-0" style={{ background: BG_OPTIONS[bgIndex] }} aria-hidden="true" />
+        {/* Media tabs dim it so the photo/video is the subject and the chrome stays
+            legible over whichever gradient was picked. */}
+        {mode !== "text" && <div className="absolute inset-0 bg-black/45" aria-hidden="true" />}
 
-        {/* Mode toggle */}
-        <div className="flex min-w-0 gap-1 p-3">
-          <button
-            type="button"
-            onClick={() => setMode("text")}
-            className={`min-w-0 flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl px-1 py-2 text-sm font-semibold ${mode === "text" ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
-          >
-            <Type className="size-4 shrink-0" /> <span className="truncate">Text</span>
-          </button>
-          {videoRecorderSupported() && (
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          {/* ── header: close · title · tools ─────────────────────────────── */}
+          <div className="flex shrink-0 items-center justify-between gap-2 px-4 pt-4 pb-2">
             <button
               type="button"
-              onClick={() => setRecOpen(true)}
-              className="min-w-0 flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl px-1 py-2 text-sm font-semibold text-muted-foreground"
+              onClick={onClose}
+              aria-label={t("status.close")}
+              className="grid size-11 shrink-0 place-items-center rounded-full text-white/90 hover:bg-white/15"
             >
-              <Video className="size-4 shrink-0" /> <span className="truncate">{t("status.record")}</span>
+              <X className="size-5" />
             </button>
-          )}
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            className={`min-w-0 flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl px-1 py-2 text-sm font-semibold ${mode === "media" ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
-          >
-            <Camera className="size-4 shrink-0" /> <span className="truncate">{t("status.library")}</span>
-          </button>
+            <h2 className="truncate text-sm font-bold text-white">{t("status.newStory")}</h2>
+            <div className="flex shrink-0 items-center gap-1">
+              {/* The frame's two tools. The pencil returns to the text canvas and puts
+                  the caret back in it; the camera is the IN-APP recorder (v2.96.2),
+                  which is the honest home for a camera glyph here — iOS blocks the
+                  system camera during a call, which is why that recorder exists. It
+                  stays gated on support: an unsupported browser must not show a dead
+                  control. */}
+              <button
+                type="button"
+                onClick={() => { setTab("text"); textRef.current?.focus(); }}
+                aria-label={t("status.text")}
+                className="grid size-11 place-items-center rounded-full text-white/90 hover:bg-white/15"
+              >
+                <Type className="size-[18px]" />
+              </button>
+              {videoRecorderSupported() && (
+                <button
+                  type="button"
+                  onClick={() => setRecOpen(true)}
+                  aria-label={t("status.record")}
+                  className="grid size-11 place-items-center rounded-full text-white/90 hover:bg-white/15"
+                >
+                  <Camera className="size-[18px]" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* ── the frame's four tabs ─────────────────────────────────────── */}
+          <div className="flex shrink-0 flex-wrap items-center justify-center gap-1.5 px-3 pb-1">
+            <TabPill active={tab === "text"} onClick={() => setTab("text")} label={t("status.text")} />
+            {MEDIA_TABS.map((m) => (
+              <TabPill
+                key={m.tab}
+                active={tab === m.tab}
+                label={t(m.labelKey)}
+                onClick={() => {
+                  setTab(m.tab);
+                  /* Open the picker when this tab has nothing to show — either no file
+                     at all, or one of a DIFFERENT kind, because asking for Video while
+                     holding a photo is a request for a video. Tapping the tab that
+                     already matches the loaded file is a way BACK to it, so that case
+                     deliberately does NOT re-open the picker.
+                     Whatever happens here, `submit()` sends `mediaKindOf(file)` — the
+                     kind is read off the FILE, never off the tab, so the post cannot be
+                     mislabelled even if a cancelled picker leaves the tab ahead of the
+                     preview for a moment. */
+                  if (!file || mediaKindOf(file) !== m.tab) openPicker(m.accept);
+                }}
+              />
+            ))}
+          </div>
+
+          {/* ── body ──────────────────────────────────────────────────────── */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 py-3">
+            {mode === "text" ? (
+              <div className="grid flex-1 place-items-center">
+                {/* 26px centred, per the frame. The caret is the textarea's OWN —
+                    the frame draws a blinking `|` because a static mock has no real
+                    one, so rendering a decorative pipe here would put TWO carets on
+                    screen. `caret-white` is what makes the real one visible on the
+                    gradient. */}
+                <textarea
+                  ref={textRef}
+                  value={text}
+                  onChange={(e) => setText(e.target.value.slice(0, 700))}
+                  autoFocus
+                  placeholder={t("status.typeStory")}
+                  rows={3}
+                  dir="auto"
+                  className="w-full resize-none bg-transparent text-center text-[26px] font-bold leading-[1.4] text-white caret-white outline-none placeholder:text-white/60 [text-shadow:0_2px_24px_rgba(0,0,0,.35)]"
+                />
+              </div>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col justify-center gap-3">
+                {previewUrl && file ? (
+                  <MediaPreview file={file} url={previewUrl} />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => openPicker(acceptForTab(tab))}
+                    className="grid min-h-[180px] w-full place-items-center rounded-2xl border-2 border-dashed border-white/35 px-4 text-center text-sm text-white/80"
+                  >
+                    {t("status.chooseMedia")}
+                  </button>
+                )}
+                {file && (
+                  <input
+                    value={caption}
+                    onChange={(e) => setCaption(e.target.value.slice(0, 700))}
+                    placeholder={t("status.caption")}
+                    dir="auto"
+                    className="w-full rounded-full border border-white/25 bg-black/35 px-4 py-2.5 text-sm text-white outline-none placeholder:text-white/50 focus:border-white/45"
+                  />
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ONE input, retargeted per tab. A separate element per accept filter is
+              three refs to keep in step for no gain. */}
           <input
             ref={fileRef}
             type="file"
@@ -446,151 +767,181 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
             className="hidden"
             onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
           />
-        </div>
 
-        {/* Preview area */}
-        <div className="px-3 pb-3">
-          {mode === "text" ? (
-            <div
-              className="relative grid min-h-[220px] place-items-center rounded-2xl p-5 text-center"
-              style={{ background: BG_OPTIONS[bgIndex] }}
-            >
-              <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value.slice(0, 700))}
-                autoFocus
-                placeholder={t("status.typeStory")}
-                rows={3}
-                className="w-full resize-none bg-transparent text-center text-xl font-semibold text-white placeholder-white/70 outline-none"
-              />
-              <button
-                type="button"
-                onClick={() => setBgIndex((i) => (i + 1) % BG_OPTIONS.length)}
-                className="absolute bottom-2 end-2 rounded-full bg-black/30 px-2.5 py-1 text-[11px] font-medium text-white"
-              >
-                Color
-              </button>
-            </div>
-          ) : (
-            <div className="rounded-2xl bg-black/40 p-2">
-              {previewUrl && file ? (
-                <MediaPreview file={file} url={previewUrl} />
-              ) : (
+          {/* ── the frame's 5 gradient swatches ───────────────────────────── */}
+          {mode === "text" && (
+            <div className="flex shrink-0 items-center justify-center gap-2.5 px-3 py-2">
+              {BG_OPTIONS.map((bg, i) => (
                 <button
+                  key={bg}
                   type="button"
-                  onClick={() => fileRef.current?.click()}
-                  className="grid min-h-[200px] w-full place-items-center rounded-xl border-2 border-dashed border-border/70 text-sm text-muted-foreground"
+                  onClick={() => setBgIndex(i)}
+                  aria-pressed={i === bgIndex}
+                  aria-label={`${colorLabel} ${i + 1}`}
+                  /* 26px is the frame's own dot, but the TAP TARGET is 44px (rule 9)
+                     via padding, so the ring stays the drawn size while the button
+                     stays reachable with a thumb. */
+                  className="grid size-11 shrink-0 place-items-center rounded-full"
                 >
-                  Tap to choose a photo, video, or audio file
-                </button>
-              )}
-              {file && (
-                <input
-                  value={caption}
-                  onChange={(e) => setCaption(e.target.value.slice(0, 700))}
-                  placeholder={t("status.caption")}
-                  className="mt-2 w-full rounded-xl bg-background/70 px-3 py-2 text-sm outline-none"
-                />
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* WHERE IT GOES (v2.105.6, #110) — my own ring, or one of my groups.
-            Rendered only when I am actually in a group: a picker with one option
-            is a control that cannot do anything, and every existing user with no
-            groups sees exactly the composer they saw before. */}
-        {myGroups.length > 0 && (
-          <div className="px-3 pb-1">
-            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Post to
-            </p>
-            <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
-              <button
-                type="button"
-                onClick={() => setTargetGroupId(null)}
-                aria-pressed={targetGroupId == null}
-                className={`shrink-0 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
-                  targetGroupId == null
-                    ? "border-primary/60 bg-primary/10"
-                    : "border-border/60 text-muted-foreground hover:bg-muted/50"
-                }`}
-              >
-                My story
-              </button>
-              {myGroups.map((g) => (
-                <button
-                  key={g.id}
-                  type="button"
-                  onClick={() => setTargetGroupId(g.id)}
-                  aria-pressed={targetGroupId === g.id}
-                  className={`inline-flex max-w-[11rem] shrink-0 items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
-                    targetGroupId === g.id
-                      ? "border-primary/60 bg-primary/10"
-                      : "border-border/60 text-muted-foreground hover:bg-muted/50"
-                  }`}
-                >
-                  <Users className="size-3.5 shrink-0" aria-hidden="true" />
-                  <span className="truncate">{g.title}</span>
+                  <span
+                    className={`block size-[26px] rounded-full border border-white/40 ${
+                      i === bgIndex ? "ring-[2.5px] ring-white" : ""
+                    }`}
+                    style={{ background: bg }}
+                  />
                 </button>
               ))}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Who can watch THIS post (v2.99.55). Two options, per the owner's ask.
-            WITHHELD for a group target rather than disabled: a group story's
-            audience IS its membership (the server ignores the stored value once a
-            conversationId is present), so leaving the control on screen would
-            invite someone to pick "Everyone" and believe they had widened it. */}
-        {audiencePickerApplies ? (
-        <div className="px-3 pb-1">
-          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Who can see this
-          </p>
-          <div className="flex gap-1.5">
-            {AUDIENCE_OPTIONS.map((opt) => {
-              const active = effectiveAudience === opt.value;
-              return (
+          {/* ── expandable pickers, above the bar the chips live in ───────── */}
+          {/* WHERE IT GOES (v2.105.6, #110) — my own ring, or one of my groups.
+              Rendered only when I am actually in a group: a picker with one option
+              is a control that cannot do anything, and every existing user with no
+              groups sees exactly the composer they saw before. */}
+          {myGroups.length > 0 && panel === "group" && (
+            <div className="shrink-0 px-3 pb-1">
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-white/70">
+                {t("status.postTo")}
+              </p>
+              <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
                 <button
-                  key={opt.value}
                   type="button"
-                  onClick={() => setAudience(opt.value)}
-                  aria-pressed={active}
-                  className={`min-w-0 flex-1 rounded-xl border px-2.5 py-2 text-left transition-colors ${
-                    active
-                      ? "border-primary/60 bg-primary/10"
-                      : "border-border/60 text-muted-foreground hover:bg-muted/50"
+                  onClick={() => { setTargetGroupId(null); setPanel(null); }}
+                  aria-pressed={targetGroupId == null}
+                  className={`shrink-0 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+                    targetGroupId == null
+                      ? "border-white bg-white/20 text-white"
+                      : "border-white/30 bg-black/30 text-white/80 hover:bg-black/45"
                   }`}
                 >
-                  <span className="flex items-center gap-1.5 text-sm font-semibold">
-                    <opt.Icon className="size-3.5 shrink-0" />
-                    <span className="truncate">{opt.label}</span>
-                  </span>
-                  <span className="mt-0.5 block text-[11px] leading-snug opacity-80">{opt.hint}</span>
+                  {/* The SAME key the strip's own tile uses: one fact, one word. */}
+                  {t("status.myStory")}
                 </button>
-              );
-            })}
-          </div>
-        </div>
-        ) : (
-          <div className="px-3 pb-1">
-            <p className="rounded-xl border border-border/60 bg-muted/40 px-3 py-2 text-[11px] leading-snug text-muted-foreground">
-              Everyone in <span className="font-semibold">{targetGroup?.title}</span> can see this for
-              24h, and it shows under the group — not on your own story.
-            </p>
-          </div>
-        )}
+                {myGroups.map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => { setTargetGroupId(g.id); setPanel(null); }}
+                    aria-pressed={targetGroupId === g.id}
+                    className={`inline-flex max-w-[11rem] shrink-0 items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+                      targetGroupId === g.id
+                        ? "border-white bg-white/20 text-white"
+                        : "border-white/30 bg-black/30 text-white/80 hover:bg-black/45"
+                    }`}
+                  >
+                    <Users className="size-3.5 shrink-0" aria-hidden="true" />
+                    <span className="truncate">{g.title}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
-        <div className="px-3 pb-4 pt-2">
-          <Button
-            type="button"
-            onClick={submit}
-            disabled={posting || (mode === "text" ? !text.trim() : !file)}
-            className="h-12 w-full gap-2 rounded-xl text-base font-semibold"
-          >
-            {posting ? t("status.posting") : (<><Send className="size-4" /> Share story</>)}
-          </Button>
+          {/* Who can watch THIS post (v2.99.55). Two options, per the owner's ask.
+              WITHHELD for a group target rather than disabled: a group story's
+              audience IS its membership (the server ignores the stored value once a
+              conversationId is present), so leaving the control on screen would
+              invite someone to pick "Everyone" and believe they had widened it. */}
+          {audiencePickerApplies ? (
+            panel === "audience" && (
+              <div className="shrink-0 px-3 pb-1">
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-white/70">
+                  {t("status.whoCanSee")}
+                </p>
+                <div className="flex gap-1.5">
+                  {AUDIENCE_OPTIONS.map((opt) => {
+                    const active = effectiveAudience === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => { setAudience(opt.value); setPanel(null); }}
+                        aria-pressed={active}
+                        className={`min-w-0 flex-1 rounded-xl border px-2.5 py-2 text-left transition-colors ${
+                          active
+                            ? "border-white bg-white/20 text-white"
+                            : "border-white/30 bg-black/30 text-white/80 hover:bg-black/45"
+                        }`}
+                      >
+                        <span className="flex items-center gap-1.5 text-sm font-semibold">
+                          <opt.Icon className="size-3.5 shrink-0" />
+                          <span className="truncate">{t(AUDIENCE_KEYS[opt.value].label)}</span>
+                        </span>
+                        <span className="mt-0.5 block text-[11px] leading-snug opacity-80">
+                          {t(AUDIENCE_KEYS[opt.value].hint)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )
+          ) : (
+            <div className="shrink-0 px-3 pb-1">
+              {/* `tn`, not `t` + string surgery: the group's name is BOLD in the middle of
+                  the sentence, and Arabic does not put it between the same two fragments —
+                  a sentence chopped at the English seam can only be re-assembled into
+                  nonsense, which is the whole reason `translateNodes` exists. */}
+              <p className="rounded-xl border border-white/25 bg-black/40 px-3 py-2 text-[11px] leading-snug text-white/85">
+                {tn("status.groupAudienceNote", {
+                  group: <span className="font-semibold">{targetGroup?.title}</span>,
+                })}
+              </p>
+            </div>
+          )}
+
+          {/* ── the frame's bottom bar: chips · accent Post pill ──────────── */}
+          <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pb-4 pt-1">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+              {/* AUDIENCE CHIP — the frame's "My contacts · 24h ▾".
+                  WHITE ON A DARK SCRIM, deliberately NOT `.rchip-accent`: that recipe is
+                  measured against the app's `--card`, and this chip floats on an
+                  author-chosen gradient that can be the yellow one, where accent text
+                  is unreadable. A scrim is legible over any of the five by
+                  construction, which is what the frame itself draws. */}
+              {audiencePickerApplies && (
+                <GlassChip
+                  onClick={() => setPanel((p) => (p === "audience" ? null : "audience"))}
+                  expanded={panel === "audience"}
+                  label={t("status.whoCanSee")}
+                >
+                  {(() => {
+                    const A = audienceOption(effectiveAudience).Icon;
+                    return <A className="size-3.5 shrink-0" aria-hidden="true" />;
+                  })()}
+                  <span className="truncate">
+                    {t(AUDIENCE_KEYS[effectiveAudience].label)}
+                    {" · "}
+                    {/* The story's real life, matching the server's STATUS_TTL_MS. */}
+                    <span dir="ltr">24h</span>
+                  </span>
+                </GlassChip>
+              )}
+              {myGroups.length > 0 && (
+                <GlassChip
+                  onClick={() => setPanel((p) => (p === "group" ? null : "group"))}
+                  expanded={panel === "group"}
+                  label={t("status.postTo")}
+                >
+                  <Users className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{targetGroup ? targetGroup.title : t("status.myStory")}</span>
+                </GlassChip>
+              )}
+            </div>
+
+            {/* THE ACCENT PILL. `.rcta` IS the frame's own recipe — solid `var(--rb)`
+                with `#04211a` on-accent text and the same 10/30 accent shadow — so
+                this reads the cycling hue instead of freezing one. */}
+            <Button
+              type="button"
+              onClick={submit}
+              disabled={posting || (mode === "text" ? !text.trim() : !file)}
+              className="rcta h-11 shrink-0 gap-2 rounded-full px-5 text-sm font-bold hover:opacity-90 disabled:opacity-40"
+            >
+              {posting ? t("status.posting") : (<>{t("status.shareStory")} <Send className="size-4" /></>)}
+            </Button>
+          </div>
         </div>
       </div>
       {/* In-app recorder → the clip becomes the picked file (30s story cap). */}
@@ -837,14 +1188,18 @@ export function StatusViewer({
                 WITHHELD FOR A SINGLE-SLIDE REEL: "1 of 1" is noise, and the bar above
                 already says there is only one. */}
             {group.items.length > 1 && (
+              /* ONE key with both numbers inside it — "{index} of {total}" — rather than
+                 two JSX fragments around a bare "of", which is a sentence glued at the
+                 English seam. `dir="ltr"` keeps the two Western digits in order whatever
+                 the page direction is (v2.106.84). */
               <span className="font-mono" dir="ltr">
-                {ii + 1} of {group.items.length}
+                {t("status.slideOf", { index: ii + 1, total: group.items.length })}
                 {" · "}
               </span>
             )}
             {group.subject.kind === "group" && item.author
-              ? `${item.mine ? "You" : item.author.displayName} · ${timeAgo(item.createdAt)}`
-              : timeAgo(item.createdAt)}
+              ? `${item.mine ? t("status.you") : item.author.displayName} · ${timeAgoText(item.createdAt, t)}`
+              : timeAgoText(item.createdAt, t)}
           </div>
         </div>
         <button type="button" onClick={onClose} aria-label={t("status.close")} className="rounded-full p-1.5 hover:bg-white/10">
@@ -903,7 +1258,7 @@ export function StatusViewer({
       {isMine && (
         <div className="flex items-center justify-between gap-3 px-5 py-3">
           <button type="button" onClick={() => { setPaused(true); setShowViewers(true); }} className="inline-flex items-center gap-1.5 text-sm text-white/80">
-            <Eye className="size-4" /> Viewers
+            <Eye className="size-4" /> {t("status.viewers")}
           </button>
           {/* Which audience THIS post went to (v2.99.55). The per-post value is
               frozen at insert, so this is the truth for this story even if the
@@ -911,13 +1266,13 @@ export function StatusViewer({
           {item.audience && (
             <span
               className="inline-flex min-w-0 items-center gap-1 text-xs text-white/60"
-              title={audienceOption(item.audience).hint}
+              title={t(audienceKeys(item.audience).hint)}
             >
               {(() => {
                 const O = audienceOption(item.audience).Icon;
                 return <O className="size-3.5 shrink-0" />;
               })()}
-              <span className="truncate">{audienceOption(item.audience).label}</span>
+              <span className="truncate">{t(audienceKeys(item.audience).label)}</span>
             </span>
           )}
           <button
@@ -952,7 +1307,7 @@ export function StatusViewer({
                 const res = await remove.mutateAsync({ id: item.id });
                 ok = !!res?.ok;
               } catch {
-                toast.error("Couldn't reach the server — story not deleted.");
+                toast.error(t("status.deleteUnreachable"));
                 return;
               }
               // Refresh BOTH reads. `mine` backs the avatar's status pip and the
@@ -963,9 +1318,7 @@ export function StatusViewer({
                 utils.status.mine.invalidate(),
               ]);
               if (!ok) {
-                toast.error(
-                  "That story is no longer there to delete — it may have already expired. Pull to refresh."
-                );
+                toast.error(t("status.deleteGone"));
                 return; // do NOT advance: the item is still there.
               }
               toast.success(t("status.storyDeleted"));
@@ -976,7 +1329,7 @@ export function StatusViewer({
             }}
             className="inline-flex items-center gap-1.5 text-sm text-red-400 disabled:opacity-50"
           >
-            <Trash2 className="size-4" /> {remove.isPending ? t("status.deleting") : "Delete"}
+            <Trash2 className="size-4" /> {remove.isPending ? t("status.deleting") : t("status.delete")}
           </button>
         </div>
       )}
@@ -988,7 +1341,7 @@ export function StatusViewer({
       {canRemoveAsAdmin && item && (
         <div className="flex items-center justify-between gap-3 px-5 py-3">
           <span className="min-w-0 truncate text-xs text-white/55">
-            You're an admin of this group
+            {t("status.youAreAdmin")}
           </span>
           <button
             type="button"
@@ -997,10 +1350,13 @@ export function StatusViewer({
               // Confirmed, because it removes something SOMEBODY ELSE posted and
               // cannot be undone — the copy says whose and where, since "delete
               // this?" does not distinguish it from the author's own Delete.
-              const who = item.author?.displayName || "this member";
+              const who = item.author?.displayName || t("status.thisMember");
               if (
                 !window.confirm(
-                  `Remove ${who}'s story from ${group?.subject.displayName ?? "this group"}? It disappears for every member. This can't be undone.`,
+                  t("status.confirmRemove", {
+                    who,
+                    group: group?.subject.displayName ?? t("status.thisGroup"),
+                  }),
                 )
               ) {
                 return;
@@ -1010,7 +1366,7 @@ export function StatusViewer({
               } catch {
                 // The server answers one message for "gone", "personal story" and
                 // "not an admin here", so there is nothing more specific to say.
-                toast.error("That story isn't there to remove — pull to refresh.");
+                toast.error(t("status.removeGone"));
                 return;
               }
               // Both reads, for the same reason the author path invalidates both:
@@ -1026,7 +1382,7 @@ export function StatusViewer({
             className="inline-flex items-center gap-1.5 text-sm text-red-400 disabled:opacity-50"
           >
             <Trash2 className="size-4" />
-            {removeAsAdmin.isPending ? t("status.removing") : "Remove as admin"}
+            {removeAsAdmin.isPending ? t("status.removing") : t("status.removeAsAdmin")}
           </button>
         </div>
       )}
@@ -1096,7 +1452,7 @@ function StatusReplyBar({
       setText("");
       setPickerOpen(false);
       setOpen(false);
-      toast.success(`Sent to ${ownerName}`);
+      toast.success(t("status.sentTo", { name: ownerName }));
     } catch {
       toast.error(t("status.replyFailed"));
     } finally {
@@ -1107,7 +1463,9 @@ function StatusReplyBar({
   if (expired) {
     return (
       <div className="px-5 py-3 text-center text-xs text-white/50">
-        This status has expired.
+        {/* STORY, not "status": this is the ephemeral post expiring, and calling it a
+            status here is the v2.101.0 vocabulary bug the owner corrected three times. */}
+        {t("status.expired")}
       </div>
     );
   }
@@ -1141,7 +1499,7 @@ function StatusReplyBar({
             type="button"
             disabled={sending}
             onClick={() => send(e)}
-            aria-label={`React with ${e}`}
+            aria-label={t("status.reactWith", { emoji: e })}
             className="grid size-10 place-items-center rounded-full text-2xl leading-none transition active:scale-90 hover:bg-white/15 disabled:opacity-40"
           >
             {e}
@@ -1176,7 +1534,7 @@ function StatusReplyBar({
           // dir="auto" so an Arabic reply lays out right-to-left as typed.
           dir="auto"
           maxLength={2000}
-          placeholder={`Reply to ${ownerName}…`}
+          placeholder={t("status.replyTo", { name: ownerName })}
           aria-label={t("status.replyToStory")}
           className="h-11 min-w-0 flex-1 rounded-full border border-white/20 bg-white/10 px-4 text-sm text-white outline-none placeholder:text-white/40 focus:border-white/40"
         />
@@ -1227,7 +1585,7 @@ function ViewersSheet({ statusId, onClose }: { statusId: number; onClose: () => 
     <div className="fixed inset-0 z-[105] flex items-end bg-black/50" onClick={onClose}>
       <div className="w-full rounded-t-3xl bg-card p-4 text-foreground max-h-[60vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-border" />
-        <div className="mb-2 text-sm font-semibold">Seen by {viewers.length}</div>
+        <div className="mb-2 text-sm font-semibold">{t("status.seenBy", { count: viewers.length })}</div>
         {viewers.length === 0 ? (
           <div className="py-6 text-center text-sm text-muted-foreground">{t("status.noViews")}</div>
         ) : (
@@ -1245,11 +1603,32 @@ function ViewersSheet({ statusId, onClose }: { statusId: number; onClose: () => 
   );
 }
 
-function timeAgo(iso: string | Date): string {
+/**
+ * Which relative-time wording an age needs — the BAND, as a pure function.
+ *
+ * A SELECTOR RETURNING A WHOLE KEY, not a stem plus a unit: `${n} + "m ago"` is a
+ * sentence assembled from a fragment, and the one thing that makes it translatable is
+ * that each band is its own complete string. That is `guestExpiryKey`'s rule, and it is
+ * also what keeps "just now" reading as an expression rather than as "0 minutes".
+ *
+ * Exported as a test seam, because which band a duration selects is exactly the thing a
+ * source pin cannot answer.
+ */
+export function timeAgoKey(
+  iso: string | Date,
+  now = Date.now(),
+): { key: TKey; count: number } {
   const d = typeof iso === "string" ? new Date(iso) : iso;
-  const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
+  const diff = (now - d.getTime()) / 1000;
+  if (diff < 60) return { key: "status.justNow", count: 0 };
+  if (diff < 3600) return { key: "status.minutesAgo", count: Math.floor(diff / 60) };
+  if (diff < 86400) return { key: "status.hoursAgo", count: Math.floor(diff / 3600) };
+  return { key: "status.daysAgo", count: Math.floor(diff / 86400) };
+}
+
+/** The band, rendered. Takes the translator rather than calling a hook: this is reached
+ *  from inside a `.map`, and a module-level function cannot use one anyway. */
+function timeAgoText(iso: string | Date, t: (k: TKey, v?: Record<string, string | number>) => string): string {
+  const { key, count } = timeAgoKey(iso);
+  return t(key, { count });
 }

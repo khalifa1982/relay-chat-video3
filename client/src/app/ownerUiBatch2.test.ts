@@ -23,6 +23,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { formatLastSeen } from "@shared/profileFields";
+import { copyOnScreen, expandCopy } from "../../../server/testing/copyOnScreen";
 
 const root = path.resolve(__dirname, "..", "..", "..");
 const read = (...p: string[]) => fs.readFileSync(path.resolve(root, ...p), "utf8");
@@ -106,9 +107,12 @@ describe("2a — one + replaces the media and paperclip buttons", () => {
       MESSAGES.indexOf("{attachMenuOpen && ("),
       MESSAGES.indexOf("{expire !== null && (")
     );
-    expect(menu).toMatch(/Photo &amp; video/);
-    expect(menu).toMatch(/Attach file/);
-    expect(menu).toMatch(/Record video/);
+    // Asked through the dictionary: these labels are translated now, so a raw literal
+    // search would report the owner's own "+" menu as having lost its rows the moment
+    // the screen speaks Arabic — a guard crying wolf on correct code.
+    expect(copyOnScreen(menu, "Photo & video")).toBe(true);
+    expect(copyOnScreen(menu, "Attach file")).toBe(true);
+    expect(copyOnScreen(menu, "Record video")).toBe(true);
     // The file picker is what the paperclip used to open.
     expect(menu).toMatch(/fileRef\.current\?\.click\(\)/);
     expect(menu).toMatch(/imageRef\.current\?\.click\(\)/);
@@ -269,8 +273,8 @@ describe("4 — the away auto-reply is opt-in", () => {
     expect(MESSAGES).toMatch(/function AutoReplyToggle\(\)/);
     expect(MESSAGES).toMatch(/<AutoReplyToggle \/>/);
     expect(MESSAGES).toMatch(/trpc\.identity\.setAutoReply\.useMutation/);
-    expect(MESSAGES).toMatch(/Auto-reply when I'm away/);
-    expect(MESSAGES).toMatch(/Off by default/);
+    expect(copyOnScreen(MESSAGES, "Auto-reply when I'm away")).toBe(true);
+    expect(copyOnScreen(MESSAGES, "Off by default")).toBe(true);
     // Optimistic with a real rollback, so the switch can't misreport its state.
     const c = MESSAGES.slice(MESSAGES.indexOf("function AutoReplyToggle()"));
     expect(c.slice(0, 2200)).toMatch(/onError:[\s\S]*?setData\(undefined, cxt\.prev\)/);
@@ -323,7 +327,11 @@ describe("5 — contacts keep the pin and the presence line apart, and every sta
   });
 
   it("keeps the blocked / on-a-call / online states it had", () => {
-    const el = presenceEl();
+    /* Read through `expandCopy`, because these words are dictionary keys now and a rule
+       that SWEEPS for copy silently matches nothing once the copy moves — going green
+       while covering zero states, which is worse than going red. Expanding restores the
+       rule over both swept and unswept source. */
+    const el = expandCopy(presenceEl());
     for (const state of ["blocked", "on a call", "online"]) {
       expect(el, `${state} still rendered`).toContain(state);
     }

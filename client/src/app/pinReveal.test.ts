@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { codeOnly } from "../../../server/testing/codeOnly";
+import { copyOnScreen, whyCopyMissing } from "../../../server/testing/copyOnScreen";
+import { DICT } from "./i18n";
 import {
   PIN_REVEAL_TIMING,
   isRevealablePin,
@@ -290,5 +292,111 @@ describe("the hyperspace warp", () => {
        browser that branch is for. */
     const inert = ENGINE.slice(ENGINE.indexOf("if (!ctx) {"), ENGINE.indexOf("const low ="));
     expect(inert).toMatch(/warp: \(\) => \{\}/);
+  });
+});
+
+/**
+ * IT SPEAKS BOTH LANGUAGES (#156).
+ *
+ * This is the NEWEST screen in the app and it shipped English-only — which matters more
+ * here than almost anywhere, because every way in passes through it: a guest name, an
+ * email sign-in, and any entry surface added later, since it arms on the signed-out →
+ * signed-in transition rather than on a callback per route. It was the one screen nobody
+ * could avoid reading in a language they might not have.
+ */
+describe("the reveal is translated", () => {
+  it("renders every word through the dictionary — none left as a literal", () => {
+    /* A SWEEP, not a list: the string somebody adds next is covered rather than exempt.
+       `codeOnly` first, because the header explains the copy it replaced. */
+    /* ONE EXEMPTION, NAMED rather than a tolerance — a count-based allowance is how a
+       real offender hides among the accepted ones. "RELAY" is a brand mark: it is a
+       name, not language, and the test below EARNS this exemption by asserting it is
+       still the brand span rather than a string that slipped through. */
+    const NOT_LANGUAGE = new Set(["RELAY"]);
+    const offenders: string[] = [];
+    /* THE TEXT-NODE RULE IS DELIBERATELY PUNCTUATION-BLIND, and the first version of it
+       was not — which a mutation caught. It allowed only letters, apostrophes and
+       dashes between words, so the ONE full sentence on this screen ("…no account
+       needed.") ended in a character the pattern could not cross and matched nothing:
+       reverting the caption to an English literal passed every assertion in this file.
+       A sweep with a hole exactly the shape of the longest string is worse than no
+       sweep, because it reports coverage. It now takes any run of text between tags and
+       asks whether it contains two ASCII words. */
+    /* Scoped to the RENDERED JSX. A TypeScript generic (`ReturnType<typeof setTimeout>`)
+       is angle brackets around text too, so sweeping the whole file reported the
+       component's own timer declarations as user-facing copy — a guard crying wolf,
+       which is as useless as one that never fires. The `return (` is where markup
+       begins, and the code-shaped filter below is belt and braces for anything inside
+       it that is still an expression rather than prose. */
+    const at = SRC.indexOf("return (");
+    expect(at, "the component still returns JSX").toBeGreaterThan(-1);
+    for (const m of SRC.slice(at).matchAll(/>([^<>{}]+)</g)) {
+      const text = m[1].replace(/\s+/g, " ").trim();
+      if (/[=;:[\]|]/.test(text)) continue; // an expression, not prose
+      if (!/[A-Za-z]{2}\s+[A-Za-z]{2}|^[A-Z][A-Za-z-]{2,}$/.test(text)) continue;
+      if (!NOT_LANGUAGE.has(text)) offenders.push(text);
+    }
+    for (const m of SRC.matchAll(/aria-label="([^"]+)"/g)) {
+      if (!NOT_LANGUAGE.has(m[1])) offenders.push(m[1]);
+    }
+    expect(
+      offenders,
+      `these still render English rather than a key:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
+
+  it("its five strings exist in BOTH languages", () => {
+    for (const key of [
+      "pin.yourNumber",
+      "pin.autoAssigned",
+      "pin.online",
+      "pin.caption",
+      "pin.screenReader",
+      "pin.continueAria",
+    ] as const) {
+      const e = DICT[key];
+      expect(e, key).toBeTruthy();
+      expect(e.en.length, key).toBeGreaterThan(0);
+      // Arabic script, not a transliteration, and not the English pasted across.
+      expect(e.ar, key).toMatch(/[؀-ۿ]/);
+      expect(e.ar, key).not.toBe(e.en);
+    }
+  });
+
+  it("the caption and the screen-reader line still SAY what they always said", () => {
+    /* Through `copyOnScreen`, so this is a pin on the WORDS rather than on the key —
+       and stronger than the literal it replaces, because reaching the dictionary also
+       proves an Arabic half exists. */
+    for (const phrase of [
+      "Anyone with this number can dial you — no account needed.",
+      "Your RELAY number is",
+    ]) {
+      expect(copyOnScreen(SRC, phrase), whyCopyMissing(SRC, phrase)).toBe(true);
+    }
+  });
+
+  it("the NUMBER is interpolated INTO the sentence, never glued around it", () => {
+    /* `Your RELAY number is {number}` is one translatable string. Splitting it into two
+       fragments either side of the digits is the shape `dict/auth.ts` records as
+       untranslatable — Arabic does not put the number between the same two words. */
+    expect(DICT["pin.screenReader"].en).toContain("{number}");
+    expect(DICT["pin.screenReader"].ar).toContain("{number}");
+    expect(SRC).toMatch(/t\("pin\.screenReader", \{ number: `\$\{pin\.slice\(0, 3\)\} \$\{pin\.slice\(3\)\}` \}\)/);
+  });
+
+  it("the digits stay WESTERN and cannot reorder under dir=rtl", () => {
+    /* Two separate facts, both load-bearing. A RELAY number read aloud has to be the
+       number typed, so no Arabic-Indic numerals reach it (v2.106.84) — and the digit ROW
+       is a flex row, which under `dir="rtl"` would otherwise render 317-842. The
+       stylesheet pins the direction on the row itself. */
+    for (const key of ["pin.screenReader", "pin.caption", "pin.yourNumber"] as const) {
+      expect(DICT[key].ar, key).not.toMatch(/[٠-٩۰-۹]/);
+    }
+    const digits = CSS.slice(CSS.indexOf(".prv-digits {"));
+    expect(digits.slice(0, 400)).toMatch(/direction: ltr/);
+  });
+
+  it("the brand mark is NOT translated — it is a name, not language", () => {
+    expect(SRC).toMatch(/<span className="prv-name">RELAY<\/span>/);
   });
 });

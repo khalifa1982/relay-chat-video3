@@ -87,15 +87,29 @@ describe("the client reads the verdict instead of discarding it", () => {
     // owner's own data disproved it (both of their statuses are on the identity
     // they are signed into). A stale cached id after the 24h reaper is the likelier
     // cause, but "likelier" is not grounds for telling somebody why.
-    expect(HANDLER).toMatch(/no longer there to delete/);
+    /* Through `copyOnScreen`: this froze an English literal and the sentence moved into
+       the dictionary. The property is that the screen still SAYS this, which the helper
+       answers for both a swept and an unswept file — and is stronger here, because
+       reaching the dictionary also proves an Arabic half exists. */
+    expect(
+      copyOnScreen(STATUS, "no longer there to delete"),
+      "the refusal must still say the story is not there to delete",
+    ).toBe(true);
+    expect(HANDLER).toMatch(/toast\.error\(t\("status\.deleteGone"\)\)/);
     expect(HANDLER).not.toMatch(/different sign-in/);
     const refusal = HANDLER.slice(HANDLER.indexOf("if (!ok) {"));
     expect(refusal).toMatch(/return; \/\/ do NOT advance/);
   });
 
   it("says something when the request itself fails", () => {
-    // v2.101.0: the ephemeral post is a STORY in every user-facing string.
-    expect(HANDLER).toMatch(/toast\.error\("Couldn't reach the server — story not deleted\."\)/);
+    // v2.101.0: the ephemeral post is a STORY in every user-facing string — asserted
+    // on the WORDS via `copyOnScreen` now that they live in the dictionary, which keeps
+    // that vocabulary rule enforced in BOTH languages rather than only in the literal.
+    expect(
+      copyOnScreen(STATUS, "Couldn't reach the server — story not deleted."),
+      "the transport failure must still be said out loud",
+    ).toBe(true);
+    expect(HANDLER).toMatch(/toast\.error\(t\("status\.deleteUnreachable"\)\)/);
   });
 
   it("confirms a delete that DID happen", () => {
@@ -131,7 +145,11 @@ describe("when a story was posted", () => {
   it("keeps the relative time but exposes the exact one", () => {
     // "i dunno … when i posted it" — "16h ago" genuinely does not answer that.
     expect(STATUS).toMatch(/title=\{new Date\(item\.createdAt\)\.toLocaleString\(\)\}/);
-    expect(STATUS).toMatch(/\{timeAgo\(item\.createdAt\)\}/);
+    /* `timeAgo` became `timeAgoText(iso, t)` when the four relative-time bands moved
+       into the dictionary — a module-level function cannot call a hook, so the
+       translator is passed in. The property is unchanged: the relative time is rendered
+       from the ITEM's own timestamp. */
+    expect(STATUS).toMatch(/timeAgoText\(item\.createdAt, t\)/);
   });
 
   it("the time is the CURRENT item's, not the group's newest", () => {
@@ -139,8 +157,10 @@ describe("when a story was posted", () => {
     // v2.105.6: the header's name line branches on the reel kind (a group is named
     // in full and never as "My story"), so the anchor moved to timeAgo's own site.
     const hdr = STATUS.slice(STATUS.indexOf("{/* header */}"));
-    const block = hdr.slice(0, hdr.indexOf("</div>", hdr.indexOf("timeAgo")));
-    expect(block).toMatch(/timeAgo\(item\.createdAt\)/);
+    const at = hdr.indexOf("timeAgoText");
+    expect(at, "the header still renders a relative time").toBeGreaterThan(-1);
+    const block = hdr.slice(0, hdr.indexOf("</div>", at));
+    expect(block).toMatch(/timeAgoText\(item\.createdAt, t\)/);
     expect(block).not.toMatch(/group\.items\[0\]|group\.newest/);
   });
 });

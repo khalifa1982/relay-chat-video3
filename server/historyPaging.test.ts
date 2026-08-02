@@ -14,6 +14,9 @@
  *      row somebody was paging to find.
  */
 import { describe, expect, it } from "vitest";
+import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
+import { translate } from "../client/src/app/i18n";
+import { loadedCountKey } from "../client/src/pages/app/History";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
@@ -257,7 +260,11 @@ describe("the client keeps older pages OUT of the polled queries", () => {
     // v2.88 — a silently-failed tap is the worst case.
     const fn = fnAt(HISTORY, "async function loadOlder()");
     expect(fn).toMatch(/toast\.error\(/);
-    expect(fn).toMatch(/That's the whole call log\./);
+    /* The sentence is a dictionary entry now, so it is asked for as the PROPERTY —
+       satisfied by the literal OR by a key whose English carries it, which additionally
+       proves an Arabic half exists. */
+    expect(copyOnScreen(fn, "That's the whole call log."),
+      whyCopyMissing(fn, "That's the whole call log.")).toBe(true);
     // And it cannot be fired twice concurrently.
     expect(fn).toMatch(/if \(loadingOlder\) return;/);
   });
@@ -267,8 +274,17 @@ describe("the client keeps older pages OUT of the polled queries", () => {
        and that stays. The new line says how far the reach currently extends.
        My first draft matched the literal "calls loaded", which is not in the source —
        the JSX is `{… ? "call" : "calls"} loaded`, i.e. an interpolation splits it. */
-    expect(src).toMatch(/"call" : "calls"\}\s*loaded/);
-    expect(src).toMatch(/search and\s*\n?\s*grouping cover these/);
+    /* The `{n} {call|calls} loaded` interpolation is gone, and what replaced it is
+       stronger: English one/other is two forms and Arabic needs four, so the line selects a
+       WHOLE KEY PER BAND. Pinned at the SELECTOR because the key is chosen at runtime and
+       no static reader (`copyOnScreen` included) can follow that, then driven for the
+       words. */
+    expect(src).toMatch(/t\(loadedCountKey\(items\.length\), \{ count: items\.length \}\)/);
+    for (const n of [1, 2, 4, 30]) {
+      const en = translate("en", loadedCountKey(n), { count: n });
+      expect(en).toMatch(/search and grouping cover these/);
+      expect(en).toContain(n === 1 ? "1 call loaded" : `${n} calls loaded`);
+    }
     expect(HISTORY).toMatch(/in this log/);
   });
 });

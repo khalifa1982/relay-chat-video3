@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RelayBackground } from "./RelayBackground";
+import { useT } from "./i18n";
 
 /**
  * THE PIN REVEAL (#162) — `design_handoff_pin_reveal/`.
@@ -31,6 +32,20 @@ import { RelayBackground } from "./RelayBackground";
  * IMMEDIATELY rather than animating: a reveal that settles onto "undefine" would be worse
  * than no reveal, and this sits between a person and their inbox — it must never be the
  * reason somebody cannot get in.
+ *
+ * ── ITS COPY IS IN BOTH LANGUAGES, AND THE DIGITS ARE IN NEITHER ─────────────────────
+ * Every way into the app passes through this screen, so shipping it English-only made it
+ * the one surface nobody could avoid reading in a language they may not have. The five
+ * strings live in `dict/auth.ts` — this is the last step of the LOGIN path rather than a
+ * screen of the app behind it. The six digits are Western in both languages, because a
+ * number read aloud has to be the number typed (v2.106.84), and `.prv-digits` already
+ * carries `direction: ltr` so the row cannot reorder under `dir="rtl"`.
+ *
+ * KNOWN AND NOT FIXED HERE: the three micro-labels sit under 0.3–0.4em letter-spacing,
+ * which forces gaps between letters that Arabic JOINS. Their Arabic is kept short to
+ * limit it, but the real fix is a direction-aware tracking reset in `index.css`, which
+ * is app-wide (History's day headers and the Contacts A–Z letters have the same shape)
+ * and does not belong in one component's translation.
  */
 
 /** Every timing the handoff fixes, in one place so the test can assert them. */
@@ -82,6 +97,7 @@ export function PinReveal({
   /** Test seam; defaults to the media query. */
   reducedMotion?: boolean;
 }) {
+  const t = useT();
   const calm =
     reducedMotion ??
     (typeof window !== "undefined" &&
@@ -187,7 +203,7 @@ export function PinReveal({
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") leave();
       }}
-      aria-label="Your RELAY number — continue to the app"
+      aria-label={t("pin.continueAria")}
     >
       {/* The reveal owns its OWN canvas, because at this point the login screen has
           unmounted and the shell has not mounted — exactly one is ever live (the rule
@@ -201,13 +217,13 @@ export function PinReveal({
             <span className="prv-dot" aria-hidden />
             <span className="prv-name">RELAY</span>
           </div>
-          <span className="prv-status">ONLINE</span>
+          <span className="prv-status">{t("pin.online")}</span>
         </div>
 
         <div className="prv-card">
           <div className="prv-head">
-            <span className="prv-label">YOUR NUMBER</span>
-            <span className="prv-chip">AUTO-ASSIGNED</span>
+            <span className="prv-label">{t("pin.yourNumber")}</span>
+            <span className="prv-chip">{t("pin.autoAssigned")}</span>
           </div>
 
           <div className={`prv-capsule${phase === "charge" ? " charge" : ""}${phase === "flash" ? " flash" : ""}${phase === "hold" ? " hold" : ""}${lit ? " lit" : ""}`}>
@@ -231,12 +247,13 @@ export function PinReveal({
           {/* The number, once, for a screen reader — the digit slots are decorative
               spans and would otherwise be read as six unrelated characters. */}
           <span className="sr-only">
-            {ok ? `Your RELAY number is ${pin.slice(0, 3)} ${pin.slice(3)}` : ""}
+            {/* The grouping is applied HERE and passed in whole, so the sentence stays
+                one translatable string with the number wherever the language wants it —
+                rather than being chopped at the English seam around an interpolation. */}
+            {ok ? t("pin.screenReader", { number: `${pin.slice(0, 3)} ${pin.slice(3)}` }) : ""}
           </span>
 
-          <p className={`prv-caption${captionIn ? " show" : ""}`}>
-            Anyone with this number can dial you — no account needed.
-          </p>
+          <p className={`prv-caption${captionIn ? " show" : ""}`}>{t("pin.caption")}</p>
         </div>
       </div>
     </div>

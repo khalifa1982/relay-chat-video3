@@ -19,7 +19,8 @@
  * browser two releases ago.
  */
 import { describe, expect, it } from "vitest";
-import { copyOnScreen } from "../../../server/testing/copyOnScreen";
+import { copyOnScreen, keysForEnglish, whyCopyMissing } from "../../../server/testing/copyOnScreen";
+import { DICT } from "./i18n";
 import { readFileSync } from "node:fs";
 import { codeOnly } from "../../../server/testing/codeOnly";
 
@@ -60,7 +61,13 @@ describe("a failed contacts read says so — it is not an empty address book", (
     // named `Empty*`, so a bare /empty/i sweep fails on correct code.
     expect(arm).not.toMatch(/No contacts yet/);
     expect(arm).not.toMatch(/Add a contact/);
-    expect(arm).toMatch(/still there/i);
+    /* The reassurance is a dictionary entry now, so it is asked for as the PROPERTY —
+       satisfied by the literal OR by a key whose English carries it, which additionally
+       proves an Arabic half exists. */
+    expect(
+      copyOnScreen(arm, "Your saved contacts are still there"),
+      whyCopyMissing(arm, "Your saved contacts are still there"),
+    ).toBe(true);
   });
 });
 
@@ -167,13 +174,35 @@ describe("no row is a dead end — the two guest panes explain themselves", () =
   });
 
   it("it names the way forward and promises nothing is lost", () => {
-    // The reason a guest cannot use these is the one thing they can act on — hiding the
-    // rows would satisfy the letter of the rule and leave the feature undiscoverable.
+    /* The reason a guest cannot use these is the one thing they can act on — hiding the
+       rows would satisfy the letter of the rule and leave the feature undiscoverable.
+
+       THE SENTENCE MOVED TO THE CALL SITES, and that is the point rather than an
+       inconvenience: it used to be `{what} needs a registered account.` with `what` a
+       caller-supplied English fragment, and a sentence chopped at an English seam cannot
+       be re-assembled in Arabic, where the word order differs. So each caller names a
+       WHOLE-sentence key, and what is asserted is that every key the component can be
+       given really does carry both promises. */
     const i = code.indexOf("function AccountOnlyNote(");
     const body = code.slice(i, i + 1400);
-    expect(body).toMatch(/registered account/i);
-    expect(body).toMatch(/carry over/i);
-    expect(body).toMatch(/Register this number/);
+    expect(copyOnScreen(body, "Register this number")).toBe(true);
+
+    const noteKeys = [...code.matchAll(/noteKey="([\w.]+)"/g)].map((m) => m[1]);
+    expect(noteKeys.length, "both panes name a note").toBe(2);
+    const explains = keysForEnglish("needs a registered account");
+    const reassures = keysForEnglish("carry over when you register");
+    for (const k of noteKeys) {
+      expect(explains, `${k} states the requirement`).toContain(k);
+      expect(reassures, `${k} promises nothing is lost`).toContain(k);
+      /* AND THE ARABIC MAKES BOTH PROMISES TOO. `keysForEnglish` reads the ENGLISH half
+         by construction, so on its own it lets the Arabic say anything — a mutation that
+         cut the reassurance out of the Arabic survived the first version of this pin
+         untouched. The promise is the substance here (somebody deciding whether to
+         register), so it is asserted in both languages. */
+      const ar = DICT[k as keyof typeof DICT].ar;
+      expect(ar, `${k} states the requirement in Arabic`).toMatch(/حسابًا مسجّلًا/);
+      expect(ar, `${k} promises nothing is lost in Arabic`).toMatch(/لا يُفقد شيء/);
+    }
   });
 });
 
