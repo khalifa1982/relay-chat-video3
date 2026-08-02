@@ -29,10 +29,16 @@
  *      positioned ancestor, and `.filter-dock` is a direct child of `#call` that anchors to
  *      `.relay-root` today. Re-anchoring a shipped surface is not this frame's business.
  *
- * AND ONE THING IS HONESTLY INCOMPLETE: nothing writes `#callWho` / `#callWhoRole`. They are
- * slots that collapse while empty, so the pill renders exactly what it always did; wiring
- * them is one write in `relayClient.ts`, which is not this frame's file. The tests below pin
- * the collapse, so the degraded state is the correct state rather than an accident.
+ * THE SLOTS ARE WRITTEN NOW (v2.107.1). This header used to end by recording that nothing
+ * filled `#callWho` / `#callWhoRole` — which meant the chip shipped with its markup and CSS
+ * complete and rendered exactly the status + timer it always had, so the frame's headline
+ * ("who am I talking to") was invisible while every source pin passed. That is a class of
+ * gap no assertion about `relayAssets.ts` can catch, because the defect was the ABSENCE of a
+ * write in a different file; the pins below now cover the write itself.
+ *
+ * The collapse pins STAY, because the empty state is still reachable and still correct: a
+ * conference has no single subject, so the chip must fall back to status-only rather than
+ * name one of N people.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -62,6 +68,37 @@ const BLOCK = (() => {
   expect(at, "the 1h block must exist").toBeGreaterThan(0);
   return CSS_CODE.slice(at);
 })();
+
+/**
+ * A named function's own body, bounded by its own closing brace.
+ *
+ * THE BODY BRACE IS THE ONE REACHED WITH PARENS CLOSED, and that is not pedantry — this
+ * repo has hit the same trap five times (v2.105.9, v2.105.27, v2.106.4, v2.106.48,
+ * v2.106.59). Taking "the first `{` after the name" gets you the DESTRUCTURED PARAMETER
+ * for `function f({ a, b })` and the RETURN TYPE for `function f(): Promise<{…}>`, so the
+ * assertions then read the signature and pass for a reason that has nothing to do with
+ * the code they name.
+ */
+function fnBody(src: string, anchor: string): string {
+  const at = src.indexOf(anchor);
+  expect(at, `no such function: ${anchor}`).toBeGreaterThan(-1);
+  // Seed the depths FROM the anchor, which already contains its own open paren.
+  let paren = 0;
+  let i = at;
+  for (; i < src.length; i++) {
+    const c = src[i];
+    if (c === "(") paren++;
+    else if (c === ")") paren--;
+    else if (c === "{" && paren === 0) break;
+  }
+  expect(i, `${anchor}: no body brace`).toBeLessThan(src.length);
+  let depth = 0;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === "{") depth++;
+    else if (src[j] === "}" && --depth === 0) return src.slice(i, j + 1);
+  }
+  throw new Error(`${anchor}: unterminated body`);
+}
 
 /** A rule's own body, bounded by its own closing brace. */
 function rule(sel: string, from: string = CSS_CODE): string {
@@ -400,6 +437,79 @@ describe("board 1h respects the call surface's standing rules", () => {
     expect(CSS_CODE.indexOf("> .relay-tile.you .nm{"))
       .toBeGreaterThan(CSS_CODE.indexOf(".relay-root .relay-tile .nm{position:absolute"));
     expect(BLOCK.trim().length).toBeGreaterThan(600);
+  });
+
+  it("SOMETHING WRITES THE SLOTS — the gap this frame shipped with, closed", () => {
+    /* THE WHOLE POINT. Every other assertion in this file inspects `relayAssets.ts`, and
+       the markup and CSS there were complete from the start — so the frame's headline
+       could be entirely absent while this suite stayed green. The defect was the missing
+       write, in a different file, which is exactly what a source pin on the markup cannot
+       see. Pin the write. */
+    expect(CLIENT).toMatch(/function paintCallIdentity\(/);
+    const body = fnBody(CLIENT, "function paintCallIdentity(");
+    expect(body).toMatch(/\$\("callWho"\)/);
+    expect(body).toMatch(/\$\("callWhoRole"\)/);
+    // It really assigns, rather than merely naming the elements.
+    expect(body).toMatch(/who\.textContent\s*=/);
+  });
+
+  it("a CONFERENCE is never named by one of its peers", () => {
+    /* The gating argument. A group has N remote peers, so naming one is a claim about the
+       call that is wrong for everybody else on it — the grid's own per-tile band is what
+       names people there. A mutation that drops either half of this (the group check, or
+       the exactly-one-peer check) puts a stranger's name on a conference. */
+    const body = fnBody(CLIENT, "function paintCallIdentity(");
+    expect(body).toMatch(/!callIsGroup\s*&&\s*pins\.length === 1/);
+  });
+
+  it("an unknown name writes the empty string, never the pin", () => {
+    /* `.hchip-who:empty{display:none}` exists for this: a bare six-digit number sitting
+       between a status and a timer reads as a third piece of state rather than a person.
+       So this deliberately does NOT reuse `nameOf`, whose fallback IS the pin. */
+    const body = fnBody(CLIENT, "function paintCallIdentity(");
+    expect(body).toMatch(/peerNamesSeen\[pin\] \|\| ""/);
+    expect(body).not.toMatch(/nameOf\(/);
+  });
+
+  it("the write is re-decided wherever the subject can change, and cleared on teardown", () => {
+    /* FOUR CALL SITES, and each is a point at which the answer changes: a peer arriving
+       (which is also the line that can flip the call to a conference), a peer leaving,
+       the call going live by a path that created no peer (a rejoin), and hang-up. Fewer
+       than four and the chip goes stale in one of those directions — the worst being the
+       last, which would open the NEXT call wearing the previous person's name. */
+    const calls = CLIENT.split("paintCallIdentity()").length - 1;
+    expect(calls, "call sites").toBeGreaterThanOrEqual(4);
+    // The teardown one specifically, and AFTER the group flag is reset so the one funnel
+    // decides it rather than a second copy of the rule.
+    const reset = CLIENT.indexOf("videoApproved = false; callIsGroup = false;");
+    expect(reset).toBeGreaterThan(0);
+    expect(CLIENT.indexOf("paintCallIdentity()", reset)).toBeGreaterThan(reset);
+  });
+
+  it("the tier rule has exactly ONE implementation", () => {
+    /* It was written out TWICE — the ring card and the dial card — before this frame
+       needed it a third time, and a third copy is how one person comes to be described
+       three ways in one call. The literal colour map is the tell: if it reappears, so has
+       the duplication. */
+    expect(CLIENT).toMatch(/function tierOf\(/);
+    expect(CLIENT.split("#4c9bff").length - 1, "the tier colour map").toBe(1);
+    /* The fallback chain, whose two halves are each load-bearing and each easy to drop:
+       a truthy `verified` from an older server means Registered, while an EXPLICIT null
+       role means the directory resolved something that is not a person at all (a party
+       line) and must render NO badge rather than defaulting to Guest. */
+    expect(CLIENT.split(`if (d.verified) return "registered";`).length - 1).toBe(1);
+    expect(CLIENT.split(`return d.role === null ? null : "guest";`).length - 1).toBe(1);
+  });
+
+  it("the badge costs no third request per call", () => {
+    /* The ring card and the dial card each already look the tier up and throw it away, so
+       the chip reads what they learned. Without the cache this would be a `directory.lookup`
+       on every call in addition to theirs, and the badge would arrive a round trip late. */
+    expect(CLIENT).toMatch(/const peerTierSeen: Record<string, PeerTier> = \{\}/);
+    const body = fnBody(CLIENT, "function paintCallIdentity(");
+    expect(body).toMatch(/peerTierSeen\[pin\]/);
+    // …and the fallback re-checks the subject, because it resolves asynchronously.
+    expect(body).toMatch(/if \(callIsGroup \|\| now\.length !== 1 \|\| now\[0\] !== pin\) return;/);
   });
 
   it("neither RELAY_CSS nor RELAY_MARKUP contains an interior backtick", () => {

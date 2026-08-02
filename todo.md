@@ -1,5 +1,155 @@
 # Project TODO
 
+## v2.107.1 — the in-call chip says who you are talking to, and a number stops being drawn in a green that fails AA
+
+Owner: *"make sure all designs should be implemented you choose any frame i dont care ..
+but make sure i have upload you all my designs suppsed to be implemented."*
+
+**THE DESIGN LEDGER WAS ELEVEN RELEASES STALE, AND THAT IS THE FIRST FINDING.**
+`design_handoff_relay_app/MISSING-FRAMES.md` listed EIGHT frames as outstanding.
+**Seven of them shipped in v2.106.96** — a release whose changelog wrote up only the
+Arabic half of the work it contained, while seven frame test files (1h, 4b, 4h, 4i, 5b,
+5d, 5h) landed in that one commit and nobody updated the doc. All seven pass, **179
+tests**. Anybody reading the ledger to decide what to build next would have rebuilt
+seven finished screens.
+
+**THE EIGHTH IS SUPERSEDED RATHER THAN OUTSTANDING, AND THE BOARD SAYS SO ITSELF.**
+The doc describes 1j as an "88px icon rail"; the frame's own `data-screen-label`
+subtitle reads *"Split view · labelled sidebar (matches 1i)"*, and the handoff README
+unifies desktop on the 280px sidebar. The board specifies 1200 = 280 + 360 + pane and
+the app renders 280 + 340 + pane, so a 20px thread list is the entire remaining delta.
+When the doc's prose and the frame's own label disagree, the frame wins.
+
+**SO ALL 42 FRAMES HAVE THEIR LAYOUT BUILT, AND WHAT IS LEFT IS FIDELITY** — which is
+what the owner's own ~60% figure was about all along. A per-frame comparison found three
+measured gaps; this release takes them.
+
+### 1 — board 1h's headline was invisible while every source pin passed
+
+The in-call chip is meant to read **name · role badge · timer · lock**. The markup and
+the CSS for all four shipped with the frame, and **nothing ever wrote `#callWho` or
+`#callWhoRole`** — so both slots collapsed and the pill rendered exactly the status +
+timer it always had.
+
+**That is a class of gap no assertion about `relayAssets.ts` can catch.** The elements
+are present and correctly styled; the defect is the ABSENCE of a write in a different
+file. Which is why the frame's own test file had to record it in a comment rather than
+a test — and the comment is the only reason it was found.
+
+**The name costs no request.** `peers[pin].name` arrives with the peer, so the chip is
+right on its first paint rather than after a round trip.
+
+**One-to-one only, and that is the whole gating argument.** A conference has N remote
+peers, and naming one of them is a claim that is wrong for everybody else on the call —
+so a group keeps the status-only chip and the grid's own per-tile band does the naming.
+
+**An unknown name writes the EMPTY STRING, never the pin.** `.hchip-who:empty{display:none}`
+exists for exactly that. A bare six-digit number sitting between a status and a timer
+reads as a third piece of state rather than as a person, which is why this deliberately
+does NOT reuse `nameOf` — whose fallback IS the pin.
+
+**Four call sites, each a point where the answer changes**: a peer arriving (the same
+line that can flip the call to a conference), a peer leaving, a rejoin that created no
+peer, and hang-up. The last is the one that stops the NEXT call opening under the
+previous person's name.
+
+**And the tier rule was already written out twice** — in the ring card and in the dial
+card — so the badge would have been a third copy, which is the shape that lets one
+person be described three ways in one call. `tierOf` + `TIER_META` are extracted and
+both existing sites repointed; the badge reads a per-pin cache those two already
+populate rather than spending a third `directory.lookup` per call.
+
+### 2 — History drew a contact's number in a green that fails AA, and Contacts drew the same fact in the readable one
+
+Green legitimately means "a RELAY number" here (v2.106.43). But v2.99.86 **MEASURED**
+the LED hue at **4.46:1 as small text, which fails AA**, and added `--relay-green-text`
+(5.92:1 light / 9.27:1 dark) precisely for a number at that size.
+
+History's `PinTag` was on the LED hue at 12.5px and its roster chip at 11px — so one
+number had two greens across two screens, and this was the screen with the unreadable
+one. Both moved, with the measured reason recorded in place.
+
+### 3 — the two halves of board 5b disagreed about green
+
+History's own `LiveRejoinCard` carries a comment citing rule 3 (green means ONLINE) as
+the reason IT moved off the presence green, while the other end of the same knock — the
+Approve button in `RelayEngine` — still filled its primary button with it. Fixed with
+`.rcta`, the shared CTA recipe, along with RelayEngine's three other non-presence
+greens: a Fit-toggle STATE, a reconnecting SPINNER, and the add-to-contacts button.
+
+**Both files come off the presence-green DEBT list**, which is what that list exists
+for — and the guard is what ENUMERATED the six offenders in the first place, by being
+asked what it would say with the two entries removed.
+
+### one guard widened, and it makes the rule stricter in effect
+
+The number exemption required a property ACCESS (`.number`), so a component that
+DESTRUCTURES its prop — `function PinTag({ number })`, whose whole job is to render one
+— had no `.number` anywhere in its element and was flagged for a correct, AA-measured
+number green.
+
+That is a guard crying wolf on correct code, and it is what kept History pinned to the
+LED hue: the only way to satisfy the sweep there was to leave the unreadable token in
+place. `{number}` is added as an alternative, with BOTH directions pinned — the LED hue
+is still refused for a number, and a longer identifier (`{numberOfPeople}`) is still not
+the exemption.
+
+### verification
+
+**8 of 8 tripwires verified by MUTATION** off a confirmed-green baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once and treating a
+changed test TOTAL as a harness failure; all three sources byte-identical afterwards.
+
+**One survivor was a BAD MUTATION of mine, reported rather than counted**: it replaced a
+comment opener and left the call itself in place, so it never created the defect it
+named. Re-run as a genuine line removal, it bit.
+
+**Two defects in my own work, both caught by running rather than reading**: an assertion
+that was wrong about the code (it pinned the OLD ternary form of the fallback chain,
+which the extraction turned into statements), and **the JSX-comment trap TWICE IN ONE
+EDIT** — a `{/* … */}` placed between a ternary's `?` and its element, which is the
+exact parse error v2.106.93 recorded in this same file, and then a JSX comment whose own
+text contained the closing block-comment sequence and so terminated itself.
+
+**Three pre-existing pins rewritten to the property, and one had frozen the duplication
+this release removes**: `verifiedBadge` required the tier colour map written out
+VERBATIM at the ring card's call site, i.e. it forbade the shared table; `hardeningPass6`
+required two teardown resets to be ADJACENT, which says nothing about whether the video
+offer is dropped and broke the moment a third per-call clear landed between them; and
+`accentAsText` correctly flagged RelayEngine's new accent text, resolved by using
+`text-primary` — the vehicle v2.106.4 built for exactly this — rather than growing the
+exemption list.
+
+**NOT VERIFIED ON A DEVICE, said plainly**: nobody has been on a call and read the name
+off the chip, and the contrast figures are the ones v2.99.86 measured rather than
+re-measured here.
+
+### the design-upload question, answered
+
+`design_handoff_relay_app/` is COMPLETE in the repo — README, both board files carrying
+all 42 frame ids, 18 screenshots, `relay-bg.js`, the data contracts and the screen map.
+
+`design_handoff_relay_login/` + `RELAY_LOGIN_HANDOFF.md` and `design_handoff_pin_reveal/`
+were **never committed** (`git log --all --diff-filter=A` finds them in no branch). Both
+were used to build their features — v2.105.0/1 and v2.106.93 — and exist in no git
+history, so the app board's own README references a sibling folder that is not there.
+**Nothing is unbuilt for want of a design; the gap is archival**, and re-uploading those
+two would close it.
+
+### still open
+
+- **#131** — nobody has verified a call on a real device.
+- **#129** — the mediasoup cutover: the nodes are live, nothing in `relay.ts` or the
+  client selects them yet.
+- **Measured fidelity gaps found but not taken here**: 2b's missing "END-TO-END
+  ENCRYPTED" label and the speaking waveform's `#22c55e` bars in `relayAssets.ts`; 4h's
+  post-identity `GroupInvite.tsx` material pass (glass recipe, `.rcta`, 74px avatar, and
+  overlapping member avatars — the last needs a server change, since
+  `groupInvitePreview` returns `memberCount` only); History's call-back disc `#22c55e`
+  and its green direction arrows; History row swipe actions, which are absent.
+
+No schema change, no new dependency, no new env var. 6205 tests.
+
 ## v2.107.0 — an `aria-label` nobody could sweep, and a sign-in notice in English
 
 The 60-agent Arabic run's adversarial verifiers reported five things. Each was checked

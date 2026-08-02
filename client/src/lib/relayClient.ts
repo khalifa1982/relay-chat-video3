@@ -838,14 +838,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
         }
 
         const role = $("dcRole");
-        const tier = d.role === "guest" || d.role === "registered" || d.role === "admin"
-          ? d.role
-          : d.verified ? "registered" : d.role === null ? null : "guest";
+        const tier = tierOf(d);
+        if (tier) peerTierSeen[pin] = tier;
         if (role && tier) {
-          const meta = { guest: ["#4c9bff", "Guest"], registered: ["#22c55e", "Registered"], admin: ["#eab308", "Admin"] }[tier];
+          const meta = TIER_META[tier];
           role.style.display = "";
-          (role as HTMLElement).style.color = meta[0];
-          role.textContent = meta[1];
+          (role as HTMLElement).style.color = meta.color;
+          role.textContent = meta.label;
         }
 
         // THE STATUS THEY CHOSE outranks presence, because it is a statement they made on
@@ -1074,6 +1073,36 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   const peerNamesSeen: Record<string, string> = {};
   const nameOf = (pin: string) =>
     peers[pin]?.name || peerNamesSeen[pin] || pin;
+
+  /* ── THE ACCOUNT TIER, DERIVED IN ONE PLACE ──────────────────────────────────
+     This rule was written out TWICE before board 1h needed it a third time — once
+     in `presentRingProfile` for the ring card, once in `enrichDialCard` for the
+     dial card — and a third copy is the antipattern this file keeps paying for: a
+     tier that reads Registered on the ring and Guest in the in-call chip is one
+     person described two ways in the same call.
+
+     The FALLBACK CHAIN IS LOAD-BEARING and is why this cannot be a plain lookup:
+     an older server sends only `verified`, so a truthy one means Registered; and
+     an EXPLICIT null `role` means the directory resolved something that is not a
+     person at all (a party line), which must render NO badge rather than being
+     defaulted to Guest. Only an ABSENT role falls through to Guest. */
+  type PeerTier = "guest" | "registered" | "admin";
+  const TIER_META: Record<PeerTier, { color: string; label: string }> = {
+    guest: { color: "#4c9bff", label: "Guest" },
+    registered: { color: "#22c55e", label: "Registered" },
+    admin: { color: "#eab308", label: "Admin" },
+  };
+  function tierOf(d: { role?: string | null; verified?: boolean } | null | undefined): PeerTier | null {
+    if (!d) return null;
+    if (d.role === "guest" || d.role === "registered" || d.role === "admin") return d.role;
+    if (d.verified) return "registered";
+    return d.role === null ? null : "guest";
+  }
+  /* Tier learned for a pin this session. The ring card and the dial card each ALREADY
+     fetch it and then throw it away, so the in-call chip reads what they learned
+     rather than spending a third `directory.lookup` per call — which also makes the
+     chip correct on its first paint instead of a round trip later. */
+  const peerTierSeen: Record<string, PeerTier> = {};
 
   // ---------- transport (SSE + POST) ----------
   function connectWS() {
@@ -3517,17 +3546,17 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         }
         // Three-tier badge (v2.99.6): every caller gets the check mark, tinted
         // by account tier, with the tier name in tiny type under it — blue
-        // Guest / green Registered / yellow Admin. Older servers send only
-        // `verified`; fall back to the old verified-only presentation.
-        const role = d.role === "guest" || d.role === "registered" || d.role === "admin"
-          ? d.role
-          : d.verified ? "registered" : d.role === null ? null : "guest";
+        // Guest / green Registered / yellow Admin. The derivation is shared with
+        // the dial card and the in-call chip (see `tierOf`), so one caller cannot
+        // be described three ways in one call.
+        const role = tierOf(d);
+        if (role) peerTierSeen[pin] = role;
         if (ver && role) {
-          const meta = { guest: ["#4c9bff", "Guest"], registered: ["#22c55e", "Registered"], admin: ["#eab308", "Admin"] }[role];
+          const meta = TIER_META[role];
           ver.style.display = "";
-          (ver as HTMLElement).style.color = meta[0];
-          ver.setAttribute("title", meta[1] + " account");
-          const txt = $("ringRoleTxt"); if (txt) txt.textContent = meta[1];
+          (ver as HTMLElement).style.color = meta.color;
+          ver.setAttribute("title", meta.label + " account");
+          const txt = $("ringRoleTxt"); if (txt) txt.textContent = meta.label;
         }
         if (pres) {
           pres.textContent =
@@ -4488,6 +4517,11 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     const pc = new RTCPeerConnection(iceConfig);
     const peer: PeerEntry = { pc, name: name || "Guest", dc: null, el: null, candQ: [], remoteSet: false, gotStream: false, initiator, graceT: null, restartT: null, iceRestarts: 0, slowT: null };
     peers[pin] = peer;
+    // Board 1h. Here rather than only at establishment because THIS is the line that
+    // can turn a 1:1 into a conference (`callIsGroup` above) — so the chip has to be
+    // re-decided on the same statement that changes the answer, or a second peer
+    // joining would leave the first person's name on a call they no longer describe.
+    paintCallIdentity();
     // No media after 15s of trying = upgrade the generic "connecting…" tile
     // text to a named "Waiting for X…" (diagnostics panel covers ICE detail;
     // this is just an honest signal in the grid itself, not a new "offline" claim).
@@ -4821,6 +4855,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     releasePeerAudio(e);
     if (e.el) e.el.remove();
     delete peers[pin];
+    // Board 1h: the chip's subject may have just left, or a conference may have
+    // thinned back to a pair. Idempotent, so a quiet ICE-restart rebuild costs a
+    // no-op rather than needing its own branch.
+    paintCallIdentity();
     unregisterMeshAnalyser(pin);
     // Drop any spotlight/active state pinned to the gone tile so layout recovers.
     const goneId = "tile-" + pin;
@@ -5039,6 +5077,68 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       card.classList.add("st-" + s);
     }
   }
+
+  /* ── BOARD 1h: THE CHIP SAYS WHO YOU ARE TALKING TO ──────────────────────────
+     The markup and CSS for the name and the tier badge shipped with the frame and
+     NOTHING EVER WROTE THEM, so both slots collapsed and the chip rendered exactly
+     the status + timer it always had. That is invisible to a source pin — the
+     elements are present and correctly styled — which is why the frame's own test
+     file had to record it in a comment instead.
+
+     ONE-TO-ONE ONLY, and that is the whole of the gating argument: a conference has
+     N remote peers and naming one of them would be a claim about the call that is
+     wrong for everybody else on it, so a group keeps the status-only chip. The
+     grid's own per-tile name band is what names people in a conference.
+
+     THE NAME COSTS NO REQUEST. `peers[pin].name` arrives with the peer and
+     `peerNamesSeen` covers the paths whose entry never lands in the mesh map, so
+     the chip is right on its first paint. An UNKNOWN name writes the empty string
+     rather than the pin — `.hchip-who:empty{display:none}` then collapses the slot,
+     which is what that rule was built for, and a bare six-digit number sitting
+     between a status and a timer would read as a third piece of state rather than
+     as a person.
+
+     IDEMPOTENT, so the call sites may fire it as often as they like. */
+  function paintCallIdentity() {
+    const who = $("callWho");
+    const roleEl = $("callWhoRole");
+    // A conference, a party line, or a call with nobody (or more than one peer)
+    // in it: no single subject, so the chip stays as it was.
+    const pins = Object.keys(peers);
+    const pin = !callIsGroup && pins.length === 1 ? pins[0] : null;
+    if (who) who.textContent = pin ? (peers[pin]?.name || peerNamesSeen[pin] || "") : "";
+    if (roleEl) roleEl.style.display = "none";
+    if (!pin || !roleEl) return;
+
+    const paintTier = (tier: PeerTier) => {
+      // Re-check the subject: this can resolve a network round trip after the call
+      // it was asked about has moved on, and a badge from the previous person is
+      // worse than none.
+      const now = Object.keys(peers);
+      if (callIsGroup || now.length !== 1 || now[0] !== pin) return;
+      const meta = TIER_META[tier];
+      roleEl.style.display = "";
+      (roleEl as HTMLElement).style.color = meta.color;
+      roleEl.setAttribute("title", meta.label + " account");
+      roleEl.setAttribute("aria-label", meta.label + " account");
+    };
+
+    const known = peerTierSeen[pin];
+    if (known) { paintTier(known); return; }
+    // Only a call this session never looked the person up for — a rejoin after a
+    // reload, or a peer who arrived by being added to the call rather than by
+    // ringing us. Decoration, so a failure is silent and the chip keeps the name.
+    if (!/^\d{6}$/.test(pin)) return;
+    trpcGet("directory.lookup", { number: pin })
+      .then((j) => {
+        const tier = tierOf(trpcJson<{ role?: string | null; verified?: boolean }>(j));
+        if (!tier) return;
+        peerTierSeen[pin] = tier;
+        paintTier(tier);
+      })
+      .catch(() => { /* the chip is readable without a badge */ });
+  }
+
   function clearConnSeq() {
     connSeqTimers.forEach(t => clearTimeout(t));
     connSeqTimers = [];
@@ -5172,6 +5272,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     emitPhase("in-call");    // caller: leave "dialing" so the ring UI clears
     updateMediaSession(true); // OS "active media" signal + lock-screen controls
     if (callStatus !== "live") setCallStatus("live");
+    // Board 1h. The peer already exists by now (createPeer painted it), so this is
+    // the belt-and-braces pass for a call that reached "live" by a path that did not
+    // go through createPeer — a rejoin after a reload, chiefly.
+    paintCallIdentity();
     // NATIVE ANDROID APP: enter OS call mode + start the ongoing-call
     // foreground service (Android never freezes a live call), then apply the
     // remembered speaker state through the REAL AudioManager route.
@@ -6773,6 +6877,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     clearEstablishDeadline(); // …nor a stale "couldn't connect the audio"
     clearFailDial(); // an explicit End during the failure card mustn't re-fire
     videoApproved = false; callIsGroup = false; // consent is per-call
+    // Board 1h: clear the chip's subject. AFTER `callIsGroup` is reset and while the
+    // peers map is already empty, so the one funnel decides it rather than a second
+    // copy of the rule — and the next call cannot open wearing the last person's name.
+    paintCallIdentity();
     videoOfferedForRoom = null; videoOfferPending = false; // M37 — the OFFER is per-call too
     clearVideoReq();
     hideVideoAsk();

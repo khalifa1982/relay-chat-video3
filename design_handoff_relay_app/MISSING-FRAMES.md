@@ -2,7 +2,50 @@
 
 Paste this into Claude Design. It lists only what is **not yet built to its own frame**.
 
-## Status (42 frames)
+---
+
+## ⚠️ THIS FILE WAS ELEVEN RELEASES STALE. Re-audited 2026-08-02 (v2.107.1).
+
+**All 42 frames now have their layout built.** The status block below is preserved as the
+v2.106.22 snapshot it was, because the correction is worth more than the table: it lists
+**eight frames as outstanding, and seven of them shipped in v2.106.96** — a release whose
+changelog entry wrote up only the Arabic half of the work it contained. Seven frame test
+files landed in that one commit and nobody updated this file:
+
+| frame | test file that landed in v2.106.96 | tests |
+|---|---|---|
+| 1h In-call video | `client/src/lib/inCallChrome1h.test.ts` | 37 |
+| 4b Story composer | `client/src/pages/app/storyComposerFrame.test.ts` | 26 |
+| 4h Group invite | `client/src/app/groupInviteLanding.test.ts` | — |
+| 4i Locked group | `client/src/pages/app/lockedGroupFrame.test.ts` | 38 |
+| 5b Rejoin a live call | `client/src/pages/app/liveRejoinFrame.test.ts` | — |
+| 5d Sign-in switcher | `client/src/app/signInMethodSwitcher.test.ts` | — |
+| 5h Sheet states | `client/src/app/sheetStatesFrame.test.ts` | 10 |
+
+**The eighth, 1j Desktop messages, is SUPERSEDED rather than outstanding.** The table below
+describes it as an "88px icon rail"; the board's own frame subtitle reads **"Split view ·
+labelled sidebar (matches 1i) · 55%"**, and the handoff README (line 4) says desktop is
+"unified on the **280px labelled sidebar**". The board specifies 1200 = 280 sidebar + 360
+thread list + chat pane; the app renders 280 + 340 + chat pane today. That 20px is the whole
+remaining delta, and the icon rail should not be built.
+
+**HOW TO KEEP THIS HONEST.** Count from the artefact, never from these notes:
+`grep -o 'id="[1-5][a-k]"' 'Relay App Redesign.dc.html' | sort -u | wc -l` → 42, and the
+labels come from `data-screen-label`. That is also what settles the 2f/2g collision recorded
+below: the board says **2f = Passcode lock, 2g = Voicemail**, and `github-screen-map.md`
+agrees, so the table below is the thing that is wrong.
+
+**WHAT IS ACTUALLY LEFT IS FIDELITY, NOT FRAMES.** Two measured examples from this audit,
+both fixed in v2.107.1: 1h's chip had complete markup and CSS for a name + role badge and
+**nothing ever wrote them**, so the frame's headline was invisible while every source pin
+passed; and History rendered a contact's number in the presence-LED green, which v2.99.86
+measured at **4.46:1 as small text — failing AA** — while Contacts rendered the same fact in
+the AA-measured token. Neither is a missing frame. Both are the kind of thing only a
+per-frame comparison against the board finds.
+
+---
+
+## Status (42 frames) — as of v2.106.22, superseded by the block above
 
 > **Updated 2026-07-30 (v2.106.22). THE BOARD IS 42 FRAMES AND THIS FILE PREVIOUSLY SAID
 > 40 — that was my error, corrected here.** I audited the frame ids by grepping only the
