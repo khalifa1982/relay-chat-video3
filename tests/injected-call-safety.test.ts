@@ -94,3 +94,37 @@ describe("a transient ICE drop does not end the call", () => {
  * unterminated template, immediately and by exact line, and any heuristic here
  * would be strictly weaker than that. Counting backticks, for instance, passes
  * happily when a comment adds two. */
+
+describe("an incoming-call ring cannot be raised by page text", () => {
+  /* Ring detection matched "<name> is calling you" anywhere in body innerText,
+   * gated on "are there accept-like buttons on the page". RELAY's ring card is
+   * PERMANENTLY MOUNTED, so that gate was always true — meaning any chat message,
+   * status or contact name containing the phrase raised a MAX-importance,
+   * DND-bypassing, sticky notification with a looping ringtone, on demand, from
+   * anyone who could send the victim text.
+   *
+   * It could not simply be deleted: none of the strong selectors the code looked
+   * for (`[data-incoming-call]`, `.incoming-call-overlay`, …) exist anywhere in
+   * the web app, so the text path was the ONLY thing that worked. The fix was to
+   * find the state the web app actually uses — `#ringOverlay.active`, added by
+   * relayClient on ring and removed on accept/decline/cancel/hangup — and key off
+   * that instead. */
+
+  it("the ring verdict is the DOM state alone", () => {
+    expect(SRC).toMatch(/var ringing = hasCallModal;/);
+  });
+
+  it("the text heuristic and its always-true gate are gone", () => {
+    expect(SRC).not.toContain("hasRingingText");
+    expect(SRC).not.toContain("hasActionButtons");
+    expect(SRC).not.toMatch(/is calling\\\.\{0,3\}\$/);
+  });
+
+  it("it keys off the web app's real ring overlay", () => {
+    expect(SRC).toMatch(/#ringOverlay\.active/);
+  });
+
+  it("the caller name is read from the ring card, not scraped from the body", () => {
+    expect(SRC).toMatch(/#ringOverlay\.active #ringWho/);
+  });
+});

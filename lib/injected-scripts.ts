@@ -175,32 +175,34 @@ export const CALL_WATCH_JS = `(() => {
 
         // STRONG signal: dedicated incoming-call DOM elements with accept/decline actions.
         // These are specific modal/overlay elements that ONLY appear during a real incoming call.
+        // #ringOverlay.active is the web app's OWN ring state: relayClient adds
+        // .active when a ring arrives and removes it on accept, decline, cancel
+        // and hangup. It is exact, and it cannot be produced by page content.
+        // The rest of this list is speculative markup that the web app does not
+        // actually emit — kept only so a future redesign has somewhere to land.
         var hasCallModal = !!document.querySelector(
+          '#ringOverlay.active, ' +
           '[data-incoming-call], [data-call-accept], [data-call-decline], ' +
           '.incoming-call-overlay, .incoming-call-modal, ' +
           '.call-incoming[data-ringing], .ringing-overlay, ' +
           'button[data-action="accept-call"], button[data-action="decline-call"]'
         );
 
-        // MEDIUM signal: text patterns that are specific to an active ringing state
-        // (not generic UI labels like "Voice Call" or "Video Call").
         var body = (document.body && document.body.innerText || '');
-        // Only match dynamic text like "John is calling..." or "Incoming call from John"
-        // Exclude static labels by requiring a name before "is calling" or after "from"
-        var hasRingingText = /\bis calling\.{0,3}$|\bis calling you|incoming call from\s+\S/im.test(body);
 
-        // We need the call modal OR very specific ringing text.
-        // The text-only signal requires an additional check: there must be
-        // accept/decline-like buttons visible (not just static page text).
-        var hasActionButtons = !!document.querySelector(
-          'button[class*="accept"], button[class*="answer"], ' +
-          'button[class*="decline"], button[class*="reject"], ' +
-          '[role="button"][class*="accept"], [role="button"][class*="answer"], ' +
-          '[data-call-accept], [data-call-decline], ' +
-          '.accept-btn, .answer-btn, .decline-btn, .reject-btn'
-        );
-
-        var ringing = hasCallModal || (hasRingingText && hasActionButtons);
+        // THE TEXT PATH IS GONE. It matched "<name> is calling you" anywhere in
+        // body innerText, gated on "are there accept-like buttons on the page" —
+        // and RELAY's ring card is permanently mounted, so that gate was always
+        // true. Any chat message, status or contact name containing the phrase
+        // therefore raised a MAX-importance, DND-bypassing, sticky notification
+        // with a looping ringtone, on demand, from anyone who could send text.
+        //
+        // Deleting it costs nothing now that #ringOverlay.active is checked
+        // above: that is the same state the web app uses to show the ring card,
+        // so detection is strictly better AND unspoofable. (It could not simply
+        // be deleted before — none of the other selectors above exist in the web
+        // app, so the text path was the only thing that worked.)
+        var ringing = hasCallModal;
 
         // Debounce: require multiple consecutive positive detections
         if (ringing) {
@@ -215,6 +217,7 @@ export const CALL_WATCH_JS = `(() => {
         // Extract caller name from dedicated elements or text patterns
         var caller = null;
         var nameEl = document.querySelector(
+          '#ringOverlay.active #ringWho, ' +
           '[data-caller-name], [data-incoming-call] .caller-name, ' +
           '.incoming-call-overlay .caller-name, .incoming-call-modal .caller-name, ' +
           '.call-incoming .caller, .ringing-overlay .caller-name'
