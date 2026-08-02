@@ -31,6 +31,12 @@ import { codeOnly } from "../../../server/testing/codeOnly";
 import { translate, DICT } from "./i18n";
 import { onlineCountKey, contactCountKey, tagLabelKey } from "../pages/app/Contacts";
 
+/* v2.106.98: the row's last-seen line went through the dictionary, so the anchor is
+   the KEY rather than the English literal it used to freeze. Anchoring on the key is
+   also what makes it survive a copy edit — the property these pins stand for is where
+   the line SITS, never what it says. */
+const LAST_SEEN_ANCHOR = 'contacts.rowLastSeen';
+
 const SRC = codeOnly(readFileSync(resolve(process.cwd(), "client/src/pages/app/Contacts.tsx"), "utf8"));
 const CSS = readFileSync(resolve(process.cwd(), "client/src/index.css"), "utf8");
 
@@ -60,7 +66,7 @@ describe("the row is two lines, so the name gets the width", () => {
     const badge = SRC.indexOf("<RoleBadge role={roleFromFlags(c.role, c.verified)}");
     const pin = SRC.indexOf('{c.number.length === 6 ? c.number.slice(0, 3)');
     const l2 = SRC.indexOf('<div className="flex items-center gap-2 ps-[54px]">');
-    const seen = SRC.indexOf("last seen {relativeTime(c.lastSeenAt)}");
+    const seen = SRC.indexOf(LAST_SEEN_ANCHOR);
     const acts = SRC.indexOf('aria-label={t("contacts.voiceCall")}');
     for (const [n, i] of Object.entries({ l1, name, badge, pin, l2, seen, acts }))
       expect(i, n).toBeGreaterThan(-1);

@@ -189,4 +189,56 @@ export const PEER = {
   "peer.month.9": { en: "Oct", ar: "أكتوبر" },
   "peer.month.10": { en: "Nov", ar: "نوفمبر" },
   "peer.month.11": { en: "Dec", ar: "ديسمبر" },
+
+  /* ── the presence line ──────────────────────────────────────────────────
+     Keyed on `peerPresenceState`, which decides WHICH state with no words in
+     it, so the English `describePeerPresence` and this cannot come to disagree
+     about whether somebody is idle or simply offline. `hidden` deliberately has
+     NO key: a suppressed presence renders nothing at all, because "Offline" is
+     still a claim about somebody the server declined to describe (v2.95). */
+  "peer.presenceInCall": { en: "On a call right now", ar: "في مكالمة الآن" },
+  "peer.presenceIdle": {
+    en: "Away — app is in the background",
+    ar: "بعيد — التطبيق في الخلفية",
+  },
+  "peer.presenceOnline": { en: "Online now", ar: "متصل الآن" },
+  "peer.presenceOffline": { en: "Offline", ar: "غير متصل" },
+  /* A full date-and-time stamp, formatted in the APP's language rather than the
+     browser's — see `dateLocale.ts`. */
+  "peer.presenceLastSeen": { en: "Last seen {when}", ar: "آخر ظهور {when}" },
+  /* A LINE is not a person, so it reports occupancy instead of presence. Banded
+     because Arabic's dual is a word rather than a numeral plus a plural noun. */
+  /* The English is byte-identical to what shipped — "nobody on the line" reads
+     better and is an unrequested copy change, which the byte-identity test in
+     `presenceCopy.test.ts` correctly refused. Only Arabic gains a real zero form,
+     because «٠ أشخاص» is not how the count is said. */
+  "peer.lineNobody": { en: "Party line · 0 on the line", ar: "خط جماعي · لا أحد على الخط" },
+  "peer.lineOne": { en: "Party line · 1 on the line", ar: "خط جماعي · شخص واحد على الخط" },
+  "peer.lineTwo": { en: "Party line · 2 on the line", ar: "خط جماعي · شخصان على الخط" },
+  "peer.lineFew": { en: "Party line · {count} on the line", ar: "خط جماعي · {count} أشخاص على الخط" },
+  "peer.lineMany": { en: "Party line · {count} on the line", ar: "خط جماعي · {count} شخصًا على الخط" },
+
+  /* ── the COMPACT "…ago", for the Contacts row ────────────────────────────
+     English abbreviates to a LETTER (`5m ago`) because the row has one line and a
+     measured width budget. Arabic does not abbreviate the same way, so the unit is
+     a whole key rather than a suffix, and it bands one/two/few/many like every
+     other count here — `٢ ساعة` is wrong where `ساعتان` is right.
+
+     THE ARABIC IS DELIBERATELY NOT THE LONG FORM: the row is the tightest surface
+     in the app, so this reads "قبل ٥ د" rather than "قبل ٥ دقائق"; the popup one tap
+     away carries the full sentence. Western digits, per v2.106.84. */
+  "peer.agoNever": { en: "never", ar: "أبدًا" },
+  "peer.agoJustNow": { en: "just now", ar: "الآن" },
+  "peer.agoMinuteOne": { en: "1m ago", ar: "قبل دقيقة" },
+  "peer.agoMinuteTwo": { en: "2m ago", ar: "قبل دقيقتين" },
+  "peer.agoMinuteFew": { en: "{count}m ago", ar: "قبل {count} د" },
+  "peer.agoMinuteMany": { en: "{count}m ago", ar: "قبل {count} د" },
+  "peer.agoHourOne": { en: "1h ago", ar: "قبل ساعة" },
+  "peer.agoHourTwo": { en: "2h ago", ar: "قبل ساعتين" },
+  "peer.agoHourFew": { en: "{count}h ago", ar: "قبل {count} س" },
+  "peer.agoHourMany": { en: "{count}h ago", ar: "قبل {count} س" },
+  "peer.agoDayOne": { en: "1d ago", ar: "قبل يوم" },
+  "peer.agoDayTwo": { en: "2d ago", ar: "قبل يومين" },
+  "peer.agoDayFew": { en: "{count}d ago", ar: "قبل {count} أيام" },
+  "peer.agoDayMany": { en: "{count}d ago", ar: "قبل {count} يومًا" },
 } as const satisfies Record<string, Entry>;

@@ -102,6 +102,7 @@ import {
 } from "@/app/biometric";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useLocale, useT, type TKey } from "@/app/i18n";
+import { formatDateIn, formatDateTimeIn } from "@/app/dateLocale";
 
 /**
  * The translator's shape, so a helper OUTSIDE a component can still speak both
@@ -1275,7 +1276,7 @@ function LoginPinSection({ onRegister }: { onRegister?: () => void }) {
 /** Signed-in devices + remote logout (v2.99.1). Each login records a session in
  *  the server ledger; deleting one logs that device out. Registered users only. */
 function DevicesSection({ onRegister }: { onRegister?: () => void }) {
-  const t = useT();
+  const { t, locale } = useLocale();
   const utils = trpc.useUtils();
   const list = trpc.otpAuth.listSessions.useQuery(undefined, { refetchOnWindowFocus: false });
   const revoke = trpc.otpAuth.revokeSession.useMutation();
@@ -1339,7 +1340,7 @@ function DevicesSection({ onRegister }: { onRegister?: () => void }) {
     const h = Math.floor(m / 60);
     if (h < 24) return t("alerts.hoursAgo", { n: h });
     const d = Math.floor(h / 24);
-    return d < 30 ? t("alerts.daysAgo", { n: d }) : new Date(ms).toLocaleDateString();
+    return d < 30 ? t("alerts.daysAgo", { n: d }) : formatDateIn(locale, ms);
   };
 
   const doRevoke = async () => {
@@ -1389,7 +1390,7 @@ function DevicesSection({ onRegister }: { onRegister?: () => void }) {
                     <div className="truncate text-xs text-muted-foreground">{p.detail}</div>
                   )}
                   <div className="text-[11px] text-muted-foreground">
-                    {new Date(p.createdAt).toLocaleString()}
+                    {formatDateTimeIn(locale, p.createdAt)}
                   </div>
                   {p.ip && (
                     <div
@@ -1454,7 +1455,7 @@ function DevicesSection({ onRegister }: { onRegister?: () => void }) {
                   <div className="text-[11px] text-muted-foreground">
                     {t("profile.deviceActive", {
                       when: relTime(s.lastSeenAt),
-                      added: new Date(s.createdAt).toLocaleDateString(),
+                      added: formatDateIn(locale, s.createdAt),
                     })}
                   </div>
                   {/* Where and how this device signed in (v2.100.1) — the same

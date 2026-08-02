@@ -28,7 +28,8 @@ import {
   type RelaySocket,
 } from "./relay";
 import { isPersistedRoom, type PersistedRoom } from "./roomStore";
-import { joinedLine, lineThumbGradient, inviteInitials, fmtInviteNumber } from "../client/src/app/InviteCard";
+import { joinedLine, lineThumbGradient, inviteInitials, fmtInviteNumber, inviteLineCountKey } from "../client/src/app/InviteCard";
+import { translate, type TKey } from "../client/src/app/i18n";
 import { codeOnly } from "./testing/codeOnly";
 import { copyOnScreen, whyCopyMissing } from "./testing/copyOnScreen";
 
@@ -445,14 +446,30 @@ describe("what the card says", () => {
     // Off the signaling node the roster is unknown. Saying "nobody is on the line"
     // there would be a false statement about somebody else's call.
     expect(CARD).toMatch(/rosterKnown/);
-    expect(CARD).toMatch(/Open the line to see who's on it/);
-    expect(CARD).toMatch(/Nobody on the line yet/);
+    /* v2.106.98 localised this card, so the sentences moved into `dict/invite.ts`.
+       `copyOnScreen` asks the property these froze — THIS sentence reaches THIS
+       screen — satisfied by the literal or by a key whose English half is it, which
+       is strictly stronger: reaching the dictionary also proves an Arabic half
+       exists. Two DIFFERENT sentences is the rule, so both are required. */
+    expect(copyOnScreen(CARD, "Open the line to see who's on it"), whyCopyMissing(CARD, "Open the line to see who's on it")).toBe(true);
+    /* The EMPTY-roster sentence is picked at RUNTIME by `inviteLineCountKey`, which
+       no static reader can follow — `copyOnScreen` resolves literal `t("key")` call
+       sites only, the limitation v2.106.93 recorded for `guestExpiryKey`. So it is
+       pinned at the SELECTOR, which is strictly what decides it: zero occupants must
+       choose a DIFFERENT key from any real count, or the card claims a live roster
+       is empty. */
+    expect(inviteLineCountKey(0)).toBe("invite.lineCountNobody");
+    expect(translate("en", "invite.lineCountNobody")).toContain("Nobody on the line yet");
+    for (const n of [1, 2, 5, 40]) {
+      expect(inviteLineCountKey(n), String(n)).not.toBe("invite.lineCountNobody");
+    }
+    expect(CARD).toMatch(/inviteLineCountKey\(/);
   });
 
   it("marks who is host and who is a co-host", () => {
     expect(CARD).toMatch(/m\.callRole === "host"/);
     expect(CARD).toMatch(/m\.callRole === "cohost"/);
-    expect(CARD).toMatch(/Creator/);
+    expect(copyOnScreen(CARD, "Creator"), whyCopyMissing(CARD, "Creator")).toBe(true);
   });
 
   it("the number is LTR and bidi-isolated so an RTL title cannot reorder it", () => {
@@ -466,14 +483,28 @@ describe("what the card says", () => {
     // the epoch, so "3 hours ago" was a NEGATIVE timestamp and `formatElapsedSince`
     // correctly refused it — the code was right and the test was wrong.
     const now = Date.UTC(2026, 6, 29, 12, 0, 0);
-    expect(joinedLine(null, now)).toBe("");
-    expect(joinedLine(0, now)).toBe("");
-    expect(joinedLine(Number.NaN, now)).toBe("");
-    expect(joinedLine(now + 5_000, now)).toBe("");
-    expect(joinedLine(now - 30_000, now)).toBe("joined 30s ago");
-    expect(joinedLine(now - 4 * 60_000, now)).toBe("joined 4m ago");
-    expect(joinedLine(now - 3 * 3600_000, now)).toBe("joined 3h ago");
-    expect(joinedLine(now - 26 * 3600_000, now)).toBe("joined 1d 2h ago");
+    /* The REAL translator, not a stub: the sentence now comes from the dictionary,
+       and driving it through `translate` is what proves the key resolves rather
+       than leaking `invite.joined` onto the card. */
+    const en = (k: TKey, v?: Record<string, string | number>) => translate("en", k, v);
+    const ar = (k: TKey, v?: Record<string, string | number>) => translate("ar", k, v);
+    expect(joinedLine(null, now, en)).toBe("");
+    expect(joinedLine(0, now, en)).toBe("");
+    expect(joinedLine(Number.NaN, now, en)).toBe("");
+    expect(joinedLine(now + 5_000, now, en)).toBe("");
+    expect(joinedLine(now - 30_000, now, en)).toBe("joined 30s ago");
+    expect(joinedLine(now - 4 * 60_000, now, en)).toBe("joined 4m ago");
+    expect(joinedLine(now - 3 * 3600_000, now, en)).toBe("joined 3h ago");
+    expect(joinedLine(now - 26 * 3600_000, now, en)).toBe("joined 1d 2h ago");
+    /* Arabic keeps the same UNKNOWN/future refusals — the guard is in the function,
+       not in the copy — and its sentence is really different rather than the English
+       pasted across. */
+    expect(joinedLine(null, now, ar)).toBe("");
+    expect(joinedLine(now + 5_000, now, ar)).toBe("");
+    const arJoined = joinedLine(now - 4 * 60_000, now, ar);
+    expect(arJoined).not.toBe("joined 4m ago");
+    expect(arJoined).toContain("4m");
+    expect(arJoined).not.toMatch(/^invite\./);
   });
 
   it("a line's thumbnail is stable for one number and differs across numbers", () => {

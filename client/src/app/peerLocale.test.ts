@@ -100,7 +100,10 @@ describe("every user-visible string on the peer surfaces goes through the dictio
   it("the component really does render through the translator", () => {
     // Guards the sweep above against passing because the file stopped rendering
     // anything at all: a screen with no `t(` calls would trivially have no literals.
-    expect(CODE).toMatch(/import \{ useT, type TKey \} from "\.\/i18n"/);
+    /* The PROPERTY is that this module takes the translator, not the exact
+       import list — which legitimately grew a `useLocale` when the presence
+       stamp started following the app's language rather than the browser's. */
+    expect(CODE).toMatch(/import \{[^}]*\buseT\b[^}]*\} from "\.\/i18n"/);
     const calls = CODE.match(/\bt\("peer\.[\w.]+"/g) ?? [];
     expect(calls.length, "peer.* keys rendered from this screen").toBeGreaterThan(20);
     // Every component that shows words takes the hook — a missed one is a whole
@@ -143,12 +146,28 @@ describe("every user-visible string on the peer surfaces goes through the dictio
          and not "PM". */
       "peer.clockAm",
       "peer.clockPm",
+      /* Reached through `lineCountKey`, the occupancy band — same reason again:
+         Arabic's dual is a word, not a numeral plus a plural noun. */
+      "peer.lineNobody",
+      "peer.lineOne",
+      "peer.lineTwo",
+      "peer.lineFew",
+      "peer.lineMany",
+      /* Reached through `agoKey(unit, n)` — a key chosen from a UNIT and a count, so
+         it is doubly unreachable to a static reader. Driven in `presenceCopy.test.ts`,
+         which asserts each unit's four forms are distinct in Arabic and that the dual
+         carries no digit. */
+      ...(["Minute", "Hour", "Day"].flatMap((u) =>
+        ["One", "Two", "Few", "Many"].map((n) => `peer.ago${u}${n}`),
+      ) as TKey[]),
+      "peer.agoNever",
+      "peer.agoJustNow",
     ]);
-    /* `lastSeen.ts` is a SECOND renderer of `peer.*` — the translated "last seen …"
+    /* `presenceCopy.ts` is a SECOND renderer of `peer.*` — the translated "last seen …"
        line the conversation header shows (v2.106.97). It is read here rather than
        exempted, so its keys are genuinely covered and only the ones no static
        reader can follow need naming below. */
-    const RENDERERS = CODE + "\n" + read("client/src/app/lastSeen.ts");
+    const RENDERERS = CODE + "\n" + read("client/src/app/presenceCopy.ts");
     const dead = PEER_KEYS.filter(
       (k) => !INDIRECT.has(k) && !RENDERERS.includes(`t("${k}"`),
     );

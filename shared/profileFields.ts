@@ -338,12 +338,145 @@ export interface PeerPresenceInput {
   memberCount: number;
 }
 
+export type PeerPresenceState =
+  | { kind: "partyLine"; memberCount: number }
+  | { kind: "hidden" }
+  | { kind: "inCall" }
+  | { kind: "idle" }
+  | { kind: "online" }
+  | { kind: "lastSeen"; at: number }
+  | { kind: "offline" };
+
+/**
+ * WHICH presence state, with no words in it — the same split as `lastSeenBand`
+ * above, and for the same reason: this rule is shared by the profile popup, the
+ * full profile and the ring card, so a `text → key` map at each render site would
+ * let a copy edit silently drop the translation on one of them.
+ *
+ * The ORDER is the rule and is unchanged; every clause's reasoning is in the
+ * header comment above `PeerPresenceInput`.
+ */
+export function peerPresenceState(d: PeerPresenceInput): PeerPresenceState {
+  if (d.partyLine) return { kind: "partyLine", memberCount: d.memberCount };
+  if (d.presenceHidden) return { kind: "hidden" };
+  if (d.inCall) return { kind: "inCall" };
+  if (d.isOnline && d.idle) return { kind: "idle" };
+  if (d.isOnline) return { kind: "online" };
+  if (d.lastSeenAt) return { kind: "lastSeen", at: new Date(d.lastSeenAt).getTime() };
+  return { kind: "offline" };
+}
+
+/** English rendering. Byte-identical to what this function always returned. */
 export function describePeerPresence(d: PeerPresenceInput): string {
-  if (d.partyLine) return `Party line · ${d.memberCount} on the line`;
-  if (d.presenceHidden) return "";
-  if (d.inCall) return "On a call right now";
-  if (d.isOnline && d.idle) return "Away — app is in the background";
-  if (d.isOnline) return "Online now";
-  if (d.lastSeenAt) return `Last seen ${new Date(d.lastSeenAt).toLocaleString()}`;
-  return "Offline";
+  const s = peerPresenceState(d);
+  switch (s.kind) {
+    case "partyLine":
+      return `Party line · ${s.memberCount} on the line`;
+    case "hidden":
+      return "";
+    case "inCall":
+      return "On a call right now";
+    case "idle":
+      return "Away — app is in the background";
+    case "online":
+      return "Online now";
+    case "lastSeen":
+      return `Last seen ${new Date(s.at).toLocaleString()}`;
+    case "offline":
+      return "Offline";
+  }
+}
+
+/* ── the COMPACT "…ago" band, for a row that has one line ───────────────────
+   Contacts renders `last seen 5m ago`, where the profile popup renders the long
+   form. Two formatters, deliberately — the row has a hard width budget (v2.106.43
+   measured it) and "last seen 5 minutes ago" does not fit — but they must never
+   disagree about WHICH bucket a moment is in, so the decision is shared exactly as
+   `lastSeenBand` is and only the words differ. */
+
+export type CompactAgoBand =
+  | { kind: "never" }
+  | { kind: "justNow" }
+  | { kind: "minutes"; n: number }
+  | { kind: "hours"; n: number }
+  | { kind: "days"; n: number }
+  | { kind: "date"; at: number };
+
+/**
+ * Total by construction: every shape that is not one of the three real time types
+ * answers `never`, because `new Date(true)` is one millisecond after the epoch and
+ * would render a date about somebody nobody has a time for. `<= 0` matches
+ * `lastSeenBand`'s own rule — 0 is what a null column becomes on plenty of paths,
+ * and two formatters disagreeing about it is the divergence this file exists to close.
+ */
+export function compactAgoBand(
+  d: Date | string | number | null | undefined,
+  nowMs: number,
+): CompactAgoBand {
+  if (d === null || d === undefined || d === "") return { kind: "never" };
+  if (!(d instanceof Date) && typeof d !== "string" && typeof d !== "number") {
+    return { kind: "never" };
+  }
+  const ms = (d instanceof Date ? d : new Date(d)).getTime();
+  if (!Number.isFinite(ms) || ms <= 0) return { kind: "never" };
+  const diff = (nowMs - ms) / 1000;
+  if (diff < 60) return { kind: "justNow" };
+  if (diff < 3600) return { kind: "minutes", n: Math.floor(diff / 60) };
+  if (diff < 86400) return { kind: "hours", n: Math.floor(diff / 3600) };
+  if (diff < 86400 * 7) return { kind: "days", n: Math.floor(diff / 86400) };
+  return { kind: "date", at: ms };
+}
+
+/**
+ * "last seen …" for one row.
+ *
+ * TOTAL BY CONSTRUCTION, and that is not defensiveness for its own sake — it is a
+ * blast-radius fix with a demonstrated failure mode. The previous shape took
+ * `Date | string | null` and called `.getTime()` on whatever was not a string, so a
+ * value of any OTHER type threw a TypeError out of the render — and because this is
+ * called from a row inside the list, React unwound the whole page and the error
+ * boundary replaced the entire Contacts screen with "An unexpected error occurred."
+ * Measured, not theorised: driving the real bundle with one numeric `lastSeenAt`
+ * rendered ZERO contacts and that message.
+ *
+ * Today the server sends a Drizzle `timestamp`, i.e. a real Date that superjson
+ * revives as a Date, so the throwing path is not reachable through the ordinary
+ * wire — this is about the cost when it is wrong, not a claim that it is. One row
+ * losing its "last seen" line is a cosmetic degradation; the entire address book
+ * disappearing is the failure the owner would report as "the contact is not
+ * showing". A whole screen must not rest on one field's runtime type.
+ *
+ * It also accepts a NUMBER now, because that is what the sibling formatter in
+ * `shared/profileFields.ts` takes (`formatLastSeen(lastSeenMs)`) — two functions
+ * answering one question with different input types is how a future caller passes
+ * the wrong one, and that formatter is likewise total (`!Number.isFinite` → "").
+ *
+ * WHAT MOVED IN v2.106.98, and why the signature did not: the BANDING (which of
+ * never/just-now/minutes/hours/days/date a moment falls in, and the totality rules
+ * above) now lives in `compactAgoBand` in `shared/profileFields.ts`, because this
+ * row and the profile popup answer the same question about the same person and must
+ * never disagree about the bucket. Only the WORDS are here, and only for the ENGLISH
+ * fallback — the Contacts row renders through `compactAgoLabel` in
+ * `client/src/app/presenceCopy.ts`, which reads this same band.
+ *
+ * It lives HERE rather than in the page for the reason `formatLastSeen` and
+ * `describePeerPresence` do: an English renderer of a shared band is the dictionary's
+ * own fallback, not a screen's private helper.
+ */
+export function relativeTime(d: Date | string | number | null | undefined): string {
+  const b = compactAgoBand(d, Date.now());
+  switch (b.kind) {
+    case "never":
+      return "never";
+    case "justNow":
+      return "just now";
+    case "minutes":
+      return `${b.n}m ago`;
+    case "hours":
+      return `${b.n}h ago`;
+    case "days":
+      return `${b.n}d ago`;
+    case "date":
+      return new Date(b.at).toLocaleDateString();
+  }
 }

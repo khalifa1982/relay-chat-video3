@@ -11,6 +11,7 @@ import { AUDIENCE_OPTIONS, audienceOption } from "@/app/statusAudience";
 import { EmojiPicker } from "@/app/EmojiPicker";
 import { REACTION_QUICK } from "@/lib/emojiCatalog";
 import { useT, useLocale, type TKey } from "@/app/i18n";
+import { formatDateTimeIn } from "@/app/dateLocale";
 import type { StatusAudience } from "@/app/statusAudience";
 
 /**
@@ -1001,7 +1002,7 @@ export function StatusViewer({
      the wrong way at the side it sits on. In Arabic "next" is to the LEFT — a reel is
      read in the page's own direction, so a fixed ChevronRight-on-the-right would send
      somebody backwards through a story every time they meant to go on. */
-  const { rtl } = useLocale();
+  const { rtl, locale } = useLocale();
   const PrevIcon = rtl ? ChevronRight : ChevronLeft;
   const NextIcon = rtl ? ChevronLeft : ChevronRight;
   const [gi, setGi] = useState(startIndex);
@@ -1180,7 +1181,7 @@ export function StatusViewer({
               IN A GROUP the author is named here too (v2.105.6): a group reel
               legitimately mixes authors, so without it a slide would be attributed
               to the group and there would be no way to tell who wrote it. */}
-          <div className="truncate text-[11px] text-white/60" title={new Date(item.createdAt).toLocaleString()}>
+          <div className="truncate text-[11px] text-white/60" title={formatDateTimeIn(locale, item.createdAt)}>
             {/* Board 2c draws "2 of 3 · 18m ago". The progress bars already encode the
                 position, but reading it off them means counting hairlines — the
                 number answers "how much of this reel is left" directly, which is the

@@ -112,6 +112,11 @@ export const CONTACTS = {
      English phrase, so it gets its own entry rather than a silent copy change to a row
      whose width was measured. "blocked" is not a presence state at all. */
   "contacts.rowOnline": { en: "online", ar: "متصل" },
+  /* ONE key for the whole line. `{ago}` is substituted by name, so Arabic — which
+     leads with the verb — puts it where the sentence wants it rather than where
+     English happens to leave a gap. Splitting this into "last seen" + a duration is
+     the fragment-assembly the dictionary forbids outright. */
+  "contacts.rowLastSeen": { en: "last seen {ago}", ar: "آخر ظهور {ago}" },
   "contacts.blocked": { en: "blocked", ar: "محظور" },
 
   // ── Remove confirmation ──

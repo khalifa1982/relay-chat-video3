@@ -54,4 +54,58 @@ export const INVITE = {
     en: "⚡ RELAY — six digits, no phone number.",
     ar: "⚡ RELAY — ستة أرقام، بلا رقم هاتف.",
   },
+
+  /* ── the invite CARD (#109) ───────────────────────────────────────────────
+     The card a shared `/i/<pin>` link lands on. It is the FIRST screen somebody
+     reaching RELAY from a link ever sees, and it was English-only — the one place
+     where "the app has an Arabic switch" was least true, because a visitor with no
+     identity has not been anywhere that offers the switch yet.
+
+     `invite.lineCount*` bands rather than interpolating, for the same reason every
+     other count here does: Arabic's dual is a word. */
+  "invite.kindLine": { en: "Party line", ar: "خط جماعي" },
+  "invite.kindCall": { en: "Call invite", ar: "دعوة مكالمة" },
+  "invite.notFoundTitle": { en: "Number not found", ar: "الرقم غير موجود" },
+  "invite.notFoundBody": {
+    en: "There's no RELAY user with this number",
+    ar: "لا يوجد مستخدم RELAY بهذا الرقم",
+  },
+  "invite.lineCountNobody": {
+    en: "Nobody on the line yet — you'd be first",
+    ar: "لا أحد على الخط بعد — ستكون أول من ينضم",
+  },
+  "invite.lineCountOne": { en: "1 on the line now", ar: "شخص واحد على الخط الآن" },
+  "invite.lineCountTwo": { en: "2 on the line now", ar: "شخصان على الخط الآن" },
+  "invite.lineCountFew": { en: "{count} on the line now", ar: "{count} أشخاص على الخط الآن" },
+  "invite.lineCountMany": { en: "{count} on the line now", ar: "{count} شخصًا على الخط الآن" },
+  /* The roster is UNKNOWN rather than empty when the API tier cannot reach the
+     signaling node — a distinction the copy has to keep, or the card makes a false
+     claim about somebody else's call. */
+  "invite.lineRosterUnknown": {
+    en: "Open the line to see who's on it",
+    ar: "افتح الخط لترى من عليه",
+  },
+  /* ONE key for the whole line: `{when}` is a date and `{who}` a count phrase, and
+     Arabic puts the two in a different order from English. */
+  "invite.lineCreated": { en: "{who} · created {when}", ar: "{who} · أُنشئ في {when}" },
+  "invite.peerInCall": { en: "On a call right now", ar: "في مكالمة الآن" },
+  "invite.peerOnline": { en: "Online now", ar: "متصل الآن" },
+  "invite.peerOffline": {
+    en: "Offline — you can't call them right now",
+    ar: "غير متصل — لا يمكنك الاتصال به الآن",
+  },
+  "invite.creator": { en: "Creator", ar: "المُنشئ" },
+  "invite.onTheLine": { en: "On the line", ar: "على الخط" },
+  "invite.host": { en: "Host", ar: "المضيف" },
+  "invite.hostTitle": { en: "Host of this call", ar: "مضيف هذه المكالمة" },
+  "invite.cohost": { en: "Co-host", ar: "مضيف مشارك" },
+  "invite.cohostTitle": {
+    en: "Co-host — can moderate this call",
+    ar: "مضيف مشارك — يمكنه إدارة هذه المكالمة",
+  },
+  /* `{ago}` is a compact duration (`4m`, `3h 20m`) from `formatElapsedSince`, which
+     is still English-abbreviated — named in the release notes rather than half-done,
+     because a COMPOUND duration needs a plural per unit and that is its own piece of
+     work. Substituted by name, so Arabic still controls where it sits. */
+  "invite.joined": { en: "joined {ago} ago", ar: "انضم قبل {ago}" },
 } as const satisfies Record<string, Entry>;

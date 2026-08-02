@@ -73,7 +73,9 @@ import { previewOf, previewOfStoryReply } from "@/app/messagePreview";
 import { statusReplyOf, storyKindLabel } from "@shared/statusReply";
 /* `tr`, not `t`, in MessagesPage: the swipe-action builder binds the THREAD to
    `t`, so an unaliased translator would be shadowed into a ThreadSummary. */
-import { useT, type TKey } from "@/app/i18n";
+import { useT, useLocale, type TKey, type Locale } from "@/app/i18n";
+import { formatDateIn } from "@/app/dateLocale";
+import { compactAgoBand } from "@shared/profileFields";
 import {
   attemptOpenGroup,
   isGroupHidden,
@@ -96,7 +98,7 @@ import { dayKey, dayLabel, groupMessagesByDay } from "@/app/messageDays";
 import { matchQuery } from "@/app/searchMatch";
 import { describeProfileStatus } from "@shared/profileStatus";
 import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
-import { lastSeenLabel } from "@/app/lastSeen";
+import { lastSeenLabel } from "@/app/presenceCopy";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { GroupCallScreen, PartyLinesSection } from "./GroupCallScreen";
 import { AvatarPicker } from "@/app/AvatarPicker";
@@ -105,6 +107,7 @@ import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/l
 import { videoRecorderSupported } from "@/lib/videoNote";
 import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 import { ImageEditSheet } from "@/app/ImageEditSheet";
+import { MediaEditSheet, DrawGlyph, useDrawLabel } from "@/app/MediaEditSheet";
 import { isEditableImage } from "@/lib/imageEdit";
 import { GroupInfoSheet } from "@/app/GroupInfoSheet";
 import { SwipeRow, type SwipeAction } from "@/app/SwipeRow";
@@ -184,14 +187,28 @@ type T = (key: TKey, vars?: Record<string, string | number>) => string;
  * third private copy is the duplication class this repo keeps paying for, so the fix is
  * to promote that helper to a shared module — which is a different file's change.
  */
-function timeAgo(t: T, iso: string | Date): string {
-  const d = typeof iso === "string" ? new Date(iso) : iso;
-  const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 60) return t("msg.timeNow");
-  if (diff < 3600) return t("msg.timeMinutes", { n: Math.floor(diff / 60) });
-  if (diff < 86400) return t("msg.timeHours", { n: Math.floor(diff / 3600) });
-  if (diff < 86400 * 7) return t("msg.timeDays", { n: Math.floor(diff / 86400) });
-  return d.toLocaleDateString();
+function timeAgo(t: T, iso: string | Date, locale: Locale): string {
+  /* The BANDING is `compactAgoBand` in `shared/profileFields.ts`, which the Contacts
+     row and the profile popup also read — this row used to carry its own byte-identical
+     copy of the same thresholds, which is how two surfaces come to bucket one moment
+     differently. Only the WORDS are local: this list is the tightest of the three and
+     shows a bare `5m` where the row shows `5m ago`. */
+  const b = compactAgoBand(iso, Date.now());
+  switch (b.kind) {
+    case "never":
+      return "";
+    case "justNow":
+      return t("msg.timeNow");
+    case "minutes":
+      return t("msg.timeMinutes", { n: b.n });
+    case "hours":
+      return t("msg.timeHours", { n: b.n });
+    case "days":
+      return t("msg.timeDays", { n: b.n });
+    case "date":
+      // A regional format, so it follows the APP's language rather than the browser's.
+      return formatDateIn(locale, b.at);
+  }
 }
 
 /**
@@ -406,6 +423,7 @@ export default function MessagesPage({
   only,
 }: { only?: "groups" } = {}) {
   const tr = useT();
+  const { locale } = useLocale();
   const { me } = useIdentity();
   const [location, setLocation] = useLocation();
   const basePath = useTabBasePath();
@@ -1062,7 +1080,7 @@ export default function MessagesPage({
                                       (unread ? "font-semibold text-primary" : "text-muted-foreground")
                                     }
                                   >
-                                    {timeAgo(tr, t.lastMessageAt)}
+                                    {timeAgo(tr, t.lastMessageAt, locale)}
                                   </span>
                                 )}
                               </div>
@@ -1369,6 +1387,7 @@ function GroupCallsSection({ onOpenPicker }: { onOpenPicker: () => void }) {
 
 function ConversationView({ conversationId }: { conversationId: number }) {
   const t = useT();
+  const { locale } = useLocale();
   const { me } = useIdentity();
   const [, setLocation] = useLocation();
   const basePath = useTabBasePath();
@@ -2011,6 +2030,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
      `uploadFile`, so cancelling is indistinguishable from never having opened
      the editor. */
   const [editImage, setEditImage] = useState<File | null>(null);
+  /* The photo waiting on the DRAW sheet. A separate piece of state (and a
+     separate picker below) rather than a mode flag on `editImage`: a flag would
+     have to be set before the picker opens and read after it resolves, and the
+     window between those two is exactly where a second tap leaves the wrong
+     editor open on the right photo. Two states cannot disagree about which
+     sheet was asked for. */
+  const [drawImage, setDrawImage] = useState<File | null>(null);
+  const drawRef = useRef<HTMLInputElement>(null);
+  const drawLabel = useDrawLabel();
   // A picked-but-unsent attachment must not follow the user into a DIFFERENT
   // conversation when they switch threads — it would otherwise sit silently
   // staged and get attached to whatever they next send there.
@@ -2195,6 +2223,24 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     if (!file) return;
     if (isEditableImage(file.type)) {
       setEditImage(file);
+      return;
+    }
+    await uploadFile(file);
+  }
+  /**
+   * The DRAW picker. Same shape as the photo picker above and gated on the same
+   * `isEditableImage`, which is the point rather than a copied line: a gif must
+   * never reach a canvas, because a re-encode keeps ONE frame and silently
+   * drops the animation. An image that fails the gate still uploads rather than
+   * being dropped — refusing the photo outright would be a worse answer than
+   * sending it undrawn.
+   */
+  async function handleDrawPick(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (isEditableImage(file.type)) {
+      setDrawImage(file);
       return;
     }
     await uploadFile(file);
@@ -2664,7 +2710,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             ) : thread?.peerLastSeenAt ? (
               // Short stamp here (the header is one cramped line); the profile
               // popup carries the full date + time.
-              <span className="text-muted-foreground truncate">{t("msg.lastSeen", { when: timeAgo(t, thread.peerLastSeenAt) })}</span>
+              <span className="text-muted-foreground truncate">{t("msg.lastSeen", { when: timeAgo(t, thread.peerLastSeenAt, locale) })}</span>
             ) : (
               <span className="text-muted-foreground">{t("msg.offline")}</span>
             )}
@@ -3525,6 +3571,20 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             >
               <Paperclip className="size-4 shrink-0" /> <span className="truncate">{t("msg.attachFile")}</span>
             </button>
+            {/* DRAW — its own row rather than a tool inside the rotate/crop
+                sheet, and the reason is a label rather than a preference:
+                chaining the two sheets makes one of that sheet's two exits lie
+                ("Use photo" would open another editor, or "Use original" would
+                attach a drawn-on photo). `MediaEditSheet.tsx` records it in
+                full. The photo picker above is untouched, so the ordinary path
+                to sending a photo is exactly as long as it was. */}
+            <button
+              type="button"
+              onClick={() => { setAttachMenuOpen(false); drawRef.current?.click(); }}
+              className="flex items-center justify-center gap-2 rounded-xl bg-muted/60 px-3 py-3 text-sm font-semibold text-foreground active:scale-95 transition-transform"
+            >
+              <DrawGlyph className="size-4 shrink-0" /> <span className="truncate">{drawLabel}</span>
+            </button>
             {/* v2.106.64 — VOICE NOTE lives here now, beside the other things you can
                 attach, per the owner: *"on the attachment inside the chat on the plus
                 button add the voice note beside of the other features set as video
@@ -3635,6 +3695,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             onChange={handleImagePick}
           />
           <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
+          {/* The draw picker. `image/*` only — there is nothing to draw on in a
+              video, and offering one would open the sheet on a file it must
+              then refuse. */}
+          <input ref={drawRef} type="file" accept="image/*" className="hidden" onChange={handleDrawPick} />
           {/* BOARD 1d: THE ATTACH CLIP LIVES INSIDE THE FIELD, not beside it.
               Measured at 390px the row was emoji + attach + timer + field + mic, leaving the
               text field 190px against the board's 274 — the field is what the screen is for
@@ -3778,6 +3842,27 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           }}
           onUse={(f) => {
             setEditImage(null);
+            void uploadFile(f);
+          }}
+        />
+      )}
+      {/* Pre-upload annotation: freehand drawing, six colours, undo. The drawn
+          file rejoins the SAME `uploadFile` path as everything else, so the
+          downscale, the ≤512px thumbnail, the caption and the disappearing
+          timer all still apply and this sheet uploads nothing itself.
+          Both exits attach the photo, and `onClose` attaches the caller's very
+          own File object — skipping has to be indistinguishable from never
+          having opened it, so there is no re-encode on that path. */}
+      {drawImage && (
+        <MediaEditSheet
+          file={drawImage}
+          onClose={() => {
+            const original = drawImage;
+            setDrawImage(null);
+            void uploadFile(original);
+          }}
+          onUse={(f) => {
+            setDrawImage(null);
             void uploadFile(f);
           }}
         />
