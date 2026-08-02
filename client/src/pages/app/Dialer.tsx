@@ -24,7 +24,7 @@ import { playDtmf, disposeDtmf } from "@/lib/dtmf";
 import { useIdentity } from "@/app/useIdentity";
 import { MyNumberCard } from "@/app/ShareNumber";
 import { shareInviteMessage } from "@/app/inviteMessage";
-import { useT, useLocale, translate, type TKey } from "@/app/i18n";
+import { useT, translate, type TKey } from "@/app/i18n";
 import { DialerMarquee } from "@/app/DialerMarquee";
 import { demotablePollInterval } from "@/app/useRealtime";
 import { useRelayEngine } from "@/app/RelayEngine";
@@ -211,32 +211,6 @@ export function ghostNumberRule(args: {
 }
 
 /**
- * Which "N more digits" wording a remaining-digit count needs.
- *
- * A FUNCTION RATHER THAN AN INTERPOLATED `s`, AND THAT IS THE WHOLE POINT.
- * `` `${n} more digit${n === 1 ? "" : "s"}` `` is a sentence assembled from a
- * fragment, so it cannot be translated at all — only re-assembled into nonsense.
- * English needs one/other; Arabic counts in four bands, and getting it wrong is
- * visible to every reader: 1 is singular, 2 is the DUAL («رقمان»), 3–10 take the
- * plural of paucity («أرقام») and 11+ take the singular accusative («رقمًا»). So a
- * WHOLE key is chosen per band, the same shape as `guestExpiryKey`.
- *
- * THE BAND ABOVE TEN CANNOT ARISE TODAY and is here anyway: this is only ever
- * called with `6 - dialed.length` where the typed length is 1–5, so the domain is
- * 1–5. The 11+ form exists because the rule belongs to the LANGUAGE rather than to
- * today's caller — a later change to the number length would otherwise silently
- * start rendering "11 أرقام", which is wrong Arabic, with nothing failing.
- *
- * Exported as a test seam: which form a count selects is exactly the thing a source
- * assertion cannot answer.
- */
-export function moreDigitsKey(remaining: number): TKey {
-  if (remaining <= 1) return "dialer.moreDigitsOne";
-  if (remaining === 2) return "dialer.moreDigitsTwo";
-  return remaining <= 10 ? "dialer.moreDigitsFew" : "dialer.moreDigitsMany";
-}
-
-/**
  * Extract a dialable 6-digit target from a URL search string (the `?to=`
  * carried over from the Messages/Contacts "call" buttons and the legacy
  * /app/call redirect). Returns null when absent or invalid. Exported for tests.
@@ -272,9 +246,7 @@ function timeAgo(iso: string | Date): string {
 }
 
 export default function DialerPage() {
-  /* `tn` as well as `t`: the missed-call banner interpolates a BOLDED name into the
-     middle of its sentence, which is exactly the case `translateNodes` exists for. */
-  const { t, tn } = useLocale();
+  const t = useT();
   const { me } = useIdentity();
   // The call engine is hosted app-wide by RelayEngineProvider so a user can be
   // rung from any tab; the Dialer just drives it (dial / read phase + the
@@ -516,21 +488,10 @@ export default function DialerPage() {
                 <span className="block text-sm font-semibold text-foreground">
                   {missedCount === 1 ? t("dialer.missedCall") : t("dialer.missedCalls", { count: missedCount })}
                 </span>
-                {/* ONE SENTENCE, ONE KEY. This used to be `from ` + a bolded name +
-                    an optional ` · 777 777` + ` — tap to see all`, i.e. a sentence
-                    chopped at its English seams — which cannot be translated, only
-                    re-assembled into nonsense, because Arabic does not put those
-                    words in that order. `tn` keeps the placeholders INSIDE the
-                    string so the translator decides where the name and the number
-                    go. `num` is always passed (empty when there is none), because an
-                    absent var leaves the raw `{num}` on screen. */}
                 <span className="block text-xs text-muted-foreground truncate">
-                  {tn("dialer.missedFromTap", {
-                    name: (
-                      <span className="font-medium text-foreground/90">{missedLatest.name}</span>
-                    ),
-                    num: missedLatest.number ? ` · ${formatDialed(missedLatest.number)}` : "",
-                  })}
+                  from <span className="font-medium text-foreground/90">{missedLatest.name}</span>
+                  {missedLatest.number ? ` · ${formatDialed(missedLatest.number)}` : ""}
+                  {" — tap to see all"}
                 </span>
               </span>
             </button>
@@ -795,16 +756,7 @@ export default function DialerPage() {
                               type="button"
                               onClick={() => openPeerProfile(previewIdentity.number)}
                               className="font-semibold text-foreground underline-offset-2 hover:underline truncate"
-                              /* REUSES `peer.viewNamedProfile` rather than minting a
-                                 Dialer copy: this opens the very same popup the
-                                 avatar ring does, so a second key would guarantee the
-                                 two labels agree only until somebody edited one. The
-                                 possessive has no Arabic equivalent, so the name
-                                 MOVES inside the sentence — safe because `translate`
-                                 substitutes by NAME rather than by position. */
-                              aria-label={t("peer.viewNamedProfile", {
-                                name: previewIdentity.displayName,
-                              })}
+                              aria-label={`View ${previewIdentity.displayName}'s profile`}
                             >
                               {previewIdentity.displayName}
                             </button>
@@ -865,13 +817,9 @@ export default function DialerPage() {
                     t("dialer.noSuchUser")
                   )
                 ) : ghost.mode === "typed" ? (
-                  /* A WHOLE KEY PER PLURAL BAND — see `moreDigitsKey`. This is the
-                     app's default tab and this line renders on every keystroke
-                     between the first digit and the sixth, so it is the single most
-                     seen sentence on the screen. */
-                  t(moreDigitsKey(6 - dialed.length), { count: 6 - dialed.length })
+                  `${6 - dialed.length} more digits`
                 ) : (
-                  t("dialer.enterNumber")
+                  "Enter a 6-digit RELAY number"
                 )}
               </div>
             </div>
@@ -1122,7 +1070,7 @@ export default function DialerPage() {
                       transitionTimingFunction: "var(--ease-out)",
                     }}
                     aria-label={t("dialer.groupCall")}
-                    title={nonexistent ? t("dialer.notOnRelay") : t("dialer.groupCallHint")}
+                    title={nonexistent ? "That number isn't on RELAY" : "Group call — ring up to 10 people into one room"}
                   >
                     <Users className="size-5" strokeWidth={2.2} />
                   </button>
@@ -1172,7 +1120,7 @@ function QuickAddContact({ number, displayName }: { number: string; displayName:
       utils.contacts.list.invalidate();
       toast.success(t("dialer.savedToContacts"));
     },
-    onError: (e) => toast.error((e as { message?: string })?.message ?? t("dialer.saveFailed")),
+    onError: (e) => toast.error((e as { message?: string })?.message ?? "Couldn't save the contact."),
   });
   const existing = trpc.contacts.list.useQuery();
   const isAlready = (existing.data ?? []).some((c) => c.number === number);
@@ -1210,7 +1158,7 @@ function QuickAddContact({ number, displayName }: { number: string; displayName:
       type="button"
       onClick={() => upsert.mutate({ number, displayName: displayName === number ? undefined : displayName })}
       disabled={upsert.isPending}
-      aria-label={t("dialer.addNumberToContacts", { number })}
+      aria-label={`Add ${number} to your contacts`}
       title={t("dialer.addToContacts")}
       className="
         relative grid place-items-center rounded-full overflow-hidden text-white
@@ -1269,11 +1217,7 @@ function QuickAddContact({ number, displayName }: { number: string; displayName:
           text-muted-foreground pointer-events-none
         "
       >
-        {/* THE SAME KEY THE `title` ABOVE ALREADY USED. This label shipped as a bare
-            English literal while `dialer.addToContacts` — Arabic half and all — sat
-            one line up on the very same element: the release that added the visible
-            words added them in English with the translation already in hand. */}
-        {t("dialer.addToContacts")}
+        Add to contacts
       </span>
     </span>
   );

@@ -31,39 +31,12 @@ export type ProfileStatus = (typeof PROFILE_STATUSES)[number];
 
 export interface ProfileStatusMeta {
   key: ProfileStatus;
-  /**
-   * Finished English, and the FALLBACK rather than what a screen renders.
-   *
-   * Kept because this module is imported by the SERVER as well as the browser, and
-   * `describeProfileStatus` composes a string for surfaces that have no translator at
-   * all. A render site that CAN translate uses `labelKey`; one that cannot still shows
-   * words rather than a blank.
-   */
   label: string;
   emoji: string;
   /** Hue for the chip's tint + border. Never used for the label's own text. */
   color: string;
-  /** What choosing it means, shown under the picker. English, for the same reason. */
+  /** What choosing it means, shown under the picker. */
   hint: string;
-  /**
-   * The dictionary keys for `label` and `hint`.
-   *
-   * PLAIN STRINGS, deliberately not the client's `TKey`: this module is `shared/`, so
-   * importing a client type would make the server bundle depend on the browser's
-   * dictionary. The render site narrows them, and `profileStatus.test.ts` cross-checks
-   * both against the real dictionary, so a typo cannot survive.
-   *
-   * NAMING THEM HERE RATHER THAN IN A MAP BESIDE EACH RENDER SITE is what stops the
-   * two consumers drifting: `PeerOverlays`' chip and `ProfileStatusPicker`'s grid show
-   * the same five labels, and a hand-kept map in each is two lists to keep in step. A
-   * sixth status added below now arrives carrying its own keys.
-   *
-   * `labelKey` points at `peer.profileStatus.*` rather than a private copy because
-   * `dict/peer.ts` asks for exactly that in its own header: one fact with two keys is
-   * how one fact acquires two different Arabic words.
-   */
-  labelKey: string;
-  hintKey: string;
 }
 
 export const PROFILE_STATUS_META: readonly ProfileStatusMeta[] = [
@@ -73,8 +46,6 @@ export const PROFILE_STATUS_META: readonly ProfileStatusMeta[] = [
     emoji: "💼",
     color: "#38bdf8",
     hint: "Reachable, but working — people can still call you.",
-    labelKey: "peer.profileStatus.work",
-    hintKey: "profileStatus.hintWork",
   },
   {
     key: "vacation",
@@ -84,8 +55,6 @@ export const PROFILE_STATUS_META: readonly ProfileStatusMeta[] = [
     // Vacation and travel both mean "not at my desk", so both derive the same
     // availability. The LABEL is what differs, which is the point of having one.
     hint: "Shows you as away as well as on vacation.",
-    labelKey: "peer.profileStatus.vacation",
-    hintKey: "profileStatus.hintVacation",
   },
   {
     key: "travel",
@@ -93,8 +62,6 @@ export const PROFILE_STATUS_META: readonly ProfileStatusMeta[] = [
     emoji: "✈️",
     color: "#fb923c",
     hint: "Shows you as travelling — the badge people already know.",
-    labelKey: "peer.profileStatus.travel",
-    hintKey: "profileStatus.hintTravel",
   },
   {
     key: "free",
@@ -102,8 +69,6 @@ export const PROFILE_STATUS_META: readonly ProfileStatusMeta[] = [
     emoji: "🟢",
     color: "#22c55e",
     hint: "Presence decides the rest: online when you're active.",
-    labelKey: "peer.profileStatus.free",
-    hintKey: "profileStatus.hintFree",
   },
   {
     key: "busy",
@@ -111,8 +76,6 @@ export const PROFILE_STATUS_META: readonly ProfileStatusMeta[] = [
     emoji: "⛔",
     color: "#ef4444",
     hint: "Shows you as away, so people know before they dial.",
-    labelKey: "peer.profileStatus.busy",
-    hintKey: "profileStatus.hintBusy",
   },
 ] as const;
 

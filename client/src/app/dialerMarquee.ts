@@ -28,11 +28,6 @@
  * ────────────────────────────────────────────────────────────────────────── */
 import { CONTACT_TAGS, type ContactTag } from "@shared/contactTags";
 import { RELAY_ACCENT_CYCLE_MS } from "@/lib/relayBackground";
-/* TYPE-ONLY, AND THAT MATTERS RATHER THAN BEING A STYLE CHOICE: `i18n.tsx` imports
-   React, and this module is evaluated by a `node`-environment test (see the header).
-   `import type` is erased at compile time, so the engine gains the KEY type and no
-   runtime edge at all — the no-DOM, no-React rule above is untouched. */
-import type { TKey } from "@/app/i18n";
 
 /* ── the rows this engine accepts ───────────────────────────────────────────
  * A structural subset of `contacts.list`'s projection, so the engine can be
@@ -69,9 +64,9 @@ export type MarqueeSlide =
   /** Two timed lines of marketing copy. No contact, no number. */
   | { kind: "hint" }
   /** A category with somebody in it: prompt, then that person decodes. */
-  | { kind: "contact"; round: MarqueeRound; promptKey: TKey; contact: MarqueeContact }
+  | { kind: "contact"; round: MarqueeRound; prompt: string; contact: MarqueeContact }
   /** A category with nobody in it: the prompt alone, and structurally nothing else. */
-  | { kind: "empty"; round: MarqueeRound; promptKey: TKey };
+  | { kind: "empty"; round: MarqueeRound; prompt: string };
 
 /** The rounds the marquee rotates through.
  *
@@ -111,48 +106,24 @@ export type MarqueeRound = ContactTag | "saved";
  *  person in NONE of the rounds. */
 export const UNTAGGED_ROUND = "saved" as const;
 
-/**
- * The prompt for each round — a KEY, never a finished string.
- *
- * WHY A KEY, AND WHY IT IS RESOLVED BY THE PAINTER RATHER THAN HERE. This is a
- * module-level constant and a module-level constant cannot call a hook, which is
- * the `CATEGORY_META` situation from Contacts and is answered the same way: the
- * constant carries the key and the render site translates. The engine deliberately
- * does NOT take a translator and resolve at build time either, and that is a
- * correctness decision rather than taste — `buildRotations` runs inside a `useMemo`
- * keyed on the CONTACT SIGNATURE, so a prompt baked in at build time would keep the
- * language it was built with until somebody edited a contact. Carrying the key means
- * a language switch takes effect on the very next painted frame, with no dependency
- * bookkeeping that a later reader could get wrong.
- *
- * The English half of each of these is what the owner signed off; it lives in
- * `dict/dialer.ts` beside its Arabic, so the two cannot come to disagree.
- */
-export const ROUND_PROMPT_KEY: Record<MarqueeRound, TKey> = {
-  family: "dialer.marqueeFamily",
-  friend: "dialer.marqueeFriend",
-  team: "dialer.marqueeTeam",
-  vip: "dialer.marqueeVip",
-  saved: "dialer.marqueeSaved",
+export const ROUND_PROMPT: Record<MarqueeRound, string> = {
+  /* "Contact your family" is the owner's own words, verbatim. The rest match its
+     shape: an instruction, no apology, and nothing that claims anything about
+     the reader's address book. */
+  family: "Contact your family",
+  friend: "Call a friend",
+  team: "Reach your team",
+  vip: "Call a VIP",
+  saved: "Someone you've saved",
 };
 
-/** The two timed lines of the hint slide, likewise keyed. Both halves of both keys
- *  are bounded by `MARQUEE_COPY_MAX` — a wrap grows the row, and the row's height
- *  is part of the keypad's hardcoded budget (see MARQUEE_MIN_VIEWPORT_H). */
-export const HINT_LINE_KEYS = [
-  "dialer.marqueeHintDial",
-  "dialer.marqueeHintFind",
-] as const satisfies readonly TKey[];
+/** The two timed lines of the hint slide. Both are bounded by
+ *  `MARQUEE_COPY_MAX` — a wrap grows the row, and the row's height is part of
+ *  the keypad's hardcoded budget (see MARQUEE_MIN_VIEWPORT_H). */
+export const HINT_LINES = ["Press the numbers to dial", "Find friends, family & team"] as const;
 
 /** No copy string may exceed this. Measured against the row's own font size at
- *  the narrowest supported width; asserted for every string this file can put on
- *  screen, IN BOTH LANGUAGES.
- *
- *  SAID PLAINLY: the bound is a CHARACTER COUNT, which is a proxy, and it was
- *  measured against Latin text. Arabic is applied the same bound because that is
- *  the check available here and Arabic renders the same ideas in fewer characters,
- *  so it errs toward being conservative — but nobody has measured an Arabic prompt
- *  in a browser at 320px. */
+ *  the narrowest supported width; asserted for every string in this file. */
 export const MARQUEE_COPY_MAX = 34;
 
 /* ── timing ─────────────────────────────────────────────────────────────────
@@ -239,10 +210,7 @@ export type CellFrame = {
 };
 
 export type MarqueeFrame = {
-  /** WHICH prompt to paint, or null for "nothing at all". A KEY rather than a
-   *  finished string, so the painter resolves it against the CURRENT language on
-   *  every frame — see ROUND_PROMPT_KEY for why resolving earlier would go stale. */
-  promptKey: TKey | null;
+  promptText: string;
   promptOpacity: number;
   /** Rise-in offset in px. Transform, never `top`. */
   promptShiftPx: number;
@@ -297,7 +265,7 @@ export function frameAt(slide: MarqueeSlide, t: number): MarqueeFrame {
 
   if (slide.kind === "own") {
     return {
-      promptKey: null,
+      promptText: "",
       promptOpacity: 0,
       promptShiftPx: 0,
       nameText: "",
@@ -318,12 +286,12 @@ export function frameAt(slide: MarqueeSlide, t: number): MarqueeFrame {
        delivered as two — which is the same clause as "don't show it all in one
        time", answered inside a slide rather than only between slides. */
     const second = t >= T.IN + T.PROMPT;
-    const line = second ? HINT_LINE_KEYS[1] : HINT_LINE_KEYS[0];
+    const line = second ? HINT_LINES[1] : HINT_LINES[0];
     /* The crossfade re-runs the IN envelope for the second line. */
     const localT = second ? t - (T.IN + T.PROMPT) : t;
     const lineOp = localT < T.IN ? clamp01(localT / T.IN) : 1;
     return {
-      promptKey: line,
+      promptText: line,
       promptOpacity: Math.min(envelope, lineOp),
       promptShiftPx: localT < T.IN ? 6 * (1 - clamp01(localT / T.IN)) : 0,
       nameText: "",
@@ -335,7 +303,7 @@ export function frameAt(slide: MarqueeSlide, t: number): MarqueeFrame {
 
   if (slide.kind === "empty") {
     return {
-      promptKey: slide.promptKey,
+      promptText: slide.prompt,
       promptOpacity: envelope,
       promptShiftPx: shift,
       nameText: "",
@@ -395,7 +363,7 @@ export function frameAt(slide: MarqueeSlide, t: number): MarqueeFrame {
      silently start scrolling, first visible on the shortest phones. */
   const cross = clamp01((t - decodeStart) / T.IN);
   return {
-    promptKey: slide.promptKey,
+    promptText: slide.prompt,
     promptOpacity: envelope * (1 - cross),
     promptShiftPx: shift,
     nameText: slide.contact.name,
@@ -528,14 +496,14 @@ export function buildRotations(
       populated.push({
         kind: "contact",
         round,
-        promptKey: ROUND_PROMPT_KEY[round],
+        prompt: ROUND_PROMPT[round],
         contact: members[Math.floor(clamp01(rand()) * members.length) % members.length],
       });
     } else if (round !== UNTAGGED_ROUND) {
       /* NO EMPTY "everyone else" SLIDE. "Someone you've saved" with nobody in it
          says only "you have no contacts", which the four category prompts
          already convey — a fifth apology adds nothing. */
-      empty.push({ kind: "empty", round, promptKey: ROUND_PROMPT_KEY[round] });
+      empty.push({ kind: "empty", round, prompt: ROUND_PROMPT[round] });
     }
   }
 
