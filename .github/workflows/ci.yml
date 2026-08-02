@@ -7,19 +7,23 @@ on:
   # `pull_request` workflows are read from the BASE branch, so a PR into a branch
   # that is not listed here queues no checks at all.
   #
-  # A SECOND WAY TO GET ZERO CHECKS, observed on PR #138 and worth 24 minutes of
-  # somebody's time: push the branch FIRST and open the PR afterwards. The push
-  # itself matches nothing here (a feature branch is deliberately not in the list
-  # above), and opening the PR through the API / App integration did not queue a
-  # run either — `get_status` answered `pending` with `total_count: 0`, i.e. no
-  # check had been *reported*, which is not the same thing as a check failing.
-  # Every run this branch has ever had came from a push made while a PR was
-  # already OPEN, i.e. from `synchronize`.
+  # READ THE COUNT, NOT THE COLOUR. On PR #138 `get_status` answered `pending`
+  # with `total_count: 0` — no check had been *reported*, which is not the same
+  # thing as a check failing, and the two are indistinguishable if you only look
+  # for something red. A PR with zero checks is not a passing PR.
   #
-  # So the order matters: open the PR, then push. If a PR is already sitting there
-  # with no checks, one more commit is what starts them — and note that "no checks"
-  # and "checks passed" are indistinguishable if you only look at whether anything
-  # is red. Read the count, not the colour.
+  # When that happens, distinguish a TRIGGER problem from an ACTIONS problem
+  # before editing this file, because they look identical from the PR page:
+  #   - trigger problem  → a run object exists for some other ref but not yours,
+  #                        or the base branch's copy of this file omits the base
+  #                        (see the note above — `pull_request` reads the BASE).
+  #   - Actions problem  → the repo-wide run count does not move at all for ANY
+  #                        event. On #138 it sat at 979 across a fresh push to an
+  #                        open PR's head, i.e. no run was ever created. That is
+  #                        repo/account level — Actions disabled, a spending cap,
+  #                        or a GitHub incident — and nothing in this file fixes it.
+  # `list_workflow_runs` unfiltered, comparing `total_count` before and after, is
+  # what tells the two apart in one call.
   push:
     branches: [main, master, web-app-main]
   pull_request:
