@@ -57,6 +57,26 @@ const REACQUIRE_CAMERA_JS =
  * error screen with retry, Android hardware-back navigation through web
  * history, and routing of external links to the system browser.
  */
+/**
+ * Is this URL the MAIN document rather than a sub-resource?
+ *
+ * `onHttpError` fires for images, scripts and XHRs too, and a 404 on a tracking
+ * pixel must not replace the whole app with an error card. The RELAY page is an
+ * SPA, so the main document is the site root or an /app route — never a file
+ * with an asset extension.
+ */
+function isMainDocument(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (/\.(js|mjs|css|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|map|json)$/i.test(u.pathname)) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function RelayWebView() {
   const webViewRef = useRef<WebView>(null);
 
@@ -69,6 +89,13 @@ export function RelayWebView() {
   // spinner can get stuck covering an already-rendered page.
   const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  /** HTTP status of a failed main-document load, so the card can name it. */
+  const [httpStatus, setHttpStatus] = useState<number | null>(null);
+  /** True when the failure was the first load never completing. */
+  const [timedOut, setTimedOut] = useState(false);
+  /** Set by any failure path; onLoadEnd (which also fires after an error) uses it
+   *  to tell a real success from the tail of a failure. */
+  const loadFailedRef = useRef(false);
   const canGoBackRef = useRef(false);
   const firstLoadDoneRef = useRef(false);
   const loadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -77,6 +104,17 @@ export function RelayWebView() {
   // load has not reported completion within 12s, dismiss the overlay anyway.
   useEffect(() => {
     loadTimeoutRef.current = setTimeout(() => {
+      // Do NOT silently dismiss (audit). This used to set loading=false whether or
+      // not the page had loaded, and because onLoadStart is gated on
+      // `!firstLoadDoneRef.current` the splash could never come back — leaving a
+      // blank navy screen with no spinner, no message and no way out for the rest
+      // of the process. If the first load has not completed by now, surface the
+      // error card that already exists, with its Retry button.
+      if (!firstLoadDoneRef.current) {
+        loadFailedRef.current = true;
+        setTimedOut(true);
+        setHasError(true);
+      }
       firstLoadDoneRef.current = true;
       setLoading(false);
     }, 12000);
@@ -173,8 +211,16 @@ export function RelayWebView() {
     setHasError(false);
     firstLoadDoneRef.current = false;
     setLoading(true);
+    setTimedOut(false);
+    setHttpStatus(null);
+    loadFailedRef.current = false;
     if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
     loadTimeoutRef.current = setTimeout(() => {
+      if (!firstLoadDoneRef.current) {
+        loadFailedRef.current = true;
+        setTimedOut(true);
+        setHasError(true);
+      }
       firstLoadDoneRef.current = true;
       setLoading(false);
     }, 12000);
@@ -182,6 +228,8 @@ export function RelayWebView() {
   }, []);
 
   const handleError = useCallback((_event: WebViewErrorEvent) => {
+    loadFailedRef.current = true;
+    setHttpStatus(null); // a transport failure has no status code
     setHasError(true);
     finishFirstLoad();
   }, [finishFirstLoad]);
@@ -309,6 +357,14 @@ export function RelayWebView() {
           if (!firstLoadDoneRef.current) setLoading(true);
         }}
         onLoadEnd={() => {
+          // CLEAR a stale error (audit). `setHasError(false)` used to live only in
+          // the manual reload callback, so one transient main-frame failure left an
+          // opaque, touch-intercepting overlay covering a WebView that had since
+          // loaded fine — the app looked permanently dead. Any successful load
+          // dismisses it. `loadFailedRef` is what distinguishes "loaded" from
+          // "onLoadEnd fired after an error", which also fires.
+          if (!loadFailedRef.current) setHasError(false);
+          loadFailedRef.current = false;
           finishFirstLoad();
           sendPushToken();
           setWebViewReady(true);
@@ -316,7 +372,20 @@ export function RelayWebView() {
           if (Platform.OS === "ios") onVoipWebViewReady();
         }}
         onError={handleError}
-        onHttpError={() => {}}
+        onHttpError={(e) => {
+          // Was an empty function. A 4xx/5xx main-frame response "loads"
+          // successfully, dismisses the splash, and renders the SERVER's error
+          // body — so the branded error card and its Retry button, which this
+          // component already implements, never appeared. Sub-resource failures
+          // (an image, a script) must NOT trigger it, hence the URL check.
+          const { statusCode, url } = e.nativeEvent;
+          if (statusCode >= 400 && isMainDocument(url)) {
+            loadFailedRef.current = true;
+            setHttpStatus(statusCode);
+            setHasError(true);
+            finishFirstLoad();
+          }
+        }}
         onNavigationStateChange={handleNavStateChange}
         onShouldStartLoadWithRequest={handleShouldStartLoad}
         onMessage={handleMessage}
@@ -361,9 +430,22 @@ export function RelayWebView() {
           <Image source={RELAY_LOGO} style={styles.logo} resizeMode="contain" />
           <Text style={styles.brand}>RELAY</Text>
           <View style={styles.errorCard}>
-            <Text style={styles.errorTitle}>Can&apos;t reach RELAY</Text>
+            <Text style={styles.errorTitle}>
+              {httpStatus != null
+                ? "RELAY had a problem"
+                : timedOut
+                  ? "RELAY is taking too long"
+                  : "Can't reach RELAY"}
+            </Text>
+            {/* Say which of the three it was. The card previously blamed the
+                user's connection for every failure, including a 500 from the
+                server and a load that simply never finished. */}
             <Text style={styles.errorBody}>
-              Check your internet connection and try again.
+              {httpStatus != null
+                ? `The server responded with ${httpStatus}. This is usually temporary.`
+                : timedOut
+                  ? "The page didn't finish loading. It may just be slow."
+                  : "Check your internet connection and try again."}
             </Text>
             <Pressable
               style={({ pressed }) => [

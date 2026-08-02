@@ -139,12 +139,12 @@ class RelayCallFcmService : FirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val ringtoneUri = Uri.parse("android.resource://\\\${packageName}/raw/ringtone")
+        val ringtoneUri = Uri.parse("android.resource://\${packageName}/raw/ringtone")
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentTitle("Incoming RELAY Call")
-            .setContentText("\\\${callerName} is calling\\u2026")
+            .setContentText("\${callerName} is calling\\u2026")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)
@@ -172,7 +172,7 @@ class RelayCallFcmService : FirebaseMessagingService() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ringtoneUri = Uri.parse("android.resource://\\\${packageName}/raw/ringtone")
+            val ringtoneUri = Uri.parse("android.resource://\${packageName}/raw/ringtone")
             val audioAttr = AudioAttributes.Builder()
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
@@ -347,7 +347,7 @@ class IncomingCallActivity : AppCompatActivity() {
 
     private fun startRinging() {
         try {
-            val ringtoneUri = Uri.parse("android.resource://\\\${packageName}/raw/ringtone")
+            val ringtoneUri = Uri.parse("android.resource://\${packageName}/raw/ringtone")
             mediaPlayer = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
@@ -409,7 +409,7 @@ class IncomingCallActivity : AppCompatActivity() {
         dismissNotification()
 
         // Launch MainActivity with deep link URL so Expo Linking can read it
-        val uri = Uri.parse("relay://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=answer")
+        val uri = Uri.parse("relay://call?nativeCall=\${callId}&mode=\${mode}&action=answer")
         val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
             setPackage(packageName)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -423,7 +423,7 @@ class IncomingCallActivity : AppCompatActivity() {
         dismissNotification()
 
         // Launch MainActivity with deep link URL for decline
-        val uri = Uri.parse("relay://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=decline")
+        val uri = Uri.parse("relay://call?nativeCall=\${callId}&mode=\${mode}&action=decline")
         val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
             setPackage(packageName)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -467,7 +467,7 @@ class CallActionReceiver : BroadcastReceiver() {
         when (intent.action) {
             RelayCallFcmService.ACTION_ANSWER -> {
                 // Launch via deep link so Expo Linking can read the call params
-                val uri = android.net.Uri.parse("relay://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=answer")
+                val uri = android.net.Uri.parse("relay://call?nativeCall=\${callId}&mode=\${mode}&action=answer")
                 val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
                     setPackage(context.packageName)
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -476,7 +476,7 @@ class CallActionReceiver : BroadcastReceiver() {
             }
             RelayCallFcmService.ACTION_DECLINE -> {
                 // Launch via deep link for decline
-                val uri = android.net.Uri.parse("relay://call?nativeCall=\\\${callId}&mode=\\\${mode}&action=decline")
+                val uri = android.net.Uri.parse("relay://call?nativeCall=\${callId}&mode=\${mode}&action=decline")
                 val launchIntent = Intent(Intent.ACTION_VIEW, uri).apply {
                     setPackage(context.packageName)
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP

@@ -20,6 +20,30 @@ if (src.includes("BuildConfig.PACKAGE")) {
   errors++;
 }
 
+// Check 1b: no ESCAPED-LITERAL dollar before a Kotlin interpolation.
+// In this JS template, `\\\${` (three backslashes) emits `\${` into the Kotlin,
+// and `\$` is Kotlin's escape for a LITERAL dollar — so the string renders the
+// placeholder text verbatim instead of interpolating. That shipped: the
+// answer-from-lock-screen deep link was literally
+// `relay://call?nativeCall=${callId}&...`, and the ringtone URI never resolved,
+// so the ring was silent. The correct source form is `\${` (one backslash).
+{
+  const THREE = "\\".repeat(3) + "${";
+  const bad = [];
+  src.split("\n").forEach((line, i) => {
+    if (line.includes(THREE)) bad.push(`  line ${i + 1}: ${line.trim().slice(0, 100)}`);
+  });
+  if (bad.length) {
+    console.error(
+      "ERROR: escaped-literal dollar before a Kotlin interpolation — these emit " +
+        "the placeholder text verbatim instead of interpolating:\n" + bad.join("\n"),
+    );
+    errors += bad.length;
+  } else {
+    console.log("\u2713 No escaped-literal $ before a Kotlin interpolation");
+  }
+}
+
 // Check 2: No `const val` with non-literal initializer (BuildConfig, function calls)
 // In the raw source, const val with ${PACKAGE} (unescaped) is fine because JS interpolates it to a literal string
 // But const val with \${...} (escaped) would produce Kotlin interpolation which isn't compile-time
