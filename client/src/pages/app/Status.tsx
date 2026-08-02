@@ -10,7 +10,8 @@ import { VideoRecordSheet } from "@/app/VideoRecordSheet";
 import { AUDIENCE_OPTIONS, audienceOption } from "@/app/statusAudience";
 import { EmojiPicker } from "@/app/EmojiPicker";
 import { REACTION_QUICK } from "@/lib/emojiCatalog";
-import { useT, useLocale } from "@/app/i18n";
+import { useT, useLocale, type TKey } from "@/app/i18n";
+import type { StatusAudience } from "@/app/statusAudience";
 
 /**
  * Rich user status (v2.95) — WhatsApp/story-style ephemeral updates: text,
@@ -38,6 +39,43 @@ const BG_OPTIONS = [
 ];
 
 const DEFAULT_ITEM_MS = 5000; // text/image dwell time
+
+/**
+ * The audience options' words, keyed on the option's own VALUE.
+ *
+ * `statusAudience.ts` is the one place these options live and its header records why:
+ * two surfaces render them, and nothing FAILS when two screens promise different things
+ * about one setting. It is a plain module-level constant, so it cannot call a hook — the
+ * same constraint `CATEGORY_META` and `PROFILE_STATUS_META` are under, and the same
+ * answer: it carries the English, the KEY is named here, and the render site translates.
+ *
+ * Keyed on the value rather than looked up by the English text, because a text lookup
+ * silently drops the translation the moment somebody edits a word.
+ */
+const AUDIENCE_KEYS: Record<
+  StatusAudience,
+  { label: TKey; hint: TKey; posted: TKey }
+> = {
+  contacts: {
+    label: "status.audContacts",
+    hint: "status.audContactsHint",
+    posted: "status.postedContacts",
+  },
+  everyone: {
+    label: "status.audEveryone",
+    hint: "status.audEveryoneHint",
+    posted: "status.postedEveryone",
+  },
+};
+
+/**
+ * Fail closed on the way in, exactly as `audienceOption` does: anything that is not the
+ * literal "everyone" resolves to the PRIVATE option. A value we do not recognise must
+ * never be labelled as the wider one.
+ */
+function audienceKeys(v: string | null | undefined) {
+  return v === "everyone" ? AUDIENCE_KEYS.everyone : AUDIENCE_KEYS.contacts;
+}
 
 /**
  * One reel — everything a single ring in the strip stands for.
@@ -159,7 +197,7 @@ export function StatusStrip() {
           className="flex shrink-0 flex-col items-center gap-1.5 w-16"
         >
           <div className="relative">
-            <StatusAvatar name="You" url={myGroup?.subject.avatarUrl ?? null} ring={myGroup ? "seen" : "none"} />
+            <StatusAvatar name={t("status.you")} url={myGroup?.subject.avatarUrl ?? null} ring={myGroup ? "seen" : "none"} />
             <span
               onClick={(e) => { e.stopPropagation(); setComposerOpen(true); }}
               /* v2.106.66 — the ACCENT, per board 1c (`background:var(--rb)`, glyph
@@ -204,7 +242,7 @@ export function StatusStrip() {
 
         {others.length === 0 && !myGroup && (
           <span className="text-xs text-muted-foreground/80 ps-1">
-            Share a photo, video, or a line — visible for 24h to your contacts.
+            {t("status.emptyStrip")}
           </span>
         )}
       </div>
@@ -274,6 +312,13 @@ function StatusAvatar({
 
 function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: () => void }) {
   const t = useT();
+  /* `tn` keeps the group's name INSIDE the sentence for the audience note below. */
+  const { tn } = useLocale();
+  /* Resolved OUT HERE rather than inside the memo below. The group list maps over
+     threads, and naming that loop variable `t` would shadow the translator — the exact
+     collision `dict/messages.ts` records for the swipe-action builder. The loop variable
+     is renamed there too, because removing a shadow beats aliasing around it. */
+  const groupFallback = t("status.groupFallback");
   const [mode, setMode] = useState<"text" | "media">("text");
   const [text, setText] = useState("");
   const [caption, setCaption] = useState("");
@@ -307,13 +352,13 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
   const myGroups = useMemo(
     () =>
       (threads.data ?? [])
-        .filter((t) => t.kind === "group")
-        .map((t) => ({
-          id: t.conversationId,
-          title: t.title || "Group",
-          avatarUrl: t.groupAvatarUrl ?? null,
+        .filter((th) => th.kind === "group")
+        .map((th) => ({
+          id: th.conversationId,
+          title: th.title || groupFallback,
+          avatarUrl: th.groupAvatarUrl ?? null,
         })),
-    [threads.data],
+    [threads.data, groupFallback],
   );
   /** null ⇒ my own ring (the default, and every pre-v2.105.6 behaviour). */
   const [targetGroupId, setTargetGroupId] = useState<number | null>(null);
@@ -383,10 +428,16 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           ...(targetGroupId != null ? { conversationId: targetGroupId } : {}),
         });
       }
+      /* ONE WHOLE SENTENCE PER OUTCOME, never a stem plus an interpolated tail. The
+         second arm used to be `Status posted — ${option.posted}.` — a sentence
+         assembled from a fragment, which cannot be translated at all: Arabic does not
+         put that qualifier where English does, so the two halves can only be glued back
+         into nonsense. (It also said STATUS about a STORY, which is the v2.101.0
+         vocabulary bug; both English halves are corrected in the dictionary.) */
       toast.success(
         targetGroup
-          ? `Story posted to ${targetGroup.title} — everyone in the group can see it for 24h.`
-          : `Status posted — ${audienceOption(effectiveAudience).posted}.`,
+          ? t("status.postedGroup", { group: targetGroup.title })
+          : t(audienceKeys(effectiveAudience).posted),
       );
       onPosted();
     } catch (e) {
@@ -421,7 +472,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
             onClick={() => setMode("text")}
             className={`min-w-0 flex-1 gap-1.5 inline-flex items-center justify-center rounded-xl px-1 py-2 text-sm font-semibold ${mode === "text" ? "bg-primary/15 text-primary" : "text-muted-foreground"}`}
           >
-            <Type className="size-4 shrink-0" /> <span className="truncate">Text</span>
+            <Type className="size-4 shrink-0" /> <span className="truncate">{t("status.text")}</span>
           </button>
           {videoRecorderSupported() && (
             <button
@@ -468,7 +519,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
                 onClick={() => setBgIndex((i) => (i + 1) % BG_OPTIONS.length)}
                 className="absolute bottom-2 end-2 rounded-full bg-black/30 px-2.5 py-1 text-[11px] font-medium text-white"
               >
-                Color
+                {t("status.color")}
               </button>
             </div>
           ) : (
@@ -481,7 +532,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
                   onClick={() => fileRef.current?.click()}
                   className="grid min-h-[200px] w-full place-items-center rounded-xl border-2 border-dashed border-border/70 text-sm text-muted-foreground"
                 >
-                  Tap to choose a photo, video, or audio file
+                  {t("status.chooseMedia")}
                 </button>
               )}
               {file && (
@@ -503,7 +554,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
         {myGroups.length > 0 && (
           <div className="px-3 pb-1">
             <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Post to
+              {t("status.postTo")}
             </p>
             <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
               <button
@@ -516,7 +567,8 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
                     : "border-border/60 text-muted-foreground hover:bg-muted/50"
                 }`}
               >
-                My story
+                {/* The SAME key the strip's own tile uses: one fact, one word. */}
+                {t("status.myStory")}
               </button>
               {myGroups.map((g) => (
                 <button
@@ -546,7 +598,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
         {audiencePickerApplies ? (
         <div className="px-3 pb-1">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Who can see this
+            {t("status.whoCanSee")}
           </p>
           <div className="flex gap-1.5">
             {AUDIENCE_OPTIONS.map((opt) => {
@@ -565,9 +617,11 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
                 >
                   <span className="flex items-center gap-1.5 text-sm font-semibold">
                     <opt.Icon className="size-3.5 shrink-0" />
-                    <span className="truncate">{opt.label}</span>
+                    <span className="truncate">{t(AUDIENCE_KEYS[opt.value].label)}</span>
                   </span>
-                  <span className="mt-0.5 block text-[11px] leading-snug opacity-80">{opt.hint}</span>
+                  <span className="mt-0.5 block text-[11px] leading-snug opacity-80">
+                    {t(AUDIENCE_KEYS[opt.value].hint)}
+                  </span>
                 </button>
               );
             })}
@@ -575,9 +629,14 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
         </div>
         ) : (
           <div className="px-3 pb-1">
+            {/* `tn`, not `t` + string surgery: the group's name is BOLD in the middle of
+                the sentence, and Arabic does not put it between the same two fragments —
+                a sentence chopped at the English seam can only be re-assembled into
+                nonsense, which is the whole reason `translateNodes` exists. */}
             <p className="rounded-xl border border-border/60 bg-muted/40 px-3 py-2 text-[11px] leading-snug text-muted-foreground">
-              Everyone in <span className="font-semibold">{targetGroup?.title}</span> can see this for
-              24h, and it shows under the group — not on your own story.
+              {tn("status.groupAudienceNote", {
+                group: <span className="font-semibold">{targetGroup?.title}</span>,
+              })}
             </p>
           </div>
         )}
@@ -589,7 +648,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
             disabled={posting || (mode === "text" ? !text.trim() : !file)}
             className="h-12 w-full gap-2 rounded-xl text-base font-semibold"
           >
-            {posting ? t("status.posting") : (<><Send className="size-4" /> Share story</>)}
+            {posting ? t("status.posting") : (<><Send className="size-4" /> {t("status.shareStory")}</>)}
           </Button>
         </div>
       </div>
@@ -837,14 +896,18 @@ export function StatusViewer({
                 WITHHELD FOR A SINGLE-SLIDE REEL: "1 of 1" is noise, and the bar above
                 already says there is only one. */}
             {group.items.length > 1 && (
+              /* ONE key with both numbers inside it — "{index} of {total}" — rather than
+                 two JSX fragments around a bare "of", which is a sentence glued at the
+                 English seam. `dir="ltr"` keeps the two Western digits in order whatever
+                 the page direction is (v2.106.84). */
               <span className="font-mono" dir="ltr">
-                {ii + 1} of {group.items.length}
+                {t("status.slideOf", { index: ii + 1, total: group.items.length })}
                 {" · "}
               </span>
             )}
             {group.subject.kind === "group" && item.author
-              ? `${item.mine ? "You" : item.author.displayName} · ${timeAgo(item.createdAt)}`
-              : timeAgo(item.createdAt)}
+              ? `${item.mine ? t("status.you") : item.author.displayName} · ${timeAgoText(item.createdAt, t)}`
+              : timeAgoText(item.createdAt, t)}
           </div>
         </div>
         <button type="button" onClick={onClose} aria-label={t("status.close")} className="rounded-full p-1.5 hover:bg-white/10">
@@ -903,7 +966,7 @@ export function StatusViewer({
       {isMine && (
         <div className="flex items-center justify-between gap-3 px-5 py-3">
           <button type="button" onClick={() => { setPaused(true); setShowViewers(true); }} className="inline-flex items-center gap-1.5 text-sm text-white/80">
-            <Eye className="size-4" /> Viewers
+            <Eye className="size-4" /> {t("status.viewers")}
           </button>
           {/* Which audience THIS post went to (v2.99.55). The per-post value is
               frozen at insert, so this is the truth for this story even if the
@@ -911,13 +974,13 @@ export function StatusViewer({
           {item.audience && (
             <span
               className="inline-flex min-w-0 items-center gap-1 text-xs text-white/60"
-              title={audienceOption(item.audience).hint}
+              title={t(audienceKeys(item.audience).hint)}
             >
               {(() => {
                 const O = audienceOption(item.audience).Icon;
                 return <O className="size-3.5 shrink-0" />;
               })()}
-              <span className="truncate">{audienceOption(item.audience).label}</span>
+              <span className="truncate">{t(audienceKeys(item.audience).label)}</span>
             </span>
           )}
           <button
@@ -952,7 +1015,7 @@ export function StatusViewer({
                 const res = await remove.mutateAsync({ id: item.id });
                 ok = !!res?.ok;
               } catch {
-                toast.error("Couldn't reach the server — story not deleted.");
+                toast.error(t("status.deleteUnreachable"));
                 return;
               }
               // Refresh BOTH reads. `mine` backs the avatar's status pip and the
@@ -963,9 +1026,7 @@ export function StatusViewer({
                 utils.status.mine.invalidate(),
               ]);
               if (!ok) {
-                toast.error(
-                  "That story is no longer there to delete — it may have already expired. Pull to refresh."
-                );
+                toast.error(t("status.deleteGone"));
                 return; // do NOT advance: the item is still there.
               }
               toast.success(t("status.storyDeleted"));
@@ -976,7 +1037,7 @@ export function StatusViewer({
             }}
             className="inline-flex items-center gap-1.5 text-sm text-red-400 disabled:opacity-50"
           >
-            <Trash2 className="size-4" /> {remove.isPending ? t("status.deleting") : "Delete"}
+            <Trash2 className="size-4" /> {remove.isPending ? t("status.deleting") : t("status.delete")}
           </button>
         </div>
       )}
@@ -988,7 +1049,7 @@ export function StatusViewer({
       {canRemoveAsAdmin && item && (
         <div className="flex items-center justify-between gap-3 px-5 py-3">
           <span className="min-w-0 truncate text-xs text-white/55">
-            You're an admin of this group
+            {t("status.youAreAdmin")}
           </span>
           <button
             type="button"
@@ -997,10 +1058,13 @@ export function StatusViewer({
               // Confirmed, because it removes something SOMEBODY ELSE posted and
               // cannot be undone — the copy says whose and where, since "delete
               // this?" does not distinguish it from the author's own Delete.
-              const who = item.author?.displayName || "this member";
+              const who = item.author?.displayName || t("status.thisMember");
               if (
                 !window.confirm(
-                  `Remove ${who}'s story from ${group?.subject.displayName ?? "this group"}? It disappears for every member. This can't be undone.`,
+                  t("status.confirmRemove", {
+                    who,
+                    group: group?.subject.displayName ?? t("status.thisGroup"),
+                  }),
                 )
               ) {
                 return;
@@ -1010,7 +1074,7 @@ export function StatusViewer({
               } catch {
                 // The server answers one message for "gone", "personal story" and
                 // "not an admin here", so there is nothing more specific to say.
-                toast.error("That story isn't there to remove — pull to refresh.");
+                toast.error(t("status.removeGone"));
                 return;
               }
               // Both reads, for the same reason the author path invalidates both:
@@ -1026,7 +1090,7 @@ export function StatusViewer({
             className="inline-flex items-center gap-1.5 text-sm text-red-400 disabled:opacity-50"
           >
             <Trash2 className="size-4" />
-            {removeAsAdmin.isPending ? t("status.removing") : "Remove as admin"}
+            {removeAsAdmin.isPending ? t("status.removing") : t("status.removeAsAdmin")}
           </button>
         </div>
       )}
@@ -1096,7 +1160,7 @@ function StatusReplyBar({
       setText("");
       setPickerOpen(false);
       setOpen(false);
-      toast.success(`Sent to ${ownerName}`);
+      toast.success(t("status.sentTo", { name: ownerName }));
     } catch {
       toast.error(t("status.replyFailed"));
     } finally {
@@ -1107,7 +1171,9 @@ function StatusReplyBar({
   if (expired) {
     return (
       <div className="px-5 py-3 text-center text-xs text-white/50">
-        This status has expired.
+        {/* STORY, not "status": this is the ephemeral post expiring, and calling it a
+            status here is the v2.101.0 vocabulary bug the owner corrected three times. */}
+        {t("status.expired")}
       </div>
     );
   }
@@ -1141,7 +1207,7 @@ function StatusReplyBar({
             type="button"
             disabled={sending}
             onClick={() => send(e)}
-            aria-label={`React with ${e}`}
+            aria-label={t("status.reactWith", { emoji: e })}
             className="grid size-10 place-items-center rounded-full text-2xl leading-none transition active:scale-90 hover:bg-white/15 disabled:opacity-40"
           >
             {e}
@@ -1176,7 +1242,7 @@ function StatusReplyBar({
           // dir="auto" so an Arabic reply lays out right-to-left as typed.
           dir="auto"
           maxLength={2000}
-          placeholder={`Reply to ${ownerName}…`}
+          placeholder={t("status.replyTo", { name: ownerName })}
           aria-label={t("status.replyToStory")}
           className="h-11 min-w-0 flex-1 rounded-full border border-white/20 bg-white/10 px-4 text-sm text-white outline-none placeholder:text-white/40 focus:border-white/40"
         />
@@ -1227,7 +1293,7 @@ function ViewersSheet({ statusId, onClose }: { statusId: number; onClose: () => 
     <div className="fixed inset-0 z-[105] flex items-end bg-black/50" onClick={onClose}>
       <div className="w-full rounded-t-3xl bg-card p-4 text-foreground max-h-[60vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-border" />
-        <div className="mb-2 text-sm font-semibold">Seen by {viewers.length}</div>
+        <div className="mb-2 text-sm font-semibold">{t("status.seenBy", { count: viewers.length })}</div>
         {viewers.length === 0 ? (
           <div className="py-6 text-center text-sm text-muted-foreground">{t("status.noViews")}</div>
         ) : (
@@ -1245,11 +1311,32 @@ function ViewersSheet({ statusId, onClose }: { statusId: number; onClose: () => 
   );
 }
 
-function timeAgo(iso: string | Date): string {
+/**
+ * Which relative-time wording an age needs — the BAND, as a pure function.
+ *
+ * A SELECTOR RETURNING A WHOLE KEY, not a stem plus a unit: `${n} + "m ago"` is a
+ * sentence assembled from a fragment, and the one thing that makes it translatable is
+ * that each band is its own complete string. That is `guestExpiryKey`'s rule, and it is
+ * also what keeps "just now" reading as an expression rather than as "0 minutes".
+ *
+ * Exported as a test seam, because which band a duration selects is exactly the thing a
+ * source pin cannot answer.
+ */
+export function timeAgoKey(
+  iso: string | Date,
+  now = Date.now(),
+): { key: TKey; count: number } {
   const d = typeof iso === "string" ? new Date(iso) : iso;
-  const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
+  const diff = (now - d.getTime()) / 1000;
+  if (diff < 60) return { key: "status.justNow", count: 0 };
+  if (diff < 3600) return { key: "status.minutesAgo", count: Math.floor(diff / 60) };
+  if (diff < 86400) return { key: "status.hoursAgo", count: Math.floor(diff / 3600) };
+  return { key: "status.daysAgo", count: Math.floor(diff / 86400) };
+}
+
+/** The band, rendered. Takes the translator rather than calling a hook: this is reached
+ *  from inside a `.map`, and a module-level function cannot use one anyway. */
+function timeAgoText(iso: string | Date, t: (k: TKey, v?: Record<string, string | number>) => string): string {
+  const { key, count } = timeAgoKey(iso);
+  return t(key, { count });
 }
