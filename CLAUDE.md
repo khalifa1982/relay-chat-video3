@@ -6,7 +6,7 @@
 
 ## TL;DR
 
-**RELAY** is a self-hosted, browser-based voice / video / chat caller wrapped in a phone-app shell. Visitors pick a display name (or sign in), get a persistent 6-digit number, and can dial each other (peer-to-peer WebRTC mesh up to 6 participants), send SMS-style messages with attachments, and manage contacts. Hosted on **AWS** at `https://your-chat.io` (2× EC2 Mumbai + ALB + ElastiCache Redis + S3) via `.github/workflows/deploy.yml`. Develop on `claude/connected-ready-glsdab`, PR into **`main`**, and every merge auto-deploys; **any `aws-ops.yml` dispatch must use `ref: main`**, because the deploy role's OIDC trust policy is scoped to that ref and a branch dispatch fails with a misleading STS error — see the Deploying section. The former Manus/`.org` deployment was **emptied and retired by the owner on 2026-07-21** — `.io` is the ONLY live deployment; do not target `.org` or the Manus Publish flow.
+**RELAY** is a self-hosted, browser-based voice / video / chat caller wrapped in a phone-app shell. Visitors pick a display name (or sign in), get a persistent 6-digit number, and can dial each other (peer-to-peer WebRTC mesh up to 6 participants), send SMS-style messages with attachments, and manage contacts. Hosted on **AWS** at `https://your-chat.io` (2× EC2 Mumbai + ALB + ElastiCache Redis + S3) via `.github/workflows/deploy.yml`. Develop on `claude/connected-ready-glsdab`, PR into **`web-app-main`**, and every merge auto-deploys; **any `aws-ops.yml` dispatch must use `ref: web-app-main`**, because the deploy role's OIDC trust policy is scoped to that ref and a dispatch on another branch fails with a misleading STS error — see the Deploying section. **`main` IS THE MOBILE/EXPO PROJECT, NOT THIS ONE** (owner, 2026-08-01) — it carries no `shared/version.ts` and no `.github/workflows/` at all, so a PR against it deploys nothing and a dispatch on it cannot even find the workflow. The former Manus/`.org` deployment was **emptied and retired by the owner on 2026-07-21** — `.io` is the ONLY live deployment; do not target `.org` or the Manus Publish flow.
 
 Stack: **React 19 + Vite + Tailwind 4 + Express 4 + tRPC 11 + Drizzle ORM (MySQL) + Manus OAuth + Server-Sent Events signaling + native WebRTC + MediaPipe Tasks Vision**. Deployed as a single Node.js process on Cloud Run.
 
@@ -361,35 +361,39 @@ Vitest runs Node-environment tests under `server/**/*.test.ts` and `client/src/l
 
 ## Deploying
 
-> **`main` IS THIS PROJECT AGAIN, AND ANY WORKFLOW YOU DISPATCH MUST RUN ON IT
-> (verified 2026-07-28).** For a few days `main` carried a different project of the
-> owner's (their Expo/React-Native WebView shell) and an earlier revision of this file
-> said so, adding "do not open a pull request against `main`" and "there is no live
-> deployment path". **All of that is now false and following it wastes runs.** The
-> owner restored `main`; it carries the web app (`client/`, `shared/version.ts` at the
-> current release, `ecosystem.config.cjs`, and all five workflows), PRs from
-> `claude/connected-ready-glsdab` merge into it normally, and every merge deploys.
-> Confirm rather than trust this paragraph:
-> `git ls-tree --name-only origin/main .github/workflows/` and
-> `git show origin/main:shared/version.ts`.
+> **THE WEB APP'S MAINLINE IS `web-app-main`, NOT `main` (owner, 2026-08-01).**
+> This paragraph has now been wrong in BOTH directions, which is why it must be
+> confirmed rather than trusted: at one point `main` carried the owner's Expo /
+> React-Native shell, then it carried the web app again (and this file said so),
+> and it now carries the mobile project once more while the web app lives on
+> `web-app-main`. **A stale answer here is expensive rather than merely untidy** —
+> it sends you to open a PR that deploys nothing, or to dispatch a workflow that
+> does not exist on the ref you named.
 >
-> **THE LOAD-BEARING RULE: dispatch `aws-ops.yml` with `ref: main`, never a feature
-> branch.** The `relay-github-deploy` OIDC trust policy is scoped to
-> `repo:khalifa1982/relay-chat-video3:ref:refs/heads/main`, so
-> `configure-aws-credentials` on any other ref retries a dozen times and then fails
-> with `Could not assume role with OIDC: Not authorized to perform
-> sts:AssumeRoleWithWebIdentity`. That error names STS, so it reads like an AWS-side
-> problem or a throttle and invites you to retry — it is neither, and three identical
-> re-runs on a branch will fail identically. The tell is `head_branch` on the run: every
-> successful aws-ops run in the history has `main`. (This is also why the failure is
-> SAFE: it happens before the first AWS call, so a refused apply wrote nothing.) The
-> workflow prefers `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` repo secrets when they
-> exist and only falls back to OIDC — setting those would remove the ref constraint,
-> and until then `main` is the only ref that authenticates.
+> **CONFIRM IN TWO COMMANDS BEFORE ACTING ON ANY OF THIS:**
+> `git ls-tree --name-only origin/<branch> .github/workflows/` and
+> `git show origin/<branch>:shared/version.ts`. The branch that answers with five
+> workflows and a version string is the web app's mainline. As of 2026-08-01 that
+> is `web-app-main`; `origin/main` answers with **nothing on both counts**, so a
+> PR against it cannot deploy and a dispatch on it cannot even find the workflow.
+>
+> **THE LOAD-BEARING RULE: dispatch `aws-ops.yml` with the mainline's ref, never a
+> feature branch.** The `relay-github-deploy` OIDC trust policy is scoped to that
+> ref, so `configure-aws-credentials` on any other one retries a dozen times and
+> then fails with `Could not assume role with OIDC: Not authorized to perform
+> sts:AssumeRoleWithWebIdentity`. That error names STS, so it reads like an
+> AWS-side problem or a throttle and invites you to retry — it is neither, and
+> three identical re-runs on a branch will fail identically. The tell is
+> `head_branch` on the run. (This is also why the failure is SAFE: it happens
+> before the first AWS call, so a refused apply wrote nothing.) The workflow
+> prefers `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` repo secrets when they exist
+> and only falls back to OIDC — setting those would remove the ref constraint.
 
-**Every push to `main` auto-deploys to `.io`**: `.github/workflows/deploy.yml` builds,
-uploads to S3, and rolling-deploys via SSM to the EC2 fleet (one server at a time,
-`/api/health` gated, ~60–90s end to end). Verify with
+**Every push to `web-app-main` auto-deploys to `.io`**: `.github/workflows/deploy.yml`
+builds, uploads to S3, and rolling-deploys via SSM to the EC2 fleet (one server at a
+time, `/api/health` gated, ~60–90s end to end). Its `push.branches` is
+`[web-app-main]` and its own header records why, so the workflow itself is the
+authority if this file and it ever disagree. Verify with
 `curl https://your-chat.io/api/version`.
 
 The former Manus/`.org` deployment was **emptied and retired by the owner (2026-07-21)** — the Publish-button flow no longer applies. Do not point anything (docs, mobile clients, emails) at `.org` or `manus.space`. There is **no Vercel, Netlify, Railway, or Render involved**.
