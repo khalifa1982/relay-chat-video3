@@ -675,8 +675,30 @@ export default function DialerPage() {
                   margin separates it from the pad. The card's `gap` already spaces
                   its rows; this is the space INSIDE the number area, which the gap
                   could not reach. */}
+              {/* v2.106.80 (owner, with a screenshot of the live Dialer and one
+                  word — "You see the over lap"): `mt-3` was 12px, and that is
+                  LESS THAN THE ADD-TO-CONTACTS LABEL NEEDS, so the label landed
+                  on top of this block's first line. Their screenshot shows "Add
+                  to contacts" written across "Registered".
+
+                  THE ARITHMETIC IS WHY IT WAS ALWAYS GOING TO COLLIDE: the add
+                  button is 48px centred on a 28px digit run, so it already hangs
+                  ~10px below the digits before the label starts; the label then
+                  needs its own 4px offset plus 9.5px of text. 12px could never
+                  hold ~13.5px of content, and because the label is absolutely
+                  positioned it takes no space and nothing failed — it simply
+                  drew over whatever was there.
+
+                  MEASURED AGAINST THE REAL BUILT STYLESHEET at 320/360/375/390/430
+                  (the owner's screenshot is 1125px at DPR 3, i.e. 375): at 12px
+                  the label's bottom sits 5px BELOW the name line's top at every
+                  width; at 16px it is still 1px short; at 20px there is a 3px
+                  gap and every width comes back clean. So this is 20px, and the
+                  bottom margin absorbs part of the cost — the card's own `gap`
+                  already separates this block from the row beneath it, which is
+                  what v2.99.90's "make space" ask was really about. */}
               <div
-                className="mt-3 mb-1.5 text-[0.78rem] min-h-4 text-muted-foreground"
+                className="mt-5 mb-1 text-[0.78rem] min-h-4 text-muted-foreground"
                 aria-live="polite"
               >
                 {ghost.mode === "ghost" ? (
@@ -1172,14 +1194,25 @@ function QuickAddContact({ number, displayName }: { number: string; displayName:
     </button>
       {/* THE WORDS, HANGING BELOW THE ICON. `absolute top-full` keeps the icon
           exactly where it was so its alignment with the digits is untouched, and
-          `whitespace-nowrap` + a centred translate let the label be wider than the
-          48px button without ever widening the grid cell it sits in. It is
-          aria-hidden because the button's own aria-label already names the action —
-          a screen reader must not hear it twice. */}
+          `whitespace-nowrap` lets the label be wider than the 48px button without
+          ever widening the grid cell it sits in. It is aria-hidden because the
+          button's own aria-label already names the action — a screen reader must
+          not hear it twice.
+
+          IT IS ANCHORED BY ITS END EDGE, NOT CENTRED, AND THAT REVERSES v2.106.79
+          ON A MEASUREMENT RATHER THAN A PREFERENCE. That release centred it
+          physically (`left-1/2 -translate-x-1/2`) so the centring would not mirror
+          in RTL, and said plainly that nobody had measured it. Measured now, at
+          320px the centred label's right edge lands 6.6px PAST the card and the
+          whole page scrolls sideways — the button already sits near the right
+          edge, so a label wider than the button has nowhere to be but off-screen.
+          `end-0` pins the label's trailing edge to the button's own, which cannot
+          overflow by construction at any width, and being LOGICAL it mirrors in
+          Arabic instead of needing an exemption from the RTL sweep. */}
       <span
         aria-hidden="true"
         className="
-          absolute top-full left-1/2 -translate-x-1/2 mt-1
+          absolute top-full end-0 mt-1
           whitespace-nowrap leading-none text-[9.5px] font-medium tracking-wide
           text-muted-foreground pointer-events-none
         "

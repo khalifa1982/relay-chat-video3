@@ -97,6 +97,8 @@ import { GroupAvatar } from "@/app/GroupAvatar";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { videoRecorderSupported } from "@/lib/videoNote";
 import { VideoRecordSheet } from "@/app/VideoRecordSheet";
+import { ImageEditSheet } from "@/app/ImageEditSheet";
+import { isEditableImage } from "@/lib/imageEdit";
 import { GroupInfoSheet } from "@/app/GroupInfoSheet";
 import { SwipeRow, type SwipeAction } from "@/app/SwipeRow";
 import { linkify } from "@/lib/linkify";
@@ -1937,6 +1939,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // in-app (works mid-call) or pick from the library.
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [videoRecOpen, setVideoRecOpen] = useState(false);
+  /* #144 — the photo waiting on the rotate/crop sheet. Holding the FILE (rather
+     than a boolean) is what lets both exits hand the very same object back to
+     `uploadFile`, so cancelling is indistinguishable from never having opened
+     the editor. */
+  const [editImage, setEditImage] = useState<File | null>(null);
   // A picked-but-unsent attachment must not follow the user into a DIFFERENT
   // conversation when they switch threads — it would otherwise sit silently
   // staged and get attached to whatever they next send there.
@@ -2093,6 +2100,32 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     const file = e.target.files?.[0];
     e.target.value = ""; // reset so re-picking the same file fires onChange
     if (!file) return;
+    await uploadFile(file);
+  }
+  /**
+   * The PHOTO picker (#144). A photo we would re-encode anyway gets the
+   * rotate/crop sheet first; everything else — video, and any image the
+   * downscale pipeline leaves alone — uploads directly, exactly as before.
+   *
+   * The gate is `isEditableImage`, which DELEGATES to the downscale pipeline's
+   * own `isDownscalableImage`, and that is the point rather than an
+   * abbreviation: an animated GIF must never reach a canvas here, because a
+   * re-encode keeps one frame and silently drops the animation. One rule, one
+   * place, so the editor and the uploader cannot come to disagree about which
+   * images are safe to redraw.
+   *
+   * Deliberately NOT applied to `handlePaste`: pasting a screenshot is a single
+   * quick gesture, and interrupting it with a full-screen modal would make the
+   * fast path slower for the case it exists to serve.
+   */
+  async function handleImagePick(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (isEditableImage(file.type)) {
+      setEditImage(file);
+      return;
+    }
     await uploadFile(file);
   }
   // Paste an image/video straight from the clipboard (e.g. a screenshot) into
@@ -3514,7 +3547,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             type="file"
             accept="image/*,video/*"
             className="hidden"
-            onChange={handleFile}
+            onChange={handleImagePick}
           />
           <input ref={fileRef} type="file" className="hidden" onChange={handleFile} />
           {/* BOARD 1d: THE ATTACH CLIP LIVES INSIDE THE FIELD, not beside it.
@@ -3641,6 +3674,26 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           onUse={(r) => {
             setVideoRecOpen(false);
             void uploadFile(new File([r.blob], `video-note.${r.ext}`, { type: r.mimeType }));
+          }}
+        />
+      )}
+      {/* Pre-upload photo editor (#144): rotate + crop, then the edited file
+          joins the SAME attachment flow — so the downscale, the thumbnail, the
+          caption and the disappearing timer all still apply.
+          BOTH exits attach the photo, and `onClose` attaches the caller's very
+          own File object: skipping the editor has to be indistinguishable from
+          never having opened it, so there is no re-encode on that path. */}
+      {editImage && (
+        <ImageEditSheet
+          file={editImage}
+          onClose={() => {
+            const original = editImage;
+            setEditImage(null);
+            void uploadFile(original);
+          }}
+          onUse={(f) => {
+            setEditImage(null);
+            void uploadFile(f);
           }}
         />
       )}
