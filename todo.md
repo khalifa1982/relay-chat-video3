@@ -1,5 +1,91 @@
 # Project TODO
 
+## v2.107.3 — the group header stops repeating what its own details sheet already holds
+
+Owner, restating something they say they have explained several times:
+
+> *"I told you inside the group and the bar, you remove the group ID and you remove the
+> group status, and you just put the group name up and online users and the total
+> members. I explained to you several times, but I don't see you implemented."*
+
+**They are right, and the reason it survived several requests is written down in a test.**
+`server/groupIdentity.test.ts` carried a pin titled *"the header shows the group's id and
+its status, and NO tier badge"* — an assertion that REQUIRED exactly what the owner asked
+to remove. Anybody who did the work would have turned that pin red and, reading its title,
+would reasonably have concluded the current behaviour was deliberate. A test that freezes
+the thing somebody is asking you to change is worse than no test, because it argues back.
+
+### what the header carried, and what it carries now
+
+Before, a group conversation's subline read:
+
+```
+114-212 · Away · 5 members · 3 online
+```
+
+Now it reads:
+
+```
+5 members · 3 online
+```
+
+with the group's NAME as the headline above it, unchanged. A 1:1 header is **untouched** —
+it still shows the person's PIN, which is why the separator that follows it stays gated on
+`!isGroup` rather than being deleted outright.
+
+### why both facts were on the header in the first place, and why that was the wrong call
+
+Neither arrived by accident. v2.102.0 gave a group its own 6-digit id and reasoned that it
+should read like a person's PIN; v2.101.1 gave a group a status and reasoned that it should
+read like a person's. Each is coherent on its own and both are wrong for THIS bar: a header
+you are looking at *while reading a conversation* answers "who am I talking to, and who is
+here". An id is a thing you go and LOOK UP when you want to share the group — it is not a
+thing you need on screen the whole time you are reading.
+
+### neither fact is lost, which is what makes the removal safe
+
+Both live on in the group's own details sheet, **one tap away on this very header** — that
+sheet is where the id is copied and shared, and it is where the status is SET (its
+`ProfileStatusPicker` is the only place in the app a group's status can be chosen at all).
+What is removed is the duplication, not the fact. That is asserted rather than assumed: a
+test pins that the sheet still renders the grouped number, still formats the status through
+the shared `describeProfileStatus`, still carries the picker, and that tapping the header is
+what opens it.
+
+### the pin is rewritten to the property, and one of my own assertions was too narrow
+
+The replacement asserts what the header MUST carry — the name as headline, the member count,
+the online count, and no tier badge (a tier describes a person's account; a group has none)
+— plus the two removals.
+
+**A mutation run then caught a real gap in my own first draft.** I had written the removal as
+*"`describeProfileStatus` does not appear"*, i.e. a ban on one IDENTIFIER. A mutation that
+reinstated the status through a plain local instead **SURVIVED it**. Banning a name is not
+the property. Whatever route a reinstatement takes it has to read one of the two wire fields
+— `thread.groupStatus` and `thread.groupNumber` are the only source of either fact in that
+component — so the assertion is now that **every such read is inside the sheet's own mount**,
+compared by count. It is deliberately scoped to `thread?.`, because the thread LIST
+legitimately reads `t.groupNumber` on a row and that is a different surface the owner did not
+ask about.
+
+**12 of 12 tripwires verified by MUTATION** off a confirmed-green baseline from byte-exact
+backups, the mutator aborting unless its target occurs exactly once and treating a changed
+test TOTAL as a harness failure; both sources byte-identical afterwards. That includes the
+defect reinstated **verbatim** (the const plus its render, exactly as it stood at HEAD) and
+reinstated by two OTHER routes, so a future return through a different spelling still bites.
+
+**Two bad needles of my own were reported rather than counted**: one referenced
+`groupStatusText`, a local this release deletes, so it could never compile and never created
+the defect it named — re-run as a genuine verbatim reinstatement, it bit; and two aborted at
+zero occurrences on an import name and an indentation I had guessed at rather than read.
+
+**Not verified on a device, said plainly**: nobody has opened a group conversation on the
+owner's phone and looked at the bar. What is proven is that the two facts are off that header,
+that they are still reachable one tap away, and that a reinstatement by any of three routes
+goes red.
+
+No schema change, no new dependency, no new env var, no server change. 6220 tests.
+
 ## v2.107.2 — four screens the owner could not read, and one of them had been "fixed" in the wrong place
 
 Owner, with four screenshots:
