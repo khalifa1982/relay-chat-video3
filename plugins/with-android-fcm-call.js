@@ -72,9 +72,25 @@ class RelayCallFcmService : FirebaseMessagingService() {
 
         when (type) {
             "incoming_call" -> handleIncomingCall(data)
-            "call_cancel" -> handleCallCancel()
+            "call_cancel" -> handleCallCancel(data)
         }
     }
+
+    /**
+     * Which call is ringing right now.
+     *
+     * Kept in SharedPreferences rather than a static because the messaging
+     * service's process can be torn down between two pushes, and a forgotten
+     * id makes the cancel below dismiss the wrong ring.
+     */
+    private fun setRingingCallId(id: String) {
+        getSharedPreferences("relay_push", Context.MODE_PRIVATE)
+            .edit().putString("ringing_call_id", id).apply()
+    }
+
+    private fun ringingCallId(): String =
+        getSharedPreferences("relay_push", Context.MODE_PRIVATE)
+            .getString("ringing_call_id", "") ?: ""
 
     override fun onNewToken(token: String) {
         // Token refresh is handled by the JS layer on next app open.
@@ -159,14 +175,38 @@ class RelayCallFcmService : FirebaseMessagingService() {
 
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIFICATION_ID, notification)
+        setRingingCallId(callId)
     }
 
-    private fun handleCallCancel() {
+    /**
+     * Cancel the call this push NAMES, not whatever happens to be ringing.
+     *
+     * There is a single NOTIFICATION_ID, so a second incoming call replaces the
+     * first one's notification. A late cancel for the call that was replaced
+     * would then silence the call that is actually ringing — the callee sees a
+     * ring vanish mid-air and the caller waits out the timeout.
+     *
+     * Conservative on purpose: only a cancel that names a DIFFERENT known call
+     * is ignored. An unnamed cancel, or one arriving when we have no record of
+     * what is ringing, still dismisses — a missed cancel leaves the phone
+     * ringing at a caller who has already hung up, which is the worse failure.
+     */
+    private fun handleCallCancel(data: Map<String, String>) {
+        val target = data["callId"] ?: ""
+        val ringing = ringingCallId()
+        if (target.isNotEmpty() && ringing.isNotEmpty() && target != ringing) return
+
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.cancel(NOTIFICATION_ID)
+        setRingingCallId("")
 
-        // Also tell IncomingCallActivity to finish if it's showing
-        val intent = Intent("${PACKAGE}.CALL_CANCEL")
+        // Also tell IncomingCallActivity to finish if it's showing. Restricted to
+        // our own package: the action is a custom string, and an unrestricted
+        // broadcast is readable by any app that registers for it.
+        val intent = Intent("${PACKAGE}.CALL_CANCEL").apply {
+            setPackage(packageName)
+            putExtra(EXTRA_CALL_ID, if (target.isNotEmpty()) target else ringing)
+        }
         sendBroadcast(intent)
     }
 
@@ -239,6 +279,11 @@ class IncomingCallActivity : AppCompatActivity() {
 
     private val cancelReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            // Only tear down if this cancel is about the call WE are showing. An
+            // unnamed cancel is treated as "everything", which is what the older
+            // broadcast meant and is still the safe reading.
+            val target = intent?.getStringExtra(RelayCallFcmService.EXTRA_CALL_ID) ?: ""
+            if (target.isNotEmpty() && callId.isNotEmpty() && target != callId) return
             stopRinging()
             finish()
         }
@@ -435,6 +480,9 @@ class IncomingCallActivity : AppCompatActivity() {
     private fun dismissNotification() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         nm.cancel(RelayCallFcmService.NOTIFICATION_ID)
+        // Nothing is ringing once the user has answered or declined here.
+        getSharedPreferences("relay_push", Context.MODE_PRIVATE)
+            .edit().putString("ringing_call_id", "").apply()
     }
 
     override fun onDestroy() {
@@ -461,8 +509,18 @@ class CallActionReceiver : BroadcastReceiver() {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.cancel(RelayCallFcmService.NOTIFICATION_ID)
 
-        // Tell IncomingCallActivity to stop (if showing)
-        context.sendBroadcast(Intent("${PACKAGE}.CALL_CANCEL"))
+        // This device has acted on the call, so nothing is ringing any more. Left
+        // set, a later cancel naming a DIFFERENT call would be judged against a
+        // dead id and dropped.
+        context.getSharedPreferences("relay_push", Context.MODE_PRIVATE)
+            .edit().putString("ringing_call_id", "").apply()
+
+        // Tell IncomingCallActivity to stop (if showing). Same package only, and
+        // naming the call so it cannot dismiss a different ring.
+        context.sendBroadcast(Intent("${PACKAGE}.CALL_CANCEL").apply {
+            setPackage(context.packageName)
+            putExtra(RelayCallFcmService.EXTRA_CALL_ID, callId)
+        })
 
         when (intent.action) {
             RelayCallFcmService.ACTION_ANSWER -> {
@@ -733,6 +791,8 @@ class RelayNativeInterface(
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(RelayCallFcmService.NOTIFICATION_ID)
             nm.cancel(RelayCallFcmService.ONGOING_CALL_NOTIFICATION_ID)
+            context.getSharedPreferences("relay_push", Context.MODE_PRIVATE)
+                .edit().putString("ringing_call_id", "").apply()
 
             // Deactivate audio routing
             audioRouter.deactivate()

@@ -588,7 +588,51 @@ export const CALL_WATCH_JS = `(() => {
 true;`;
 
 /**
+ * SESSION_REHYDRATE_JS — the half of session persistence that must run FIRST.
+ *
+ * `injectedJavaScript` runs at document-end: the web bundle has already been
+ * evaluated and has already read `sessionStorage` to decide whether anybody is
+ * signed in. Restoring the session after that point restores it for the NEXT
+ * load, so the user saw a sign-in screen on every cold start and the persistence
+ * only ever appeared to work if they navigated again.
+ *
+ * So the copy-back is injected via `injectedJavaScriptBeforeContentLoaded`
+ * instead, and only the copy-back — the snapshot timers still belong at
+ * document-end, where the page is live.
+ *
+ * It stays IDEMPOTENT and is deliberately also reached from SESSION_PERSIST_JS:
+ * react-native-webview's before-content hook lands at `onPageStarted` on
+ * Android, which is early but not contractually before the page's own scripts.
+ * Running it twice costs a JSON parse; running it zero times costs the session.
+ */
+export const SESSION_REHYDRATE_JS = `(() => {
+  try {
+    var NS = '__relay_ss__';
+    window.__relayRehydrate = function () {
+      try {
+        var raw = localStorage.getItem(NS);
+        if (!raw) return;
+        var saved = JSON.parse(raw);
+        Object.keys(saved).forEach(function (k) {
+          // Never overwrite a live value: the page's own state wins over the
+          // snapshot, or a sign-out would be undone by the last snapshot taken
+          // before it.
+          if (sessionStorage.getItem(k) === null) {
+            try { sessionStorage.setItem(k, saved[k]); } catch (e) {}
+          }
+        });
+      } catch (e) {}
+    };
+    window.__relayRehydrate();
+  } catch (e) {}
+})();
+true;`;
+
+/**
  * SESSION_PERSIST_JS — keep the user signed in across full app restarts.
+ *
+ * The restore half lives in SESSION_REHYDRATE_JS and runs before the page's own
+ * scripts; this half takes the snapshots.
  */
 export const SESSION_PERSIST_JS = `(() => {
   try {
@@ -597,6 +641,9 @@ export const SESSION_PERSIST_JS = `(() => {
     var NS = '__relay_ss__';
 
     var rehydrate = function () {
+      // Installed by SESSION_REHYDRATE_JS. Defined again here only for the case
+      // where the before-content injection did not run at all.
+      if (typeof window.__relayRehydrate === 'function') { window.__relayRehydrate(); return; }
       try {
         var raw = localStorage.getItem(NS);
         if (!raw) return;
@@ -786,3 +833,11 @@ true;`;
 /** Combined script injected once on load. */
 export const INJECTED_JS =
   RELAY_NATIVE_BRIDGE_JS + "\n" + SESSION_PERSIST_JS + "\n" + VERSION_WATCH_JS + "\n" + CALL_WATCH_JS + "\n" + HANGUP_ICON_FIX_JS;
+
+/**
+ * Injected BEFORE the page's own scripts run.
+ *
+ * Only what genuinely cannot wait belongs here — this runs against a document
+ * that may have no body yet, so anything touching the DOM would throw.
+ */
+export const INJECTED_BEFORE_JS = SESSION_REHYDRATE_JS;

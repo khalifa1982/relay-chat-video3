@@ -19,7 +19,7 @@ import type { WebViewErrorEvent } from "react-native-webview/lib/WebViewTypes";
 
 import { RELAY_APP_URL, isInternalUrl } from "@/lib/relay-config";
 import { reconcileVersion } from "@/lib/version-watch";
-import { INJECTED_JS } from "@/lib/injected-scripts";
+import { INJECTED_BEFORE_JS, INJECTED_JS } from "@/lib/injected-scripts";
 import { parseRelayMessage } from "@/lib/call-messages";
 import { useCallSession } from "@/hooks/use-call-session";
 import { useCallNotifications } from "@/hooks/use-call-notifications";
@@ -390,6 +390,10 @@ export function RelayWebView() {
         onShouldStartLoadWithRequest={handleShouldStartLoad}
         onMessage={handleMessage}
         injectedJavaScript={INJECTED_JS}
+        // The session copy-back has to beat the web bundle's own read of
+        // sessionStorage; at document-end it restores the session for the NEXT
+        // load, which is why cold start kept showing a sign-in screen.
+        injectedJavaScriptBeforeContentLoaded={INJECTED_BEFORE_JS}
       />
 
       {webUpdateAvailable && !loading && !hasError ? (
