@@ -224,6 +224,48 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessa
     return newUUID
   }
 
+  /// A "the caller hung up" VoIP push.
+  ///
+  /// iOS 13+ TERMINATES an app that returns from didReceiveIncomingPushWith
+  /// without reporting an incoming call, and after a few of those the system
+  /// stops delivering VoIP pushes to it altogether — at which point the app
+  /// never rings again until it is reinstalled. ENDING a call is not REPORTING
+  /// one, so the old code was a guaranteed kill in the common case: the app was
+  /// evicted between the ring and the hang-up, so this process had no record of
+  /// the call and reportCall(with:endedAt:) matched nothing at all.
+  ///
+  /// Known call → end it, which is the ordinary warm path and satisfies the
+  /// requirement via the push that reported it. Unknown call → report it and end
+  /// it in the same breath, which is the sanctioned shape for exactly this case.
+  /// includesCallsInRecents = false keeps the flash out of the Phone app.
+  private func handleCancelPush(callId: String, callUUID: UUID, callerName: String,
+                                wasReported: Bool, completion: @escaping () -> Void) {
+    if wasReported {
+      callKitProvider?.reportCall(with: callUUID, endedAt: nil, reason: .remoteEnded)
+      removeCall(callId)
+      completion()
+      return
+    }
+
+    let update = CXCallUpdate()
+    update.remoteHandle = CXHandle(type: .generic, value: callerName)
+    update.localizedCallerName = callerName
+    update.hasVideo = false
+    update.supportsHolding = false
+    update.supportsDTMF = false
+    update.supportsGrouping = false
+    update.supportsUngrouping = false
+
+    callKitProvider?.reportNewIncomingCall(with: callUUID, update: update) { error in
+      if let error = error {
+        NSLog("[RELAY VoIP] Cancel-push report failed: %@", error.localizedDescription)
+      }
+      self.callKitProvider?.reportCall(with: callUUID, endedAt: nil, reason: .remoteEnded)
+      self.removeCall(callId)
+      completion()
+    }
+  }
+
   /// Remove a callId→UUID mapping
   private func removeCall(_ callId: String?) {
     guard let id = callId else { return }
@@ -362,6 +404,8 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessa
     let callerName = d["callerName"] as? String ?? "RELAY"
     let mode = d["mode"] as? String ?? "voice"
     let hasVideo = mode == "video"
+    // BEFORE uuid(for:), which mints and stores one — after it, everything looks known.
+    let wasReported = callIdToUUID[callId] != nil
     let callUUID = uuid(for: callId)
 
     // Track video/voice mode for audio session configuration
@@ -375,10 +419,8 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessa
     RNVoipPushNotificationManager.didReceiveIncomingPush(with: payload, forType: type.rawValue)
 
     if pushType == "call_cancel" {
-      // Caller cancelled — dismiss the CallKit UI
-      callKitProvider?.reportCall(with: callUUID, endedAt: nil, reason: .remoteEnded)
-      removeCall(callId)
-      completion()
+      handleCancelPush(callId: callId, callUUID: callUUID, callerName: callerName,
+                       wasReported: wasReported, completion: completion)
     } else {
       // Incoming call — MUST report to CallKit before handler returns (iOS 13+ law)
       let update = CXCallUpdate()

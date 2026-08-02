@@ -36,19 +36,33 @@ if (Platform.OS === "ios") {
   }
 }
 
-/** Pending call context stored when CallKit answers before WebView is ready */
-interface PendingCallAnswer {
-  callId: string;
-  mode: string;
-}
+/**
+ * A CallKit action that happened before the WebView could hear about it.
+ *
+ * ANSWER used to be queued and END did not, so declining a cold-start ring from
+ * the lock screen was dropped on the floor: `injectCallDeclined` returns early
+ * when the WebView is not ready, and nothing retried. The caller then sat
+ * ringing until the timeout while the callee had already pressed Decline.
+ */
+type PendingCallEvent =
+  | { kind: "answer"; callId: string; mode: string }
+  | { kind: "end"; callId: string };
 
 // Module-level state
 let webViewRef: React.RefObject<WebView | null> | null = null;
 let voipToken: string | null = null;
 let isWebViewReady = false;
 let pendingTokenInjection = false;
-let pendingCallAnswer: PendingCallAnswer | null = null;
+let pendingCallEvents: PendingCallEvent[] = [];
 let initialized = false;
+
+/** Bounded: a wedged WebView must not turn this into an unbounded backlog. */
+const MAX_PENDING_CALL_EVENTS = 8;
+
+function queueCallEvent(e: PendingCallEvent) {
+  pendingCallEvents.push(e);
+  if (pendingCallEvents.length > MAX_PENDING_CALL_EVENTS) pendingCallEvents.shift();
+}
 
 // Map UUID → callId for reverse lookup
 const uuidToCallId: Map<string, string> = new Map();
@@ -147,7 +161,7 @@ export function initVoipCallManager() {
       injectCallAnswered(callId, mode);
     } else {
       // Cold start: queue for when WebView loads
-      pendingCallAnswer = { callId, mode };
+      queueCallEvent({ kind: "answer", callId, mode });
     }
   });
 
@@ -155,7 +169,13 @@ export function initVoipCallManager() {
   RNCallKeep.addEventListener("endCall", ({ callUUID }: { callUUID: string }) => {
     console.log("[RELAY VoIP] Call ended/declined via CallKit, UUID:", callUUID);
     const callId = uuidToCallId.get(callUUID.toLowerCase()) || callUUID;
-    injectCallDeclined(callId);
+    if (isWebViewReady && webViewRef?.current) {
+      injectCallDeclined(callId);
+    } else {
+      // Same cold-start path as answer. Without this the decline is lost and the
+      // caller rings on at somebody who already refused.
+      queueCallEvent({ kind: "end", callId });
+    }
     uuidToCallId.delete(callUUID.toLowerCase());
     uuidToMode.delete(callUUID.toLowerCase());
   });
@@ -175,10 +195,13 @@ export function initVoipCallManager() {
       if (name === "RNCallKeepPerformAnswerCallAction") {
         const callId = uuidToCallId.get(data?.callUUID?.toLowerCase()) || data?.callUUID || "";
         const mode = uuidToMode.get(data?.callUUID?.toLowerCase()) || "voice";
-        pendingCallAnswer = { callId, mode };
+        queueCallEvent({ kind: "answer", callId, mode });
       } else if (name === "RNCallKeepPerformEndCallAction") {
+        // These are BY DEFINITION early — this handler exists because the JS
+        // bridge was not up when they fired — so injecting straight away could
+        // never have worked. Queue it like the answer beside it.
         const callId = uuidToCallId.get(data?.callUUID?.toLowerCase()) || data?.callUUID || "";
-        injectCallDeclined(callId);
+        queueCallEvent({ kind: "end", callId });
       }
     }
   });
@@ -219,14 +242,34 @@ export function onVoipWebViewReady() {
     injectTokenIntoWebView(voipToken);
   }
 
-  // Handle pending call answer (cold start scenario)
-  if (pendingCallAnswer) {
-    const { callId, mode } = pendingCallAnswer;
-    pendingCallAnswer = null;
-    // For cold start, load the call URL directly
-    if (webViewRef?.current) {
-      const callUrl = `${RELAY_APP_URL}?nativeCall=${encodeURIComponent(callId)}&mode=${encodeURIComponent(mode)}&action=answer`;
-      webViewRef.current.injectJavaScript(navigateJs(callUrl));
+  flushPendingCallEvents();
+}
+
+/**
+ * Deliver the CallKit actions that happened while the WebView was still coming
+ * up, in the order they happened.
+ *
+ * An answer that was later ended is DROPPED rather than replayed: answering
+ * navigates the WebView to the call URL, and navigating only to immediately
+ * tell the fresh page the call is over would race the load and, if it lost,
+ * leave the user staring at a call that no longer exists.
+ */
+function flushPendingCallEvents() {
+  const queued = pendingCallEvents;
+  pendingCallEvents = [];
+  if (queued.length === 0) return;
+
+  const ended = new Set(queued.filter((e) => e.kind === "end").map((e) => e.callId));
+  for (const e of queued) {
+    if (e.kind === "answer") {
+      if (ended.has(e.callId)) continue;
+      // Cold start: load the call URL directly so the page boots into the call.
+      if (webViewRef?.current) {
+        const callUrl = `${RELAY_APP_URL}?nativeCall=${encodeURIComponent(e.callId)}&mode=${encodeURIComponent(e.mode)}&action=answer`;
+        webViewRef.current.injectJavaScript(navigateJs(callUrl));
+      }
+    } else {
+      injectCallDeclined(e.callId);
     }
   }
 }
