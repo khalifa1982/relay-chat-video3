@@ -13,7 +13,8 @@
 - [x] Standing guard: no client screen may use an empty-arglist locale formatter; 3 exemptions NAMED (2 vendored shadcn + the dev TURN probe) with a staleness check so the list cannot rot
 - [x] 7 pre-existing pins repointed; two had frozen the DEFECT (the empty arglist verbatim)
 - [x] `lastSeen.ts` renamed `presenceCopy.ts` — it now holds last-seen, presence, occupancy and compact-ago
-- [x] 13/13 tripwires verified by mutation off a green baseline; 5 sources byte-identical afterwards; 6169 tests
+- [x] 13/13 tripwires verified by mutation off a green baseline; 5 sources byte-identical afterwards
+- [x] Verified in an ISOLATED worktree at the commit's own SHA — which caught that the pathspec commit had taken a parallel run's `MediaEditSheet` import inside `Messages.tsx` without the file. Typecheck clean, 328 files, 6107 passed, `vite build` green
 - [ ] `formatElapsedSince` is still English-abbreviated (`3h 20m`) — a COMPOUND duration needs a plural per unit, its own piece of work; substituted by name so Arabic controls placement
 - [ ] Nobody has switched the app to Arabic on a real device and looked at a date
 
