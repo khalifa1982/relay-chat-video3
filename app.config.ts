@@ -46,7 +46,7 @@ const config: ExpoConfig = {
   owner: "uaecoms-team",
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.26",
+  version: "1.0.33",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -55,7 +55,7 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
-    buildNumber: "32",
+    buildNumber: "33",
     googleServicesFile: "./GoogleService-Info.plist",
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
