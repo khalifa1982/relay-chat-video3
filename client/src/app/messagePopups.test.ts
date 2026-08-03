@@ -156,9 +156,72 @@ describe("both places a card and a lock can meet", () => {
 
   it("and the render filters again, for a group locked while its card is up", async () => {
     const ui = read("./MessagePopups.tsx");
-    expect(ui).toMatch(/visibleMessagePopups\(all, isGroupHidden\)/);
+    expect(ui).toMatch(/visibleMessagePopups\(all, isGroupHidden, \{ appLocked \}\)/);
     // Without this the component never re-renders on a lock change and the card
     // stays on screen until something else happens to update it.
     expect(ui).toMatch(/useGroupLocks\(\)/);
+  });
+});
+
+/**
+ * THE CARD OUTLIVED THE DEVICE PASSCODE.
+ *
+ * `<MessagePopups/>` is mounted in `App.tsx` as a sibling of `<Router/>` —
+ * deliberately, so a card survives tab navigation. That also puts it OUTSIDE
+ * `PasscodeGate`, which locks by swapping ITS OWN children for the lock screen
+ * (`if (!locked) return <>{children}</>; return <LockScreen/>`).
+ *
+ * So `useRealtime` — which lives in `AppShell`, inside the gate — stops, and no NEW
+ * card is queued while locked. But the queue is MODULE state and the component is
+ * still mounted and still rendering, at `position: fixed; z-[80]`, over a lock
+ * screen whose root sets no z-index at all. Profile has a "Lock now" button, so:
+ *
+ *   a message arrives → its card appears → the user taps Lock → the card stays on
+ *   screen above the lock, with the sender's name, the message preview, and a
+ *   working reply box.
+ *
+ * That is the entirety of what the passcode exists to cover, sitting on top of it.
+ */
+describe("visibleMessagePopups — the app passcode outranks every card", () => {
+  const cards = (ids: number[]) => ids.map((conversationId, i) => ({ id: i + 1, conversationId, from: 99 }));
+
+  it("shows nothing at all while the device is locked", async () => {
+    const { visibleMessagePopups } = await fresh();
+    expect(visibleMessagePopups(cards([1, 2, 3]), () => false, { appLocked: true })).toEqual([]);
+  });
+
+  it("the lock outranks the per-group rule, not the other way round", async () => {
+    // Even a conversation nothing else is hiding is covered.
+    const { visibleMessagePopups } = await fresh();
+    expect(visibleMessagePopups(cards([7]), () => false, { appLocked: true })).toEqual([]);
+  });
+
+  it("unlocking brings the card back — suppressed, not discarded", async () => {
+    // Somebody who locked mid-conversation expects to find it again.
+    const { visibleMessagePopups } = await fresh();
+    const input = cards([4, 5]);
+    expect(visibleMessagePopups(input, () => false, { appLocked: true })).toEqual([]);
+    expect(visibleMessagePopups(input, () => false, { appLocked: false })).toEqual(input);
+  });
+
+  it("an absent option means unlocked, so every existing caller is unchanged", async () => {
+    const { visibleMessagePopups } = await fresh();
+    const input = cards([1]);
+    expect(visibleMessagePopups(input, () => false)).toEqual(input);
+    expect(visibleMessagePopups(input, () => false, {})).toEqual(input);
+  });
+
+  it("the component actually asks — it is the only thing standing between the two", async () => {
+    const ui = readFileSync(new URL("./MessagePopups.tsx", import.meta.url).pathname, "utf8");
+    expect(ui).toMatch(/const appLocked = useLocked\(\)/);
+    expect(ui).toMatch(/visibleMessagePopups\(all, isGroupHidden, \{ appLocked \}\)/);
+    expect(ui).toMatch(/import \{ useLocked \} from "\.\/passcode"/);
+  });
+
+  it("and the gate really does render ONLY the lock screen, which is why this is needed", () => {
+    // If the gate rendered its children behind an overlay instead, the mount point
+    // would not matter — this test records which of the two it is.
+    const gate = readFileSync(new URL("./PasscodeGate.tsx", import.meta.url).pathname, "utf8");
+    expect(gate).toMatch(/if \(!locked\) return <>\{children\}<\/>;\s*\n\s*return <LockScreen \/>;/);
   });
 });

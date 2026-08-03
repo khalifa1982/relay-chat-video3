@@ -11,6 +11,7 @@ import {
 import { previewOf } from "./messagePreview";
 import { PeerAvatar } from "./PeerOverlays";
 import { isGroupHidden, useGroupLocks } from "./groupLock";
+import { useLocked } from "./passcode";
 
 /**
  * Non-intrusive incoming-message popups. When a message arrives while the user
@@ -41,7 +42,12 @@ import { isGroupHidden, useGroupLocks } from "./groupLock";
 export function MessagePopups() {
   const all = useMessagePopups();
   useGroupLocks(); // re-render when a lock is set, removed, or re-engaged
-  const popups = visibleMessagePopups(all, isGroupHidden);
+  /* THE DEVICE PASSCODE, which this component sits OUTSIDE of. It is mounted in
+     `App.tsx` beside `<Router/>` so a card survives tab navigation — and that is
+     above `PasscodeGate`, which only swaps ITS children for the lock screen. See
+     `visibleMessagePopups` for what that left on screen. */
+  const appLocked = useLocked();
+  const popups = visibleMessagePopups(all, isGroupHidden, { appLocked });
   if (popups.length === 0) return null;
   return (
     <div className="fixed z-[80] bottom-24 end-3 md:bottom-4 flex flex-col gap-2 w-[min(92vw,340px)] pointer-events-none">

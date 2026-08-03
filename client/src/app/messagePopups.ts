@@ -36,7 +36,29 @@ function emit() {
 export function visibleMessagePopups(
   popups: readonly MessagePopup[],
   isHidden: (conversationId: number) => boolean,
+  opts?: {
+    /**
+     * Is the DEVICE PASSCODE lock screen up (v2.107.18)?
+     *
+     * `<MessagePopups/>` is mounted in `App.tsx` as a sibling of `<Router/>` —
+     * deliberately, so a card survives tab navigation — which puts it OUTSIDE
+     * `PasscodeGate`. The gate swaps its children for the lock screen, so
+     * `useRealtime` stops and no NEW card is queued; but the queue is module state
+     * and the component is still mounted and still rendering, at `position: fixed;
+     * z-[80]`, over a lock screen that sets no z-index at all.
+     *
+     * So: a message arrives, its card appears, the user taps Lock in Profile — and
+     * the card stays on top of the lock screen with the sender's name, the message
+     * preview and a working reply box. That is the whole of what the passcode
+     * exists to cover, sitting above it.
+     *
+     * Suppressed rather than cleared: the card comes back when they unlock, which
+     * is what somebody who locked their phone mid-conversation would expect.
+     */
+    appLocked?: boolean;
+  },
 ): MessagePopup[] {
+  if (opts?.appLocked) return [];
   return popups.filter((p) => {
     try {
       return !isHidden(p.conversationId);
