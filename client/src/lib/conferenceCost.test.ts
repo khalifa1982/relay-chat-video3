@@ -54,7 +54,7 @@ describe("the mesh encoder ladder now caps FRAME RATE, the largest lever left", 
   it("scales framerate with the party size", () => {
     // Encode cost is roughly linear in framerate, so five encoders at the
     // camera's native 30 were doing twice the work of five at 15.
-    expect(CAPS).toMatch(/const maxFramerate = n <= 1 \? 30 : n <= 3 \? 24 : 15;/);
+    expect(CAPS).toMatch(/const maxFramerate = n <= 1 \? \(isMobile \? 24 : 30\) : n <= 3 \? 24 : 15;/);
     expect(CAPS).toMatch(/p\.encodings\[0\]\.maxFramerate = maxFramerate;/);
   });
 
@@ -66,18 +66,23 @@ describe("the mesh encoder ladder now caps FRAME RATE, the largest lever left", 
     // only the LADDER DECLARATION, so deleting the line that actually applies
     // maxBitrate left it green — caught by the mutation run, and exactly the
     // "pinned the declaration, not the use" weakness this repo keeps rediscovering.
-    expect(CAPS).toMatch(/maxBitrate = n <= 1 \? 1_200_000 : n <= 3 \? 700_000 : 350_000/);
+    /* WIDENED v2.107.24: the 1:1 tier became mobile-aware after the call-vitals
+       log measured 121 MB upstream in one 13-minute phone call — the encoder
+       pinned at 1.2 Mbps for the whole duration is the heat the owner feels.
+       Mobile 1:1 is now 900 kbps; desktop keeps 1.2 Mbps; group tiers untouched. */
+    expect(CAPS).toMatch(/maxBitrate = n <= 1 \? \(isMobile \? 900_000 : 1_200_000\) : n <= 3 \? 700_000 : 350_000/);
     expect(CAPS).toMatch(/p\.encodings\[0\]\.maxBitrate = maxBitrate;/);
     expect(CAPS).toMatch(/scale = n <= 3 \? 1 : 2/);
     expect(CAPS).toMatch(/p\.encodings\[0\]\.scaleResolutionDownBy = scale;/);
   });
 
-  it("1:1 is unchanged in effect, and the cap is still REVERSIBLE", () => {
-    // 30 equals the source rate, so a two-person call is untouched — but it is a
-    // real value rather than an absent field, because the party can SHRINK (6 -> 2)
-    // and an undefined cap is not reliably cleared by every engine.
-    const [, one] = CAPS.match(/const maxFramerate = n <= 1 \? (\d+)/) ?? [];
-    expect(one, "1:1 keeps the camera's own rate").toBe("30");
+  it("1:1 matches the SOURCE rate per platform, and the cap is still REVERSIBLE", () => {
+    /* WIDENED v2.107.24: mobile capture dropped to 24fps for heat, and the 1:1
+       encode cap follows it — cap == source on BOTH platforms, so a two-person
+       call still loses nothing to the cap itself. Still a real value rather than
+       an absent field, because the party can SHRINK (6 -> 2) and an undefined
+       cap is not reliably cleared by every engine. */
+    expect(CAPS).toMatch(/n <= 1 \? \(isMobile \? 24 : 30\)/);
     // Never left implicit.
     expect(codeOnly(CAPS)).not.toMatch(/maxFramerate = undefined|delete .*maxFramerate/);
   });
