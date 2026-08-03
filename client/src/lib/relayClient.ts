@@ -14,6 +14,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { MediaPipeline, FILTERS, type FilterId, type FilterDef } from "./mediaPipeline";
+import { callTelemetryStart, callTelemetrySample, callTelemetryNote, callTelemetryEnd } from "./callTelemetry";
 
 /* ────────────────────────────────────────────────────────────────────────────────
    THE ENGINE'S OWN TRANSLATOR.
@@ -4562,6 +4563,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   let statsShown = false;
   try { statsShown = localStorage.getItem("relay_call_stats") === "1"; } catch { /* private mode */ }
   let qualPrev: import("./callStats").ByteSample | null = null;
+  let qualTick = 0;
   /** Last thermal signature written to the diag log, so a 2s poller logs a CHANGE
    *  rather than a line every tick. */
   let qualLastSig = "";
@@ -4592,7 +4594,13 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
    *  summarizer. Sharing it is the point: a second transport's numbers have to be
    *  directly comparable to these, or "is this one worse?" has no answer. */
   async function collectCallQuality() {
-    if (!statsShown || !inCall) return;
+    if (!inCall) return;
+    /* TELEMETRY RIDES THIS COLLECTOR (v2.107.23): vitals must flow whether or
+       not anyone is watching the overlay, so the gate below is the RENDER's,
+       not the sampler's. With the overlay hidden the work thins to every third
+       tick — 6s resolution for the log, full 2s whenever a human is looking. */
+    qualTick = (qualTick + 1) % 3;
+    if (!statsShown && qualTick !== 0) return;
     const { entriesOf, summarizeStats, formatCallStats, formatCallDetail, callStatsVerdict, callQualityTone } =
       await import("./callStats");
     const reports: import("./callStats").StatEntry[][] = [];
@@ -4603,6 +4611,8 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     try {
       const { stats, sample } = summarizeStats(reports, { prev: qualPrev, nowMs: Date.now() });
       qualPrev = sample;
+      callTelemetrySample(stats, sample, Object.keys(peers).length);
+      if (!statsShown) return;
       const v = callStatsVerdict(stats);
       /* TWO LINES, joined with a newline and rendered by `white-space: pre-line`:
          line 1 is how the call is GOING, line 2 what it is MADE OF. The detail line
@@ -4672,6 +4682,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   function startStatsSampler() {
     if (statsSampleT) return;
     statsSampleT = setInterval(sampleStats, 2000);
+    callTelemetryStart(roomId ?? "");
   }
   function stopStatsSampler() {
     if (statsSampleT) { clearInterval(statsSampleT); statsSampleT = null; }
@@ -7348,6 +7359,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     myRole = null; roomHostPin = null;
     closeHostPanel(); closeAudioMenu(); closeTileMenu(); updateHostUI();
     unprimeAutoPip(); void exitPip(); // leave PiP + stop priming when the call ends
+    /* The vitals row's final flush, taken at the honest instant: how many peers
+       were still attached and whether the room id survived teardown is exactly
+       the owner's "is it killed or still open" — reported, not assumed. */
+    callTelemetryEnd(Object.keys(peers).length, roomId != null);
     stopStatsSampler();
     teardownSpeakerMonitor();
     /* The LOCAL level monitor is NOT torn down here any more — `releaseLocalMedia`
@@ -7580,7 +7595,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   document.addEventListener("click", onDocClickAddPad, true);
   // The red End button ends THIS line. If a call is on hold, it ends the active
   // line and resumes the held one (phone-style); otherwise it hangs up fully.
-  ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => endActiveLine());
+  ($("hangBtn") as HTMLElement | null)?.addEventListener("click", () => { callTelemetryNote("local-hangup"); endActiveLine(); });
   ($("flipCamBtn") as HTMLElement | null)?.addEventListener("click", () => { flipCamera(); });
   ($("screenBtn") as HTMLElement | null)?.addEventListener("click", () => { void toggleScreenShare(); });
   // Screen share is VISIBLE on every platform during a call (cross-platform

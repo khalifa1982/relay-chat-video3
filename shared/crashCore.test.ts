@@ -149,3 +149,18 @@ describe("platform labels — clamped on the way in, detected from the bridge", 
     ).toBe("web");
   });
 });
+
+describe("compareAppVersions (v2.107.23)", () => {
+  it("compares numerically per segment — 2.107.9 is OLDER than 2.107.10", async () => {
+    const { compareAppVersions } = await import("./crashCore");
+    expect(compareAppVersions("2.107.9", "2.107.10")).toBe(-1);
+    expect(compareAppVersions("2.107.10", "2.107.9")).toBe(1);
+    expect(compareAppVersions("2.107.22", "2.107.22")).toBe(0);
+  });
+  it("reads missing segments as zero", async () => {
+    const { compareAppVersions } = await import("./crashCore");
+    expect(compareAppVersions("2.107", "2.107.0")).toBe(0);
+    expect(compareAppVersions("2.107", "2.107.1")).toBe(-1);
+    expect(compareAppVersions("3", "2.999.999")).toBe(1);
+  });
+});

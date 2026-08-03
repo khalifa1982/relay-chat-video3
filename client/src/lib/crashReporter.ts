@@ -62,12 +62,20 @@ function nowT(): number {
   return Math.round((Date.now() - bootAt) / 100) / 10;
 }
 
+let crumbSink: ((c: CrashBreadcrumb) => void) | null = null;
+/** SESSION TELEMETRY TAP (v2.107.23): the journey recorder subscribes here so
+ *  taps/navs/errors/lifecycle are instrumented ONCE and consumed twice — the
+ *  short ring for crash context, the full session log for the journey. */
+export function setCrumbSink(fn: (c: CrashBreadcrumb) => void): void { crumbSink = fn; }
+export function crashDeviceId(): string { return getDeviceId() ?? ""; }
+export function crashSessionId(): string { return sessionId; }
 function crumb(kind: CrashBreadcrumb["kind"], msg: string): void {
   try {
     pushCrashBreadcrumb(crumbs, { t: nowT(), kind, msg });
   } catch {
     /* never throw */
   }
+  try { crumbSink?.({ t: 0, kind, msg }); } catch { /* the sink must never wound the ring */ }
 }
 
 function readQueue(): QueuedReport[] {

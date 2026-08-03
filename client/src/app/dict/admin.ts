@@ -516,4 +516,51 @@ export const ADMIN = {
   "admin.crash.empty": { en: "No crashes recorded.", ar: "لا توجد أعطال مسجّلة." },
   "admin.crash.loadError": { en: "Couldn't load crash data.", ar: "تعذّر تحميل بيانات الأعطال." },
   "admin.crash.close": { en: "Close", ar: "إغلاق" },
+
+  /* ── The SOLVED workflow (v2.107.23) ─────────────────────────────────────────
+     A crash marked fixed leaves the default list — "no need to read that problem
+     again" — and resurfaces on its own ONLY when the same defect arrives from a
+     build NEWER than the fix. Version strings render raw (identifiers). */
+  "admin.solve.solve": { en: "Mark solved in {v}", ar: "وضع علامة تم الحل في {v}" },
+  "admin.solve.solvedIn": { en: "Solved in {v}", ar: "تم الحل في {v}" },
+  "admin.solve.regressed": { en: "REGRESSED — back since the fix", ar: "انتكاسة — عاد بعد الإصلاح" },
+  "admin.solve.unsolve": { en: "Reopen", ar: "إعادة فتح" },
+  "admin.solve.showSolved": { en: "Show solved", ar: "عرض ما تم حلّه" },
+
+  /* ── Session journeys + call vitals (v2.107.23) ──────────────────────────────
+     Shared lifecycle vocabulary: OPEN is still heartbeating, CLOSED said
+     goodbye, VANISHED went silent without one — the killed-tab case only
+     absence can reveal. */
+  "admin.tele.state.open": { en: "open", ar: "مفتوحة" },
+  "admin.tele.state.closed": { en: "closed", ar: "مغلقة" },
+  "admin.tele.state.vanished": { en: "vanished", ar: "اختفت" },
+  "admin.sessions.label": { en: "SESSION JOURNEYS", ar: "رحلات الجلسات" },
+  "admin.sessions.body": {
+    en: "Every session, step by step — each tap, navigation, failure and lifecycle beat, with whether it closed cleanly or was killed.",
+    ar: "كل جلسة خطوة بخطوة — كل نقرة وتنقّل وفشل ونبضة حياة، مع ما إذا أُغلقت بشكل سليم أم قُتلت.",
+  },
+  "admin.sessions.taps": { en: "{n} taps", ar: "{n} نقرة" },
+  "admin.sessions.errors": { en: "{n} errors", ar: "{n} خطأ" },
+  "admin.sessions.fails": { en: "{n} failed", ar: "{n} فشل" },
+  "admin.sessions.started": { en: "Started", ar: "البداية" },
+  "admin.sessions.lastSeen": { en: "Last seen", ar: "آخر ظهور" },
+  "admin.sessions.journey": { en: "Journey", ar: "الرحلة" },
+  "admin.sessions.empty": { en: "No sessions recorded yet.", ar: "لا توجد جلسات مسجّلة بعد." },
+  "admin.sessions.loadError": { en: "Couldn't load session data.", ar: "تعذّر تحميل بيانات الجلسات." },
+  "admin.calls.label": { en: "CALL VITALS", ar: "مؤشرات المكالمات" },
+  "admin.calls.body": {
+    en: "The technical vitals of every call — kilobytes up and down, bitrate, round-trip, loss, duration, and whether teardown was clean. Never the voice or video itself.",
+    ar: "المؤشرات التقنية لكل مكالمة — الكيلوبايتات صعودًا ونزولًا ومعدل البت وزمن الذهاب والإياب والفقد والمدة وسلامة الإنهاء. أبدًا ليس الصوت أو الفيديو نفسه.",
+  },
+  "admin.calls.upDown": { en: "↑{u} KB · ↓{d} KB", ar: "↑{u} ك.ب · ↓{d} ك.ب" },
+  "admin.calls.rtt": { en: "RTT {n}ms", ar: "زمن الإياب {n}م.ث" },
+  "admin.calls.loss": { en: "loss {n}%", ar: "فقد {n}٪" },
+  "admin.calls.durationS": { en: "{n}s", ar: "{n}ث" },
+  "admin.calls.peers": { en: "{n} peers", ar: "{n} طرف" },
+  "admin.calls.clean": { en: "clean teardown", ar: "إنهاء سليم" },
+  "admin.calls.leaked": { en: "leaked", ar: "تسريب" },
+  "admin.calls.timeline": { en: "Timeline", ar: "الخط الزمني" },
+  "admin.calls.moments": { en: "Moments", ar: "اللحظات" },
+  "admin.calls.empty": { en: "No calls recorded yet.", ar: "لا توجد مكالمات مسجّلة بعد." },
+  "admin.calls.loadError": { en: "Couldn't load call data.", ar: "تعذّر تحميل بيانات المكالمات." },
 } as const satisfies Record<string, Entry>;

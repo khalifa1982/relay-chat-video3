@@ -28,12 +28,16 @@ describe("board 2h — the admin panel did not quietly widen", () => {
     const found = [...new Set([...ADMIN.matchAll(/trpc\.admin\.([a-zA-Z]+)/g)].map((m) => m[1]))].sort();
     expect(found).toEqual([
       "amIAdmin",
+      "callDetail",
+      "callList",
       "clearGuestRegistrationInvite",
       // v2.107.x — the crash console's four read-only views (rationale pinned in
       // identityPurge.test.ts; three guards saw this widening, none shrugged).
       "crashDetail",
       "crashGroups",
       "crashOccurrences",
+      "crashResolve",
+      "crashUnsolve",
       "crashVersions",
       "deleteIdentity",
       "findIdentities",
@@ -41,6 +45,8 @@ describe("board 2h — the admin panel did not quietly widen", () => {
       "mediaDiagnostics",
       "pushDiagnostics",
       "sendTestPush",
+      "sessionDetail",
+      "sessionList",
       "setAccountType",
       "setIdentityNumber",
     ]);

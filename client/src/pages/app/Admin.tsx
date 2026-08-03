@@ -45,6 +45,7 @@
        390px, so they stay on their own line under the label.
    ============================================================ */
 import type { ReactNode } from "react";
+import { APP_VERSION } from "@shared/version";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -449,6 +450,8 @@ export default function Admin() {
       {/* Crash telemetry from every surface — web, both mobile apps, and the
           server itself — grouped by defect and kept per build version. */}
       <CrashConsole />
+      <SessionsConsole />
+      <CallsConsole />
 
       <form
         onSubmit={(e) => {
@@ -1324,15 +1327,222 @@ function RelayVerdict({ result }: { result: import("@/lib/relayProbe").RelayProb
  * identifiers (the same token in both languages), not copy, exactly like the
  * 6-digit numbers everywhere else in this console.
  */
+/** SESSION JOURNEYS (v2.107.23) — the owner's "everything the user does, icon
+ *  by icon" made readable: one row per session, expandable into the full
+ *  step-by-step trail, with the open / closed / VANISHED verdict up front. */
+function SessionsConsole() {
+  const t = useT();
+  const stateLabel = (st: "open" | "closed" | "vanished") =>
+    st === "open"
+      ? t("admin.tele.state.open")
+      : st === "closed"
+        ? t("admin.tele.state.closed")
+        : t("admin.tele.state.vanished");
+  const [openSid, setOpenSid] = useState<string | null>(null);
+  const listQ = trpc.admin.sessionList.useQuery({ days: 7, limit: 60 }, { staleTime: 15_000 });
+  const detailQ = trpc.admin.sessionDetail.useQuery(
+    { sessionId: openSid ?? "" },
+    { enabled: !!openSid }
+  );
+  const ts = (v: unknown) => String(v).replace("T", " ").slice(0, 16);
+  const stateChip = (state: string) =>
+    "shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px] " +
+    (state === "vanished"
+      ? "border-destructive/60 text-destructive"
+      : state === "open"
+        ? "border-[#c9a227]/70 text-[#c9a227] dark:text-[#e8c94a]"
+        : "border-border text-muted-foreground");
+  const journey = (() => {
+    const raw = detailQ.data?.session?.events;
+    if (typeof raw !== "string") return "";
+    try {
+      const evs = JSON.parse(raw) as { t: number; kind: string; msg: string }[];
+      return evs.map((e) => `${e.t}s  ${e.kind.padEnd(5)} ${e.msg}`).join("\n");
+    } catch {
+      return raw;
+    }
+  })();
+  return (
+    <div
+      className="rsheet space-y-3 rounded-[20px] border bg-card p-4"
+      style={{ borderColor: GOLD_HAIRLINE }}
+    >
+      <h3 className={GOLD_LABEL}>{t("admin.sessions.label")}</h3>
+      <p className="text-xs text-muted-foreground">{t("admin.sessions.body")}</p>
+      {listQ.isError ? (
+        <p className="text-xs text-destructive">{t("admin.sessions.loadError")}</p>
+      ) : (listQ.data?.rows ?? []).length === 0 && !listQ.isLoading ? (
+        <p className="text-xs text-muted-foreground">{t("admin.sessions.empty")}</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {(listQ.data?.rows ?? []).map((r) => (
+            <li key={r.sessionId}>
+              <button
+                type="button"
+                onClick={() => setOpenSid(openSid === r.sessionId ? null : r.sessionId)}
+                className="w-full rounded-[14px] border border-border/70 bg-background/40 px-3 py-2 text-start hover:border-[#c9a227]/50"
+              >
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className={stateChip(r.state)}>{stateLabel(r.state)}</span>
+                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground [unicode-bidi:isolate]" dir="ltr">
+                    {r.platform} · {r.appVersion}
+                  </span>
+                </span>
+                <span className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted-foreground/80 [unicode-bidi:isolate]" dir="ltr">
+                  <span>{t("admin.sessions.started")} {ts(r.startedAt)}</span>
+                  <span>{t("admin.sessions.lastSeen")} {ts(r.lastSeenAt)}</span>
+                  <span>{t("admin.sessions.taps", { n: r.taps })}</span>
+                  <span>{t("admin.sessions.errors", { n: r.errors })}</span>
+                  <span>{t("admin.sessions.fails", { n: r.fails })}</span>
+                  {r.url ? <span className="truncate">{r.url}</span> : null}
+                </span>
+              </button>
+              {openSid === r.sessionId && (
+                <div className="mt-1.5 space-y-1.5 rounded-[14px] border border-border/50 bg-background/30 p-2.5 [unicode-bidi:isolate]" dir="ltr">
+                  <div className={GOLD_LABEL}>{t("admin.sessions.journey")}</div>
+                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-[10px] bg-background/70 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                    {journey || "…"}
+                  </pre>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="rounded-[13px]"
+                    onClick={() => setOpenSid(null)}
+                  >
+                    {t("admin.crash.close")}
+                  </Button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** CALL VITALS (v2.107.23) — kilobytes up/down, bitrate, round-trip, loss,
+ *  duration, end reason and the clean/leaked verdict. Never a frame of media:
+ *  the source feed is the stats summarizer, which has none to give. */
+function CallsConsole() {
+  const t = useT();
+  const stateLabel = (st: "open" | "closed" | "vanished") =>
+    st === "open"
+      ? t("admin.tele.state.open")
+      : st === "closed"
+        ? t("admin.tele.state.closed")
+        : t("admin.tele.state.vanished");
+  const [openCid, setOpenCid] = useState<string | null>(null);
+  const listQ = trpc.admin.callList.useQuery({ days: 7, limit: 60 }, { staleTime: 15_000 });
+  const detailQ = trpc.admin.callDetail.useQuery(
+    { callInstanceId: openCid ?? "" },
+    { enabled: !!openCid }
+  );
+  const ts = (v: unknown) => String(v).replace("T", " ").slice(0, 16);
+  const stateChip = (state: string, clean: number | null) =>
+    "shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px] " +
+    (state === "vanished" || clean === 0
+      ? "border-destructive/60 text-destructive"
+      : state === "open"
+        ? "border-[#c9a227]/70 text-[#c9a227] dark:text-[#e8c94a]"
+        : "border-border text-muted-foreground");
+  const parsed = (raw: unknown) => {
+    if (typeof raw !== "string") return "";
+    try {
+      return (JSON.parse(raw) as Record<string, unknown>[])
+        .map((e) =>
+          "t" in e && "upKbps" in e
+            ? `${e.t}s  ↑${e.upKbps}kbps ↓${e.downKbps}kbps  rtt=${e.rttMs ?? "-"}ms loss=${e.lossPct ?? "-"}%`
+            : `${e.t}s  ${e.msg}`
+        )
+        .join("\n");
+    } catch {
+      return raw;
+    }
+  };
+  return (
+    <div
+      className="rsheet space-y-3 rounded-[20px] border bg-card p-4"
+      style={{ borderColor: GOLD_HAIRLINE }}
+    >
+      <h3 className={GOLD_LABEL}>{t("admin.calls.label")}</h3>
+      <p className="text-xs text-muted-foreground">{t("admin.calls.body")}</p>
+      {listQ.isError ? (
+        <p className="text-xs text-destructive">{t("admin.calls.loadError")}</p>
+      ) : (listQ.data?.rows ?? []).length === 0 && !listQ.isLoading ? (
+        <p className="text-xs text-muted-foreground">{t("admin.calls.empty")}</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {(listQ.data?.rows ?? []).map((r) => (
+            <li key={r.callInstanceId}>
+              <button
+                type="button"
+                onClick={() => setOpenCid(openCid === r.callInstanceId ? null : r.callInstanceId)}
+                className="w-full rounded-[14px] border border-border/70 bg-background/40 px-3 py-2 text-start hover:border-[#c9a227]/50"
+              >
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className="flex items-baseline gap-2">
+                    <span className={stateChip(r.state, r.clean)}>{stateLabel(r.state)}</span>
+                    {r.clean === 1 ? (
+                      <span className="font-mono text-[10px] text-muted-foreground">{t("admin.calls.clean")}</span>
+                    ) : r.clean === 0 ? (
+                      <span className="font-mono text-[10px] text-destructive">{t("admin.calls.leaked")}</span>
+                    ) : null}
+                  </span>
+                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground [unicode-bidi:isolate]" dir="ltr">
+                    {r.platform} · {r.appVersion}
+                  </span>
+                </span>
+                <span className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted-foreground/80 [unicode-bidi:isolate]" dir="ltr">
+                  <span>{ts(r.startedAt)}</span>
+                  <span>{t("admin.calls.durationS", { n: r.durationSec })}</span>
+                  <span>{t("admin.calls.upDown", { u: r.upKB, d: r.downKB })}</span>
+                  {r.avgRttMs != null ? <span>{t("admin.calls.rtt", { n: r.avgRttMs })}</span> : null}
+                  {r.lossWorstPct != null ? <span>{t("admin.calls.loss", { n: r.lossWorstPct })}</span> : null}
+                  <span>{t("admin.calls.peers", { n: r.peersMax })}</span>
+                  {r.endReason ? <span>{r.endReason}</span> : null}
+                </span>
+              </button>
+              {openCid === r.callInstanceId && (
+                <div className="mt-1.5 space-y-1.5 rounded-[14px] border border-border/50 bg-background/30 p-2.5 [unicode-bidi:isolate]" dir="ltr">
+                  <div className={GOLD_LABEL}>{t("admin.calls.timeline")}</div>
+                  <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-[10px] bg-background/70 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                    {parsed(detailQ.data?.call?.samples) || "…"}
+                  </pre>
+                  <div className={GOLD_LABEL}>{t("admin.calls.moments")}</div>
+                  <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-[10px] bg-background/70 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                    {parsed(detailQ.data?.call?.events) || "…"}
+                  </pre>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="rounded-[13px]"
+                    onClick={() => setOpenCid(null)}
+                  >
+                    {t("admin.crash.close")}
+                  </Button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function CrashConsole() {
   const t = useT();
   const [ver, setVer] = useState("");
   const [plat, setPlat] = useState("");
   const [openFp, setOpenFp] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [showSolved, setShowSolved] = useState(false);
   const versionsQ = trpc.admin.crashVersions.useQuery(undefined, { staleTime: 30_000 });
   const groupsQ = trpc.admin.crashGroups.useQuery(
-    { appVersion: ver || undefined, platform: plat || undefined, days: 365 },
+    { appVersion: ver || undefined, platform: plat || undefined, days: 365, includeSolved: showSolved || undefined },
     { staleTime: 15_000 }
   );
   const occQ = trpc.admin.crashOccurrences.useQuery(
@@ -1340,6 +1550,11 @@ function CrashConsole() {
     { enabled: !!openFp }
   );
   const detailQ = trpc.admin.crashDetail.useQuery({ id: openId ?? 0 }, { enabled: !!openId });
+  /* SOLVED workflow (v2.107.23): resolve pins the CURRENT build as the fix
+     version — the operator presses it right after shipping the fix, so "this
+     build" is the honest value; the note field stays server-side optional. */
+  const resolveM = trpc.admin.crashResolve.useMutation({ onSuccess: () => void groupsQ.refetch() });
+  const unsolveM = trpc.admin.crashUnsolve.useMutation({ onSuccess: () => void groupsQ.refetch() });
 
   /* MySQL timestamps arrive as "YYYY-MM-DDTHH:MM:SS…" or "YYYY-MM-DD HH:MM:SS";
      shown to the minute, UTC, mono — an operator compares builds across days,
@@ -1370,6 +1585,9 @@ function CrashConsole() {
       >
         <button type="button" className={chip(!ver && !plat)} onClick={() => { setVer(""); setPlat(""); }}>
           {t("admin.crash.allVersions")}
+        </button>
+        <button type="button" className={chip(showSolved)} onClick={() => setShowSolved((v) => !v)}>
+          {t("admin.solve.showSolved")}
         </button>
         {(versionsQ.data?.rows ?? []).slice(0, 14).map((r) => {
           const active = ver === r.appVersion && plat === r.platform;
@@ -1442,12 +1660,42 @@ function CrashConsole() {
                 </span>
                 <span className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted-foreground/80 [unicode-bidi:isolate]" dir="ltr">
                   <span>{g.platform} · {g.appVersion}</span>
+                  {g.solvedInVersion && !g.regressed ? (
+                    <span className="text-emerald-600 dark:text-emerald-400">✓ {t("admin.solve.solvedIn", { v: g.solvedInVersion })}</span>
+                  ) : null}
+                  {g.regressed ? (
+                    <span className="text-destructive">{t("admin.solve.regressed")}</span>
+                  ) : null}
                   <span>{t("admin.crash.lastSeen")} {ts(g.lastSeen)}</span>
                   <span>{t("admin.crash.firstSeen")} {ts(g.firstSeen)}</span>
                 </span>
               </button>
               {openFp === g.fingerprint && (
                 <div className="mt-1.5 space-y-1.5 rounded-[14px] border border-border/50 bg-background/30 p-2.5">
+                  <div className="flex gap-2">
+                    {!g.solvedInVersion || g.regressed ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="rounded-[13px]"
+                        disabled={resolveM.isPending}
+                        onClick={() => resolveM.mutate({ fingerprint: g.fingerprint, solvedInVersion: APP_VERSION })}
+                      >
+                        {t("admin.solve.solve", { v: APP_VERSION })}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="rounded-[13px]"
+                        disabled={unsolveM.isPending}
+                        onClick={() => unsolveM.mutate({ fingerprint: g.fingerprint })}
+                      >
+                        {t("admin.solve.unsolve")}
+                      </Button>
+                    )}
+                  </div>
                   <div className={GOLD_LABEL}>{t("admin.crash.occurrences")}</div>
                   <ul className="space-y-1">
                     {(occQ.data?.rows ?? []).map((o) => (

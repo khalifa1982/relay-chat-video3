@@ -4,6 +4,7 @@ import { DEVICE_ID_HEADER, getDeviceId } from "@/lib/deviceId";
 // crash during the very first render is caught, queued and delivered. The
 // boundary at the bottom of this file is the render-crash half of the same net.
 import { initCrashReporter } from "@/lib/crashReporter";
+import { initSessionTelemetry, sessionEvent } from "./lib/sessionTelemetry";
 import { CrashBoundary } from "@/components/CrashBoundary";
 // M48: capture the boot URL before any routing, so the Dialer can tell an in-app
 // "call" tap from someone ARRIVING on /app/dialer?to=… (see lib/bootUrl.ts).
@@ -26,12 +27,23 @@ const queryClient = new QueryClient();
 queryClient.getQueryCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     console.error("[API Query Error]", event.query.state.error);
+    // "What does not function" (v2.107.23): a failed request is a journey
+    // event, not just console noise — the session log is where it testifies.
+    sessionEvent(
+      "fail",
+      "query " + JSON.stringify(event.query.queryKey).slice(0, 100) + " — " +
+        String((event.query.state.error as Error | null)?.message ?? "").slice(0, 80)
+    );
   }
 });
 
 queryClient.getMutationCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     console.error("[API Mutation Error]", event.mutation.state.error);
+    sessionEvent(
+      "fail",
+      "mutation — " + String((event.mutation.state.error as Error | null)?.message ?? "").slice(0, 100)
+    );
   }
 });
 
@@ -80,6 +92,7 @@ const trpcClient = trpc.createClient({
 });
 
 initCrashReporter();
+initSessionTelemetry();
 
 createRoot(document.getElementById("root")!).render(
   <CrashBoundary>
