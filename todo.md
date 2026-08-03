@@ -1,5 +1,115 @@
 # Project TODO
 
+## v2.107.26 — THE ADMIN TOOL'S DRY RUN SAID A NUMBER WAS FREE AND THE APPLY REFUSED IT
+
+Owner: *"Change 449243 to 666666"*.
+
+```
+DRY RUN:  identity 205 "AT": 449-243 -> 666-666
+          contacts: 0 rewritten, 0 stale duplicate(s) removed
+          ADMIN_EXIT=0
+
+APPLY:    identity 205 "AT": 449-243 -> 666-666
+          ADMIN_EXIT=4
+          666-666 is reserved by another allocation in flight
+```
+
+**A dry run whose verdict differs from the apply's is the one thing it must never
+do.** Its whole purpose is that an operator can read it and know what the write
+will do. This told them two different things about one number.
+
+### Three tables share the one dialable space; the clash check read two
+
+`identities`, `party_lines`, and — since **v2.102.0** gave a group its own 6-digit
+id out of the same space — `conversations`. This script predates that release, so
+a number held by a **group** read as FREE.
+
+The server's own `numberTaken` *was* updated and this second implementation in
+another language was not: the divergence class v2.99.50 and v2.99.71 record, and
+the one `adminToolParity.test.ts` exists to prevent.
+
+### And the ledger was never part of the dry run at all
+
+The apply reserves in `number_reservations` before it writes, so it already
+refused — but only *after* the dry run had said the change looked fine. Both reads
+now happen **before** the dry-run/apply fork, asserted by index, so the two
+verdicts cannot diverge again.
+
+### The ledger refusal names which of two opposite cases it is
+
+This is the load-bearing part, because the two need opposite actions:
+
+- **`claimedAt` STAMPED, no holder** → v2.100.0's purge **tombstone**. A deleted
+  person's number, deliberately never reissued, so one somebody kept written down
+  cannot later reach a stranger. *Pick another number.*
+- **`claimedAt IS NULL`, no holder** → **debris** from an allocation that reserved
+  and then failed (v2.99.49 R2).
+
+**Releasing either is refused here.** Clearing a tombstone would break exactly the
+monotonicity the ledger exists for, and the standing guard forbidding
+`DELETE FROM number_reservations` outright is untouched. The operator is told which
+case it is and left to decide.
+
+### The parity pin had frozen the count at two, which is why this shipped
+
+Its title read *"checks **BOTH** tables of the shared number space"* and it
+asserted exactly those two literals — so the third table's arrival was invisible to
+it. **A test that hardcodes an arity cannot see the thing it is named for.**
+
+The holder set is now **derived** from `NUMBER_BEARING_COLUMNS` by *strategy*:
+
+| strategy | meaning | in the clash check? |
+|---|---|---|
+| `identity` | holds an allocation | **yes** |
+| `not-a-person` | holds an allocation (party line, group) | **yes** |
+| `renumber` | a *copy* of an identity's number | no |
+| `live` | resolved from the identity at read time | no |
+
+So a fourth allocating table fails the moment it is **declared**, with nobody
+remembering to widen a literal — plus a non-vacuity floor, since a filter that
+selected nothing would pass by checking nothing.
+
+### The same one-table gap was in create-account
+
+Its `taken()` read identities, party_lines and the ledger — not `conversations`.
+So it could have **minted a second holder for a group's number**, which is the
+cross-table collision v2.99.30/M20 exists to prevent: MySQL cannot enforce
+uniqueness across two tables, so a collision permanently *shadows* a person,
+because a dial resolves the group first.
+
+And **neither `party_lines` nor `conversations` was preflighted** there, though
+both were queried. The preflight validates each column against `information_schema`
+precisely so a rename cannot make a freeness check pass by reading **nothing** —
+the silent direction.
+
+### Verification
+
+**4 of 4 tripwires bite**, by mutation off a confirmed-green baseline from a
+byte-exact backup; the mutator aborts unless its target occurs exactly once, and
+the source is byte-identical afterwards.
+
+| Mutation | |
+|---|---|
+| the group clash check removed (the exact shipped defect) | BIT |
+| the dry run stops reading the ledger | BIT |
+| `create-account`'s `taken()` drops conversations | BIT |
+| `create-account` stops preflighting its holders | BIT |
+
+### No production write happened
+
+The apply refused before touching anything, and the dry run reserves nothing (the
+`INSERT` sits inside the `APPLY` branch — verified by reading, not assumed). So
+449-243 is untouched and the ledger is unchanged.
+
+### Why 666666 is unavailable is not yet known, and is deliberately not guessed at
+
+The old dry run could not report it, and the improved one has not been run against
+production yet. It will now say whether a **group** holds it, or whether it is a
+**tombstone** (permanently retired — pick another) or **debris** (releasable, but
+as its own deliberate decision).
+
+No schema change, no new dependency, no new env var. **6583 tests.**
+
 ## v2.107.25 — THE DESKTOP NOTIFICATION PANEL WAS PAINTED UNDER THE CONTENT
 
 Owner, with a screenshot of the desktop app and the bell panel circled in red:

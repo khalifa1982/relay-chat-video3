@@ -87,9 +87,85 @@ describe("the backend tool agrees with the server about what a renumber touches"
     expect(V2DB).toMatch(/export function planRenumber\(/);
   });
 
-  it("checks BOTH tables of the shared number space before writing", () => {
-    expect(setNumberBlock).toMatch(/SELECT id FROM identities WHERE number = \?/);
-    expect(setNumberBlock).toMatch(/SELECT id FROM party_lines WHERE number = \?/);
+  it("checks EVERY table of the shared number space — derived, not a frozen count", () => {
+    /* REWRITTEN AT v2.107.26, and the old form is why this shipped broken. It asserted
+       "BOTH tables" — hardcoded at exactly two — so when v2.102.0 gave a GROUP its own
+       6-digit id out of the same space, the third table's arrival was invisible here.
+       The consequence was not cosmetic: a number held by a group read as FREE in the
+       DRY RUN and was then refused by the apply's reservation guard, so the tool told
+       an operator two different things about one number.
+
+       The set is now DERIVED from `NUMBER_BEARING_COLUMNS`. A table declared "identity"
+       or "not-a-person" HOLDS an allocation in the dialable space, so freeness must be
+       checked against it; "renumber" and "live" are COPIES of an identity's number and
+       are not allocations. So a fourth allocating table fails this the moment it is
+       declared, without anybody remembering to widen a literal. */
+    const holders = NUMBER_BEARING_COLUMNS.filter(
+      (c) => c.strategy === "identity" || c.strategy === "not-a-person",
+    ).map((c) => c.table);
+    // Non-vacuity: if the filter ever selects nothing this test would pass by
+    // checking nothing at all.
+    expect(holders.length, "the dialable space must have holders").toBeGreaterThanOrEqual(3);
+    for (const t of new Set(holders)) {
+      expect(
+        setNumberBlock,
+        `${t} holds an allocation in the shared number space — the clash check must read it`,
+      ).toMatch(new RegExp(`SELECT id FROM ${t} WHERE number = \\?`));
+    }
+  });
+
+  it("the DRY RUN reaches the same verdict as the apply — including the ledger", () => {
+    /* The apply reserves before it writes, so it already refuses a reserved number —
+       but only AFTER the dry run has said the change looks fine. A dry run whose
+       verdict differs from the apply's is the one thing it must never do, and that is
+       exactly what happened on a live renumber (v2.107.26). */
+    expect(setNumberBlock).toMatch(
+      /SELECT number, claimedAt FROM number_reservations WHERE number = \?/,
+    );
+    // The ledger read must come BEFORE the dry-run/apply fork, or it is not part of
+    // the dry run's answer at all.
+    const ledgerRead = setNumberBlock.indexOf("FROM number_reservations WHERE number = ?");
+    const fork = setNumberBlock.indexOf("if (!APPLY)");
+    expect(ledgerRead).toBeGreaterThan(-1);
+    expect(fork).toBeGreaterThan(-1);
+    expect(ledgerRead).toBeLessThan(fork);
+  });
+
+  it("a CLAIMED reservation with no holder is reported as retired, not cleared", () => {
+    /* The two cases need OPPOSITE actions and must not be collapsed. A stamped row is
+       v2.100.0's purge tombstone — deliberately never reissued, so a number somebody
+       kept written down cannot later reach a stranger — while an unclaimed row with no
+       holder is debris from an allocation that reserved and then failed (v2.99.49 R2).
+       Releasing either from THIS operation is forbidden; the monotonicity guard below
+       already forbids the DELETE outright. */
+    expect(setNumberBlock).toMatch(/resv\.claimedAt/);
+    expect(setNumberBlock).toMatch(/RETIRED/);
+    expect(setNumberBlock).toMatch(/claimedAt IS NULL/);
+  });
+
+  it("create-account checks the same holders, and preflights each one", () => {
+    /* The same one-table gap existed here: `taken()` read identities, party_lines and
+       the ledger, and not `conversations`. And every table it reads must be
+       preflighted, or a rename makes the freeness check pass by reading nothing —
+       which is the whole reason the preflight exists. */
+    const block = TOOL.slice(
+      TOOL.indexOf('if (OP === "create-account")'),
+      TOOL.indexOf('if (OP === "set-number")'),
+    );
+    expect(block.length, "the create-account block must be findable").toBeGreaterThan(500);
+    const holders = new Set(
+      NUMBER_BEARING_COLUMNS.filter(
+        (c) => c.strategy === "identity" || c.strategy === "not-a-person",
+      ).map((c) => c.table),
+    );
+    for (const t of holders) {
+      expect(block, `taken() must read ${t}`).toMatch(
+        new RegExp(`SELECT 1 x FROM ${t} WHERE number = \\? LIMIT 1`),
+      );
+      expect(block, `${t}.number must be preflighted`).toMatch(
+        new RegExp(`"${t}\\.number"`),
+      );
+    }
   });
 
   it("reserves in the shared ledger, and treats a duplicate as taken", () => {
