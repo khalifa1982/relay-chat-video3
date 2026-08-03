@@ -126,7 +126,8 @@ export function RelayWebView() {
 
   // Firebase push token: get the native device token and inject it into the
   // WebView so the web app can register it with its server for push delivery.
-  const { onWebViewLoadEnd: sendPushToken } = usePushToken(webViewRef);
+  const { onWebViewLoadEnd: sendPushToken, onWebReady: sendPushTokenOnReady } =
+    usePushToken(webViewRef);
 
   // Track when WebView is ready (first load complete) for Android call intents
   const [webViewReady, setWebViewReady] = useState(false);
@@ -229,6 +230,12 @@ export function RelayWebView() {
         case "audio-route":
           applyAudioRoute(msg.route);
           break;
+        // The web app's bridge is listening NOW. Re-send the push token: onLoadEnd
+        // can fire before RELAY attaches its listener, in which case the token
+        // posted then was dropped and nothing anywhere said so.
+        case "web-ready":
+          sendPushTokenOnReady();
+          break;
         case "online":
           setOnline(msg.online);
           break;
@@ -258,6 +265,7 @@ export function RelayWebView() {
       showIncomingCall,
       dismissIncomingCall,
       showIncomingMessage,
+      sendPushTokenOnReady,
     ],
   );
 
