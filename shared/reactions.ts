@@ -61,6 +61,40 @@ function hasForbiddenCodePoint(s: string): boolean {
 }
 
 /**
+ * A KEYCAP: an ASCII digit (or `#`/`*`), an optional variation selector, and the
+ * combining enclosing keycap U+20E3. `0️⃣`–`9️⃣` are all in the picker.
+ *
+ * Recognised as a unit because the digit inside one is a real ASCII digit, and the
+ * "an emoji is not a word" rule tests exactly that. Stripping the whole well-formed
+ * sequence is what lets the rule stay strict without refusing glyphs the app offers.
+ */
+const KEYCAP = /[0-9#*]️?⃣/g;
+
+/**
+ * "Is there a letter or a digit in here", in any script — built at RUNTIME.
+ *
+ * The literal would be `/\p{L}|\p{N}/u`, and `tsc` refuses it with TS1501: this
+ * repo's tsconfig sets no `target`, so it defaults to ES5, which predates Unicode
+ * property escapes. That is the same downlevel constraint behind the `for…of`
+ * TS2802 notes elsewhere in this file. The RUNTIME is esbuild and Vite — neither
+ * downlevels that far — and property escapes have been in every browser and in
+ * Node since 2018, so the capability is real even though the compiler's target
+ * cannot express it.
+ *
+ * Compiled ONCE, and guarded: an engine that genuinely cannot build it falls back
+ * to the ASCII class this rule used to be. That is narrower than intended, but it
+ * is the behaviour the file already shipped with — strictly better than a module
+ * that throws on import and takes every reaction with it.
+ */
+const LETTER_OR_NUMBER: RegExp = (() => {
+  try {
+    return new RegExp("\\p{L}|\\p{N}", "u");
+  } catch {
+    return /[A-Za-z0-9]/;
+  }
+})();
+
+/**
  * Normalize a proposed reaction, or null if it is not one.
  *
  * THIS IS NOT COSMETIC VALIDATION. Without it the reaction field is a free-text
@@ -71,10 +105,23 @@ function hasForbiddenCodePoint(s: string): boolean {
  * would refuse legitimate reactions forever after):
  *
  *   - bounded length,
- *   - no ASCII letters or digits — an emoji is not a word,
+ *   - no LETTERS and no DIGITS, in any script — an emoji is not a word,
  *   - no whitespace — one glyph, not a phrase,
  *   - no control or bidi characters, which can reorder the text AROUND the chip (the
  *     class every PIN surface in this app isolates against).
+ *
+ * ── THE SECOND RULE SAID `[A-Za-z0-9]`, WHICH IS ASCII AND ONLY ASCII ─────────
+ * So the free-text channel this function exists to close stood open in every other
+ * script: `react({ emoji: "غبي" })` — or Cyrillic, or CJK, or Japanese — passed
+ * validation and rendered as a chip under somebody else's own message. This app
+ * ships an Arabic UI, so that is not a theoretical gap. The test is now the Unicode
+ * property, which covers scripts added after this was written too; enumerating
+ * alphabets would rot exactly the way the rejected allowlist would.
+ *
+ * Checked against the picker's own 1,125 entries: with keycaps stripped first,
+ * `\p{L}|\p{N}` refuses none of them. Before this change it refused TEN — the keycap
+ * digits `0️⃣`–`9️⃣`, which the picker offered and the server had always rejected on
+ * the ASCII digit inside them, so tapping one silently did nothing.
  *
  * FAILS TO NULL rather than to a default: a reaction nobody can express is a refused
  * tap, while a defaulted one puts a sentiment in somebody's mouth.
@@ -83,7 +130,9 @@ export function normalizeReactionEmoji(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const s = raw.trim();
   if (!s || s.length > REACTION_MAX_LENGTH) return null;
-  if (/[A-Za-z0-9]/.test(s)) return null;
+  // Keycaps out of the way first: the digit in one is not a word, it is part of a
+  // glyph. Only a WELL-FORMED sequence is stripped, so a bare "1" is still refused.
+  if (LETTER_OR_NUMBER.test(s.replace(KEYCAP, ""))) return null;
   if (/\s/.test(s)) return null;
   if (hasForbiddenCodePoint(s)) return null;
   return s;

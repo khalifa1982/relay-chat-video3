@@ -389,3 +389,79 @@ describe("realtime on the client", () => {
     expect(block).not.toMatch(/messages\.threads/);
   });
 });
+
+/**
+ * `[A-Za-z0-9]` IS ASCII, AND THE RULE IT ENFORCED WAS "NOT A WORD".
+ *
+ * So the free-text channel this validator exists to close stood open in every other
+ * script. `react({ emoji: "غبي" })` — or Cyrillic, or CJK — passed and rendered as a
+ * chip under somebody else's own message, which is exactly the unsolicited-text
+ * scenario the function's own header describes. This app ships an Arabic UI.
+ *
+ * The same class check refused ten glyphs the picker OFFERS: `0️⃣`–`9️⃣` are a real
+ * ASCII digit plus U+FE0F plus U+20E3, so tapping one was silently rejected by the
+ * server it had just been offered by.
+ */
+describe("a reaction is a glyph, not a word in some other alphabet", () => {
+  it("refuses letters in every script, not only Latin", () => {
+    for (const word of [
+      "غبي", // Arabic
+      "дурак", // Cyrillic
+      "笨蛋", // Chinese
+      "バカ", // Japanese katakana
+      "바보", // Korean
+      "μωρό", // Greek
+      "טיפש", // Hebrew
+      "मूर्ख", // Devanagari
+      "โง่", // Thai
+      "ahmak", // Latin, as before
+    ]) {
+      expect(normalizeReactionEmoji(word), word).toBeNull();
+    }
+  });
+
+  it("refuses digits in every script too", () => {
+    // A bare number is not a reaction, in any numeral system.
+    for (const n of ["1", "42", "٤٢", "四", "௧"]) {
+      expect(normalizeReactionEmoji(n), n).toBeNull();
+    }
+  });
+
+  it("still admits every emoji shape the app uses", () => {
+    for (const e of ["👍", "❤️", "😂", "👩🏽‍🚀", "🇦🇪", "🔟", "™️", "▶️", "#️⃣", "*️⃣"]) {
+      expect(normalizeReactionEmoji(e), e).toBe(e);
+    }
+  });
+
+  it("admits the keycap digits the picker offers — they used to be rejected", () => {
+    for (const k of ["0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]) {
+      expect(normalizeReactionEmoji(k), k).toBe(k);
+    }
+    // The variation selector is optional in a keycap sequence.
+    expect(normalizeReactionEmoji("1⃣")).toBe("1⃣");
+  });
+
+  it("stripping keycaps does not smuggle a digit past the rule", () => {
+    // Only a WELL-FORMED sequence is removed, so a digit that is merely NEAR a
+    // keycap still counts as a digit.
+    expect(normalizeReactionEmoji("1️⃣2")).toBeNull();
+    expect(normalizeReactionEmoji("7")).toBeNull();
+    expect(normalizeReactionEmoji("a1️⃣")).toBeNull();
+  });
+
+  it("REFUSES NOTHING the picker offers — checked against the picker itself", () => {
+    // An allowlist was rejected for rotting; this is the same guarantee, measured.
+    // It is what proved the ten keycaps were being refused in the first place.
+    const src = readFileSync(resolve(__dirname, "../client/src/lib/emojiCatalog.ts"), "utf8");
+    const entries = new Set<string>();
+    for (const m of src.matchAll(/"([^"\\\n]{1,24})"/g)) {
+      if (/[^\x00-\x7F]/.test(m[1])) entries.add(m[1]);
+    }
+    expect(entries.size).toBeGreaterThan(1000);
+    const refused: string[] = [];
+    entries.forEach((e) => {
+      if (normalizeReactionEmoji(e) === null) refused.push(e);
+    });
+    expect(refused, "the picker offers a reaction the server refuses").toEqual([]);
+  });
+});
