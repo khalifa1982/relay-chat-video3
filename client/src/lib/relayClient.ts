@@ -539,7 +539,9 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // Active-speaker detection via Web Audio, on the REMOTE streams. Lazily
   // created on the first one.
   let meshAudioCtx: AudioContext | null = null;
-  const meshAnalysers: Record<string, { node: AnalyserNode; src: MediaStreamAudioSourceNode; data: Uint8Array<ArrayBuffer> }> = {};
+  /* `tap` is a CLONE of the remote audio track, not the track itself — see
+   * registerMeshAnalyser. It is held so unregister can stop it. */
+  const meshAnalysers: Record<string, { node: AnalyserNode; src: MediaStreamAudioSourceNode; data: Uint8Array<ArrayBuffer>; tap: MediaStreamTrack }> = {};
   let speakerSampleT: ReturnType<typeof setInterval> | null = null;
   // THE PARTY CAP. The mesh runs N-1 encoders and N-1 decoders on every phone, which
   // v2.99.84 measured as the single biggest lever on call CPU and heat, so 6 is a
@@ -1953,6 +1955,34 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       if (ctx) void ctx.resume().catch(() => {});
     } catch { /* best-effort */ }
   }
+  /**
+   * The mirror of `loudspeakerPrime` for the active-speaker monitor's context.
+   *
+   * WHY IT HAS TO EXIST. #160 closes `meshAudioCtx` at every hang-up, and its own
+   * test records the safety argument for closing: *"Closing at teardown is only
+   * safe because `loudspeakerPrime()` runs inside the dial tap and the Answer
+   * tap."* That argument was made for the LOUDSPEAKER context and then applied to
+   * this one, which had no priming at all — so from the second call onward it was
+   * rebuilt inside `ontrack`, outside any gesture, where WebKit starts it
+   * SUSPENDED and refuses `resume()`. Priming here is what makes the close safe
+   * for the sibling too.
+   *
+   * Unlike `loudspeakerPrime` this is NOT gated on `loudspeakerPref()` — the
+   * speaker monitor runs on every call whichever output the audio is going to.
+   */
+  function meshSpeakerPrime() {
+    try {
+      ensureMeshAudioCtx(); // creates + resume()s the CONTEXT; no sampler yet
+    } catch { /* best-effort: metering is decoration, never a reason to fail a dial */ }
+  }
+  /** THE ONE FUNNEL for gesture-time audio priming. Both contexts are primed
+   *  together so a sixth entry point cannot prime one and forget the other —
+   *  which is exactly how `meshAudioCtx` came to be closed without ever being
+   *  primed. */
+  function primeCallAudio() {
+    loudspeakerPrime();
+    meshSpeakerPrime();
+  }
   function routeElToLoudspeaker(el: HTMLMediaElement) {
     if (!loudspeakerCtx || loudspeakerMutedEls.has(el)) return;
     // NEVER mute an element into a context that isn't RUNNING: the 2s scan
@@ -2945,7 +2975,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     if (!/^\d{6}$/.test(dialed)) return;
     if (dialed === me.pin) { toast("That's your own number.", true); return; }
     if (peers[dialed]) { toast("You're already connected to them.", true); return; }
-    loudspeakerPrime(); // dial tap gesture — before ensureMedia consumes it
+    primeCallAudio(); // dial tap gesture — before ensureMedia consumes it
     // The raw dialer's mode IS the camera toggle's current state, so it decides
     // whether a camera is opened at all.
     try { await ensureMedia(camOn); } catch { return; }
@@ -3767,7 +3797,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     // The Answer tap IS the gesture — prime the speaker route NOW, before the
     // getUserMedia await consumes/outlives the transient activation (phones
     // apply the remembered speaker state at establishment).
-    loudspeakerPrime();
+    primeCallAudio();
     // A camera is opened only when this is a VIDEO call we are answering AS
     // video. Answering a video dial with the Voice button, or answering a voice
     // dial at all, is voice mode — and under the v2.81 mutual-consent rule our
@@ -5821,7 +5851,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   }
 
   // ---------- mesh active-speaker (Web Audio level metering) ----------
-  function ensureMeshSpeakerMonitor() {
+  /* Context only — no sampler. Split out so `meshSpeakerPrime` can build and
+     resume it inside the dial/Answer gesture without also starting a 400ms timer
+     before there is a call to meter. */
+  function ensureMeshAudioCtx() {
     if (!meshAudioCtx) {
       try {
         const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -5830,31 +5863,87 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       } catch { return; }
     }
     try { void meshAudioCtx.resume(); } catch { /* */ }
+  }
+  function ensureMeshSpeakerMonitor() {
+    ensureMeshAudioCtx();
+    if (!meshAudioCtx) return;
     if (!speakerSampleT) speakerSampleT = setInterval(sampleMeshSpeakers, 400);
   }
+  /**
+   * Tap a peer's remote audio for active-speaker metering.
+   *
+   * TWO RULES HERE, AND BOTH ARE ABOUT AUDIBILITY RATHER THAN METERING. This
+   * function is decoration; the call's audio is the product, so it must be
+   * impossible for the meter to cost anybody the sound.
+   *
+   * (1) NEVER TAP THE LIVE TRACK — tap a CLONE. A MediaStreamAudioSourceNode
+   *     routes its source INTO the WebAudio graph, and this graph terminates in
+   *     an analyser, which is a SINK: nothing reaches `destination`. Handing it
+   *     the live remote track therefore competes with the <audio> element that is
+   *     supposed to be playing that same track. A fresh wrapper MediaStream —
+   *     what this used to do — does NOT help, because a wrapper still references
+   *     the SAME track object; only a clone gives WebAudio its own copy. This
+   *     file already records TWO separate bugs caused by tap contention on one
+   *     remote stream (see routeElToLoudspeaker), which is the argument for
+   *     removing the contention by construction rather than sequencing around it.
+   *
+   * (2) NEVER TAP INTO A CONTEXT THAT IS NOT RUNNING. `meshAudioCtx` is built
+   *     inside `ontrack` — never inside a user gesture — so on WebKit it is born
+   *     SUSPENDED and `resume()` is REFUSED (the v2.106.89 rule, which was fixed
+   *     for the voice recorder and never swept to this second site). #160 then
+   *     began CLOSING this context at every hang-up, so every call after the
+   *     first rebuilds it there. A graph that does not run renders nothing, and
+   *     a suspended graph holding the live track starves the element — which
+   *     presents as "audio arrives and is never played out", on both ends,
+   *     on voice and video alike, with a perfectly healthy transport. It is
+   *     invisible on desktop Chromium, which permits a gesture-less resume.
+   *     So: skip, and let the 400ms sampler retry once priming has run.
+   */
   function registerMeshAnalyser(pin: string, stream: MediaStream) {
     if (meshAnalysers[pin]) return;
-    if (!stream.getAudioTracks().length) return;
+    const live = stream.getAudioTracks()[0];
+    if (!live) return;
     ensureMeshSpeakerMonitor();
     if (!meshAudioCtx) return;
+    if (meshAudioCtx.state !== "running") {
+      try { void meshAudioCtx.resume(); } catch { /* */ }
+      return; // deferred, NOT dropped — sampleMeshSpeakers retries.
+    }
+    let tap: MediaStreamTrack | null = null;
     try {
-      // Fresh wrapper stream (see routeElToLoudspeaker): keeps this metering
-      // tap from colliding with the loudspeaker tap on the same remote stream.
-      const src = meshAudioCtx.createMediaStreamSource(new MediaStream(stream.getAudioTracks()));
+      tap = live.clone();
+      const src = meshAudioCtx.createMediaStreamSource(new MediaStream([tap]));
       const node = meshAudioCtx.createAnalyser();
       node.fftSize = 256;
       src.connect(node); // analyser is a sink only — never connected to destination
       const data = new Uint8Array(new ArrayBuffer(node.frequencyBinCount));
-      meshAnalysers[pin] = { node, src, data };
-    } catch { /* */ }
+      meshAnalysers[pin] = { node, src, data, tap };
+    } catch {
+      // A clone we did not hand to meshAnalysers belongs to nothing, so this is
+      // its only possible release.
+      try { tap?.stop(); } catch { /* */ }
+    }
   }
   function unregisterMeshAnalyser(pin: string) {
     const a = meshAnalysers[pin];
     if (!a) return;
     try { a.src.disconnect(); a.node.disconnect(); } catch { /* */ }
+    // The clone is ours alone (see registerMeshAnalyser), so nothing else can
+    // ever release it.
+    try { a.tap.stop(); } catch { /* */ }
     delete meshAnalysers[pin];
   }
   function sampleMeshSpeakers() {
+    /* Pick up any tap registerMeshAnalyser DEFERRED because the context was not
+       running yet. Without this a call that started before the context could be
+       resumed would never get a speaker highlight, and the retry has to live on
+       a tick rather than at attach time because what changes is the CONTEXT's
+       state, not the peer's. Cheap: the `meshAnalysers[pin]` guard returns
+       immediately once a peer is registered. */
+    for (const pin in peers) {
+      const rs = peers[pin].remoteStream;
+      if (rs && !meshAnalysers[pin]) registerMeshAnalyser(pin, rs);
+    }
     const levels: Array<{ id: string; level: number }> = [];
     for (const pin in meshAnalysers) {
       if (!document.getElementById("tile-" + pin)) continue;
@@ -7408,7 +7497,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       if (target === me.pin) return false;
       // Still inside the tap that triggered the dial — prime the speaker route
       // before the async media work consumes the transient activation.
-      loudspeakerPrime();
+      primeCallAudio();
       // fire-and-forget the actual async call
       void programmaticDial(target, opts);
       return true;
@@ -7417,7 +7506,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       if (!me.pin) return false;
       const valid = targets.filter(t => /^\d{6}$/.test(String(t)) && t !== me.pin);
       if (valid.length === 0) return false;
-      loudspeakerPrime();
+      primeCallAudio();
       void programmaticGroupDial(targets, opts);
       return true;
     },
@@ -7506,7 +7595,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       if (!/^\d{6}$/.test(number) || !me.pin || number === me.pin) return;
       if (!ws || ws.readyState !== 1) { toast("Not connected — try again in a moment.", true); return; }
       // Prime the speaker route inside the tap, like a dial (we may join media).
-      loudspeakerPrime();
+      primeCallAudio();
       sendWS({ type: "knock", to: number });
     },
     approveKnock(roomId, pin) {
