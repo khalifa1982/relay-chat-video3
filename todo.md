@@ -1,5 +1,144 @@
 # Project TODO
 
+## v2.107.25 — THE DESKTOP NOTIFICATION PANEL WAS PAINTED UNDER THE CONTENT
+
+Owner, with a screenshot of the desktop app and the bell panel circled in red:
+*"If you see the notification in desktop its not showing"*.
+
+**The panel was open the whole time.** That is why this reads as "not showing"
+rather than as a dead button: it renders, and everything past the sidebar's right
+edge is covered by the Recent card — "NOTIFICA", "Do…", "Ca…", "Missed ca…" all
+sliced off at exactly that boundary.
+
+### Measured, not reasoned about
+
+Which of two siblings paints on top is a cascade question, so it was driven in
+Chromium against the real built stylesheet at 1400px. The panel is
+`md:absolute md:start-0 md:w-72`, so it opens *rightward* out of a 256px
+(`md:w-64`) sidebar and overflows **52px** into the content column. Sampling
+`elementFromPoint` inside the panel but past that edge:
+
+```
+aside z-10  ->  topmost = the content card   (OCCLUDED — the bug)
+aside z-20  ->  topmost = the panel          (VISIBLE)
+```
+
+### The panel's own z-[80] could never reach the fight
+
+`position` plus a non-auto `z-index` **creates a stacking context**, so the 80
+resolves *inside* the aside; what competes with the sibling is the aside's own
+value. And the aside and the content scroll container were **both `relative
+z-10`** — two positioned siblings at equal z-index paint in DOM order, and the
+content wrapper comes later in the file, so it won the tie. The higher number on
+the panel was not insufficient, it was inert.
+
+### Why raise the ancestor instead of portalling the panel
+
+On desktop the panel is positioned against the bell as its offset parent, so a
+portal to `document.body` would need the bell measured and the panel re-anchored
+— the class of change that mis-centred the video-consent card (v2.99.54) and
+clipped the ⋮ menu off the left edge (v2.99.0). One number on the ancestor is
+correct by construction.
+
+`z-20` is **bounded on both sides and both bounds matter**: it must clear the
+content wrapper, and it must stay *below* the mobile chrome's `z-30` (top bar and
+tab bar). Those never coexist with it (`hidden md:flex` against `md:hidden`), but
+a future shared overlay would sit in that band.
+
+It also **cannot be out-climbed from inside the content**, which is what makes it
+robust rather than a nudge: that wrapper is itself a stacking context at z-10, so
+nothing any page renders can escape it. The fix does not depend on what the pages
+happen to contain.
+
+### Why it was desktop-only
+
+On a phone the bell renders from the top bar, which is already `z-30` and already
+beats the content wrapper. The identical panel was fine there, so the defect had
+nothing to reveal it.
+
+### Third appearance of this class
+
+- **v2.106.27** — the background canvas painting over three of five tabs, fixed
+  by lifting the shell's content wrapper *and* the aside to `relative z-10`.
+  That is this very line: correct then, and made ambiguous later by a panel that
+  grew to overflow the sidebar.
+- **v2.107.2 item 3** — the story viewer's `z-[100]` trapped inside that same
+  wrapper, fixed by portalling, because there the element had no anchor to keep.
+
+### Verification
+
+**8 of 8 tripwires bite**, by mutation off a confirmed-green baseline from
+byte-exact backups. The mutator aborts unless its target occurs exactly once, and
+restores from those backups rather than `git checkout --` (which discarded
+uncommitted work under test in v2.99.56). All three sources byte-identical
+afterwards.
+
+Mutations: the aside reverted to `z-10` verbatim; its `relative z-20` removed
+outright; the aside climbing above the mobile chrome; the content wrapper raised
+to **tie** with the sidebar (the tie *is* the defect, so an equal-z mutation must
+bite); the panel narrowed to the sidebar's width; the desktop panel
+un-positioned; the mobile panel losing its viewport pinning; and the **canvas**
+raised above the sidebar.
+
+### Two pre-existing pins rewritten to the property
+
+`client/src/app/backgroundOverContent.test.ts` asserted the exact string
+`relative z-10 hidden md:flex` on the aside — i.e. it **froze the defect**,
+forbidding this fix while saying nothing about the rule it stands for, which is
+only that the sidebar is *positioned* and sits *above the canvas*. It now
+compares against `RelayBackground`'s own declared `zIndex`, which is strictly
+stronger than the literal it replaces — proven by a mutation the old form could
+never have seen (raising the canvas above the sidebar bites now, and would have
+passed before).
+
+The second carried the same fragility one element along: a slice anchored on
+`className="relative z-10 flex-1 min-h-0 overflow-y-auto`, hardcoding a z-index
+into an *anchor*. Now matched as `z-\d+`.
+
+### The new pins are the ordering, never the numbers
+
+`client/src/app/notifPanelStacking.test.ts` (6 tests). Freezing `z-20` would
+forbid a later retune, and freezing `z-10` on the content wrapper is exactly what
+just went red. So: the sidebar must be **strictly** greater than the content
+wrapper, both must clear the canvas, the sidebar must stay under 30, and the
+panel must still be the wider element — so the overflow the ordering exists for
+is arithmetic rather than an assumption.
+
+### Not verified on the owner's machine, said plainly
+
+The occlusion and its removal are measured in a real browser against the real
+stylesheet, but nobody has opened the bell on their desktop since the fix.
+
+### The version collided a fourth time, and the mechanism was observed directly
+
+This shipped as `.24`. While it was in flight a parallel session released its own
+**v2.107.24** to `web-app-main` (`22968f6` — the mobile-video 24fps + 900 kbps cap
+work), so it is renumbered to `.25`.
+
+**The rebase produced no conflict at all**, which is the whole point, and it is
+confirmed against their commit rather than inferred: their edit is
+`"2.107.23"` → `"2.107.24"`, byte-identical to mine, so git merged the two
+silently and two different builds would have claimed one version — defeating the
+auto-updater's own premise, since it compares the client's *baked* version against
+the server's *runtime* one. **The renumber is what creates the visible conflict**,
+so nothing catches this automatically, and any two sessions bumping from the same
+current version will collide every time.
+
+### The changelog is nine releases stale, and that is not mine to invent
+
+Their `.24` touched **only `shared/version.ts`** — verified from its own diff,
+which carries no CLAUDE.md and no todo.md. So that file's version line still read
+**v2.107.15** (my own entry) with **no entry for any of .16 through .24** — the
+pattern `.15` recorded for `.13`/`.14`, now nine deep.
+
+The version line is corrected here because it must name the release being shipped.
+The nine missing entries belong to those sessions and cannot be reconstructed from
+here, so they are named as a gap rather than papered over. Re-syncing them from
+their diffs is offered and awaiting a decision.
+
+No schema change, no new dependency, no new env var, no server change.
+**6579 tests.**
+
 ## v2.107.15 — THE FAILURE MOVED FROM RECEIVE TO SEND (`↑0kbps`)
 
 Khalifa on v2.107.12: *"Still no sound"*, with the full readout:

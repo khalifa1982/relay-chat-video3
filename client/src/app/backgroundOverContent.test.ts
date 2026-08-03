@@ -106,7 +106,15 @@ describe("the shell's content is painted ABOVE the background canvas", () => {
   });
 
   it("the desktop sidebar is lifted too, being unpositioned content as well", () => {
-    expect(SHELL).toMatch(/relay-appshell-chrome relative z-10 hidden md:flex/);
+    /* REWRITTEN AT v2.107.25. This froze the exact string `relative z-10 hidden md:flex`,
+       so it broke the moment the sidebar was legitimately raised to z-20 to stop the
+       notification panel being painted under the content — while saying nothing about the
+       property it stands for, which is only that the sidebar is POSITIONED and sits ABOVE
+       the canvas. Compared against the canvas rather than frozen as a number, which is
+       strictly stronger: freezing 10 would let a change to the CANVAS reopen the bug. */
+    const m = SHELL.match(/relay-appshell-chrome relative z-(\d+) hidden md:flex/);
+    expect(m, "the sidebar must be positioned and carry a z-index").toBeTruthy();
+    expect(Number(m![1])).toBeGreaterThan(canvasZ());
   });
 
   it("the lift is on the ONE wrapper above children, not per page", () => {
@@ -114,7 +122,10 @@ describe("the shell's content is painted ABOVE the background canvas", () => {
        tabs were covered and two were fine purely by accident of their own markup — a
        per-page fix would have repeated that accident. */
     const code = codeOnly(SHELL);
-    const at = code.indexOf('className="relative z-10 flex-1 min-h-0 overflow-y-auto');
+    /* The z-index is MATCHED, not hardcoded into the anchor (v2.107.25): the sibling
+       assertion above had frozen `z-10` on the sidebar and went red on a legitimate
+       retune, and this anchor carried the same fragility one element along. */
+    const at = code.search(/className="relative z-\d+ flex-1 min-h-0 overflow-y-auto/);
     expect(at).toBeGreaterThan(0);
     /* `lastIndexOf`, because `{children}` occurs TWICE — `AppShell` passes it down to
        `Inner` long before `Inner` renders it, and the FIRST occurrence sits above the

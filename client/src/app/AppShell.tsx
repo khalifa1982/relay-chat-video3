@@ -666,10 +666,45 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
       {/* ── desktop / tablet sidebar ───────────────────────────── */}
       <aside
         className={
-          // `relative z-10` for the same reason as the scroll container below: this is
+          // `relative` for the same reason as the scroll container below: this is
           // unpositioned content, and the fixed background canvas at `z-index: 0`
           // paints above unpositioned content.
-          "relay-appshell-chrome relative z-10 hidden md:flex md:flex-col md:w-64 lg:w-72 shrink-0 " +
+          //
+          // BUT z-20, NOT z-10 — AND THE ONE STEP IS THE WHOLE FIX (v2.107.25).
+          //
+          // The notification bell lives in here, and its panel opens RIGHTWARD
+          // (`md:absolute md:start-0 md:w-72`), so on a 256px sidebar it overflows
+          // ~52px into the content column. The scroll container below is ALSO
+          // `relative z-10`, and two positioned siblings with EQUAL z-index are
+          // painted in DOM order — that wrapper comes later, so it won. The panel's
+          // own `z-[80]` could not save it: `position` + a non-auto `z-index` CREATES
+          // A STACKING CONTEXT, so the 80 resolves INSIDE this aside and what
+          // competes against the sibling is this element's own value.
+          //
+          // Measured against the real built stylesheet at 1400px: sampling inside the
+          // panel but past the sidebar's right edge, `elementFromPoint` returned the
+          // content card at z-10 and the panel at z-20 — the owner's screenshot, where
+          // "NOTIFICATIONS" / "Do Not Disturb" / "Missed calls" were all sliced off at
+          // the Recent card's left edge.
+          //
+          // The MOBILE bell was never affected, which is why this hid for so long: it
+          // renders from the top bar, which is `z-30` and therefore already beats the
+          // content wrapper.
+          //
+          // Raising this is safe AND robust rather than a bump-the-number patch. The
+          // sidebar and the content are flex SIBLINGS (`shrink-0` + `flex-1`), so they
+          // never overlap in layout — only this panel overflows, which is exactly what
+          // must be on top. And because that wrapper is itself a stacking context at
+          // z-10, nothing inside any page can ever climb above 20 to cover us again.
+          // 20 also stays BELOW the mobile chrome's z-30, which never coexists with
+          // this element anyway (`hidden md:flex` against `md:hidden`).
+          //
+          // This is the third appearance of this class: v2.106.27 (the canvas over
+          // unpositioned content) and v2.107.2 (the story viewer trapped under the
+          // navigation, fixed by portalling). A portal would work here too and is not
+          // used, because the panel's desktop position is anchored to the bell as its
+          // offset parent and a portal would have to recompute that by hand.
+          "relay-appshell-chrome relative z-20 hidden md:flex md:flex-col md:w-64 lg:w-72 shrink-0 " +
           "border-r border-border/70 bg-sidebar/65 " +
           "supports-[backdrop-filter]:bg-sidebar/45 supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150"
         }
