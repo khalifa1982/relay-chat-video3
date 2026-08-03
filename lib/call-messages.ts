@@ -11,6 +11,18 @@ export type RelayMessage =
   | { type: "audio-route"; route: "earpiece" | "speaker" | "bluetooth" }
   | { type: "online"; online: boolean }
   | { type: "webCallEnded"; callId: string }
+  /**
+   * The web app announcing that its native bridge is LISTENING.
+   *
+   * This closes a real handshake race that loses the push token. `onLoadEnd`
+   * fires when the document has loaded, but RELAY's `nativeTokenBridge`
+   * attaches its listener inside a React effect — so a token posted at load
+   * time can arrive BEFORE anything is listening and simply vanish, with
+   * nothing anywhere reporting it. The web side has posted RELAY_WEB_READY for
+   * exactly this since v2.99.79 and the shell ignored it, so the only recovery
+   * was backgrounding and re-foregrounding the app.
+   */
+  | { type: "web-ready" }
   | { type: "unknown" };
 
 /**
@@ -60,6 +72,12 @@ export function parseRelayMessage(raw: unknown): RelayMessage {
     }
     case "relay-online":
       return { type: "online", online: Boolean(data.online) };
+    // Note the spelling: the web side posts RELAY_WEB_READY, not a `relay-`
+    // prefixed name like the rest. Matching the SENDER rather than the local
+    // convention is the whole point — a tidier name here would silently never
+    // fire, which is precisely how this handshake came to be missing.
+    case "RELAY_WEB_READY":
+      return { type: "web-ready" };
     case "webCallEnded":
       return typeof data.callId === "string" && data.callId
         ? { type: "webCallEnded", callId: data.callId }

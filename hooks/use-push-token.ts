@@ -85,5 +85,30 @@ export function usePushToken(webViewRef: React.RefObject<WebView | null>) {
     }
   }, [token, sendTokenToWebView]);
 
-  return { token, onWebViewLoadEnd, registerForPush };
+  /**
+   * Re-send in response to the web app announcing its bridge is LISTENING.
+   *
+   * `onWebViewLoadEnd` is not sufficient on its own: the document can finish
+   * loading before RELAY attaches its listener in a React effect, so a token
+   * posted then is dropped with nothing reporting it. This is the acknowledged
+   * handshake — the web side has posted RELAY_WEB_READY since v2.99.79.
+   *
+   * DELIBERATELY NOT the Expo-token change from PR #96: iOS now gets a real FCM
+   * registration token natively (Round 29, Firebase MessagingDelegate -> the
+   * relay:native CustomEvent), so also fetching an Expo token here would give one
+   * handset TWO distinct tokens. Subscriptions are keyed per token and
+   * sendPushToIdentity fans out to every row, so that is a duplicate
+   * notification for every message, not a fallback.
+   */
+  const onWebReady = useCallback(() => {
+    if (token) sendTokenToWebView(token);
+    // A token we never obtained (permission granted late, or a transient failure
+    // on mount) is worth one more attempt now that we know the far side is up.
+    else
+      void registerForPush().then((t) => {
+        if (t) sendTokenToWebView(t);
+      });
+  }, [token, sendTokenToWebView, registerForPush]);
+
+  return { token, onWebViewLoadEnd, onWebReady, registerForPush };
 }
