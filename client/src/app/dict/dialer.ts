@@ -88,6 +88,20 @@ export const DIALER = {
     ar: "لا يوجد مستخدم RELAY بهذا الرقم",
   },
 
+  /* A HELD number (v2.107.x): an admin-reserved vanity pattern (000000, 121212, …)
+     or a tombstoned number — real in the reservation ledger, but nobody's, and not
+     assignable. It reads DIFFERENTLY from both a person and the "no RELAY user" blank.
+     ONE KEY FOR THE WHOLE SENTENCE with two placeholders, rendered via `tn` so the two
+     coloured words are React spans while the connective ("by" / "من قبل") stays inside
+     the string and keeps each language's own word order — the exact case the fragment
+     rule (see ./auth.ts) exists for. Owner: the word Reserved in red, admin in yellow. */
+  "dialer.reservedByAdmin": {
+    en: "{reserved} by {admin}",
+    ar: "{reserved} من قبل {admin}",
+  },
+  "dialer.reservedWord": { en: "Reserved", ar: "محجوز" },
+  "dialer.reservedAdmin": { en: "admin", ar: "مشرف" },
+
   /* ── The missed-call banner ──────────────────────────────────────────────────
      ONE KEY FOR THE WHOLE SENTENCE, not `from` + a name + `— tap to see all`.
      `dialer.from` exists for the fragment and is deliberately NOT used: a sentence

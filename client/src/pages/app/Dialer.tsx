@@ -346,6 +346,20 @@ export default function DialerPage() {
     }
   );
 
+  /* v2.107.x — a HELD number (an admin-reserved vanity pattern like 000000 / 121212, or
+     a tombstoned number) resolves to nobody, so `previewQuery` returns null and the pad
+     would say "No RELAY user". Ask the ledger — but ONLY on that miss, so a number that
+     IS a person never triggers a second call — and render "Reserved by admin" when it
+     comes back held. Kept off the `lookup` payload so no other lookup consumer is
+     touched. */
+  const reservedQuery = trpc.directory.reserved.useQuery(
+    { number: dialed },
+    {
+      enabled: dialed.length === 6 && previewQuery.isSuccess && !previewQuery.data,
+      staleTime: 5_000,
+    }
+  );
+
   // Hardware-keyboard support: digits type into the pad; Backspace removes.
   useEffect(() => {
     if (phase !== "idle") return; // engine owns keyboard during a call
@@ -435,6 +449,10 @@ export default function DialerPage() {
   }
 
   const previewIdentity = previewQuery.data ?? null;
+  // True only once the ledger confirms the missed number is HELD (see reservedQuery).
+  // A held number resolves to nobody, so `nonexistent` below is already true and call /
+  // message / save stay disabled — this flag only changes what the pad SAYS.
+  const previewReserved = reservedQuery.data?.reserved === true;
   // Self-call guard and the displayed "your number" must both use the
   // signaling pin (enginePin), NOT the v2 identity number, otherwise the
   // shown number can never actually be dialed.
@@ -843,6 +861,27 @@ export default function DialerPage() {
                         </span>
                       );
                     })()
+                  ) : previewReserved ? (
+                    /* A HELD number: an admin-reserved vanity pattern (000000, 121212,
+                       …) or a tombstone. NOT a user and NOT dialable, so it must read
+                       differently from both a person and the blank "no RELAY user".
+                       Owner's ask: the word RESERVED in red, admin in yellow. ONE dict
+                       key carries the whole sentence (so word order is right in both
+                       languages) and `tn` injects the two coloured words as spans. */
+                    <span className="inline-flex items-center gap-1">
+                      {tn("dialer.reservedByAdmin", {
+                        reserved: (
+                          <span className="font-semibold text-red-500">
+                            {t("dialer.reservedWord")}
+                          </span>
+                        ),
+                        admin: (
+                          <span className="font-semibold text-yellow-400">
+                            {t("dialer.reservedAdmin")}
+                          </span>
+                        ),
+                      })}
+                    </span>
                   ) : (
                     t("dialer.noSuchUser")
                   )
