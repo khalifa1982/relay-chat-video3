@@ -1715,7 +1715,12 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     return {
       width: { ideal: isMobile ? 960 : 1280 },
       height: { ideal: isMobile ? 540 : 720 },
-      frameRate: { ideal: 30, max: 30 },
+      /* HEAT (v2.107.24): phones cook on sustained video calls, and the vitals
+         log put numbers on it — 121 MB upstream in a 13-minute 1:1 call, the
+         encoder pinned at its cap for the whole duration. 24fps on mobile cuts
+         capture + encode + ISP work ~20% and is visually indistinguishable in
+         a chat window; desktops (plugged in, fans) keep 30. */
+      frameRate: { ideal: isMobile ? 24 : 30, max: isMobile ? 24 : 30 },
     };
   }
   // Screen share is mostly STATIC content (slides, a document, a desktop) — a
@@ -4770,13 +4775,17 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
 
   function applyMeshVideoCaps() {
     const n = Object.keys(peers).length;
-    const maxBitrate = n <= 1 ? 1_200_000 : n <= 3 ? 700_000 : 350_000;
+    /* HEAT (v2.107.24): the 1:1 tier is now mobile-aware. 900 kbps H.264 at
+       540p24 still reads as sharp video chat, and the ~25%% drop in radio +
+       encoder effort is exactly the sustained load a hand can feel. Desktop
+       keeps 1.2 Mbps; the group tiers were already conservative. */
+    const maxBitrate = n <= 1 ? (isMobile ? 900_000 : 1_200_000) : n <= 3 ? 700_000 : 350_000;
     const scale = n <= 3 ? 1 : 2;
     // 1:1 keeps 30 — deliberately a real value equal to the source rate rather
     // than an absent field, because the party can SHRINK (6 → 2) and a cap left
     // undefined is not reliably cleared by every engine; assigning 30 back is
     // deterministic. So 1:1 is unchanged in effect while remaining reversible.
-    const maxFramerate = n <= 1 ? 30 : n <= 3 ? 24 : 15;
+    const maxFramerate = n <= 1 ? (isMobile ? 24 : 30) : n <= 3 ? 24 : 15;
     for (const id in peers) {
       peers[id].pc.getSenders().forEach(s => {
         if (!s.track) return;
@@ -7359,10 +7368,6 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     myRole = null; roomHostPin = null;
     closeHostPanel(); closeAudioMenu(); closeTileMenu(); updateHostUI();
     unprimeAutoPip(); void exitPip(); // leave PiP + stop priming when the call ends
-    /* The vitals row's final flush, taken at the honest instant: how many peers
-       were still attached and whether the room id survived teardown is exactly
-       the owner's "is it killed or still open" — reported, not assumed. */
-    callTelemetryEnd(Object.keys(peers).length, roomId != null);
     stopStatsSampler();
     teardownSpeakerMonitor();
     /* The LOCAL level monitor is NOT torn down here any more — `releaseLocalMedia`
@@ -7374,6 +7379,12 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     // Clear leftover tiles so an idle/parked grid doesn't keep dead srcObjects.
     const grid = $("videoGrid"); if (grid) grid.innerHTML = "";
     inCall = false; roomId = null; callAnswered = false;
+    /* The vitals row's final flush — taken AFTER the clears, which is the honest
+       instant: a correct teardown reads peers={} and roomId=null here (clean=1),
+       and anything still attached at this line is a genuine leak. The first
+       probe sat one step earlier and called every call leaked; the log said so
+       within four rows, which is the telemetry doing its job on itself. */
+    callTelemetryEnd(Object.keys(peers).length, roomId != null);
     // Round 11 B: the capability names a call we have LEFT. Dropping it here is
     // what guarantees the repair path can never resurrect a call the user ended.
     roomCap = null; cancelRecreate();

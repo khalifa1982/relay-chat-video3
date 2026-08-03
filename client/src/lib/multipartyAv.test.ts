@@ -136,7 +136,9 @@ describe("second-wave audit fixes (finders re-reviewed the fresh code)", () => {
 
   it("mesh encoders scale with party size (5 uncapped 720p30 encoders melted phones + uplinks)", () => {
     expect(SRC).toMatch(/function applyMeshVideoCaps\(\)/);
-    expect(SRC).toMatch(/const maxBitrate = n <= 1 \? 1_200_000 : n <= 3 \? 700_000 : 350_000;/);
+    // WIDENED v2.107.24: 1:1 is mobile-aware now (900 kbps on phones — heat,
+    // measured in the call-vitals log). The ladder's shape is what this pins.
+    expect(SRC).toMatch(/const maxBitrate = n <= 1 \? \(isMobile \? 900_000 : 1_200_000\) : n <= 3 \? 700_000 : 350_000;/);
     expect(SRC).toMatch(/applyMeshVideoCaps\(\); \/\/ fewer parties → raise per-sender quality again/);
   });
 
