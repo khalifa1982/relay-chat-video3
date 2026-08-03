@@ -20,12 +20,36 @@ export interface VideoMimePick {
   ext: string;
 }
 
+/**
+ * Spellings that ask for H.264-in-MP4 EXPLICITLY — the one pairing every current
+ * engine can decode, and therefore the only container that makes a clip recorded on
+ * Android playable on an iPhone.
+ *
+ * THE AUDIO SIBLING LEARNED THIS AND THIS FILE DID NOT (v2.106.89 fixed
+ * `pickAudioMime` after the owner reported the voice bar broken on iPhone; the same
+ * reasoning was never carried across). Bare `video/mp4` is answered TRUE by
+ * Chromium, which then reveals VP8/VP9 under that label — the mislabel check below
+ * catches that and switches to WebM, which is honest and still undecodable on every
+ * iPhone, because iOS Safari has no WebM demuxer at all. Asking for the codec by
+ * name first means the engines that really can produce H.264 do, and the fallback is
+ * reached only by the ones that genuinely cannot.
+ *
+ * Bare `video/mp4` stays in the list BELOW these, because that is exactly what
+ * Safari answers to and Safari's is genuinely H.264/AAC.
+ */
+const H264_MP4 = [
+  'video/mp4;codecs="avc1.42E01E,mp4a.40.2"', // Baseline 3.0 + AAC-LC — the safe pair
+  'video/mp4;codecs="avc1,mp4a"',
+  "video/mp4;codecs=avc1",
+];
+
 /** Probe MediaRecorder for a supported VIDEO container. Null ⇒ no recorder.
  *  Unlike audio there is no "" last-ditch entry: a browser with MediaRecorder
  *  but no video encoder (rare) must report unsupported, not produce garbage. */
 export function pickVideoMime(): VideoMimePick | null {
   if (typeof window === "undefined" || !window.MediaRecorder) return null;
   const candidates: VideoMimePick[] = [
+    ...H264_MP4.map((mimeType) => ({ mimeType, ext: "mp4" })),
     { mimeType: "video/mp4", ext: "mp4" }, // Safari (H.264/AAC)
     { mimeType: 'video/webm;codecs="vp9,opus"', ext: "webm" },
     { mimeType: 'video/webm;codecs="vp8,opus"', ext: "webm" },
@@ -93,6 +117,11 @@ function constructRecorder(stream: MediaStream, mimeType: string): MediaRecorder
   }
 }
 
+/** How long a stopped recorder gets to flush its final blob. Same reasoning, and
+ *  the same value, as `voiceNote.ts`: far longer than a flush, far shorter than a
+ *  wait anybody notices. */
+const FLUSH_GRACE_MS = 5_000;
+
 export function recordFromStream(
   stream: MediaStream,
   opts?: { maxMs?: number },
@@ -107,22 +136,53 @@ export function recordFromStream(
   let cancelled = false;
   let capT: ReturnType<typeof setTimeout> | null = null;
 
+  /* `done` MUST ALWAYS SETTLE, AND HERE IT COULD NOT — the defect `voiceNote.ts`
+   * fixed and this sibling never did.
+   *
+   * It resolved only from the recorder's `stop` event. There was no `error`
+   * listener, `safeStop()` on an ALREADY-INACTIVE recorder fires nothing at all, and
+   * the duration cap called `rec.stop()` and then trusted that same event. So a
+   * recorder that went inactive on its own — an iOS call or Siri interruption, the
+   * camera claimed by another app, a MediaRecorder `error` — left this pending
+   * forever.
+   *
+   * WHAT THAT COSTS: `VideoRecordSheet` leaves `phase === "rec"` only inside
+   * `rec.done.then(...)`, and both of that phase's exits (Stop and Send) call
+   * `recRef.current?.stop()`, a no-op on an inactive recorder. Both ways out are
+   * dead and the sheet is stuck on the recording UI — the same complete lock-out the
+   * owner reported for the voice composer, on the video sheet.
+   *
+   * So the resolver is hoisted and made IDEMPOTENT, with four paths to it: a normal
+   * stop, a recorder error, an already-inactive recorder, and a hard deadline. */
+  let settle: (v: { blob: Blob; mimeType: string; ext: string; durationMs: number } | null) => void =
+    () => {};
+  let settled = false;
+  let deadlineT: ReturnType<typeof setTimeout> | null = null;
+  const armDeadline = (ms: number) => {
+    if (deadlineT) clearTimeout(deadlineT);
+    deadlineT = setTimeout(() => finish(), ms);
+  };
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    if (capT) clearTimeout(capT);
+    if (deadlineT) clearTimeout(deadlineT);
+    if (cancelled || chunks.length === 0) {
+      settle(null);
+      return;
+    }
+    const finalMime = rec.mimeType || mimeType;
+    settle({
+      blob: new Blob(chunks, { type: finalMime }),
+      mimeType: finalMime,
+      ext,
+      durationMs: Date.now() - startedAt,
+    });
+  };
+
   const done = new Promise<{ blob: Blob; mimeType: string; ext: string; durationMs: number } | null>(
     (resolve) => {
-      const finish = () => {
-        if (capT) clearTimeout(capT);
-        if (cancelled || chunks.length === 0) {
-          resolve(null);
-          return;
-        }
-        const finalMime = rec.mimeType || mimeType;
-        resolve({
-          blob: new Blob(chunks, { type: finalMime }),
-          mimeType: finalMime,
-          ext,
-          durationMs: Date.now() - startedAt,
-        });
-      };
+      settle = resolve;
       const onData = (e: BlobEvent) => {
         if (e.data.size > 0) chunks.push(e.data);
       };
@@ -155,6 +215,7 @@ export function recordFromStream(
           // race test before this guard existed.
           if (cancelled) return;
           r.removeEventListener("stop", finish); // this stop is just to swap, not a real end
+          r.removeEventListener("error", finish); // …and the old recorder's error is not ours
           try {
             if (r.state !== "inactive") r.stop();
           } catch {
@@ -168,6 +229,7 @@ export function recordFromStream(
             mimeType = "video/webm";
             rec.addEventListener("dataavailable", onData);
             rec.addEventListener("stop", finish);
+            rec.addEventListener("error", finish);
             rec.start(1000);
           } catch {
             /* keep the mp4-labeled recorder — imperfect labeling beats no recording */
@@ -178,6 +240,11 @@ export function recordFromStream(
 
       rec.addEventListener("dataavailable", onData);
       rec.addEventListener("stop", finish);
+      /* A recorder ERROR settles with whatever was captured rather than discarding
+         it: the chunks already collected are real footage, and losing a take
+         somebody just made is worse than sending a slightly short one. With nothing
+         captured, `finish` resolves null on its own. */
+      rec.addEventListener("error", finish);
       armMislabelCheck(rec);
 
       // 1s timeslice: Safari flushes chunks progressively (bounded memory, and
@@ -197,17 +264,34 @@ export function recordFromStream(
           } catch {
             /* already stopped */
           }
+          /* Arm a SHORT deadline rather than settling here. `stop()` queues the
+             final `dataavailable`, so resolving in this tick would drop the last
+             second of the take — and with a recorder that flushed nothing, it is
+             this that stops the cap being its own way to hang. */
+          armDeadline(FLUSH_GRACE_MS);
         }, opts.maxMs);
       }
+      /* THE BACKSTOP. Every other path depends on the recorder behaving; this one
+         does not. Generous, because its job is to make "pending forever" impossible
+         rather than to enforce a limit: a take cut short by it is bad, a sheet
+         nobody can leave is worse. */
+      armDeadline((opts?.maxMs && opts.maxMs > 0 ? opts.maxMs : 5 * 60_000) + 30_000);
     },
   );
 
   const safeStop = () => {
     try {
-      if (rec.state !== "inactive") rec.stop();
+      if (rec.state !== "inactive") {
+        rec.stop(); // the `stop` event → finish()
+        return;
+      }
     } catch {
-      /* already stopped */
+      /* fall through and settle directly */
     }
+    /* ALREADY INACTIVE, so `stop()` fires nothing. This is the case that wedged the
+       sheet: its Stop and Send buttons both route here, both were no-ops, and
+       neither did anything ever again. Settling directly is what makes them work. */
+    finish();
   };
   return {
     stop: safeStop,

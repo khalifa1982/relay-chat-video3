@@ -348,15 +348,36 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
    * So the cap is re-armed for the time REMAINING whenever the run resumes, and
    * disarmed while paused. */
   const capMs = opts?.maxMs && opts.maxMs > 0 ? opts.maxMs : 0;
+  /**
+   * How long a stopped recorder gets to flush its final blob before we give up on it.
+   *
+   * THE CAP USED TO SETTLE IN THE SAME TICK AS `stop()`, AND THAT THREW THE WHOLE
+   * RECORDING AWAY. `rec.start()` is called with NO timeslice, deliberately — one
+   * blob at the end rather than a stream of them — and `MediaRecorder.stop()` QUEUES
+   * the final `dataavailable` rather than firing it. So calling `finish()` straight
+   * after `stop()` ran while `chunks` was still empty, and `finish` resolves NULL for
+   * an empty recording: a voicemail that ran the full sixty seconds was silently
+   * discarded, and the prompt read it as "cancelled".
+   *
+   * The intent behind that line was right — the cap must not ask the recorder to stop
+   * and then trust an event that may never come. It is the DEADLINE's job to
+   * guarantee settlement, so the cap arms a short one instead of pre-empting the
+   * flush. Five seconds is far longer than a flush and far shorter than a wait
+   * anybody would notice.
+   *
+   * (The repo's own fake recorder hid this: its `stop()` fires `onstop`
+   * synchronously and its `start()` emits a chunk immediately, so the queue this
+   * depends on did not exist in the test. `voiceNoteCap.test.ts` models the spec.)
+   */
+  const FLUSH_GRACE_MS = 5_000;
   const fireCap = () => {
     try {
       if (rec.state !== "inactive") rec.stop();
     } catch {
       /* already stopped */
     }
-    // …and settle even if that stop produced no `onstop`. Without this the duration cap
-    // was itself a way to hang: it asked the recorder to stop and then trusted an event.
-    finish();
+    // Wait for the queued flush; the deadline is the guarantee, not this tick.
+    armDeadline(FLUSH_GRACE_MS);
   };
   const armCap = () => {
     if (capT) clearTimeout(capT);

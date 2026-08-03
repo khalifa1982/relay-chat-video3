@@ -208,9 +208,22 @@ describe("the recording promise always settles", () => {
   });
 
   it("the duration cap settles by itself, with nobody pressing anything", async () => {
+    /* WINDOW WIDENED v2.107.15, and the reason is the other half of this same line.
+       The cap used to call `finish()` in the SAME TICK as `rec.stop()` — which does
+       settle it promptly, and threw the recording away doing so: `stop()` queues the
+       final `dataavailable`, and with no timeslice that queued blob is the entire
+       take, so `finish` ran on an empty `chunks` and resolved NULL. A voicemail
+       spoken for the full minute vanished (see `voiceNoteCap.test.ts`, which models
+       the spec's async flush — the fake here fires `onstop` synchronously, which is
+       exactly why this file could not see it).
+
+       So the cap now stops the recorder and arms a SHORT deadline instead of
+       pre-empting the flush. The property this test exists for is unchanged and is
+       still asserted: nobody presses anything and it settles on its own. */
     FakeRecorder.mode = "never-answers";
     const { h } = await record(800);
-    const r = await settlesWithin(h.done, 2_000);
+    // Bounded well inside the flush grace plus a margin — not "eventually".
+    const r = await settlesWithin(h.done, 800 + 5_000 + 1_000);
     expect(r.done, "the cap must settle rather than merely ask the recorder to stop").toBe(true);
   });
 
