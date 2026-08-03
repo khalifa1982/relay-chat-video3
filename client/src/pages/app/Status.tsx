@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useAutoplay } from "@/app/useAutoplay";
 import { Plus, X, Camera, Type, Trash2, Eye, ChevronDown, ChevronLeft, ChevronRight, Send, Video, Smile, Users } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
@@ -1576,6 +1577,14 @@ function StatusReplyBar({
 }
 
 function StatusBody({ item }: { item: StatusItem }) {
+  /* Attribute autoplay was crash_reports #5 (closing a status mid-start) — the
+     hook owns the start and pauses before unmount. Two refs because a hook's
+     call order is fixed; whichever element this item doesn't render stays null
+     and its hook no-ops. */
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  useAutoplay(videoRef, item.mediaUrl);
+  useAutoplay(audioRef, item.mediaUrl);
   if (item.kind === "text") {
     return (
       <div className="grid size-full place-items-center p-8 text-center" style={{ background: item.bgColor ?? "#111827" }}>
@@ -1587,13 +1596,13 @@ function StatusBody({ item }: { item: StatusItem }) {
     return <div className="grid size-full place-items-center"><img src={item.mediaUrl ?? ""} alt="" className="max-h-full max-w-full object-contain" /></div>;
   }
   if (item.kind === "video") {
-    return <div className="grid size-full place-items-center"><video src={item.mediaUrl ?? ""} autoPlay playsInline controls={false} className="max-h-full max-w-full" /></div>;
+    return <div className="grid size-full place-items-center"><video ref={videoRef} src={item.mediaUrl ?? ""} playsInline controls={false} className="max-h-full max-w-full" /></div>;
   }
   if (item.kind === "audio") {
     return (
       <div className="grid size-full place-items-center gap-4 p-8">
         <div className="grid size-24 place-items-center rounded-full bg-white/10 text-4xl">🎵</div>
-        <audio src={item.mediaUrl ?? ""} autoPlay controls className="w-[min(90vw,420px)]" />
+        <audio ref={audioRef} src={item.mediaUrl ?? ""} controls className="w-[min(90vw,420px)]" />
       </div>
     );
   }

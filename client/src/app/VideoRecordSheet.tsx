@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { X, SwitchCamera, Check, RotateCcw, Images, Send } from "lucide-react";
+import { useAutoplay } from "@/app/useAutoplay";
 import {
   openVideoCapture,
   recordFromStream,
@@ -94,6 +95,11 @@ export function VideoRecordSheet({
   const [elapsedMs, setElapsedMs] = useState(0);
   const [result, setResult] = useState<{ blob: Blob; mimeType: string; ext: string; durationMs: number } | null>(null);
   const [reviewUrl, setReviewUrl] = useState<string | null>(null);
+  /* The review player's start is owned here (crash_reports #5 class); the LIVE
+     preview's start already lives beside its srcObject assignment, so its
+     redundant autoPlay attribute is simply dropped below. */
+  const reviewRef = useRef<HTMLVideoElement | null>(null);
+  useAutoplay(reviewRef, reviewUrl);
   /* The KEY, not the sentence. A translated string frozen in state is stale the moment
      the language changes, and storing one would also drag `t` into an effect closure
      whose dependency list does not (and should not) include it. */
@@ -317,13 +323,12 @@ export function VideoRecordSheet({
       {/* stage */}
       <div className="relative min-h-0 flex-1">
         {phase === "review" && reviewUrl ? (
-          <video src={reviewUrl} controls playsInline autoPlay className="absolute inset-0 size-full object-contain" />
+          <video ref={reviewRef} src={reviewUrl} controls playsInline className="absolute inset-0 size-full object-contain" />
         ) : (
           <video
             ref={videoRef}
             muted
             playsInline
-            autoPlay
             className="absolute inset-0 size-full object-cover"
             // Mirror the FRONT-camera preview only (natural selfie feel); the
             // recorded clip itself is the raw, unmirrored track.
