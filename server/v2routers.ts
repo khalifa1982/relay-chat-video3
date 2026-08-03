@@ -69,6 +69,7 @@ import {
   getIdentityByDeviceId,
   getIdentityById,
   getIdentityByNumber,
+  isNumberReserved,
   getOrCreateDmConversation,
   dmConversationExists,
   createGroupConversation,
@@ -1286,6 +1287,23 @@ export const v2DirectoryRouter = router({
         partyLine: false,
         memberCount: 0,
       };
+    }),
+
+  /**
+   * Is this number HELD in the reservation ledger? (v2.107.x) A number can be reserved
+   * without being a person — an admin-reserved vanity pattern (000000, 121212, …) or a
+   * tombstoned number. The dialer asks this ONLY when `lookup` already resolved to
+   * nobody, so it can tell a HELD number ("Reserved by admin") apart from a genuinely
+   * free one ("No RELAY user with this number"). Behind the same `directoryGate`
+   * throttle, and it discloses nothing a `lookup` did not already imply. Kept as its
+   * OWN query on purpose, so the lookup payload — and every one of its consumers —
+   * stays exactly as it was.
+   */
+  reserved: publicProcedure
+    .input(z.object({ number: NumberSchema }))
+    .query(async ({ input, ctx }) => {
+      directoryGate(ctx);
+      return { reserved: await isNumberReserved(input.number) };
     }),
 
   /**

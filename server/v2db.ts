@@ -7592,6 +7592,34 @@ export async function confirmNumberReservation(number: string): Promise<void> {
   }
 }
 
+/**
+ * Is this 6-digit number HELD in the reservation ledger? (v2.107.x)
+ *
+ * READ-ONLY, and the mirror of the allocation gate: the minter refuses any number
+ * whose INSERT into `number_reservations` collides, so a number present here is
+ * exactly one that can never be handed out — an admin-reserved vanity pattern
+ * (000000, 121212, …) or a tombstoned number. The dial/lookup path calls this ONLY
+ * after it has already ruled out a live identity and a party line, so a `true` here
+ * means "reserved, not a person" — the state the pad renders as "Reserved by admin".
+ *
+ * FAILS OPEN as "not reserved" on a DB hiccup: a missing badge is harmless, and a
+ * transient error must never mislabel an ordinary number as held.
+ */
+export async function isNumberReserved(number: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    const res = await db.execute(
+      sql`SELECT 1 FROM \`number_reservations\` WHERE \`number\` = ${number} LIMIT 1`
+    );
+    const rows = Array.isArray(res) ? (res[0] as unknown as unknown[]) : [];
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (e) {
+    console.warn("[numbers] reservation check skipped:", (e as Error)?.message || "");
+    return false;
+  }
+}
+
 /** Release a reservation this process just took and PROVABLY never bound.
  *  Guarded on the number being absent from BOTH number tables, so it can never
  *  un-reserve one that is actually in use. */
