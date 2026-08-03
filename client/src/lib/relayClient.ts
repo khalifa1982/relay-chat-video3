@@ -7075,23 +7075,32 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         return;
       }
     }
+    /* TRY/FINALLY, like `flipBusy`, `filterBusy` and `recoverBusy` — this was the
+     * one of the four guards that reset BY HAND, at four separate points.
+     *
+     * The flag exists to swallow double-taps while a transition is in flight, so a
+     * throw anywhere between here and a reset leaves it stuck TRUE, and every later
+     * tap on Share dies at the guard above with no toast and no log. It self-heals
+     * only on hang-up, which clears it — exactly the shape that gets reported as
+     * "the screen share button randomly stops working" and never reproduces.
+     * Nothing in the body is a KNOWN thrower today; the point is that the stuck
+     * state stops being reachable at all. */
     screenBusy = true;
-    let disp: MediaStream;
     try {
-      disp = await md.getDisplayMedia({ video: { ...qualityScreenShare(videoQuality) }, audio: false });
-    } catch {
-      // User cancelled the picker, or permission denied — no-op.
-      screenBusy = false;
-      return;
-    }
+      let disp: MediaStream;
+      try {
+        disp = await md.getDisplayMedia({ video: { ...qualityScreenShare(videoQuality) }, audio: false });
+      } catch {
+        // User cancelled the picker, or permission denied — no-op.
+        return;
+      }
     // The call may have ended while the picker was open — don't adopt a capture
     // into a dead call (that would leak the screen grab + wedge state).
     const track = disp.getVideoTracks()[0] || null;
-    if (!inCall || !track) {
-      disp.getTracks().forEach(t => t.stop());
-      screenBusy = false;
-      return;
-    }
+      if (!inCall || !track) {
+        disp.getTracks().forEach(t => t.stop());
+        return;
+      }
     // A shared screen is mostly static, text-heavy content — hint "detail" so the
     // encoder favors sharpness over frame rate (readable text, not smeared).
     try { (track as MediaStreamTrack & { contentHint?: string }).contentHint = "detail"; } catch { /* */ }
@@ -7127,13 +7136,16 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutGrid());
     // Tell everyone we're sharing so they spotlight our tile (works on every
     // browser — viewers don't need to detect the track source themselves).
-    sendWS({ type: "screen", action: "on" });
-    screenBusy = false;
-    toast("Sharing your screen");
+      sendWS({ type: "screen", action: "on" });
+      toast("Sharing your screen");
+    } finally {
+      screenBusy = false;
+    }
   }
   async function stopScreenShare() {
     if (!screenSharing) return;
     screenBusy = true;
+    try {
     screenSharing = false;
     const dying = screenStream;
     screenStream = null;
@@ -7156,8 +7168,14 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     screenShareIds.delete("tile-self");
     layoutGrid();
     sendWS({ type: "screen", action: "off" });
-    screenBusy = false;
     toast("Stopped screen sharing");
+    } finally {
+      /* Same reasoning as the toggle above, and it matters MORE here: a stuck flag
+         on the STOP path leaves somebody sharing their screen with a Stop button
+         that does nothing. `track.onended` routing the browser's own "Stop sharing"
+         bar straight to this function is the only reason that was survivable. */
+      screenBusy = false;
+    }
   }
   function toggleChat() {
     const p = $("chatPanel"); if (!p) return;
