@@ -125,6 +125,10 @@ describe("platform labels — clamped on the way in, detected from the bridge", 
   it("normalizeCrashPlatform clamps unknown values to web instead of inventing enum members", () => {
     expect(normalizeCrashPlatform("ios")).toBe("ios");
     expect(normalizeCrashPlatform("android-native")).toBe("android-native");
+    // The Capacitor shells' NATIVE layer (v2.107.21) — a Java or NSException
+    // crash of the shell itself, as opposed to the web bundle running inside it.
+    expect(normalizeCrashPlatform("android-shell")).toBe("android-shell");
+    expect(normalizeCrashPlatform("ios-shell")).toBe("ios-shell");
     expect(normalizeCrashPlatform("smart-fridge")).toBe("web");
     expect(normalizeCrashPlatform(undefined)).toBe("web");
   });
