@@ -449,6 +449,10 @@ export function startRelay(root: HTMLElement): RelayHandle {
   let facingMode: "user" | "environment" = "user";
   let activeFilter: FilterId = "none";
   let micOn = true, camOn = true;
+  /* The pending "has the mic stayed muted?" recovery. There is deliberately NO
+     mirrored `micTrackMuted` flag: the readout reads `track.muted` live, and a second
+     copy of one fact is how the two come to disagree. */
+  let micMuteT: ReturnType<typeof setTimeout> | null = null;
   // Pending auto-rejoin after a mid-call reload (e.g. the auto-updater). Read from
   // sessionStorage at boot; drives register() to use the in-call pin and onRejoin
   // to restore mic/cam. Cleared once we rejoin, the call proves ended, or on a
@@ -2027,13 +2031,19 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       ensureMeshAudioCtx(); // creates + resume()s the CONTEXT; no sampler yet
     } catch { /* best-effort: metering is decoration, never a reason to fail a dial */ }
   }
-  /** THE ONE FUNNEL for gesture-time audio priming. Both contexts are primed
-   *  together so a sixth entry point cannot prime one and forget the other —
-   *  which is exactly how `meshAudioCtx` came to be closed without ever being
-   *  primed. */
+  function localLevelPrime() {
+    try {
+      ensureLocalLevelCtx(); // no-op on iOS, where the meter does not run at all
+    } catch { /* best-effort: metering is decoration, never a reason to fail a dial */ }
+  }
+  /** THE ONE FUNNEL for gesture-time audio priming. EVERY call-audio context is
+   *  primed together so an entry point cannot prime some and forget others — which
+   *  is exactly how `meshAudioCtx` came to be closed without ever being primed, and
+   *  `localLevelCtx` was the third one still built after the gesture was spent. */
   function primeCallAudio() {
     loudspeakerPrime();
     meshSpeakerPrime();
+    localLevelPrime();
   }
   function routeElToLoudspeaker(el: HTMLMediaElement) {
     if (!loudspeakerCtx || loudspeakerMutedEls.has(el)) return;
@@ -2347,9 +2357,44 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   // another app claiming the camera. The mesh keeps a dead sender — the user
   // stayed permanently one-way muted / black with zero feedback ("completely
   // muted" in the 6-party QA). Watch every local track and self-heal.
+  /**
+   * A MUTED mic is not an ENDED mic, and only one of the two was ever watched.
+   *
+   * `onended` covers a track the OS destroyed. It does NOT cover `track.muted`,
+   * which the browser sets when the source stops DELIVERING while the track stays
+   * live — an OS interruption, another app claiming the input, or (on iOS) the
+   * audio session being reconfigured underneath us. In that state `enabled` is
+   * still true, so `syncMicEnabled` sees nothing wrong, the mic button stays lit,
+   * and the sender quietly sends zero bytes. That is precisely the v2.107.12
+   * handset reading: `↑0kbps` on an unmuted voice call.
+   *
+   * Video already watched `onmute`/`onunmute` (for the tile placeholder). Audio
+   * simply never got the mirror.
+   *
+   * RECOVERY IS DELAYED, NOT IMMEDIATE, and that is deliberate: a brief
+   * interruption mutes and unmutes on its own, and re-acquiring on every edge
+   * would tear down a working mic to chase a blip. A mute that PERSISTS is the
+   * one worth acting on; `recoverDeadLocalTrack` is single-flight (#160) so this
+   * cannot storm either way.
+   */
+  const MIC_MUTE_RECOVER_MS = 2500;
   function watchLocalTracks(stream: MediaStream) {
     stream.getTracks().forEach(t => {
       t.onended = () => { void recoverDeadLocalTrack(t.kind); };
+      if (t.kind !== "audio") return;
+      t.onmute = () => {
+        if (micMuteT) clearTimeout(micMuteT);
+        micMuteT = setTimeout(() => {
+          micMuteT = null;
+          // Still muted, still the track we are publishing, still in a call.
+          if (!inCall || !t.muted || t.readyState !== "live") return;
+          toast("Your microphone stopped sending — reconnecting it…");
+          void recoverDeadLocalTrack("audio");
+        }, MIC_MUTE_RECOVER_MS);
+      };
+      t.onunmute = () => {
+        if (micMuteT) { clearTimeout(micMuteT); micMuteT = null; }
+      };
     });
   }
   /**
@@ -2499,6 +2544,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     // getUserMedia when we release must NOT install its stream afterwards (it
     // would be an orphan no end path can ever stop — a permanently lit camera).
     mediaGen++;
+    // A pending mute-recovery must not outlive the media it was going to re-acquire:
+    // it would fire after the call, re-open the microphone, and have nothing left
+    // holding a reference able to stop it (the #160 orphan class).
+    if (micMuteT) { clearTimeout(micMuteT); micMuteT = null; }
     // BEFORE the tracks are stopped: disconnect the graph reading them, rather than
     // leaving a source node briefly pointed at a track being torn down.
     teardownLocalLevelMonitor();
@@ -4558,7 +4607,29 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
          a one-line pill. `textContent`, never innerHTML — `encoderImplementation`
          and the codec name are browser-supplied strings and there is no reason to
          hand any of them to a parser. */
-      const detail = formatCallDetail(stats);
+      /* OUR OWN MIC'S STATE, which no getStats field can express (v2.107.15).
+       *
+       * `↑0kbps` on a call whose mic button reads ON has two very different causes —
+       * we are not being GIVEN audio to send, or we are sending and the far side
+       * cannot play it — and the readout could not tell them apart. This says which,
+       * from the one place that knows: the local track. It lives here rather than in
+       * `callStats.ts` because it is a fact about our capture, not about RTC stats,
+       * and that module is deliberately pure over a stats report.
+       *
+       * Rendered ONLY when something is wrong, unlike `↓aud`: the inbound counters
+       * are worth comparing against a healthy call, whereas "the mic is fine" is the
+       * silent default and saying so on every reading is noise. */
+      const outTrack = outAudioTrack();
+      const micNote = !outTrack
+        ? "↑mic none"
+        : outTrack.readyState !== "live"
+          ? "↑mic ended"
+          : outTrack.muted
+            ? "↑mic muted by OS"
+            : micOn && !outTrack.enabled
+              ? "↑mic disabled"
+              : "";
+      const detail = [formatCallDetail(stats), micNote].filter(Boolean).join(" · ");
       renderCallQuality(
         (v === "relay" ? "⚠ " : v === "poor" ? "▲ " : "") + formatCallStats(stats) +
           (detail ? "\n" + detail : ""),
@@ -6038,29 +6109,81 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   // is detected, so it's obvious before a peer has to say "you're on mute".
   // Independent of meshAudioCtx, which only taps REMOTE streams.
   let localLevelCtx: AudioContext | null = null;
-  let localLevelAnalyser: { src: MediaStreamAudioSourceNode; node: AnalyserNode; data: Uint8Array<ArrayBuffer> } | null = null;
+  let localLevelAnalyser: { src: MediaStreamAudioSourceNode; node: AnalyserNode; data: Uint8Array<ArrayBuffer>; tap: MediaStreamTrack } | null = null;
   let localLevelT: ReturnType<typeof setInterval> | null = null;
+  /**
+   * NEVER ON iOS, AND THAT IS THE LOAD-BEARING HALF (v2.107.15).
+   *
+   * A real iPhone call on v2.107.12 read `↑0kbps` with 0 audio bytes sent over the
+   * sample interval, on a voice call whose mic was unmuted and whose outbound Opus
+   * stream existed — i.e. the encoder was being fed nothing. This is the only
+   * WebAudio consumer of the LOCAL mic, and it claims it BEFORE WebRTC does:
+   * `ensureLocalLevelMonitor()` runs at `ensureMediaInner`'s exit, while the track
+   * only reaches an `RTCRtpSender` later in `createPeer`.
+   *
+   * On iOS a WebAudio context taking a mic input reconfigures the shared
+   * AVAudioSession, and a muted capture track is the documented outcome — which
+   * nothing here could see, because `watchLocalTracks` only ever watched `onended`
+   * (fixed alongside this).
+   *
+   * CLONING IS NOT ENOUGH FOR THAT CASE, which is why this is a skip rather than
+   * the same clone the remote analyser got: a clone protects against two consumers
+   * contending for one track, and does nothing about the OS reconfiguring the audio
+   * session — a clone is fed from the same input. Elsewhere the tap is kept (it has
+   * been harmless on desktop throughout) and hardened the same way as its sibling,
+   * so the class is closed on every platform rather than papered over on one.
+   *
+   * The cost is a decorative pulse on the mic button. METERING IS DECORATION; AUDIO
+   * IS THE PRODUCT — the same rule that governs the remote analyser.
+   */
+  function localLevelMeterAllowed(): boolean {
+    return !IS_IOS;
+  }
+  function ensureLocalLevelCtx() {
+    if (!localLevelMeterAllowed()) return;
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    if (!localLevelCtx) localLevelCtx = new Ctx();
+    try { void localLevelCtx.resume(); } catch { /* */ }
+  }
   function ensureLocalLevelMonitor() {
+    if (!localLevelMeterAllowed()) return;
     if (localLevelAnalyser || !localStream || localStream.getAudioTracks().length === 0) return;
+    const live = localStream.getAudioTracks()[0];
+    if (!live) return;
+    ensureLocalLevelCtx();
+    if (!localLevelCtx) return;
+    /* A suspended context renders nothing, so the tap buys no metering and can only
+       cost. Deferred rather than dropped: the 400ms sampler retries once the
+       context is actually running. */
+    if (localLevelCtx.state !== "running") {
+      try { void localLevelCtx.resume(); } catch { /* */ }
+      if (!localLevelT) localLevelT = setInterval(sampleLocalLevel, 400);
+      return;
+    }
+    let tap: MediaStreamTrack | null = null;
     try {
-      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!Ctx) return;
-      if (!localLevelCtx) localLevelCtx = new Ctx();
-      void localLevelCtx.resume();
-      // Tap via a NEW MediaStream wrapping the same track — never the destination,
-      // so this can't interfere with anything else reading the track (e.g. the
-      // RTCRtpSender publishing it to peers).
-      const src = localLevelCtx.createMediaStreamSource(new MediaStream([localStream.getAudioTracks()[0]]));
+      // A CLONE, never the live mic: a wrapper MediaStream still references the
+      // SAME track object, so it never protected the RTCRtpSender publishing it
+      // (v2.107.12 proved that for the remote analyser).
+      tap = live.clone();
+      const src = localLevelCtx.createMediaStreamSource(new MediaStream([tap]));
       const node = localLevelCtx.createAnalyser();
       node.fftSize = 256;
       src.connect(node);
-      localLevelAnalyser = { src, node, data: new Uint8Array(new ArrayBuffer(node.frequencyBinCount)) };
+      localLevelAnalyser = { src, node, data: new Uint8Array(new ArrayBuffer(node.frequencyBinCount)), tap };
       if (!localLevelT) localLevelT = setInterval(sampleLocalLevel, 400);
-    } catch { /* best-effort — silent if Web Audio is unavailable */ }
+    } catch {
+      // Release a clone that never reached localLevelAnalyser — its only possible release.
+      try { tap?.stop(); } catch { /* */ }
+    }
   }
   function sampleLocalLevel() {
     const a = localLevelAnalyser;
     const btn = $("micBtn");
+    /* RETRY a deferred tap. The retry belongs on the tick rather than at attach
+       time because what changes is the CONTEXT's state, not the track's. */
+    if (!a && localStream && localLevelCtx?.state === "running") ensureLocalLevelMonitor();
     if (!a || !btn) return;
     a.node.getByteFrequencyData(a.data);
     let sum = 0;
@@ -6072,6 +6195,8 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     if (localLevelT) { clearInterval(localLevelT); localLevelT = null; }
     if (localLevelAnalyser) {
       try { localLevelAnalyser.src.disconnect(); localLevelAnalyser.node.disconnect(); } catch { /* */ }
+      // The clone is ours alone; nothing else can ever release it.
+      try { localLevelAnalyser.tap.stop(); } catch { /* */ }
       localLevelAnalyser = null;
     }
     if (localLevelCtx) { try { void localLevelCtx.close(); } catch { /* */ } localLevelCtx = null; }

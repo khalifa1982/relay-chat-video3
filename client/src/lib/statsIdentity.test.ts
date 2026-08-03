@@ -335,8 +335,14 @@ describe("v2.106.58 — the detail line is separate from the quality line", () =
 
 describe("v2.106.58 — the readout is wired for two lines and still rides one poller", () => {
   it("joins the two lines with a newline, and only when the detail says something", () => {
+    /* REWRITTEN TO THE PROPERTY (v2.107.15). This froze the exact expression
+       `const detail = formatCallDetail(stats);`, i.e. it forbade the detail line ever
+       being COMPOSED — and v2.107.15 legitimately appends the local mic's own state,
+       which no getStats field can express. What the test stands for is unchanged and is
+       what it now asserts: line 2 is built from `formatCallDetail`, and it is omitted
+       entirely when it has nothing to say so an ordinary reading stays one line. */
     const code = codeOnly(CLIENT);
-    expect(code).toMatch(/const detail = formatCallDetail\(stats\);/);
+    expect(code).toMatch(/const detail = \[formatCallDetail\(stats\)[\s\S]{0,80}\.filter\(Boolean\)/);
     expect(code).toMatch(/detail \? "\\n" \+ detail : ""/);
   });
 
