@@ -1835,7 +1835,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     if (audioUnlockArmed || typeof document === "undefined") return;
     audioUnlockArmed = true;
     const unlock = () => {
-      collectAudioEls().forEach(el => { try { void el.play?.(); } catch { /* */ } });
+      // The catch is ON THE PROMISE — a sync try around play() catches nothing
+      // async, and this was the one escape hatch left: crash_reports #6 (Safari,
+      // answering a waiting call) was exactly this rejection going unhandled.
+      collectAudioEls().forEach(el => { try { void el.play?.()?.catch(() => { /* */ }); } catch { /* */ } });
       audioUnlockArmed = false;
       document.removeEventListener("pointerdown", unlock);
       document.removeEventListener("touchend", unlock);

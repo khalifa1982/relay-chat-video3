@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
+import { useAutoplay } from "@/app/useAutoplay";
 import { useRelayEngine } from "@/app/RelayEngine";
 import { toast } from "sonner";
 import {
@@ -5646,6 +5647,11 @@ function MediaLightbox({
   media: LightboxMedia;
   onClose: () => void;
 }) {
+  /* Attribute autoplay on the lightbox video was the same class as
+     crash_reports #5 — closing the lightbox mid-start rejected an unownable
+     promise. The hook owns the start and settles it with pause() on close. */
+  const lightboxVideoRef = useRef<HTMLVideoElement | null>(null);
+  useAutoplay(lightboxVideoRef, media.url);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -5704,7 +5710,7 @@ function MediaLightbox({
         {media.type === "image" ? (
           <img src={media.url} alt={media.name || t("msg.imageAlt")} className="max-h-[78vh] max-w-[92vw] rounded-lg object-contain" />
         ) : (
-          <video src={media.url} controls autoPlay className="max-h-[78vh] max-w-[92vw] rounded-lg" />
+          <video ref={lightboxVideoRef} src={media.url} controls className="max-h-[78vh] max-w-[92vw] rounded-lg" />
         )}
         {media.caption && (
           <p className="max-w-[92vw] text-center text-sm text-white/90" dir="auto">
