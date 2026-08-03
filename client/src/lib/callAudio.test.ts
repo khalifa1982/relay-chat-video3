@@ -55,11 +55,22 @@ describe("mobile speaker — route menu, default-on, gesture priming", () => {
     expect(CLIENT).toMatch(/if \(ok\) setLoudspeakerPref\(true\);/);
   });
 
-  it("the speaker context is PRIMED inside real gestures (Answer tap + every dial path)", () => {
+  it("BOTH call audio contexts are PRIMED inside real gestures (Answer tap + every dial path)", () => {
     expect(CLIENT).toMatch(/function loudspeakerPrime\(\)/);
-    const primes = CLIENT.match(/loudspeakerPrime\(\);/g) || [];
     // acceptInvite + dial() + dialGroup() + legacy keypad startCall.
+    const primes = CLIENT.match(/primeCallAudio\(\);/g) || [];
     expect(primes.length).toBeGreaterThanOrEqual(4);
+    /* THE PROPERTY, not the arrangement: priming is ONE funnel that covers both
+       contexts, so a sixth entry point cannot prime one and forget the other.
+       That omission is exactly what left `meshAudioCtx` closed-but-never-primed
+       after #160 — built inside `ontrack`, hence SUSPENDED on WebKit, which
+       starves the <audio> element holding the same remote track. */
+    const funnel = CLIENT.slice(CLIENT.indexOf("function primeCallAudio()"));
+    expect(funnel.slice(0, 200)).toMatch(/loudspeakerPrime\(\);[\s\S]*meshSpeakerPrime\(\);/);
+    /* ...and no gesture site primes just one of the two behind the funnel's back:
+       each half has exactly ONE caller, which is the funnel. */
+    expect((CLIENT.match(/loudspeakerPrime\(\);/g) || []).length).toBe(1);
+    expect((CLIENT.match(/meshSpeakerPrime\(\);/g) || []).length).toBe(1);
   });
 
   it("the remembered speaker state is APPLIED at establishment — with the never-mute-into-a-dead-context guard intact", () => {

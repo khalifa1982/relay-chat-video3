@@ -1,5 +1,110 @@
 # Project TODO
 
+## v2.107.12 — THE ACTIVE-SPEAKER TAP WAS STARVING REMOTE AUDIO (silent-call fix)
+
+**A VERSION COLLISION, RECORDED RATHER THAN PAPERED OVER.** This shipped as
+**v2.107.12**, not .11: a parallel session released its own **v2.107.11** (`14ef58a` — Do Not Disturb ignored by the phone, and a locked chat putting its
+messages on the lock screen) while this branch was open, and it set the SAME
+`APP_VERSION` string. **The rebase did not conflict, which is exactly what makes
+it dangerous**: both sides made the byte-identical edit `2.107.10 -> 2.107.11`,
+so git resolved it silently and two different builds would have claimed one
+version. That breaks the auto-updater's own premise — it compares the client's
+BAKED version against the server's RUNTIME version, so a client holding their
+build would never learn this one was live. Their release did not update these
+notes, so the chain below skips from v2.107.12 to v2.107.10; the missing entry
+is theirs.
+
+Khalifa's test call on v2.107.10, voice-and-video, **fully silent both
+directions** with a demonstrably healthy call: *"32ms · 0% loss · 7ms jit ·
+direct · host/udp · ↑opus · ↑H264, video flowing both ways at 640×480"*, and the
+owner's coturn correlation showing **valid credentials, zero 401s, zero relayed
+bytes** (the call was direct, so media never touched the relay at all). Owner:
+*"TURN is exonerated; the credential hypothesis is dead… Over to you for the fix
+on the audio render path."*
+
+**THE DEFECT IS THE v2.106.89 RULE APPLIED AT ONLY ONE OF ITS TWO SITES.**
+`registerMeshAnalyser` taps every remote audio stream into `meshAudioCtx` for
+level metering, and two things were wrong with how:
+
+1. **It tapped the LIVE remote track.** A `MediaStreamAudioSourceNode` routes its
+   source INTO the WebAudio graph, and this graph terminates in an analyser — a
+   SINK, with nothing reaching `destination`. So it competed with the `<audio>`
+   element that is supposed to be playing that same track. The "fresh wrapper
+   MediaStream" it used protected nothing, because **a wrapper still references
+   the same track object**. It taps a `clone()` now, which gives WebAudio its own
+   copy and leaves playout untouched by construction. This file already recorded
+   TWO separate bugs caused by tap contention on one remote stream (see
+   `routeElToLoudspeaker`) — that is the argument for removing the contention
+   rather than sequencing around it a third time.
+
+2. **The context is built inside `ontrack`, never inside a user gesture**, so on
+   WebKit it is born SUSPENDED and `resume()` is REFUSED. That is verbatim the
+   rule v2.106.89 recorded — *"`resume()` needs the gesture too"* — which was
+   fixed for the voice recorder and never swept here. A suspended graph renders
+   nothing while holding the live track, which starves the element.
+
+**AND #160 IS WHAT ARMED IT.** That release began CLOSING `meshAudioCtx` at every
+hang-up, so every call after the first rebuilt it inside `ontrack`. Its own test
+states the safety argument for closing: *"Closing at teardown is only safe
+because `loudspeakerPrime()` runs inside the dial tap and the Answer tap."* That
+argument was made for the **loudspeaker** context and then applied to this one,
+**which had no priming at all**. New `meshSpeakerPrime()` supplies it, behind a
+single `primeCallAudio()` funnel so a sixth gesture entry point cannot prime one
+context and forget the other — which is exactly how this happened. It is
+deliberately NOT gated on `loudspeakerPref()`: the monitor runs on every call
+whichever output carries the audio, so gating it would leave earpiece calls
+unprimed.
+
+**METERING IS DECORATION; AUDIO IS THE PRODUCT** — so a context that is not
+`running` is now never tapped at all. The tap is DEFERRED rather than dropped
+(the 400ms sampler retries, because what changes is the CONTEXT's state, not the
+peer's), so the worst case is a missing speaker highlight and never a silent
+call. `ensureMeshAudioCtx` is split out from `ensureMeshSpeakerMonitor` so
+priming can build and resume the context inside the gesture without also starting
+a timer before there is a call to meter, and the clone is stopped on unregister —
+including one that never reached `meshAnalysers`, whose only possible release
+that is.
+
+**WHY THREE MEASUREMENTS MISSED IT, which is the part worth recording.**
+v2.106.51, v2.106.53 and v2.106.57 each drove real two-browser calls in this
+sandbox and read `totalAudioEnergy` 2.6–4.0. **Desktop Chromium permits a
+gesture-less `resume()`**, so the context runs there and the tap is harmless. The
+defect can only bite on a real handset — exactly where the owner tested and where
+this sandbox cannot reproduce it. The analyser tap itself dates to v2.91 and
+coexisted with working audio for the same reason.
+
+**8 of 8 tripwires verified by MUTATION** off a confirmed-green baseline from
+byte-exact backups, the mutator aborting unless its target occurs exactly once
+and treating a changed test TOTAL as a harness failure; both sources byte-identical
+afterwards — including the live-track tap reinstated verbatim, the running-state
+gate removed, the retry removed, the clone left unstopped, the analyser wired to
+`destination`, the prime gated on the speaker preference, and the #160 omission
+(a funnel that primes only the loudspeaker) reinstated. One aborted at two
+occurrences on a needle shared with the local level monitor and bit once
+re-anchored.
+
+**TWO PRE-EXISTING PINS REWRITTEN TO THE PROPERTY.** `callAudio` and
+`micTeardown` each counted `loudspeakerPrime()` CALL SITES — an arrangement, not
+a property, and one that says nothing about whether the sibling context is primed
+at all. `callAudio` now asserts the funnel covers BOTH and that each half has
+exactly ONE caller, which is strictly stronger than the count it replaced.
+
+**A DEFECT IN MY OWN TEST HELPER, caught by failing on CORRECT source**: `fnBody`
+resumed its scan PAST the anchor, which ends with an open paren — so paren depth
+started at 0 with one already open and it took a type annotation's brace
+(`{ webkitAudioContext?: typeof AudioContext }`) as the function body, failing all
+8. That is the seeded-depth trap this repo has recorded six times; fixed as the
+class by scanning from the start of the declaration.
+
+**NOT VERIFIED ON A HANDSET, said plainly.** What is proven is that the meter can
+no longer contend for the track the element is playing, that it cannot tap a
+context that is not running, and that both call-audio contexts are primed inside
+a real gesture. Whether the owner's next call has sound is a measurement only
+their device can make — and the readout will now say so either way.
+
+`client/src/lib/meshTapPlayout.test.ts` (8). No schema change, no new dependency,
+no new env var, no server change.
+
 ## v2.107.10 — THE APP CAN NOW SAY WHY A CALL WAS SILENT (audio-failure incident)
 
 Owner, with an uploaded root-cause document: *"The TURN credential race is failing

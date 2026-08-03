@@ -86,9 +86,25 @@ describe("the 'one participant muted / distorted' class", () => {
     expect(SRC).toMatch(/toast\("Microphone reconnected\."\);/);
   });
 
-  it("Web-Audio taps use FRESH wrapper streams so loudspeaker + analyser never fight over one stream (the loser fell back to the earpiece = one quiet voice)", () => {
-    const wraps = SRC.match(/createMediaStreamSource\(new MediaStream\(stream\.getAudioTracks\(\)\)\)/g) || [];
-    expect(wraps.length).toBe(2); // loudspeaker route + mesh analyser
+  it("no Web-Audio tap ever contends for a remote stream (the loser fell back to the earpiece = one quiet voice)", () => {
+    /* THE PROPERTY, not the mechanism. This used to require BOTH taps to use a
+       "fresh wrapper stream", counted at exactly 2 — and v2.107.11 showed that a
+       wrapper protects nothing for the ANALYSER, because a wrapper still
+       references the SAME track object, so the tap competed with the <audio>
+       element playing it. The two taps need DIFFERENT treatments:
+         - the loudspeaker route must carry the SAME audio to `destination` (and
+           deliberately mutes the element once wired), so a wrapper is right;
+         - the analyser is a SINK, so it must never touch the live track at all —
+           it taps a CLONE, which cannot contend by construction.
+       What must hold either way: neither tap is handed the shared stream OBJECT. */
+    const sources = SRC.match(/createMediaStreamSource\([^)]*\)/g) || [];
+    expect(sources.length).toBeGreaterThanOrEqual(2); // loudspeaker route + mesh analyser
+    for (const s of sources) expect(s).toMatch(/new MediaStream\(/);
+    // The loudspeaker route: its own wrapper around the same tracks.
+    expect(SRC).toMatch(/createMediaStreamSource\(new MediaStream\(stream\.getAudioTracks\(\)\)\)/);
+    // The analyser: a clone, never the live track.
+    expect(SRC).toMatch(/createMediaStreamSource\(new MediaStream\(\[tap\]\)\)/);
+    expect(SRC).toMatch(/tap = live\.clone\(\)/);
   });
 
 });
