@@ -297,6 +297,12 @@ describe("the panel stays a panel", () => {
       [
         "amIAdmin",
         "clearGuestRegistrationInvite",
+        // v2.107.x — the crash console's four read-only views (see the fuller
+        // rationale beside the identityPurge.test.ts pin; two guards on purpose).
+        "crashDetail",
+        "crashGroups",
+        "crashOccurrences",
+        "crashVersions",
         "deleteIdentity",
         "findIdentities",
         "inviteGuestRegistration",

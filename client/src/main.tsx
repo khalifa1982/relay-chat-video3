@@ -1,5 +1,10 @@
 import { trpc } from "@/lib/trpc";
 import { DEVICE_ID_HEADER, getDeviceId } from "@/lib/deviceId";
+// Crash telemetry (v2.107.x): installed BEFORE anything else runs, so even a
+// crash during the very first render is caught, queued and delivered. The
+// boundary at the bottom of this file is the render-crash half of the same net.
+import { initCrashReporter } from "@/lib/crashReporter";
+import { CrashBoundary } from "@/components/CrashBoundary";
 // M48: capture the boot URL before any routing, so the Dialer can tell an in-app
 // "call" tap from someone ARRIVING on /app/dialer?to=… (see lib/bootUrl.ts).
 import "@/lib/bootUrl";
@@ -74,7 +79,10 @@ const trpcClient = trpc.createClient({
   ],
 });
 
+initCrashReporter();
+
 createRoot(document.getElementById("root")!).render(
+  <CrashBoundary>
   <trpc.Provider client={trpcClient} queryClient={queryClient}>
     <QueryClientProvider client={queryClient}>
       <ThemeProvider defaultTheme="dark" switchable>
@@ -87,4 +95,5 @@ createRoot(document.getElementById("root")!).render(
       </ThemeProvider>
     </QueryClientProvider>
   </trpc.Provider>
+  </CrashBoundary>
 );

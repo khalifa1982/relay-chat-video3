@@ -29,6 +29,12 @@ describe("board 2h — the admin panel did not quietly widen", () => {
     expect(found).toEqual([
       "amIAdmin",
       "clearGuestRegistrationInvite",
+      // v2.107.x — the crash console's four read-only views (rationale pinned in
+      // identityPurge.test.ts; three guards saw this widening, none shrugged).
+      "crashDetail",
+      "crashGroups",
+      "crashOccurrences",
+      "crashVersions",
       "deleteIdentity",
       "findIdentities",
       "inviteGuestRegistration",

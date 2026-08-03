@@ -26,6 +26,7 @@ import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpir
   presenceNeedsNotification,
 } from "../v2db";
 import { reapExpiredGuests } from "../purgeIdentity";
+import { recordCrash } from "../v2db";
 import { sendPushToIdentity } from "../webPush";
 import { registerWellKnown } from "../wellKnown";
 import { registerSeo } from "../seo";
@@ -550,6 +551,49 @@ async function startServer() {
     res.setHeader("Cache-Control", "no-store");
     res.json({ version: APP_VERSION });
   });
+  // Crash ingest (v2.107.x) — where every reporter delivers: the web app, the
+  // Capacitor iOS/Android shells (same live bundle, so they report with no store
+  // release), the React Native app, and this process's own uncaught hooks.
+  //
+  // DELIBERATELY A PLAIN EXPRESS ROUTE, NOT A tRPC PROCEDURE: the moment this is
+  // needed is the moment the app — possibly including its tRPC client — is
+  // broken, so the path must be reachable by a bare fetch/sendBeacon. Same
+  // reasoning for the response contract: ALWAYS 204, never an error status —
+  // any HTTP answer means "delivered" to the client queue, so a malformed or
+  // rate-limited report is dropped once instead of retried forever. The insert
+  // is fire-and-forget; a crash burst must never hold requests open.
+  const crashIpLimiter = createRateLimiter({ capacity: 20, refillPerSec: 0.25 });
+  app.post("/api/crash", (req: Request, res: Response) => {
+    try {
+      if (
+        process.env.RELAY_RATELIMIT_OFF !== "1" &&
+        !crashIpLimiter.allow(clientIpOf(req), Date.now(), 1)
+      ) {
+        res.status(204).end();
+        return;
+      }
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const s = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
+      void recordCrash({
+        platform: s(b.platform) ?? "web",
+        appVersion: s(b.appVersion) ?? "unknown",
+        serverVersion: APP_VERSION,
+        errorName: s(b.errorName) ?? "Error",
+        errorMessage: s(b.errorMessage) ?? "",
+        stack: s(b.stack),
+        componentStack: s(b.componentStack),
+        breadcrumbs: s(b.breadcrumbs),
+        device: s(b.device),
+        url: s(b.url),
+        deviceId: s(b.deviceId),
+        sessionId: s(b.sessionId),
+        who: s(b.who),
+      });
+    } catch {
+      /* the crash path never throws */
+    }
+    res.status(204).end();
+  });
   // Liveness probe (v2.90) — the process is up and serving. No auth, no DB
   // touch (a transient DB blip during a rolling deploy must not fail the
   // gate), no cache. Used by the AWS rolling-deploy health check and any
@@ -803,5 +847,53 @@ async function startServer() {
     console.log(`Server running on http://localhost:${port}/`);
   });
 }
+
+/* SERVER-SIDE CRASH CAPTURE (v2.107.x) — the Node process reports its own
+ * uncaught exceptions and unhandled rejections into the same `crash_reports`
+ * table (platform "server"), so the console reviews every layer in one place.
+ *
+ * THE PROCESS STILL DIES on an uncaughtException, exactly as before — PM2 owns
+ * the restart, and a process that limps on after an unknown throw is in an
+ * unknown state. The only change is an 800ms bounded attempt to write the row
+ * first; the race means a dead database can never keep a dying process alive.
+ * unhandledRejection stays non-fatal (Node's own default), recorded only. */
+process.on("uncaughtException", (err: Error) => {
+  void (async () => {
+    try {
+      await Promise.race([
+        recordCrash({
+          platform: "server",
+          appVersion: APP_VERSION,
+          serverVersion: APP_VERSION,
+          errorName: err?.name || "UncaughtException",
+          errorMessage: err?.message || String(err),
+          stack: err?.stack || null,
+        }),
+        new Promise((r) => setTimeout(r, 800)),
+      ]);
+    } catch {
+      /* recording is best-effort; exiting is not */
+    } finally {
+      console.error("[crash] uncaughtException:", err);
+      process.exit(1);
+    }
+  })();
+});
+process.on("unhandledRejection", (reason: unknown) => {
+  try {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    void recordCrash({
+      platform: "server",
+      appVersion: APP_VERSION,
+      serverVersion: APP_VERSION,
+      errorName: err.name || "UnhandledRejection",
+      errorMessage: err.message,
+      stack: err.stack || null,
+    });
+    console.error("[crash] unhandledRejection:", err);
+  } catch {
+    /* never throw from the recorder */
+  }
+});
 
 startServer().catch(console.error);

@@ -70,6 +70,11 @@ import {
   getIdentityById,
   getIdentityByNumber,
   isNumberReserved,
+  listCrashGroups,
+  listCrashVersions,
+  listCrashOccurrences,
+  getCrashReport,
+  purgeCrashReports,
   getOrCreateDmConversation,
   dmConversationExists,
   createGroupConversation,
@@ -5606,6 +5611,60 @@ export const v2AdminRouter = router({
     const userId = (ctx.user?.id as number | undefined) ?? null;
     return { admin: await isUserAdmin(userId) };
   }),
+
+  /* ── Crash console (v2.107.x) ──────────────────────────────────────────────
+     The read side of crash telemetry. Reports arrive via the no-auth
+     /api/crash ingest (that path must work when the app is broken); REVIEWING
+     them is admin-only — a stack trace names files, ids and sometimes people.
+     Four reads, one deliberately-manual purge. */
+
+  /** Per-(appVersion, platform) rollup — the owner's "review several versions
+   *  for each build": which builds crash, how much, and when they last did. */
+  crashVersions: publicProcedure.query(async ({ ctx }) => {
+    await requireAdmin(ctx);
+    return { rows: await listCrashVersions() };
+  }),
+
+  /** Grouped by defect (fingerprint), newest activity first, filterable to one
+   *  platform / one build / a recency window. */
+  crashGroups: publicProcedure
+    .input(
+      z.object({
+        platform: z.string().max(16).optional(),
+        appVersion: z.string().max(32).optional(),
+        days: z.number().int().min(1).max(3650).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      return { rows: await listCrashGroups(input) };
+    }),
+
+  /** Every stored occurrence of one defect — its per-version history. */
+  crashOccurrences: publicProcedure
+    .input(z.object({ fingerprint: z.string().length(40), limit: z.number().int().min(1).max(200).optional() }))
+    .query(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      return { rows: await listCrashOccurrences(input.fingerprint, input.limit ?? 50) };
+    }),
+
+  /** One full report — stack, breadcrumbs, device — for the diagnostics view. */
+  crashDetail: publicProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      return { report: await getCrashReport(input.id) };
+    }),
+
+  /** Manual trim. NEVER scheduled — the standing default is keep-forever; this
+   *  exists so the owner can shed ancient rows on his own decision only. */
+  crashPurge: publicProcedure
+    .input(z.object({ olderThanDays: z.number().int().min(7).max(3650) }))
+    .mutation(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      return { purged: await purgeCrashReports(input.olderThanDays) };
+    }),
+
 
   /** Find people by 6-digit number, email, or name. Blank lists the newest. */
   findIdentities: publicProcedure
