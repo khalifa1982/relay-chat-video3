@@ -336,25 +336,58 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
     stream.getTracks().forEach((t) => t.stop());
     throw e;
   }
-  if (opts?.maxMs && opts.maxMs > 0) {
-    capT = setTimeout(() => {
-      try {
-        if (rec.state !== "inactive") rec.stop();
-      } catch {
-        /* already stopped */
-      }
-      // …and settle even if that stop produced no `onstop`. Without this the duration cap
-      // was itself a way to hang: it asked the recorder to stop and then trusted an event.
-      finish();
-    }, opts.maxMs);
-  }
+  /* THE CAP COUNTS AUDIO, NOT WALL CLOCK — and it used to count wall clock.
+   *
+   * `elapsedMs()` excludes paused time on purpose (see above: a note paused for a
+   * minute must not claim to be a minute longer than its sound). The cap did not, so
+   * the two disagreed the moment anybody used the pause button that sits right next
+   * to them. VoicemailPrompt is where both meet: it passes `maxMs: 60_000` AND offers
+   * pause. Pause for twenty seconds and the recorder was stopped at forty seconds of
+   * audio, with the on-screen timer reading 0:40 out of 1:00 and nothing saying why.
+   *
+   * So the cap is re-armed for the time REMAINING whenever the run resumes, and
+   * disarmed while paused. */
+  const capMs = opts?.maxMs && opts.maxMs > 0 ? opts.maxMs : 0;
+  const fireCap = () => {
+    try {
+      if (rec.state !== "inactive") rec.stop();
+    } catch {
+      /* already stopped */
+    }
+    // …and settle even if that stop produced no `onstop`. Without this the duration cap
+    // was itself a way to hang: it asked the recorder to stop and then trusted an event.
+    finish();
+  };
+  const armCap = () => {
+    if (capT) clearTimeout(capT);
+    capT = null;
+    if (!capMs) return;
+    capT = setTimeout(fireCap, Math.max(0, capMs - elapsedMs()));
+  };
+  const disarmCap = () => {
+    if (capT) clearTimeout(capT);
+    capT = null;
+  };
+  armCap();
 
   /* THE BACKSTOP. Every other path depends on the recorder behaving; this one does not.
      Generous — the cap plus a wide margin, or a flat ceiling when there is no cap — because
      its job is to make "pending forever" impossible, not to enforce a limit. A recording cut
-     short by this is a bad outcome; a composer nobody can escape is a worse one. */
-  const DEADLINE_MS = (opts?.maxMs && opts.maxMs > 0 ? opts.maxMs : 5 * 60_000) + 30_000;
-  deadlineT = setTimeout(() => finish(), DEADLINE_MS);
+     short by this is a bad outcome; a composer nobody can escape is a worse one.
+
+     IT IS RE-ARMED ACROSS A PAUSE for the same reason the cap is: left on wall clock it
+     would fire mid-pause and end a recording the user had merely set down. While paused it
+     gets a long flat ceiling instead of being switched off — a paused recorder still has
+     working Discard and Send buttons, so it is not the lock-out this exists to prevent, but
+     "settles eventually" is the property and it must survive being forgotten. */
+  const DEADLINE_MS = (capMs || 5 * 60_000) + 30_000;
+  /** How long a recording left PAUSED is allowed to sit before it settles itself. */
+  const PAUSED_DEADLINE_MS = 10 * 60_000;
+  const armDeadline = (ms: number) => {
+    if (deadlineT) clearTimeout(deadlineT);
+    deadlineT = setTimeout(() => finish(), ms);
+  };
+  armDeadline(DEADLINE_MS);
 
   const safeStop = () => {
     try {
@@ -384,6 +417,9 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
             accumulatedMs += Date.now() - runStartedAt;
             runStartedAt = null;
           }
+          // The clock the cap counts has stopped, so the cap stops with it.
+          disarmCap();
+          armDeadline(PAUSED_DEADLINE_MS);
         }
       } catch {
         /* engine without pause support — the recorder simply keeps running */
@@ -394,6 +430,9 @@ export async function startVoiceRecording(opts?: { maxMs?: number }): Promise<Vo
         if (rec.state === "paused") {
           rec.resume();
           runStartedAt = Date.now();
+          // Re-armed for what is LEFT of the budget, not for the whole of it.
+          armCap();
+          armDeadline(DEADLINE_MS);
         }
       } catch {
         /* as above */

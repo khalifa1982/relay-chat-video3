@@ -248,3 +248,103 @@ describe("the recording promise always settles", () => {
     expect(r.value, "a late cancel cannot un-send an already-settled recording").not.toBeNull();
   });
 });
+
+/**
+ * THE CAP COUNTED WALL CLOCK WHILE THE TIMER COUNTED AUDIO.
+ *
+ * `elapsedMs()` excludes paused time on purpose — a note paused for a minute must not
+ * claim to be a minute longer than its sound. The duration cap did not, and the two
+ * meet in exactly one place: `VoicemailPrompt` passes `maxMs: 60_000` and puts a pause
+ * button next to the timer. Pause for twenty seconds and the recorder was stopped at
+ * forty seconds of audio, with the on-screen timer reading 0:40 out of 1:00 and
+ * nothing anywhere saying why.
+ *
+ * Driven, not pinned: whether a timer fires early is not something source can answer.
+ */
+describe("a pause does not eat the recording budget", () => {
+  it("the cap fires after maxMs of AUDIO, not of wall clock", async () => {
+    const { h } = await record(60_000);
+    await vi.advanceTimersByTimeAsync(30_000); // 30s recorded
+    h.pause();
+    await vi.advanceTimersByTimeAsync(30_000); // 30s paused — must not count
+    expect(h.state()).toBe("paused");
+    let settled = false;
+    void h.done.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled, "the cap fired during the pause").toBe(false);
+
+    h.resume();
+    // 29 more seconds of audio: 59s total, still inside the minute.
+    await vi.advanceTimersByTimeAsync(29_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled, "the cap fired a second early").toBe(false);
+
+    // …and the last second closes it.
+    const r = await settlesWithin(h.done, 2_000);
+    expect(r.done, "the cap must still stop the recording").toBe(true);
+    expect(r.value).not.toBeNull();
+  });
+
+  it("the reported duration excludes the pause, and matches what the cap counted", async () => {
+    const { h } = await record(60_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    h.pause();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(h.elapsedMs()).toBeGreaterThanOrEqual(10_000);
+    expect(h.elapsedMs(), "paused time leaked into the duration").toBeLessThan(11_000);
+    h.resume();
+    await vi.advanceTimersByTimeAsync(5_000);
+    h.stop();
+    const r = await settlesWithin(h.done, 100);
+    expect(r.done).toBe(true);
+    const v = r.value as { durationMs: number };
+    expect(v.durationMs).toBeGreaterThanOrEqual(15_000);
+    expect(v.durationMs).toBeLessThan(16_000);
+  });
+
+  it("an uncapped recording is unaffected by pausing", async () => {
+    currentStream = fakeStream();
+    const h = await startVoiceRecording();
+    await vi.advanceTimersByTimeAsync(1_000);
+    h.pause();
+    await vi.advanceTimersByTimeAsync(60_000);
+    h.resume();
+    await vi.advanceTimersByTimeAsync(1_000);
+    h.stop();
+    const r = await settlesWithin(h.done, 100);
+    expect(r.done).toBe(true);
+    expect(r.value).not.toBeNull();
+  });
+
+  it("a recording left PAUSED still settles eventually", async () => {
+    // The backstop's property is "never pending forever". A paused recorder has
+    // working Discard and Send buttons so it is not the lock-out that motivated it,
+    // but it must not be able to sit there for the life of the tab either.
+    const { h } = await record(60_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    h.pause();
+    const r = await settlesWithin(h.done, 11 * 60_000);
+    expect(r.done, "a forgotten paused recording never settled").toBe(true);
+  });
+
+  it("the backstop is not consumed by a pause either", async () => {
+    // Left on wall clock it would fire mid-pause and end a recording somebody had
+    // merely set down.
+    const { h } = await record(60_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+    h.pause();
+    await vi.advanceTimersByTimeAsync(80_000); // past the original 90s deadline
+    h.resume();
+    let settled = false;
+    void h.done.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled, "the backstop fired across the pause").toBe(false);
+    h.stop();
+    const r = await settlesWithin(h.done, 100);
+    expect(r.done).toBe(true);
+  });
+});
