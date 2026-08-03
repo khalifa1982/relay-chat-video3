@@ -488,4 +488,32 @@ export const ADMIN = {
     ar: "لا شيء يمكن الوصول إليه — لم يقبله أي جهاز.",
   },
   "admin.push.testFailed": { en: "Couldn't send the test.", ar: "تعذّر إرسال الإشعار التجريبي." },
+
+  /* ── Crash console (v2.107.x) ──────────────────────────────────────────────
+     Reads the crash_reports pipe every surface writes to: the web app, the
+     Capacitor iOS/Android shells, the React Native app, and the server process
+     itself. Platform names and versions render RAW from the data (they are
+     identifiers, not copy), so only the chrome is keyed. Western digits per
+     the dictionary's own rule — a build number is the same number in Arabic. */
+  "admin.crash.label": { en: "CRASH REPORTS", ar: "تقارير الأعطال" },
+  "admin.crash.body": {
+    en: "Every uncaught error from the web app, the iOS and Android apps, and this server — grouped by defect, kept per build version.",
+    ar: "كل خطأ غير معالج من تطبيق الويب وتطبيقي iOS وAndroid وهذا الخادم — مجمّعة حسب العطل ومحفوظة لكل إصدار.",
+  },
+  "admin.crash.allVersions": { en: "All versions", ar: "كل الإصدارات" },
+  "admin.crash.allPlatforms": { en: "All platforms", ar: "كل المنصات" },
+  "admin.crash.pickVersion": { en: "Filter by version", ar: "تصفية حسب الإصدار" },
+  "admin.crash.pickPlatform": { en: "Filter by platform", ar: "تصفية حسب المنصة" },
+  /* ×N in English; "N مرة" (N times) in Arabic — the count itself stays in
+     Western digits per the dictionary's own rule. */
+  "admin.crash.timesShort": { en: "×{n}", ar: "{n} مرة" },
+  "admin.crash.lastSeen": { en: "Last", ar: "الأحدث" },
+  "admin.crash.firstSeen": { en: "First", ar: "الأول" },
+  "admin.crash.occurrences": { en: "Occurrences", ar: "مرات الحدوث" },
+  "admin.crash.stack": { en: "Stack", ar: "المكدس" },
+  "admin.crash.breadcrumbs": { en: "Trail", ar: "المسار" },
+  "admin.crash.device": { en: "Device", ar: "الجهاز" },
+  "admin.crash.empty": { en: "No crashes recorded.", ar: "لا توجد أعطال مسجّلة." },
+  "admin.crash.loadError": { en: "Couldn't load crash data.", ar: "تعذّر تحميل بيانات الأعطال." },
+  "admin.crash.close": { en: "Close", ar: "إغلاق" },
 } as const satisfies Record<string, Entry>;

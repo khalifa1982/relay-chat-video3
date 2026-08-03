@@ -743,6 +743,18 @@ describe("the admin delete", () => {
       // They write ONE hint and cannot register anybody — completing a
       // registration needs a request from the browser holding that identity.
       "clearGuestRegistrationInvite",
+      // v2.107.x — the crash console, four READ-ONLY views over crash_reports:
+      // the per-build rollup, the grouped defect list, one group's occurrence
+      // history, one occurrence's full diagnostics. They reach no user data
+      // beyond what a crashing client sent about itself, and write nothing.
+      // (crashPurge exists server-side for the owner but has NO panel button —
+      // the standing default is keep-forever, so deletion stays a deliberate,
+      // out-of-band act rather than a tap.) All three surface guards went red
+      // on this addition, which is them working.
+      "crashDetail",
+      "crashGroups",
+      "crashOccurrences",
+      "crashVersions",
       "deleteIdentity",
       "findIdentities",
       "inviteGuestRegistration",

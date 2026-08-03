@@ -446,6 +446,10 @@ export default function Admin() {
           whether they actually accept a credential (v2.107.10). */}
       <RelaySelfTest />
 
+      {/* Crash telemetry from every surface — web, both mobile apps, and the
+          server itself — grouped by defect and kept per build version. */}
+      <CrashConsole />
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -1303,6 +1307,204 @@ function RelayVerdict({ result }: { result: import("@/lib/relayProbe").RelayProb
             ))}
           </ul>
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * CRASH CONSOLE (v2.107.x) — reads the telemetry pipe every surface writes to:
+ * the web app, the Capacitor iOS/Android shells (which run this same bundle),
+ * the React Native app, and the server process. One card, three layers:
+ * version chips (the "review several versions per build" rollup) filter the
+ * grouped defect list; a group opens its occurrence history; an occurrence
+ * opens the full diagnostics — stack, breadcrumb trail, device.
+ *
+ * PLATFORM NAMES AND VERSION STRINGS RENDER RAW from the rows — they are
+ * identifiers (the same token in both languages), not copy, exactly like the
+ * 6-digit numbers everywhere else in this console.
+ */
+function CrashConsole() {
+  const t = useT();
+  const [ver, setVer] = useState("");
+  const [plat, setPlat] = useState("");
+  const [openFp, setOpenFp] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<number | null>(null);
+  const versionsQ = trpc.admin.crashVersions.useQuery(undefined, { staleTime: 30_000 });
+  const groupsQ = trpc.admin.crashGroups.useQuery(
+    { appVersion: ver || undefined, platform: plat || undefined, days: 365 },
+    { staleTime: 15_000 }
+  );
+  const occQ = trpc.admin.crashOccurrences.useQuery(
+    { fingerprint: openFp ?? "" },
+    { enabled: !!openFp }
+  );
+  const detailQ = trpc.admin.crashDetail.useQuery({ id: openId ?? 0 }, { enabled: !!openId });
+
+  /* MySQL timestamps arrive as "YYYY-MM-DDTHH:MM:SS…" or "YYYY-MM-DD HH:MM:SS";
+     shown to the minute, UTC, mono — an operator compares builds across days,
+     and a locale-shaped date would make two rows disagree about one moment. */
+  const ts = (v: string) => String(v).replace("T", " ").slice(0, 16);
+  const platforms = Array.from(new Set((versionsQ.data?.rows ?? []).map((r) => r.platform)));
+
+  const chip = (active: boolean) =>
+    "shrink-0 rounded-full border px-2.5 py-1 font-mono text-[10px] transition-colors " +
+    (active
+      ? "border-[#c9a227]/70 bg-[#e8c94a]/15 text-foreground"
+      : "border-border text-muted-foreground hover:text-foreground");
+
+  return (
+    <div
+      className="rsheet space-y-3 rounded-[20px] border bg-card p-4"
+      style={{ borderColor: GOLD_HAIRLINE }}
+    >
+      <h3 className={GOLD_LABEL}>{t("admin.crash.label")}</h3>
+      <p className="text-xs text-muted-foreground">{t("admin.crash.body")}</p>
+
+      {/* The per-build rollup — each chip is a (version, platform) with its hit
+          count, and tapping it filters the group list to that build. */}
+      <div
+        className="flex gap-1.5 overflow-x-auto pb-1"
+        role="group"
+        aria-label={t("admin.crash.pickVersion")}
+      >
+        <button type="button" className={chip(!ver && !plat)} onClick={() => { setVer(""); setPlat(""); }}>
+          {t("admin.crash.allVersions")}
+        </button>
+        {(versionsQ.data?.rows ?? []).slice(0, 14).map((r) => {
+          const active = ver === r.appVersion && plat === r.platform;
+          return (
+            <button
+              key={r.appVersion + "/" + r.platform}
+              type="button"
+              className={chip(active)}
+              onClick={() => {
+                setVer(active ? "" : r.appVersion);
+                setPlat(active ? "" : r.platform);
+              }}
+            >
+              {r.appVersion} · {r.platform} {t("admin.crash.timesShort", { n: r.hits })}
+            </button>
+          );
+        })}
+      </div>
+      {platforms.length > 1 && (
+        <div
+          className="flex gap-1.5 overflow-x-auto"
+          role="group"
+          aria-label={t("admin.crash.pickPlatform")}
+        >
+          <button type="button" className={chip(!plat)} onClick={() => setPlat("")}>
+            {t("admin.crash.allPlatforms")}
+          </button>
+          {platforms.map((p) => (
+            <button
+              key={p}
+              type="button"
+              className={chip(plat === p && !ver)}
+              onClick={() => {
+                setPlat(plat === p ? "" : p);
+                setVer("");
+              }}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {groupsQ.isError ? (
+        <p className="text-xs text-destructive">{t("admin.crash.loadError")}</p>
+      ) : (groupsQ.data?.rows ?? []).length === 0 && !groupsQ.isLoading ? (
+        <p className="text-xs text-muted-foreground">{t("admin.crash.empty")}</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {(groupsQ.data?.rows ?? []).map((g) => (
+            <li key={g.fingerprint}>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpenFp(openFp === g.fingerprint ? null : g.fingerprint);
+                  setOpenId(null);
+                }}
+                className="w-full rounded-[14px] border border-border/70 bg-background/40 px-3 py-2 text-start hover:border-[#c9a227]/50"
+              >
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 truncate font-mono text-xs font-semibold text-foreground">
+                    {g.errorName}
+                  </span>
+                  <span className="shrink-0 font-mono text-[10px] text-[#c9a227] dark:text-[#e8c94a]">
+                    {t("admin.crash.timesShort", { n: g.hits })}
+                  </span>
+                </span>
+                <span className="mt-0.5 block truncate text-[11px] text-muted-foreground [unicode-bidi:isolate]" dir="ltr">
+                  {g.errorMessage}
+                </span>
+                <span className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted-foreground/80 [unicode-bidi:isolate]" dir="ltr">
+                  <span>{g.platform} · {g.appVersion}</span>
+                  <span>{t("admin.crash.lastSeen")} {ts(g.lastSeen)}</span>
+                  <span>{t("admin.crash.firstSeen")} {ts(g.firstSeen)}</span>
+                </span>
+              </button>
+              {openFp === g.fingerprint && (
+                <div className="mt-1.5 space-y-1.5 rounded-[14px] border border-border/50 bg-background/30 p-2.5">
+                  <div className={GOLD_LABEL}>{t("admin.crash.occurrences")}</div>
+                  <ul className="space-y-1">
+                    {(occQ.data?.rows ?? []).map((o) => (
+                      <li key={o.id}>
+                        <button
+                          type="button"
+                          onClick={() => setOpenId(openId === o.id ? null : o.id)}
+                          className="flex w-full items-baseline justify-between gap-2 rounded-[10px] px-2 py-1 font-mono text-[10px] text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                          dir="ltr"
+                        >
+                          <span>{ts(o.createdAt)} · {o.platform} · {o.appVersion}</span>
+                          <span>{t("admin.crash.timesShort", { n: o.dupCount })}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {openId != null && detailQ.data?.report && (
+                    <div className="space-y-1.5" dir="ltr">
+                      <div className={GOLD_LABEL}>{t("admin.crash.stack")}</div>
+                      <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-[10px] bg-background/70 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                        {detailQ.data.report.stack || detailQ.data.report.errorMessage}
+                        {detailQ.data.report.componentStack
+                          ? "\n\n" + detailQ.data.report.componentStack
+                          : ""}
+                      </pre>
+                      {detailQ.data.report.breadcrumbs && (
+                        <>
+                          <div className={GOLD_LABEL}>{t("admin.crash.breadcrumbs")}</div>
+                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-[10px] bg-background/70 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                            {detailQ.data.report.breadcrumbs}
+                          </pre>
+                        </>
+                      )}
+                      {detailQ.data.report.device && (
+                        <>
+                          <div className={GOLD_LABEL}>{t("admin.crash.device")}</div>
+                          <pre className="overflow-auto whitespace-pre-wrap break-all rounded-[10px] bg-background/70 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                            {detailQ.data.report.device}
+                          </pre>
+                        </>
+                      )}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="rounded-[13px]"
+                        onClick={() => setOpenId(null)}
+                      >
+                        {t("admin.crash.close")}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

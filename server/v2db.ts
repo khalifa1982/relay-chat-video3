@@ -16,6 +16,13 @@
 import { contactTagsOf, serializeContactTags, categoryMirror } from "../shared/contactTags";
 import { normalizeReactionEmoji, type ReactionRow } from "../shared/reactions";
 import { alertPrefsAreEmpty, type AlertPrefs } from "../shared/alertPrefs";
+import {
+  CRASH_CAPS,
+  CRASH_STORM_WINDOW_SEC,
+  capCrashField,
+  crashFingerprintInput,
+  normalizeCrashPlatform,
+} from "../shared/crashCore";
 import crypto from "crypto";
 import {
   and,
@@ -2908,6 +2915,41 @@ export async function ensureSchemaExtensions(): Promise<void> {
         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
         \`claimedAt\` timestamp NULL,
         PRIMARY KEY (\`number\`)
+      )`,
+    },
+    {
+      // Crash telemetry (v2.107.x): every uncaught error from the web app, the
+      // Capacitor iOS/Android shells (which load the same live bundle — that is
+      // what makes them report without a store release), the React Native app,
+      // and this server process itself. KEPT FOREVER by design — the owner's ask
+      // is a reviewable history "for several versions of each build" — so growth
+      // is bounded by field caps + per-IP rate limiting + the dupCount storm
+      // collapse, never by deletion. `fingerprint` groups occurrences of one
+      // defect across releases; `appVersion` is the client's BAKED version, so a
+      // group's rows read as a per-version history.
+      name: "crash_reports",
+      ddl: `CREATE TABLE IF NOT EXISTS \`crash_reports\` (
+        \`id\` bigint unsigned NOT NULL AUTO_INCREMENT,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`platform\` varchar(16) NOT NULL,
+        \`appVersion\` varchar(32) NOT NULL,
+        \`serverVersion\` varchar(32) NOT NULL,
+        \`fingerprint\` char(40) NOT NULL,
+        \`errorName\` varchar(128) NOT NULL,
+        \`errorMessage\` text NOT NULL,
+        \`stack\` mediumtext NULL,
+        \`componentStack\` text NULL,
+        \`breadcrumbs\` mediumtext NULL,
+        \`device\` text NULL,
+        \`url\` varchar(512) NULL,
+        \`deviceId\` varchar(64) NULL,
+        \`sessionId\` varchar(64) NULL,
+        \`who\` varchar(6) NULL,
+        \`dupCount\` int NOT NULL DEFAULT 1,
+        PRIMARY KEY (\`id\`),
+        KEY \`crash_fp_time_idx\` (\`fingerprint\`, \`createdAt\`),
+        KEY \`crash_ver_idx\` (\`appVersion\`, \`platform\`),
+        KEY \`crash_time_idx\` (\`createdAt\`)
       )`,
     },
     {
@@ -7781,4 +7823,302 @@ export async function deletePartyLine(ownerIdentityId: number, id: number): Prom
     .delete(partyLines)
     .where(and(eq(partyLines.id, id), eq(partyLines.ownerIdentityId, ownerIdentityId)));
   return true;
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
+   CRASH TELEMETRY (v2.107.x)
+
+   The storage half of the crash console: `recordCrash` is the single writer
+   (called by the /api/crash ingest route AND by this process's own uncaught-
+   exception hooks), and the read functions below feed the admin panel. The pure
+   rules — caps, message normalization, top-frame extraction, the storm window —
+   live in shared/crashCore.ts so the client applies the SAME ones before sending.
+
+   EVERY FUNCTION HERE FAILS OPEN AND NEVER THROWS. A crash reporter that can
+   itself crash the request it rides on is a defect amplifier; a report silently
+   dropped on a DB hiccup is just a missing row.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** sha1 of the normalized (name, message, top frames) — the GROUP key. sha1 is
+ *  fine here: this is a bucketing key, not a security boundary, and 40 hex chars
+ *  fit the char(40) column exactly. */
+export function crashFingerprint(
+  name: string,
+  message: string,
+  stack: string | null | undefined
+): string {
+  return crypto.createHash("sha1").update(crashFingerprintInput(name, message, stack)).digest("hex");
+}
+
+export type CrashInsert = {
+  platform: string;
+  appVersion: string;
+  serverVersion: string;
+  errorName: string;
+  errorMessage: string;
+  stack?: string | null;
+  componentStack?: string | null;
+  breadcrumbs?: string | null;
+  device?: string | null;
+  url?: string | null;
+  deviceId?: string | null;
+  sessionId?: string | null;
+  who?: string | null;
+};
+
+/** Store one report. Caps every field server-side (a client that skipped its own
+ *  caps still cannot write an unbounded row), computes the fingerprint, and
+ *  collapses storms: a repeat of the SAME fingerprint from the SAME session
+ *  inside CRASH_STORM_WINDOW_SEC bumps `dupCount` on the latest row instead of
+ *  inserting — a render-loop that fires 400 times is one row saying 400. */
+export async function recordCrash(r: CrashInsert): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    const name = capCrashField(r.errorName || "Error", CRASH_CAPS.name);
+    const message = capCrashField(r.errorMessage || "", CRASH_CAPS.message);
+    const stack = r.stack ? capCrashField(r.stack, CRASH_CAPS.stack) : null;
+    const fp = crashFingerprint(name, message, stack);
+    const sessionId = r.sessionId ? capCrashField(r.sessionId, CRASH_CAPS.id) : null;
+
+    if (sessionId) {
+      const dup = await db.execute(sql`
+        SELECT \`id\` FROM \`crash_reports\`
+         WHERE \`fingerprint\` = ${fp} AND \`sessionId\` = ${sessionId}
+           AND \`createdAt\` > NOW() - INTERVAL ${sql.raw(String(CRASH_STORM_WINDOW_SEC))} SECOND
+         ORDER BY \`id\` DESC LIMIT 1`);
+      const dupRows = (Array.isArray(dup) ? dup[0] : []) as unknown as { id: number }[];
+      if (Array.isArray(dupRows) && dupRows.length > 0) {
+        await db.execute(
+          sql`UPDATE \`crash_reports\` SET \`dupCount\` = \`dupCount\` + 1 WHERE \`id\` = ${dupRows[0].id}`
+        );
+        return;
+      }
+    }
+
+    await db.execute(sql`
+      INSERT INTO \`crash_reports\`
+        (\`platform\`, \`appVersion\`, \`serverVersion\`, \`fingerprint\`, \`errorName\`,
+         \`errorMessage\`, \`stack\`, \`componentStack\`, \`breadcrumbs\`, \`device\`,
+         \`url\`, \`deviceId\`, \`sessionId\`, \`who\`)
+      VALUES
+        (${normalizeCrashPlatform(r.platform)},
+         ${capCrashField(r.appVersion || "unknown", CRASH_CAPS.version)},
+         ${capCrashField(r.serverVersion || "unknown", CRASH_CAPS.version)},
+         ${fp}, ${name}, ${message}, ${stack},
+         ${r.componentStack ? capCrashField(r.componentStack, CRASH_CAPS.componentStack) : null},
+         ${r.breadcrumbs ? capCrashField(r.breadcrumbs, CRASH_CAPS.breadcrumbs) : null},
+         ${r.device ? capCrashField(r.device, CRASH_CAPS.device) : null},
+         ${r.url ? capCrashField(r.url, CRASH_CAPS.url) : null},
+         ${r.deviceId ? capCrashField(r.deviceId, CRASH_CAPS.id) : null},
+         ${sessionId},
+         ${r.who && /^\d{6}$/.test(r.who) ? r.who : null})`);
+  } catch (e) {
+    console.warn("[crash] record skipped:", (e as Error)?.message || "");
+  }
+}
+
+export type CrashVersionRow = {
+  appVersion: string;
+  platform: string;
+  hits: number;
+  rows: number;
+  lastSeen: string;
+};
+
+/** The per-version rollup — the owner's "review several versions for each
+ *  build". One row per (appVersion, platform) with total hits (dupCount-aware),
+ *  distinct stored rows, and the last time that build produced a crash. */
+export async function listCrashVersions(): Promise<CrashVersionRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    const res = await db.execute(sql`
+      SELECT \`appVersion\`, \`platform\`,
+             CAST(SUM(\`dupCount\`) AS UNSIGNED) AS hits,
+             COUNT(*) AS \`rows\`,
+             MAX(\`createdAt\`) AS lastSeen
+        FROM \`crash_reports\`
+       GROUP BY \`appVersion\`, \`platform\`
+       ORDER BY lastSeen DESC
+       LIMIT 200`);
+    return (Array.isArray(res) ? res[0] : []) as unknown as CrashVersionRow[];
+  } catch (e) {
+    console.warn("[crash] versions query skipped:", (e as Error)?.message || "");
+    return [];
+  }
+}
+
+export type CrashGroupRow = {
+  fingerprint: string;
+  hits: number;
+  rows: number;
+  firstSeen: string;
+  lastSeen: string;
+  lastId: number;
+  versions: number;
+  platforms: number;
+  errorName: string;
+  errorMessage: string;
+  platform: string;
+  appVersion: string;
+};
+
+/** Grouped-by-defect list, newest activity first, optionally filtered to one
+ *  platform / one appVersion / a recency window. Two queries on purpose: the
+ *  GROUP BY finds the buckets, then one IN() fetch dresses each bucket with its
+ *  latest occurrence's name + message — MySQL's "any value per group" rules make
+ *  doing it in one statement a portability trap. */
+export async function listCrashGroups(opts: {
+  platform?: string;
+  appVersion?: string;
+  days?: number;
+  limit?: number;
+}): Promise<CrashGroupRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    const conds = [sql`1 = 1`];
+    if (opts.platform) conds.push(sql`\`platform\` = ${normalizeCrashPlatform(opts.platform)}`);
+    if (opts.appVersion)
+      conds.push(sql`\`appVersion\` = ${capCrashField(opts.appVersion, CRASH_CAPS.version)}`);
+    const days = Math.min(Math.max(Math.floor(opts.days ?? 90), 1), 3650);
+    conds.push(sql`\`createdAt\` > NOW() - INTERVAL ${sql.raw(String(days))} DAY`);
+    const limit = Math.min(Math.max(Math.floor(opts.limit ?? 100), 1), 200);
+
+    const grouped = await db.execute(sql`
+      SELECT \`fingerprint\`,
+             CAST(SUM(\`dupCount\`) AS UNSIGNED) AS hits,
+             COUNT(*) AS \`rows\`,
+             MIN(\`createdAt\`) AS firstSeen,
+             MAX(\`createdAt\`) AS lastSeen,
+             MAX(\`id\`) AS lastId,
+             COUNT(DISTINCT \`appVersion\`) AS versions,
+             COUNT(DISTINCT \`platform\`) AS platforms
+        FROM \`crash_reports\`
+       WHERE ${sql.join(conds, sql` AND `)}
+       GROUP BY \`fingerprint\`
+       ORDER BY lastSeen DESC
+       LIMIT ${sql.raw(String(limit))}`);
+    const groups = (Array.isArray(grouped) ? grouped[0] : []) as unknown as Omit<
+      CrashGroupRow,
+      "errorName" | "errorMessage" | "platform" | "appVersion"
+    >[];
+    if (!Array.isArray(groups) || groups.length === 0) return [];
+
+    const ids = groups.map((g) => Number(g.lastId)).filter((n) => Number.isFinite(n));
+    const latest = await db.execute(sql`
+      SELECT \`id\`, \`errorName\`, \`errorMessage\`, \`platform\`, \`appVersion\`
+        FROM \`crash_reports\`
+       WHERE \`id\` IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`);
+    const latestRows = (Array.isArray(latest) ? latest[0] : []) as unknown as {
+      id: number;
+      errorName: string;
+      errorMessage: string;
+      platform: string;
+      appVersion: string;
+    }[];
+    const byId = new Map(latestRows.map((r) => [Number(r.id), r]));
+    return groups.map((g) => {
+      const last = byId.get(Number(g.lastId));
+      return {
+        ...g,
+        hits: Number(g.hits),
+        rows: Number(g.rows),
+        lastId: Number(g.lastId),
+        versions: Number(g.versions),
+        platforms: Number(g.platforms),
+        errorName: last?.errorName ?? "",
+        errorMessage: last?.errorMessage ?? "",
+        platform: last?.platform ?? "",
+        appVersion: last?.appVersion ?? "",
+      };
+    });
+  } catch (e) {
+    console.warn("[crash] groups query skipped:", (e as Error)?.message || "");
+    return [];
+  }
+}
+
+export type CrashOccurrenceRow = {
+  id: number;
+  createdAt: string;
+  platform: string;
+  appVersion: string;
+  serverVersion: string;
+  url: string | null;
+  who: string | null;
+  deviceId: string | null;
+  dupCount: number;
+};
+
+/** Every stored occurrence of one defect, newest first — the per-version history
+ *  of a single group ("still happening on 2.107.17, stopped after .15 on iOS"). */
+export async function listCrashOccurrences(
+  fingerprint: string,
+  limit = 50
+): Promise<CrashOccurrenceRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    const lim = Math.min(Math.max(Math.floor(limit), 1), 200);
+    const res = await db.execute(sql`
+      SELECT \`id\`, \`createdAt\`, \`platform\`, \`appVersion\`, \`serverVersion\`,
+             \`url\`, \`who\`, \`deviceId\`, \`dupCount\`
+        FROM \`crash_reports\`
+       WHERE \`fingerprint\` = ${fingerprint.slice(0, 40)}
+       ORDER BY \`id\` DESC
+       LIMIT ${sql.raw(String(lim))}`);
+    return (Array.isArray(res) ? res[0] : []) as unknown as CrashOccurrenceRow[];
+  } catch (e) {
+    console.warn("[crash] occurrences query skipped:", (e as Error)?.message || "");
+    return [];
+  }
+}
+
+export type CrashDetailRow = CrashOccurrenceRow & {
+  fingerprint: string;
+  errorName: string;
+  errorMessage: string;
+  stack: string | null;
+  componentStack: string | null;
+  breadcrumbs: string | null;
+  device: string | null;
+  sessionId: string | null;
+};
+
+/** One full row — stack, breadcrumbs, device — for the diagnostics drawer. */
+export async function getCrashReport(id: number): Promise<CrashDetailRow | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const res = await db.execute(
+      sql`SELECT * FROM \`crash_reports\` WHERE \`id\` = ${Math.floor(id)} LIMIT 1`
+    );
+    const rows = (Array.isArray(res) ? res[0] : []) as unknown as CrashDetailRow[];
+    return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+  } catch (e) {
+    console.warn("[crash] detail query skipped:", (e as Error)?.message || "");
+    return null;
+  }
+}
+
+/** Manual purge, admin-only and NEVER scheduled — the default is keep-forever
+ *  per the owner. Exists so the owner can trim ancient rows on his own terms. */
+export async function purgeCrashReports(olderThanDays: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  try {
+    const days = Math.min(Math.max(Math.floor(olderThanDays), 7), 3650);
+    const res = await db.execute(sql`
+      DELETE FROM \`crash_reports\`
+       WHERE \`createdAt\` < NOW() - INTERVAL ${sql.raw(String(days))} DAY
+       LIMIT 5000`);
+    const n = Array.isArray(res) ? ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) : 0;
+    if (n > 0) console.log(`[crash] purged ${n} report(s) older than ${days}d`);
+    return n;
+  } catch (e) {
+    console.warn("[crash] purge skipped:", (e as Error)?.message || "");
+    return 0;
+  }
 }
