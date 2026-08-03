@@ -374,6 +374,43 @@ export function signalDisposition(s: {
   return "drop";
 }
 
+/**
+ * What a hold-related refusal means — extracted for the reason `signalDisposition`
+ * was: whether the client hangs up is exactly the thing a source pin cannot answer.
+ *
+ * THE DEFECT THIS ENCODES AGAINST. `nohold` HANGS THE CALL UP, and the server sent
+ * it from four places: `end-active` (nothing left to resume — the hang-up is right,
+ * and is what v2.99.36 added the code for), and `swap`, `merge` and `end-held`
+ * (there is simply no held call). The handler took all four, so a user in a live
+ * call with a second one on hold, whose held party had just hung up, tapped Merge —
+ * or Swap, or End-held — and the client ended the call they were ON. `end-held` was
+ * the plainest: they asked to drop the WAITING line and the ACTIVE one went.
+ *
+ * TWO GUARDS, EITHER OF WHICH IS SUFFICIENT, because they fail on different sides
+ * of a rolling deploy. The server now sends `holdgone` for the three informational
+ * cases; and `endActivePending` — armed by `endActiveLine` and by nothing else —
+ * says whether an end-active is genuinely in flight, so a new client is right even
+ * against a server that still says `nohold`.
+ */
+export type HoldErrorAction =
+  /** Complete the hang-up: there was nothing to resume. */
+  | "hangup"
+  /** The HELD line is gone; this call is fine. Clear the stale held bar. */
+  | "drop-held"
+  /** Not a hold refusal — let the rest of the error handler classify it. */
+  | "ignore";
+
+export function holdErrorAction(s: {
+  code: string | null | undefined;
+  inCall: boolean;
+  /** Is an `end-active` awaiting its `resumed`? */
+  endActivePending: boolean;
+}): HoldErrorAction {
+  if (s.code === "holdgone") return "drop-held";
+  if (s.code !== "nohold" || !s.inCall) return "ignore";
+  return s.endActivePending ? "hangup" : "drop-held";
+}
+
 export function startRelay(root: HTMLElement): RelayHandle {
   const $ = (id: string): HTMLElement | null => root.querySelector("#" + id);
 
@@ -1480,11 +1517,26 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
           toast(m.message || "That request is no longer waiting.", true);
           break;
         }
-        if (m.code === "nohold" && inCall) {
+        /* Hold refusals, decided in one place — see `holdErrorAction` for why
+         * `nohold` used to end the call the user was ON when they tapped Merge,
+         * Swap or End-held. `endActiveT` is the "an end-active is in flight" fact
+         * that only this closure has. */
+        const holdAction = holdErrorAction({
+          code: m.code,
+          inCall,
+          endActivePending: endActiveT != null,
+        });
+        if (holdAction === "hangup") {
           cancelEndActiveFallback();
           dropHeld();
           hangUp("end-active-nohold");
           return;
+        }
+        if (holdAction === "drop-held") {
+          // The HELD line is gone; this call is not. Clear the stale held bar — the
+          // toast at the top of this handler has already said so.
+          dropHeld();
+          break;
         }
         if (addInviteOfflineGuard && (m.code === "offline" || m.code === "nonexistent" || m.code === "unavailable")) {
           // Offline/nonexistent error for an in-call add-to-call invite (the "+"

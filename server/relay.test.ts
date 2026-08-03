@@ -406,14 +406,17 @@ describe("relay signaling", () => {
     expect(
       b.outbox.some((m) => typeof m === "object" && m !== null && (m as { type: string }).type === "held-ended")
     ).toBe(true);
-    // A second end-held has nothing to release → explicit nohold error.
+    /* A second end-held has nothing to release. `holdgone` since v2.107.14, NOT
+       `nohold`: the client hangs up on `nohold`, so answering "you asked to end the
+       held line and there isn't one" with it ended the ACTIVE call — the exact
+       opposite of what the user tapped. */
     b.outbox.length = 0;
     handleMessage(reg, b.asConn(), { type: "end-held" });
     const err = b.outbox.find(
       (m): m is { type: string; code: string } =>
         typeof m === "object" && m !== null && (m as { type: string }).type === "error"
     );
-    expect(err?.code).toBe("nohold");
+    expect(err?.code).toBe("holdgone");
   });
 
   it("notifies remaining peers when one leaves the room", () => {

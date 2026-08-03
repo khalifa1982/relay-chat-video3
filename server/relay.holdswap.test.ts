@@ -192,15 +192,34 @@ describe("call-waiting hold / swap / merge", () => {
     expect(reg.pinRoom.get(bob.pin)).toBe(roomR);
   });
 
-  it("swap / merge with nothing on hold returns a 'nohold' error", () => {
+  it("swap / merge with nothing on hold refuses with `holdgone`, NOT the code that hangs up", () => {
+    /* REWRITTEN v2.107.14, and the old expectation was the bug rather than the
+       contract. `nohold` is the answer to `end-active`, and the client HANGS UP on
+       it — correctly, because after an end-active there is nothing left to resume.
+       Sending the same code from `swap` and `merge` meant a user in a live call
+       whose HELD party had just left tapped Merge, and the client ended the call
+       they were actually on. Two different facts, two codes; the shared envelope is
+       the `knockfail` lesson over again. */
+    const alice = register(reg, "Alice");
+    const bob = register(reg, "Bob");
+    makeCall(reg, alice.conn, bob.conn, bob.pin);
+    for (const type of ["swap", "merge"] as const) {
+      bob.conn.clear();
+      handleMessage(reg, bob.conn.asConn(), { type });
+      const code = (bob.conn.last("error") as { code: string }).code;
+      expect(code, `${type} must not answer with the hang-up code`).toBe("holdgone");
+      expect(code).not.toBe("nohold");
+    }
+  });
+
+  it("`nohold` is still what an end-active with nothing to resume answers", () => {
+    // The other half of the split: the code that hangs up must keep reaching the
+    // one case that wants it, or v2.99.36's wedge comes back.
     const alice = register(reg, "Alice");
     const bob = register(reg, "Bob");
     makeCall(reg, alice.conn, bob.conn, bob.pin);
     bob.conn.clear();
-    handleMessage(reg, bob.conn.asConn(), { type: "swap" });
-    expect((bob.conn.last("error") as { code: string }).code).toBe("nohold");
-    bob.conn.clear();
-    handleMessage(reg, bob.conn.asConn(), { type: "merge" });
+    handleMessage(reg, bob.conn.asConn(), { type: "end-active" });
     expect((bob.conn.last("error") as { code: string }).code).toBe("nohold");
   });
 

@@ -586,20 +586,56 @@ export function _resetVoipSessionsForTests(): void {
   voipSessions.clear();
 }
 
-function reapRoom(reg: RelayRegistry, roomId: string) {
+/**
+ * Drop every trace of a room from this instance's state.
+ *
+ * ONE IMPLEMENTATION, TWO CALLERS — because "reapRoom is the single teardown path"
+ * was an assertion, and the exception to it was already in this file. `merge`
+ * folds the held call into the active one and then deleted the emptied room BY
+ * HAND, with its own comment noting it does so "WITHOUT crossing reapRoom". So it
+ * skipped `forgetRoom`, and the mediasoup ownership ledger for the merged-away
+ * room was never dropped.
+ *
+ * THAT IS MORE THAN A LEAK, BECAUSE ONE CLASS OF ROOM ID IS REUSED. A party
+ * line's room id is DERIVED from its number (`pl-<number>`) precisely so the room
+ * can be reaped and re-created on the next dial. Merge a held party line into an
+ * active call and its session survives under that exact id, so the NEXT call on
+ * that line gets it back from `sessionFor` carrying the previous call's producer
+ * ids — and `otherProducersFor` then tells a joiner to consume producers the node
+ * closed with the old room, which is a joiner who hears nothing. An ordinary room
+ * id is random, so there the same bug only ever leaked memory.
+ *
+ * The teardown is a function both paths call now, so the property is a fact.
+ */
+function discardRoom(reg: RelayRegistry, roomId: string) {
   touchBusyState(); // busy-line + party-line-count mirror (v2.91)
   markRoomDirty(roomId); // the snapshot will be null ⇒ a fenced DEL
-  /* Drop the whole ownership ledger with the room. Placed in reapRoom because its own comment
-     above states the property this relies on — "reapRoom is the single teardown path" — so no
-     future exit can leak a room's ids by forgetting to. */
+  /* The ownership ledger goes with the room. The node records no owner for any id
+     it mints (see mediasoupRoom.ts), so a session outliving its room is a set of
+     ids with nothing left to authorize them against. */
   forgetRoom(voipSessions, roomId);
   const t = reg.roomReapT.get(roomId);
   if (t) { clearTimeout(t); reg.roomReapT.delete(roomId); }
-  // Conference history: if this room was a REAL call (answered, ≥2 participants
-  // ever present), emit it for logging before we lose the roster. Fired exactly
-  // once per room — reapRoom is the single teardown path. Best-effort.
-  const meta = reg.roomMeta.get(roomId);
   reg.roomMeta.delete(roomId);
+  const room = reg.rooms.get(roomId);
+  if (room) {
+    room.forEach(pin => {
+      if (reg.pinRoom.get(pin) === roomId) reg.pinRoom.delete(pin);
+      const c = reg.clients.get(pin);
+      if (c && c.roomId === roomId) c.roomId = null;
+    });
+    reg.rooms.delete(roomId);
+  }
+}
+
+function reapRoom(reg: RelayRegistry, roomId: string) {
+  // Conference history: if this room was a REAL call (answered, ≥2 participants
+  // ever present), emit it for logging. The roster is read BEFORE the teardown, and
+  // the hook is handed a plain object — `recordConferenceEnd` is a DB write over
+  // `info` and never reads back into the registry — so it does not matter that the
+  // room is already gone by the time it runs. Fired exactly once per room.
+  const meta = reg.roomMeta.get(roomId);
+  discardRoom(reg, roomId);
   if (meta && meta.accepted && meta.roster.size >= 2 && reg.onConferenceEnd) {
     try {
       // End time = the last moment a member was actually connected, NOT the
@@ -619,15 +655,6 @@ function reapRoom(reg: RelayRegistry, roomId: string) {
         participants: Array.from(meta.roster.entries()).map(([pin, name]) => ({ pin, name })),
       });
     } catch { /* never let history logging break teardown */ }
-  }
-  const room = reg.rooms.get(roomId);
-  if (room) {
-    room.forEach(pin => {
-      if (reg.pinRoom.get(pin) === roomId) reg.pinRoom.delete(pin);
-      const c = reg.clients.get(pin);
-      if (c && c.roomId === roomId) c.roomId = null;
-    });
-    reg.rooms.delete(roomId);
   }
 }
 
@@ -3102,7 +3129,14 @@ export function handleMessage(
       const activeRid = self.roomId;
       const heldRid = reg.heldRoom.get(conn.pin);
       if (!activeRid || !heldRid || !reg.rooms.has(heldRid) || !reg.rooms.has(activeRid)) {
-        safeSend(conn.socket, { type: "error", code: "nohold", message: "No call on hold." });
+        /* `holdgone`, NOT `nohold` (v2.107.14). `nohold` is the answer to
+           `end-active`, and the client HANGS UP on it — correctly, because there is
+           nothing left to resume. Sending it here meant a swap refused because the
+           held party had just left ended the call the user was actually on. The
+           refusals are different facts and now have different codes; a client too
+           old to know this one falls through to a plain toast, which is the right
+           outcome for both of them. */
+        safeSend(conn.socket, { type: "error", code: "holdgone", message: "No call on hold." });
         break;
       }
       reg.heldRoom.set(conn.pin, activeRid);
@@ -3154,7 +3188,10 @@ export function handleMessage(
       // and the room reaps if empty — while the ACTIVE call stays untouched.
       // (The client already closed its frozen peer connections.)
       if (!reg.heldRoom.get(conn.pin)) {
-        safeSend(conn.socket, { type: "error", code: "nohold", message: "No call on hold." });
+        /* `holdgone`, and this was the plainest of the three: the user asked to end
+           the HELD line, and answering with the code that hangs up ended the ACTIVE
+           one instead — the exact opposite of what they tapped. */
+        safeSend(conn.socket, { type: "error", code: "holdgone", message: "No call on hold." });
         break;
       }
       releaseHeldRoom(reg, conn.pin);
@@ -3170,7 +3207,9 @@ export function handleMessage(
       const activeRid = self.roomId;
       const heldRid = reg.heldRoom.get(conn.pin);
       if (!activeRid || !heldRid || !reg.rooms.has(heldRid) || !reg.rooms.has(activeRid)) {
-        safeSend(conn.socket, { type: "error", code: "nohold", message: "No call on hold." });
+        // `holdgone` for the same reason as `swap` above: this refusal must not be
+        // the code that ends the caller's live call.
+        safeSend(conn.socket, { type: "error", code: "holdgone", message: "No call on hold." });
         break;
       }
       reg.heldRoom.delete(conn.pin);
@@ -3217,16 +3256,20 @@ export function handleMessage(
           iceServers: undefined,
         }, p);
       }
-      // The held room is now empty of real members — reap it (no history; it was
-      // folded into the active call, which carries the full roster).
-      if (heldRoom.size === 0) {
-        const t = reg.roomReapT.get(heldRid);
-        if (t) { clearTimeout(t); reg.roomReapT.delete(heldRid); }
-        reg.roomMeta.delete(heldRid);
-        reg.rooms.delete(heldRid);
-      }
-      // Round 11: the held room was folded into the active one WITHOUT crossing
-      // reapRoom, so neither side would otherwise be re-shadowed.
+      // The held room is now empty of real members — discard it. No history: it
+      // was folded into the active call, which carries the full roster, so this
+      // deliberately takes the teardown WITHOUT `reapRoom`'s conference-end hook.
+      //
+      // `discardRoom` rather than the four deletes that used to be written out
+      // here, because those omitted `forgetRoom` and left the room's mediasoup
+      // ownership ledger behind — which for a PARTY LINE, whose id is derived
+      // from its number and therefore comes back on the next dial, meant the next
+      // call inherited the previous one's producer ids and a joiner was told to
+      // consume producers that no longer exist.
+      if (heldRoom.size === 0) discardRoom(reg, heldRid);
+      // Round 11: re-shadow both sides. `discardRoom` marks the held one, but this
+      // branch also runs when the held room was NOT emptied, and the active room
+      // has changed either way.
       markRoomDirty(heldRid);
       markRoomDirty(activeRid);
       safeSend(conn.socket, { type: "merged", roomId: activeRid, members: membersOf(reg, activeRid, conn.pin), cap: mintRoomCap(activeRid, conn.pin, roleOf(activeMeta, conn.pin)) });

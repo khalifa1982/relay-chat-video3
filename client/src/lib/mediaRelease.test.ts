@@ -53,8 +53,18 @@ describe("A — the end-active wedge is closed", () => {
     expect(seg).toMatch(/code: "nohold"/);
   });
   it("the client completes the hang-up on a nohold reply", () => {
-    expect(ENGINE).toMatch(/m\.code === "nohold" && inCall/);
+    /* REWRITTEN v2.107.14. The property is unchanged — a `nohold` answering an
+       end-active must finish the hang-up, or the v2.99.36 wedge comes back — but the
+       decision moved into `holdErrorAction` because the same code was ALSO being sent
+       by swap / merge / end-held, where it meant "there is no held call" and ended the
+       call the user was actually on. See `holdErrorAction.test.ts`, which drives the
+       rule; this keeps pinning that the hang-up is still reached from here. */
+    expect(ENGINE).toMatch(/const holdAction = holdErrorAction\(\{/);
+    expect(ENGINE).toMatch(/if \(holdAction === "hangup"\)/);
     expect(ENGINE).toMatch(/hangUp\("end-active-nohold"\)/);
+    // …and the hang-up branch still releases the devices, which is what this file is about.
+    const seg = ENGINE.slice(ENGINE.indexOf('if (holdAction === "hangup")'));
+    expect(seg.slice(0, 300)).toMatch(/cancelEndActiveFallback\(\)/);
   });
 });
 

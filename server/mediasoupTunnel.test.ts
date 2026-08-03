@@ -14,6 +14,7 @@ import {
   createRegistry,
   handleMessage,
   leaveRoom,
+  partyLineRoomId,
   snapshotRoom,
   applyHydratedRooms,
   _resetVoipSessionsForTests,
@@ -651,5 +652,157 @@ describe("#129 structure", () => {
     // The narrowed parameter type is what makes reaching for publicIp here impossible.
     expect(sig).toMatch(/export type NodeAddress = Pick<VoipNode, "instanceId" \| "privateIp">/);
     expect(sig).not.toMatch(/node\.publicIp/);
+  });
+});
+
+/**
+ * "reapRoom is the single teardown path" WAS AN ASSERTION, AND THE FILE ALREADY
+ * CONTAINED THE EXCEPTION.
+ *
+ * `merge` folds the held call into the active one and then deleted the emptied
+ * room by hand — its own comment says it does so "WITHOUT crossing reapRoom" — so
+ * `forgetRoom` never ran and the room's ownership ledger survived it.
+ *
+ * For an ordinary room that is a leak and nothing more: ids are random, so nothing
+ * ever asks for that session again. A PARTY LINE is the case that bites. Its room
+ * id is DERIVED from its number (`pl-<number>`) precisely so the room can be reaped
+ * and rebuilt on the next dial — so the stale session comes back under the same id,
+ * and `otherProducersFor` hands the next call's joiner the PREVIOUS call's producer
+ * ids. Those producers died with the old room on the node, so the joiner consumes
+ * nothing and hears nothing.
+ *
+ * Driven end to end: whether a ledger survives a merge is not a question the source
+ * can answer.
+ */
+describe("a merged-away room takes its ledger with it", () => {
+  let reg: RelayRegistry;
+  let sent: Array<Record<string, unknown>>;
+  let reply: () => { status: number; json: unknown };
+
+  beforeEach(() => {
+    _resetVoipSessionsForTests();
+    reg = createRegistry();
+    sent = [];
+    reply = () => ({ status: 200, json: {} });
+    process.env.VOIP_NODE_SECRET = "test-secret";
+    installFetch();
+  });
+  afterEach(() => restoreFetch());
+
+  function installFetch() {
+    (globalThis as unknown as { fetch: unknown }).fetch = async (
+      _url: string,
+      init: { body: string },
+    ) => {
+      sent.push(JSON.parse(init.body) as Record<string, unknown>);
+      const r = reply();
+      return { ok: r.status < 400, status: r.status, text: async () => JSON.stringify(r.json) };
+    };
+  }
+  function restoreFetch() {
+    delete (globalThis as unknown as { fetch?: unknown }).fetch;
+  }
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  /** Put `pin` in `roomId` as far as the server is concerned, node-assigned. */
+  function placeIn(pin: string, roomId: string, seedFrom: string) {
+    const seed = reg.roomMeta.get(seedFrom)!;
+    if (!reg.rooms.has(roomId)) reg.rooms.set(roomId, new Set());
+    reg.rooms.get(roomId)!.add(pin);
+    if (!reg.roomMeta.has(roomId)) {
+      reg.roomMeta.set(roomId, {
+        ...seed,
+        roster: new Map(seed.roster),
+        cohosts: new Set(seed.cohosts),
+        voip: { ...ASSIGNMENT },
+      });
+    }
+    reg.pinRoom.set(pin, roomId);
+    const c = reg.clients.get(pin);
+    if (c) c.roomId = roomId;
+  }
+
+  it("a re-dialled party line does not inherit the merged call's producers", async () => {
+    const { a, b, rid } = callBetween(reg, true);
+    const line = partyLineRoomId("555555");
+
+    // A produces INSIDE the party line, so that room's ledger names a producer.
+    placeIn(a.pin!, line, rid);
+    reply = () => ({ status: 200, json: { id: "t-line" } });
+    handleMessage(reg, a.asConn(), { type: "voip", op: "createTransport", seq: 1 });
+    await flush();
+    reply = () => ({ status: 200, json: { id: "p-line", kind: "audio" } });
+    handleMessage(reg, a.asConn(), { type: "voip", op: "produce", seq: 2, transportId: "t-line" });
+    await flush();
+
+    // …then it becomes the HELD line and A merges it into the active call.
+    placeIn(a.pin!, rid, rid);
+    reg.rooms.get(line)!.add(a.pin!); // still a member of the held room, as hold leaves it
+    reg.heldRoom.set(a.pin!, line);
+    handleMessage(reg, a.asConn(), { type: "merge" });
+    expect(reg.rooms.has(line), "the merged-away room should be gone").toBe(false);
+
+    // The line is dialled again. Same id, by construction — that is what `pl-` is for.
+    placeIn(a.pin!, line, rid);
+    placeIn(b.pin!, line, rid);
+    b.outbox.length = 0;
+    handleMessage(reg, b.asConn(), { type: "voip-producers" });
+    expect(
+      b.lastOfType("voip-producers"),
+      "the new call inherited the previous one's producers",
+    ).toMatchObject({ producers: [] });
+  });
+
+  it("an ordinary merged room's ledger is dropped too", async () => {
+    const { a, rid } = callBetween(reg, true);
+    const held = "held-room-1";
+    placeIn(a.pin!, held, rid);
+    reply = () => ({ status: 200, json: { id: "t-held" } });
+    handleMessage(reg, a.asConn(), { type: "voip", op: "createTransport", seq: 1 });
+    await flush();
+    placeIn(a.pin!, rid, rid);
+    reg.rooms.get(held)!.add(a.pin!);
+    reg.heldRoom.set(a.pin!, held);
+    handleMessage(reg, a.asConn(), { type: "merge" });
+
+    // Re-create it and try to act on the id the old session owned. The refusal has
+    // to come from an EMPTY ledger, not from a surviving one that happens to agree.
+    placeIn(a.pin!, held, rid);
+    a.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "voip", op: "produce", seq: 9, transportId: "t-held" });
+    await flush();
+    expect(a.lastOfType("voip-error")).toMatchObject({ seq: 9, reason: "not-your-id" });
+  });
+
+  it("the merge still does what it is for — the mover lands in the active call", async () => {
+    // The teardown change must not cost the feature. C is in the held room and
+    // has to end up in the active one.
+    const { a, rid } = callBetween(reg, true);
+    const c = register(reg, "C");
+    const held = "held-room-2";
+    placeIn(a.pin!, held, rid);
+    placeIn(c.pin!, held, rid);
+    placeIn(a.pin!, rid, rid);
+    reg.rooms.get(held)!.add(a.pin!);
+    reg.heldRoom.set(a.pin!, held);
+    c.outbox.length = 0;
+    handleMessage(reg, a.asConn(), { type: "merge" });
+    expect(c.lastOfType("joined")).toMatchObject({ roomId: rid });
+    expect(reg.pinRoom.get(c.pin!)).toBe(rid);
+    expect(reg.rooms.get(rid)!.has(c.pin!)).toBe(true);
+    expect(reg.heldRoom.has(a.pin!)).toBe(false);
+  });
+
+  it("there is now ONE teardown, so a third exit cannot forget the ledger", () => {
+    const relayCode = codeOnly(RELAY_SRC);
+    // The property `reapRoom`'s comment claimed. Both exits call the same function,
+    // and neither deletes the room's state by hand.
+    expect(relayCode).toMatch(/function discardRoom\(reg: RelayRegistry, roomId: string\)/);
+    expect(relayCode.match(/discardRoom\(reg, /g) ?? []).toHaveLength(2);
+    const merge = relayCode.slice(relayCode.indexOf('case "merge":'), relayCode.indexOf('case "video-request":'));
+    expect(merge).not.toMatch(/reg\.rooms\.delete\(/);
+    expect(merge).not.toMatch(/reg\.roomMeta\.delete\(/);
+    // …and `forgetRoom` is reached from exactly one place, so there is one rule.
+    expect(relayCode.match(/forgetRoom\(voipSessions/g) ?? []).toHaveLength(1);
   });
 });
