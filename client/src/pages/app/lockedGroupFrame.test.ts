@@ -430,3 +430,38 @@ describe("the gate is not vacuous", () => {
     expect(CODE).not.toMatch(/from "@\/app\/GroupLockGate"/);
   });
 });
+
+/**
+ * THE ROW DESCRIBED ITSELF TWO DIFFERENT WAYS.
+ *
+ * The visible "typing…" chip is gated on `!hidden` — deliberately, and the comment
+ * beside it says why: "typing" means somebody in there is active right now, which
+ * is exactly the live detail a privacy screen covers. The `aria-label` on the same
+ * row was not gated, so the accessible name announced "typing now" for a group
+ * whose row prints the lock notice instead.
+ *
+ * That matters here more than most places: the lock's scenario is a phone handed to
+ * somebody with the app open, and a phone with VoiceOver on reads the label aloud.
+ */
+describe("the locked row's accessible name matches what it prints", () => {
+  const SRC = fs.readFileSync(path.resolve(__dirname, "Messages.tsx"), "utf8");
+
+  it("the aria-label suppresses typing when the row is hidden", () => {
+    const at = SRC.indexOf("`Open conversation with ${displayName}`");
+    expect(at, "the thread row's aria-label moved").toBeGreaterThan(0);
+    const label = SRC.slice(at, at + 900);
+    expect(label).toMatch(/typing && !hidden \? ", typing now" : ""/);
+  });
+
+  it("…and it is the SAME condition the visible chip uses", () => {
+    // Two spellings of one rule is how the visual and the announced come apart.
+    expect(SRC).toMatch(/\{typing && !hidden \?/);
+  });
+
+  it("the accessible name still carries what the row DOES print", () => {
+    // The lock hides the preview, not the group's name — redacting the label past
+    // the rule would make a locked row unnavigable by screen reader.
+    const at = SRC.indexOf("`Open conversation with ${displayName}`");
+    expect(SRC.slice(at, at + 900)).toMatch(/unread \? `, \$\{t\.unreadCount\} unread`/);
+  });
+});

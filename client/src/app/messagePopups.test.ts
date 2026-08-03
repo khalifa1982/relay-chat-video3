@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 
 async function fresh() {
   vi.resetModules();
@@ -81,5 +82,83 @@ describe("isViewingConversation", () => {
     const s = await fresh();
     setLoc("/app/messages", "?c=42", false);
     expect(s.isViewingConversation(42)).toBe(false);
+  });
+});
+
+/**
+ * THE IN-PAGE CARD WAS THE ONE MESSAGE SURFACE THE GROUP LOCK DID NOT REACH.
+ *
+ * The card carries the group's title, the sender's avatar and a preview of what
+ * they said, with an inline reply box under it. The lock's own scenario is *"I hand
+ * my phone to someone with the app open"* — so this is the surface it is most
+ * about, and it was the only one not consulting it: the thread list already
+ * redacts a hidden row (`isGroupHidden` at Messages.tsx), and the notification
+ * paths do too.
+ *
+ * SUPPRESSED rather than redacted, unlike the push. A push is the only signal a
+ * closed app gets, so dropping one drops the message and the worker shows a
+ * nameless banner instead. In-page nothing is lost — the thread row still updates
+ * with its own redacted preview and unread count.
+ */
+describe("visibleMessagePopups — a locked group gets no card", () => {
+  const cards = (ids: number[]) => ids.map((conversationId, i) => ({ id: i + 1, conversationId, from: 99 }));
+
+  it("drops the hidden conversations and keeps the rest, in order", async () => {
+    const { visibleMessagePopups } = await fresh();
+    const hidden = new Set([2, 4]);
+    const out = visibleMessagePopups(cards([1, 2, 3, 4, 5]), (c) => hidden.has(c));
+    expect(out.map((p) => p.conversationId)).toEqual([1, 3, 5]);
+  });
+
+  it("hides everything when everything is locked", async () => {
+    const { visibleMessagePopups } = await fresh();
+    expect(visibleMessagePopups(cards([1, 2]), () => true)).toEqual([]);
+  });
+
+  it("changes nothing when no group is locked", async () => {
+    const { visibleMessagePopups } = await fresh();
+    const input = cards([7, 8]);
+    expect(visibleMessagePopups(input, () => false)).toEqual(input);
+  });
+
+  it("fails toward SHOWING when the lock store cannot be read", async () => {
+    // `groupLock` fails toward NOT locked for the same reason, and a card that
+    // silently never appears is the harder failure to notice.
+    const { visibleMessagePopups } = await fresh();
+    const out = visibleMessagePopups(cards([1, 2]), () => {
+      throw new Error("localStorage unavailable");
+    });
+    expect(out.map((p) => p.conversationId)).toEqual([1, 2]);
+  });
+
+  it("does not mutate the queue it was given", async () => {
+    const { visibleMessagePopups } = await fresh();
+    const input = cards([1, 2, 3]);
+    visibleMessagePopups(input, (c) => c === 2);
+    expect(input.map((p) => p.conversationId)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("both places a card and a lock can meet", () => {
+  const read = (p: string) =>
+    readFileSync(new URL(p, import.meta.url).pathname, "utf8")
+      .split("\n")
+      .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l))
+      .join("\n");
+
+  it("nothing is QUEUED for a group already hidden", async () => {
+    // The queue holds three, so a card nobody will ever see would push out one
+    // they would.
+    const rt = read("./useRealtime.ts");
+    expect(rt).toMatch(/!isGroupHidden\(payload\.conversationId\)/);
+    expect(rt).toMatch(/import \{ isGroupHidden \} from "\.\/groupLock"/);
+  });
+
+  it("and the render filters again, for a group locked while its card is up", async () => {
+    const ui = read("./MessagePopups.tsx");
+    expect(ui).toMatch(/visibleMessagePopups\(all, isGroupHidden\)/);
+    // Without this the component never re-renders on a lock change and the card
+    // stays on screen until something else happens to update it.
+    expect(ui).toMatch(/useGroupLocks\(\)/);
   });
 });

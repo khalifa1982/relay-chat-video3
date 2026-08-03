@@ -1019,7 +1019,14 @@ export default function MessagesPage({
                               aria-label={
                                 `Open conversation with ${displayName}` +
                                 (unread ? `, ${t.unreadCount} unread` : "") +
-                                (typing ? ", typing now" : "")
+                                /* `&& !hidden`, for the same reason the visible chip
+                                   has it: "typing now" says somebody in there is
+                                   active this second, which is exactly the live
+                                   detail a locked row withholds. Without it the
+                                   accessible name announced what the row refuses to
+                                   print, and a row describing itself two different
+                                   ways is a bug whichever way round it goes. */
+                                (typing && !hidden ? ", typing now" : "")
                               }
                               className="flex min-h-[58px] min-w-0 flex-1 flex-col justify-center gap-[3px] rounded-xl text-start outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                             >

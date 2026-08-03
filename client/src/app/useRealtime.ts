@@ -10,6 +10,7 @@ import { notify, playCallRing, playMessageChime } from "./notifications";
 import { isThreadMuted } from "./mutedThreads";
 import { setTyping, clearTyping } from "./typingStore";
 import { pushMessagePopup, isViewingConversation } from "./messagePopups";
+import { isGroupHidden } from "./groupLock";
 
 type V2Event =
   | { kind: "message"; conversationId: number; from: number }
@@ -206,8 +207,17 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
                 playMessageChime();
               }
               // In-app popup with the message content + inline reply — unless the
-              // user is already looking at that conversation.
-              if (!isViewingConversation(payload.conversationId)) {
+              // user is already looking at that conversation, or the group is
+              // LOCKED on this device. The card names the group and quotes the
+              // message, and the lock's scenario is a phone handed over with the
+              // app open. `MessagePopups` filters again at render, for a group
+              // locked while its card is already up; nothing should be QUEUED for
+              // one that is hidden now, because the queue holds three and a card
+              // nobody will see would push out one they would.
+              if (
+                !isViewingConversation(payload.conversationId) &&
+                !isGroupHidden(payload.conversationId)
+              ) {
                 pushMessagePopup(payload.conversationId, payload.from);
               }
               notify({

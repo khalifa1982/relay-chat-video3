@@ -5,19 +5,43 @@ import { trpc } from "@/lib/trpc";
 import {
   useMessagePopups,
   dismissMessagePopup,
+  visibleMessagePopups,
   type MessagePopup,
 } from "./messagePopups";
 import { previewOf } from "./messagePreview";
 import { PeerAvatar } from "./PeerOverlays";
+import { isGroupHidden, useGroupLocks } from "./groupLock";
 
 /**
  * Non-intrusive incoming-message popups. When a message arrives while the user
  * is in a call or on another screen, a small card appears (bottom-right) with
  * the sender, the message content, and an inline reply box. Each card can be
  * minimized to a chip or closed. Mounted once at the app root.
+ *
+ * ── A LOCKED GROUP GETS NO CARD (v2.107.12) ────────────────────────────────
+ * The card shows the group's title, the sender's avatar and a preview of what
+ * they said. The group lock's own scenario is *"I hand my phone to someone with
+ * the app open"*, so this surface is the one it is most about — and it was the
+ * only message surface that did not consult it. The thread list already redacts a
+ * hidden row; the notification paths do too.
+ *
+ * SUPPRESSED HERE RATHER THAN REDACTED, which is the opposite of what the service
+ * worker does with a push, and the difference is what would be LOST. A push is the
+ * only signal a closed app gets, so dropping one drops the message; the worker
+ * shows a nameless banner instead. In-page nothing is lost — the thread row still
+ * updates with its own redacted preview and its unread count — so a card reading
+ * "a locked chat, but not which one" would add no information while carrying an
+ * inline reply box into a conversation this device is hiding.
+ *
+ * FILTERED AT RENDER as well as at the source, because a card and a lock can meet
+ * two different ways: `useRealtime` never queues one for a group already locked,
+ * and this covers a group locked (or re-locked) while its card is on screen.
+ * `useGroupLocks()` is what makes that second case re-render.
  */
 export function MessagePopups() {
-  const popups = useMessagePopups();
+  const all = useMessagePopups();
+  useGroupLocks(); // re-render when a lock is set, removed, or re-engaged
+  const popups = visibleMessagePopups(all, isGroupHidden);
   if (popups.length === 0) return null;
   return (
     <div className="fixed z-[80] bottom-24 end-3 md:bottom-4 flex flex-col gap-2 w-[min(92vw,340px)] pointer-events-none">
