@@ -224,10 +224,16 @@ describe("board 5c — every class the writer sets is styled, and vice versa", (
     expect(body).not.toMatch(/is-good|is-warn/);
   });
 
-  it("the readout still costs nothing while switched off, and cannot disturb a call", () => {
+  it("the readout renders nothing while switched off — only the thinned vitals sample runs", () => {
+    /* WIDENED v2.107.23 alongside callStats.test.ts: the vitals feed rides
+       this collector now, so the off-state is "one summarize every third tick,
+       zero render" rather than "zero everything". The render early-return is
+       the pin that keeps the readout itself free. */
     const at = CLIENT.indexOf("async function collectCallQuality()");
     const body = CLIENT.slice(at, CLIENT.indexOf("\n  function toggleCallStats", at));
-    expect(body.slice(0, 200)).toMatch(/if \(!statsShown \|\| !inCall\) return;/);
+    expect(body.slice(0, 500)).toMatch(/if \(!inCall\) return;/);
+    expect(body.slice(0, 500)).toMatch(/if \(!statsShown && qualTick !== 0\) return;/);
+    expect(body).toMatch(/if \(!statsShown\) return;/);
     expect(body).toMatch(/catch \{ \/\* the readout is decoration|catch \{/);
   });
 

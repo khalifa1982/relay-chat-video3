@@ -26,7 +26,7 @@ import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpir
   presenceNeedsNotification,
 } from "../v2db";
 import { reapExpiredGuests } from "../purgeIdentity";
-import { recordCrash } from "../v2db";
+import { recordCrash, recordSessionFlush, recordCallFlush } from "../v2db";
 import { sendPushToIdentity } from "../webPush";
 import { registerWellKnown } from "../wellKnown";
 import { registerSeo } from "../seo";
@@ -591,6 +591,69 @@ async function startServer() {
       });
     } catch {
       /* the crash path never throws */
+    }
+    res.status(204).end();
+  });
+  /* SESSION + CALL TELEMETRY INGEST (v2.107.23) — same contract as /api/crash:
+     always 204, per-IP limited, fire-and-forget. Flushes ride a 20s cadence per
+     client, so the limiter is generous where the crash pipe's is tight; either
+     way an abusive IP gets silence, never an error to retry against. */
+  const telemetryIpLimiter = createRateLimiter({ capacity: 60, refillPerSec: 1 });
+  app.post("/api/telemetry", (req: Request, res: Response) => {
+    try {
+      if (
+        process.env.RELAY_RATELIMIT_OFF !== "1" &&
+        !telemetryIpLimiter.allow(clientIpOf(req), Date.now(), 1)
+      ) {
+        res.status(204).end();
+        return;
+      }
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const s = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
+      const n = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+      if (b.kind === "session" && s(b.sessionId)) {
+        void recordSessionFlush({
+          sessionId: s(b.sessionId) as string,
+          deviceId: s(b.deviceId),
+          platform: s(b.platform) ?? "web",
+          appVersion: s(b.appVersion) ?? "unknown",
+          url: s(b.url),
+          events: Array.isArray(b.events) ? b.events.slice(0, 200) : [],
+          taps: n(b.taps),
+          errors: n(b.errors),
+          fails: n(b.fails),
+          ended:
+            b.ended && typeof b.ended === "object" && s((b.ended as Record<string, unknown>).reason)
+              ? { reason: s((b.ended as Record<string, unknown>).reason) as string }
+              : null,
+        });
+      } else if (b.kind === "call" && s(b.callInstanceId)) {
+        void recordCallFlush({
+          callInstanceId: s(b.callInstanceId) as string,
+          sessionId: s(b.sessionId),
+          deviceId: s(b.deviceId),
+          platform: s(b.platform) ?? "web",
+          appVersion: s(b.appVersion) ?? "unknown",
+          roomId: s(b.roomId),
+          connectedAt: typeof b.connectedAt === "number" ? b.connectedAt : null,
+          durationSec: n(b.durationSec),
+          upKB: n(b.upKB),
+          downKB: n(b.downKB),
+          avgRttMs: typeof b.avgRttMs === "number" ? b.avgRttMs : null,
+          maxRttMs: typeof b.maxRttMs === "number" ? b.maxRttMs : null,
+          lossWorstPct: typeof b.lossWorstPct === "number" ? b.lossWorstPct : null,
+          peersMax: n(b.peersMax),
+          samples: Array.isArray(b.samples) ? b.samples.slice(0, 200) : [],
+          events: Array.isArray(b.events) ? b.events.slice(0, 100) : [],
+          ended:
+            b.ended && typeof b.ended === "object" && s((b.ended as Record<string, unknown>).reason)
+              ? { reason: s((b.ended as Record<string, unknown>).reason) as string }
+              : null,
+          clean: typeof b.clean === "number" ? b.clean : null,
+        });
+      }
+    } catch {
+      /* the telemetry path never throws */
     }
     res.status(204).end();
   });

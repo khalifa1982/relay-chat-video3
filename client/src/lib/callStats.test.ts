@@ -333,10 +333,18 @@ describe("v2.105.21 — the readout is wired without a second poller", () => {
     expect(CLIENT).toMatch(/localStorage\.setItem\("relay_call_stats"/);
   });
 
-  it("does no work at all while switched off", () => {
-    // The collector is the expensive half; it must return before any getStats call.
+  it("while switched off, only the thinned vitals sample runs — the render half returns first", () => {
+    /* WIDENED v2.107.23, consciously: the owner's telemetry brief ("record the
+       transmission size, latency, everything technical") moved the vitals feed
+       INSIDE this collector, so "off = zero work" became "off = one summarize
+       every THIRD tick, and never a render". Both gates are pinned, and so is
+       the render half's own early return — the overlay still costs nothing to
+       a user who never opens it. */
     const fn = CLIENT.slice(CLIENT.indexOf("async function collectCallQuality()"));
-    expect(fn.slice(0, 200)).toMatch(/if \(!statsShown \|\| !inCall\) return;/);
+    expect(fn.slice(0, 500)).toMatch(/if \(!inCall\) return;/);
+    expect(fn.slice(0, 500)).toMatch(/if \(!statsShown && qualTick !== 0\) return;/);
+    expect(fn).toMatch(/callTelemetrySample\(stats, sample/);
+    expect(fn).toMatch(/if \(!statsShown\) return;/);
   });
 
   it("clears the byte baseline on toggle, or the first line reports a stale rate", () => {

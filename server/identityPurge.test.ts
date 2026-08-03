@@ -739,6 +739,8 @@ describe("the admin delete", () => {
     );
     expect([...calls].sort()).toEqual([
       "amIAdmin",
+      "callDetail",
+      "callList",
       // v2.105.15 (#111): suggesting an address to a guest, and withdrawing it.
       // They write ONE hint and cannot register anybody — completing a
       // registration needs a request from the browser holding that identity.
@@ -754,6 +756,8 @@ describe("the admin delete", () => {
       "crashDetail",
       "crashGroups",
       "crashOccurrences",
+      "crashResolve",
+      "crashUnsolve",
       "crashVersions",
       "deleteIdentity",
       "findIdentities",
@@ -766,6 +770,8 @@ describe("the admin delete", () => {
       "mediaDiagnostics",
       "pushDiagnostics",
       "sendTestPush",
+      "sessionDetail",
+      "sessionList",
       "setAccountType",
       "setIdentityNumber",
     ]);

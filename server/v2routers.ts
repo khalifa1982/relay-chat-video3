@@ -72,6 +72,12 @@ import {
   isNumberReserved,
   listCrashGroups,
   listCrashVersions,
+  listSessions,
+  getSessionLog,
+  listCalls,
+  getCallLog,
+  resolveCrash,
+  unresolveCrash,
   listCrashOccurrences,
   getCrashReport,
   purgeCrashReports,
@@ -5633,6 +5639,7 @@ export const v2AdminRouter = router({
         platform: z.string().max(16).optional(),
         appVersion: z.string().max(32).optional(),
         days: z.number().int().min(1).max(3650).optional(),
+        includeSolved: z.boolean().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -5654,6 +5661,79 @@ export const v2AdminRouter = router({
     .query(async ({ ctx, input }) => {
       await requireAdmin(ctx);
       return { report: await getCrashReport(input.id) };
+    }),
+
+  /** SOLVED workflow (v2.107.23): mark a fingerprint fixed-in-a-version. The
+   *  group leaves the default view and resurfaces only on a NEWER-version
+   *  recurrence — a regression un-hides itself. */
+  crashResolve: publicProcedure
+    .input(
+      z.object({
+        fingerprint: z.string().length(40),
+        solvedInVersion: z.string().min(1).max(32),
+        note: z.string().max(500).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = await requireAdmin(ctx);
+      await resolveCrash({
+        fingerprint: input.fingerprint,
+        solvedInVersion: input.solvedInVersion,
+        note: input.note ?? null,
+        who: String((me as { number?: unknown } | null)?.number ?? "").slice(0, 6) || null,
+      });
+      return { ok: true as const };
+    }),
+
+  crashUnsolve: publicProcedure
+    .input(z.object({ fingerprint: z.string().length(40) }))
+    .mutation(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      await unresolveCrash(input.fingerprint);
+      return { ok: true as const };
+    }),
+
+  /** Session journeys (v2.107.23) — every tap, nav, failure and lifecycle beat
+   *  per session, with the open / closed / VANISHED verdict derived server-side. */
+  sessionList: publicProcedure
+    .input(
+      z.object({
+        days: z.number().int().min(1).max(3650).optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+        platform: z.string().max(16).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      return { rows: await listSessions(input) };
+    }),
+
+  sessionDetail: publicProcedure
+    .input(z.object({ sessionId: z.string().min(1).max(64) }))
+    .query(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      return { session: await getSessionLog(input.sessionId) };
+    }),
+
+  /** Call vitals (v2.107.23) — kilobytes up/down, round-trip, loss, duration,
+   *  end reason and the clean/leaked verdict. Never a frame of media. */
+  callList: publicProcedure
+    .input(
+      z.object({
+        days: z.number().int().min(1).max(3650).optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      return { rows: await listCalls(input) };
+    }),
+
+  callDetail: publicProcedure
+    .input(z.object({ callInstanceId: z.string().min(1).max(64) }))
+    .query(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      return { call: await getCallLog(input.callInstanceId) };
     }),
 
   /** Manual trim. NEVER scheduled — the standing default is keep-forever; this

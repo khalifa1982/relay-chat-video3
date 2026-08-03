@@ -299,9 +299,13 @@ describe("the panel stays a panel", () => {
         "clearGuestRegistrationInvite",
         // v2.107.x — the crash console's four read-only views (see the fuller
         // rationale beside the identityPurge.test.ts pin; two guards on purpose).
+        "callDetail",
+        "callList",
         "crashDetail",
         "crashGroups",
         "crashOccurrences",
+        "crashResolve",
+        "crashUnsolve",
         "crashVersions",
         "deleteIdentity",
         "findIdentities",
@@ -312,6 +316,8 @@ describe("the panel stays a panel", () => {
         "mediaDiagnostics",
         "pushDiagnostics",
         "sendTestPush",
+        "sessionDetail",
+        "sessionList",
         "setAccountType",
         "setIdentityNumber",
       ].sort()

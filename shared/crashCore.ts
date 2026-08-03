@@ -162,3 +162,24 @@ export function detectCrashPlatform(win: {
  *  hundreds of times a second; the counter keeps the truth ("this happened
  *  400 times") without four hundred inserts. */
 export const CRASH_STORM_WINDOW_SEC = 60;
+
+/**
+ * Numeric dotted-version compare for the SOLVED workflow (v2.107.23): a crash
+ * marked solved-in-2.107.22 must stay hidden for stale clients still running
+ * 2.107.21, and must RESURFACE the moment the same fingerprint arrives from
+ * 2.107.23 — that is a regression, and it un-hides itself. String compare is
+ * wrong here ("2.107.9" > "2.107.10" lexically); this splits on dots and
+ * compares numerically, missing segments read as 0.
+ */
+export function compareAppVersions(a: string, b: string): -1 | 0 | 1 {
+  const pa = a.split(".").map(s => parseInt(s, 10) || 0);
+  const pb = b.split(".").map(s => parseInt(s, 10) || 0);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x < y) return -1;
+    if (x > y) return 1;
+  }
+  return 0;
+}

@@ -22,7 +22,9 @@ import {
   capCrashField,
   crashFingerprintInput,
   normalizeCrashPlatform,
+  compareAppVersions,
 } from "../shared/crashCore";
+import { mergeSessionEvents, sessionStateOf, SESSION_STALE_MS } from "../shared/telemetryCore";
 import crypto from "crypto";
 import {
   and,
@@ -2950,6 +2952,82 @@ export async function ensureSchemaExtensions(): Promise<void> {
         KEY \`crash_fp_time_idx\` (\`fingerprint\`, \`createdAt\`),
         KEY \`crash_ver_idx\` (\`appVersion\`, \`platform\`),
         KEY \`crash_time_idx\` (\`createdAt\`)
+      )`,
+    },
+    {
+      // Session journeys (v2.107.23): one row per client session — every tap,
+      // navigation, failure and lifecycle beat, capped by shared/telemetryCore
+      // so keep-forever stays affordable. `endedAt` NULL + stale `lastSeenAt`
+      // is how a KILLED session testifies (state derived, never stored).
+      name: "session_logs",
+      ddl: `CREATE TABLE IF NOT EXISTS \`session_logs\` (
+        \`sessionId\` varchar(64) NOT NULL,
+        \`deviceId\` varchar(64) NULL,
+        \`platform\` varchar(16) NOT NULL,
+        \`appVersion\` varchar(32) NOT NULL,
+        \`startedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`lastSeenAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`endedAt\` timestamp NULL,
+        \`endReason\` varchar(16) NULL,
+        \`url\` varchar(512) NULL,
+        \`taps\` int NOT NULL DEFAULT 0,
+        \`errors\` int NOT NULL DEFAULT 0,
+        \`fails\` int NOT NULL DEFAULT 0,
+        \`events\` mediumtext NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`sessionId\`),
+        KEY \`sess_seen_idx\` (\`lastSeenAt\`),
+        KEY \`sess_dev_idx\` (\`deviceId\`, \`startedAt\`),
+        KEY \`sess_ver_idx\` (\`appVersion\`)
+      )`,
+    },
+    {
+      // Call vitals (v2.107.23): kilobytes up/down, bitrate, round-trip, loss,
+      // duration, end reason and whether teardown was CLEAN — never a frame of
+      // media. Partial flushes upsert mid-call; a row with no `endedAt` whose
+      // `lastSeenAt` went stale is a call that VANISHED (killed app).
+      name: "call_logs",
+      ddl: `CREATE TABLE IF NOT EXISTS \`call_logs\` (
+        \`callInstanceId\` varchar(64) NOT NULL,
+        \`sessionId\` varchar(64) NULL,
+        \`deviceId\` varchar(64) NULL,
+        \`platform\` varchar(16) NOT NULL,
+        \`appVersion\` varchar(32) NOT NULL,
+        \`roomId\` varchar(64) NULL,
+        \`startedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`connectedAt\` timestamp NULL,
+        \`endedAt\` timestamp NULL,
+        \`endReason\` varchar(24) NULL,
+        \`clean\` tinyint NULL,
+        \`durationSec\` int NOT NULL DEFAULT 0,
+        \`upKB\` int NOT NULL DEFAULT 0,
+        \`downKB\` int NOT NULL DEFAULT 0,
+        \`avgRttMs\` int NULL,
+        \`maxRttMs\` int NULL,
+        \`lossWorstPct\` double NULL,
+        \`peersMax\` int NOT NULL DEFAULT 0,
+        \`samples\` mediumtext NULL,
+        \`events\` text NULL,
+        \`lastSeenAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`callInstanceId\`),
+        KEY \`call_started_idx\` (\`startedAt\`),
+        KEY \`call_seen_idx\` (\`lastSeenAt\`)
+      )`,
+    },
+    {
+      // SOLVED workflow (v2.107.23): a fingerprint marked fixed-in-a-version
+      // leaves the console's default view — "no need to read that problem
+      // again" — and RESURFACES by itself only if the same fingerprint arrives
+      // from a NEWER version than the fix: a regression, and it un-hides.
+      name: "crash_resolutions",
+      ddl: `CREATE TABLE IF NOT EXISTS \`crash_resolutions\` (
+        \`fingerprint\` char(40) NOT NULL,
+        \`solvedInVersion\` varchar(32) NOT NULL,
+        \`note\` varchar(500) NULL,
+        \`solvedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`solvedBy\` varchar(6) NULL,
+        PRIMARY KEY (\`fingerprint\`)
       )`,
     },
     {
@@ -7958,6 +8036,9 @@ export type CrashGroupRow = {
   lastId: number;
   versions: number;
   platforms: number;
+  solvedInVersion?: string | null;
+  solvedAt?: string | null;
+  regressed?: boolean;
   errorName: string;
   errorMessage: string;
   platform: string;
@@ -7974,6 +8055,7 @@ export async function listCrashGroups(opts: {
   appVersion?: string;
   days?: number;
   limit?: number;
+  includeSolved?: boolean;
 }): Promise<CrashGroupRow[]> {
   const db = await getDb();
   if (!db) return [];
@@ -8019,7 +8101,7 @@ export async function listCrashGroups(opts: {
       appVersion: string;
     }[];
     const byId = new Map(latestRows.map((r) => [Number(r.id), r]));
-    return groups.map((g) => {
+    const assembled = groups.map((g) => {
       const last = byId.get(Number(g.lastId));
       return {
         ...g,
@@ -8032,8 +8114,54 @@ export async function listCrashGroups(opts: {
         errorMessage: last?.errorMessage ?? "",
         platform: last?.platform ?? "",
         appVersion: last?.appVersion ?? "",
-      };
+      } as CrashGroupRow;
     });
+    /* SOLVED workflow (v2.107.23). A solved group leaves the default view —
+       the owner's "no need to read that problem again" — and comes back BY
+       ITSELF only when its fingerprint has been seen on an app version NEWER
+       than the fix (numeric compare; string order calls 2.107.9 newer than
+       2.107.10). Stale clients still crashing on pre-fix versions keep a
+       solved group hidden, which is the point. */
+    const resFetched = await db.execute(sql`
+      SELECT \`fingerprint\`, \`solvedInVersion\`, \`solvedAt\`
+        FROM \`crash_resolutions\`
+       WHERE \`fingerprint\` IN (${sql.join(assembled.map((g) => sql`${g.fingerprint}`), sql`, `)})`);
+    const resolutions = (Array.isArray(resFetched) ? resFetched[0] : []) as unknown as {
+      fingerprint: string;
+      solvedInVersion: string;
+      solvedAt: string;
+    }[];
+    const solvedByFp = new Map(resolutions.map((r) => [r.fingerprint, r]));
+    if (solvedByFp.size > 0) {
+      const solvedFps = Array.from(solvedByFp.keys());
+      const since = await db.execute(sql`
+        SELECT c.\`fingerprint\`, c.\`appVersion\`
+          FROM \`crash_reports\` c
+          JOIN \`crash_resolutions\` r ON r.\`fingerprint\` = c.\`fingerprint\`
+         WHERE c.\`fingerprint\` IN (${sql.join(solvedFps.map((f) => sql`${f}`), sql`, `)})
+           AND c.\`createdAt\` > r.\`solvedAt\`
+         GROUP BY c.\`fingerprint\`, c.\`appVersion\``);
+      const sinceRows = (Array.isArray(since) ? since[0] : []) as unknown as {
+        fingerprint: string;
+        appVersion: string;
+      }[];
+      const regressedFps = new Set<string>();
+      for (const r of sinceRows) {
+        const sv = solvedByFp.get(r.fingerprint);
+        if (sv && compareAppVersions(r.appVersion, sv.solvedInVersion) > 0) regressedFps.add(r.fingerprint);
+      }
+      for (const g of assembled) {
+        const sv = solvedByFp.get(g.fingerprint);
+        if (sv) {
+          g.solvedInVersion = sv.solvedInVersion;
+          g.solvedAt = String(sv.solvedAt);
+          g.regressed = regressedFps.has(g.fingerprint);
+        }
+      }
+    }
+    return opts.includeSolved
+      ? assembled
+      : assembled.filter((g) => !g.solvedInVersion || g.regressed);
   } catch (e) {
     console.warn("[crash] groups query skipped:", (e as Error)?.message || "");
     return [];
@@ -8120,5 +8248,306 @@ export async function purgeCrashReports(olderThanDays: number): Promise<number> 
   } catch (e) {
     console.warn("[crash] purge skipped:", (e as Error)?.message || "");
     return 0;
+  }
+}
+
+/* ── Session + call telemetry, and the SOLVED workflow (v2.107.23) ──────────── */
+
+/** Upsert one flush of a session journey. Read-merge-write so the shared caps
+ *  hold no matter how many flushes a marathon session sends; counters are
+ *  cumulative on the client, so GREATEST keeps the true totals across retries
+ *  arriving out of order. Fail-open like every telemetry write. */
+export async function recordSessionFlush(p: {
+  sessionId: string;
+  deviceId: string | null;
+  platform: string;
+  appVersion: string;
+  url: string | null;
+  events: unknown[];
+  taps: number;
+  errors: number;
+  fails: number;
+  ended: { reason: string } | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    const prev = await db.execute(
+      sql`SELECT \`events\` FROM \`session_logs\` WHERE \`sessionId\` = ${p.sessionId} LIMIT 1`
+    );
+    const prevRows = (Array.isArray(prev) ? prev[0] : []) as unknown as { events: string | null }[];
+    const merged = mergeSessionEvents(
+      prevRows[0]?.events ?? null,
+      p.events as Parameters<typeof mergeSessionEvents>[1]
+    );
+    const endReason = p.ended ? capCrashField(p.ended.reason, 16) : null;
+    await db.execute(sql`
+      INSERT INTO \`session_logs\`
+        (\`sessionId\`, \`deviceId\`, \`platform\`, \`appVersion\`, \`url\`,
+         \`taps\`, \`errors\`, \`fails\`, \`events\`, \`endedAt\`, \`endReason\`)
+      VALUES
+        (${capCrashField(p.sessionId, 64)}, ${p.deviceId ? capCrashField(p.deviceId, 64) : null},
+         ${normalizeCrashPlatform(p.platform)}, ${capCrashField(p.appVersion, CRASH_CAPS.version)},
+         ${p.url ? capCrashField(p.url, 512) : null},
+         ${Math.max(0, Math.floor(p.taps))}, ${Math.max(0, Math.floor(p.errors))},
+         ${Math.max(0, Math.floor(p.fails))}, ${merged},
+         ${p.ended ? sql`NOW()` : null}, ${endReason})
+      ON DUPLICATE KEY UPDATE
+        \`lastSeenAt\` = NOW(),
+        \`url\` = VALUES(\`url\`),
+        \`taps\` = GREATEST(\`taps\`, VALUES(\`taps\`)),
+        \`errors\` = GREATEST(\`errors\`, VALUES(\`errors\`)),
+        \`fails\` = GREATEST(\`fails\`, VALUES(\`fails\`)),
+        \`events\` = VALUES(\`events\`),
+        \`endedAt\` = COALESCE(\`endedAt\`, VALUES(\`endedAt\`)),
+        \`endReason\` = COALESCE(\`endReason\`, VALUES(\`endReason\`))`);
+  } catch (e) {
+    console.warn("[telemetry] session flush skipped:", (e as Error)?.message || "");
+  }
+}
+
+/** Upsert one flush of a call's vitals — partials mid-call, final on end. The
+ *  numbers only ever grow (GREATEST) so an out-of-order partial can never roll
+ *  a finished call backwards. */
+export async function recordCallFlush(p: {
+  callInstanceId: string;
+  sessionId: string | null;
+  deviceId: string | null;
+  platform: string;
+  appVersion: string;
+  roomId: string | null;
+  connectedAt: number | null;
+  durationSec: number;
+  upKB: number;
+  downKB: number;
+  avgRttMs: number | null;
+  maxRttMs: number | null;
+  lossWorstPct: number | null;
+  peersMax: number;
+  samples: unknown;
+  events: unknown;
+  ended: { reason: string } | null;
+  clean: number | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    const samplesJson = capCrashField(JSON.stringify(p.samples ?? []), 60_000);
+    const eventsJson = capCrashField(JSON.stringify(p.events ?? []), 8_000);
+    const endReason = p.ended ? capCrashField(p.ended.reason, 24) : null;
+    await db.execute(sql`
+      INSERT INTO \`call_logs\`
+        (\`callInstanceId\`, \`sessionId\`, \`deviceId\`, \`platform\`, \`appVersion\`, \`roomId\`,
+         \`connectedAt\`, \`durationSec\`, \`upKB\`, \`downKB\`, \`avgRttMs\`, \`maxRttMs\`,
+         \`lossWorstPct\`, \`peersMax\`, \`samples\`, \`events\`, \`endedAt\`, \`endReason\`, \`clean\`)
+      VALUES
+        (${capCrashField(p.callInstanceId, 64)}, ${p.sessionId ? capCrashField(p.sessionId, 64) : null},
+         ${p.deviceId ? capCrashField(p.deviceId, 64) : null}, ${normalizeCrashPlatform(p.platform)},
+         ${capCrashField(p.appVersion, CRASH_CAPS.version)}, ${p.roomId ? capCrashField(p.roomId, 64) : null},
+         ${p.connectedAt ? new Date(p.connectedAt) : null},
+         ${Math.max(0, Math.floor(p.durationSec))}, ${Math.max(0, Math.floor(p.upKB))},
+         ${Math.max(0, Math.floor(p.downKB))},
+         ${p.avgRttMs == null ? null : Math.round(p.avgRttMs)},
+         ${p.maxRttMs == null ? null : Math.round(p.maxRttMs)},
+         ${p.lossWorstPct == null ? null : p.lossWorstPct},
+         ${Math.max(0, Math.floor(p.peersMax))}, ${samplesJson}, ${eventsJson},
+         ${p.ended ? sql`NOW()` : null}, ${endReason},
+         ${p.clean == null ? null : p.clean ? 1 : 0})
+      ON DUPLICATE KEY UPDATE
+        \`lastSeenAt\` = NOW(),
+        \`durationSec\` = GREATEST(\`durationSec\`, VALUES(\`durationSec\`)),
+        \`upKB\` = GREATEST(\`upKB\`, VALUES(\`upKB\`)),
+        \`downKB\` = GREATEST(\`downKB\`, VALUES(\`downKB\`)),
+        \`avgRttMs\` = COALESCE(VALUES(\`avgRttMs\`), \`avgRttMs\`),
+        \`maxRttMs\` = GREATEST(COALESCE(\`maxRttMs\`, 0), COALESCE(VALUES(\`maxRttMs\`), 0)),
+        \`lossWorstPct\` = GREATEST(COALESCE(\`lossWorstPct\`, 0), COALESCE(VALUES(\`lossWorstPct\`), 0)),
+        \`peersMax\` = GREATEST(\`peersMax\`, VALUES(\`peersMax\`)),
+        \`samples\` = VALUES(\`samples\`),
+        \`events\` = VALUES(\`events\`),
+        \`connectedAt\` = COALESCE(\`connectedAt\`, VALUES(\`connectedAt\`)),
+        \`endedAt\` = COALESCE(\`endedAt\`, VALUES(\`endedAt\`)),
+        \`endReason\` = COALESCE(\`endReason\`, VALUES(\`endReason\`)),
+        \`clean\` = COALESCE(\`clean\`, VALUES(\`clean\`))`);
+  } catch (e) {
+    console.warn("[telemetry] call flush skipped:", (e as Error)?.message || "");
+  }
+}
+
+export type SessionListRow = {
+  sessionId: string;
+  deviceId: string | null;
+  platform: string;
+  appVersion: string;
+  startedAt: string;
+  lastSeenAt: string;
+  endedAt: string | null;
+  endReason: string | null;
+  url: string | null;
+  taps: number;
+  errors: number;
+  fails: number;
+  state: "open" | "closed" | "vanished";
+};
+
+export async function listSessions(opts: {
+  days?: number;
+  limit?: number;
+  platform?: string;
+}): Promise<SessionListRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    const conds = [sql`1 = 1`];
+    if (opts.platform) conds.push(sql`\`platform\` = ${normalizeCrashPlatform(opts.platform)}`);
+    const days = Math.min(Math.max(Math.floor(opts.days ?? 7), 1), 3650);
+    conds.push(sql`\`lastSeenAt\` > NOW() - INTERVAL ${sql.raw(String(days))} DAY`);
+    const limit = Math.min(Math.max(Math.floor(opts.limit ?? 100), 1), 200);
+    const res = await db.execute(sql`
+      SELECT \`sessionId\`, \`deviceId\`, \`platform\`, \`appVersion\`, \`startedAt\`,
+             \`lastSeenAt\`, \`endedAt\`, \`endReason\`, \`url\`, \`taps\`, \`errors\`, \`fails\`
+        FROM \`session_logs\`
+       WHERE ${sql.join(conds, sql` AND `)}
+       ORDER BY \`lastSeenAt\` DESC
+       LIMIT ${sql.raw(String(limit))}`);
+    const rows = (Array.isArray(res) ? res[0] : []) as unknown as Omit<SessionListRow, "state">[];
+    const nowMs = Date.now();
+    return rows.map((r) => ({
+      ...r,
+      taps: Number(r.taps),
+      errors: Number(r.errors),
+      fails: Number(r.fails),
+      state: sessionStateOf(
+        r.endedAt ? Date.parse(String(r.endedAt)) : null,
+        Date.parse(String(r.lastSeenAt)),
+        nowMs,
+        SESSION_STALE_MS
+      ),
+    }));
+  } catch (e) {
+    console.warn("[telemetry] session list skipped:", (e as Error)?.message || "");
+    return [];
+  }
+}
+
+export async function getSessionLog(sessionId: string): Promise<Record<string, unknown> | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const res = await db.execute(
+      sql`SELECT * FROM \`session_logs\` WHERE \`sessionId\` = ${capCrashField(sessionId, 64)} LIMIT 1`
+    );
+    const rows = (Array.isArray(res) ? res[0] : []) as unknown as Record<string, unknown>[];
+    return rows[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export type CallListRow = {
+  callInstanceId: string;
+  sessionId: string | null;
+  deviceId: string | null;
+  platform: string;
+  appVersion: string;
+  roomId: string | null;
+  startedAt: string;
+  lastSeenAt: string;
+  connectedAt: string | null;
+  endedAt: string | null;
+  endReason: string | null;
+  clean: number | null;
+  durationSec: number;
+  upKB: number;
+  downKB: number;
+  avgRttMs: number | null;
+  maxRttMs: number | null;
+  lossWorstPct: number | null;
+  peersMax: number;
+  state: "open" | "closed" | "vanished";
+};
+
+export async function listCalls(opts: { days?: number; limit?: number }): Promise<CallListRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    const days = Math.min(Math.max(Math.floor(opts.days ?? 7), 1), 3650);
+    const limit = Math.min(Math.max(Math.floor(opts.limit ?? 100), 1), 200);
+    const res = await db.execute(sql`
+      SELECT \`callInstanceId\`, \`sessionId\`, \`deviceId\`, \`platform\`, \`appVersion\`, \`roomId\`,
+             \`startedAt\`, \`lastSeenAt\`, \`connectedAt\`, \`endedAt\`, \`endReason\`, \`clean\`,
+             \`durationSec\`, \`upKB\`, \`downKB\`, \`avgRttMs\`, \`maxRttMs\`, \`lossWorstPct\`, \`peersMax\`
+        FROM \`call_logs\`
+       WHERE \`startedAt\` > NOW() - INTERVAL ${sql.raw(String(days))} DAY
+       ORDER BY \`startedAt\` DESC
+       LIMIT ${sql.raw(String(limit))}`);
+    const rows = (Array.isArray(res) ? res[0] : []) as unknown as Omit<CallListRow, "state">[];
+    const nowMs = Date.now();
+    return rows.map((r) => ({
+      ...r,
+      durationSec: Number(r.durationSec),
+      upKB: Number(r.upKB),
+      downKB: Number(r.downKB),
+      peersMax: Number(r.peersMax),
+      state: sessionStateOf(
+        r.endedAt ? Date.parse(String(r.endedAt)) : null,
+        Date.parse(String(r.lastSeenAt)),
+        nowMs,
+        SESSION_STALE_MS
+      ),
+    }));
+  } catch (e) {
+    console.warn("[telemetry] call list skipped:", (e as Error)?.message || "");
+    return [];
+  }
+}
+
+export async function getCallLog(callInstanceId: string): Promise<Record<string, unknown> | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const res = await db.execute(
+      sql`SELECT * FROM \`call_logs\` WHERE \`callInstanceId\` = ${capCrashField(callInstanceId, 64)} LIMIT 1`
+    );
+    const rows = (Array.isArray(res) ? res[0] : []) as unknown as Record<string, unknown>[];
+    return rows[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Mark a fingerprint SOLVED in a version. Re-solving overwrites — the newest
+ *  fix wins, and `solvedAt` resets so regression detection measures from it. */
+export async function resolveCrash(p: {
+  fingerprint: string;
+  solvedInVersion: string;
+  note: string | null;
+  who: string | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.execute(sql`
+      INSERT INTO \`crash_resolutions\` (\`fingerprint\`, \`solvedInVersion\`, \`note\`, \`solvedBy\`)
+      VALUES (${capCrashField(p.fingerprint, 40)}, ${capCrashField(p.solvedInVersion, 32)},
+              ${p.note ? capCrashField(p.note, 500) : null}, ${p.who ? capCrashField(p.who, 6) : null})
+      ON DUPLICATE KEY UPDATE
+        \`solvedInVersion\` = VALUES(\`solvedInVersion\`),
+        \`note\` = VALUES(\`note\`),
+        \`solvedAt\` = NOW(),
+        \`solvedBy\` = VALUES(\`solvedBy\`)`);
+  } catch (e) {
+    console.warn("[crash] resolve skipped:", (e as Error)?.message || "");
+  }
+}
+
+export async function unresolveCrash(fingerprint: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.execute(
+      sql`DELETE FROM \`crash_resolutions\` WHERE \`fingerprint\` = ${capCrashField(fingerprint, 40)}`
+    );
+  } catch (e) {
+    console.warn("[crash] unresolve skipped:", (e as Error)?.message || "");
   }
 }
