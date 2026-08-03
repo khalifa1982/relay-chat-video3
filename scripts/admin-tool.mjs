@@ -184,6 +184,11 @@ try {
         "users.emailVerified", "users.loginPinHash", "users.preferPinLogin",
         "identities.id", "identities.number", "identities.displayName",
         "identities.userId", "identities.verified",
+        /* Every table `taken()` reads must be preflighted, or a rename would make the
+           freeness check pass by reading nothing — which is what the preflight is for.
+           `party_lines` and `conversations` were both queried and neither validated
+           (v2.107.26). */
+        "party_lines.number", "conversations.number",
         "number_reservations.number", "number_reservations.claimedAt",
       ]))
     ) {
@@ -198,9 +203,13 @@ try {
         // Pick the number. An explicit --number is honoured when free; otherwise we
         // search, skipping the prefixes the server's own allocator skips so this
         // path cannot hand out something self-service would refuse.
+        /* All three tables sharing the dialable space, plus the ledger. `conversations`
+           was the missing one (v2.102.0 group ids, v2.107.26) — the same gap that let
+           set-number's dry run call a group's number free. */
         const taken = async (n) =>
           !!(await one(`SELECT 1 x FROM identities WHERE number = ? LIMIT 1`, [n])) ||
           !!(await one(`SELECT 1 x FROM party_lines WHERE number = ? LIMIT 1`, [n])) ||
+          !!(await one(`SELECT 1 x FROM conversations WHERE number = ? LIMIT 1`, [n])) ||
           !!(await one(`SELECT 1 x FROM number_reservations WHERE number = ? LIMIT 1`, [n]));
         const reservedPrefix = (n) => RESERVED_PREFIXES.some((p) => n.startsWith(p));
         let chosen = "";
@@ -332,6 +341,7 @@ try {
       "conference_participants.identityId",
       "conference_participants.number",
       "party_lines.number",
+      "conversations.number",
       "number_reservations.number",
       "number_reservations.claimedAt",
     ];
@@ -362,11 +372,55 @@ try {
       } else if (number === to) {
         console.log("already that number — nothing to do");
       } else {
-        // Free in BOTH tables sharing the one number space.
+        /* FREE IN ALL THREE TABLES SHARING THE ONE DIALABLE NUMBER SPACE, AND FREE IN
+           THE LEDGER — because the DRY RUN MUST REACH THE SAME VERDICT AS THE APPLY.
+           It did not, and that is the defect this replaces (v2.107.26).
+
+           `conversations.number` was missed: v2.102.0 gave a GROUP its own 6-digit id
+           out of the same space, and this script predates it, so a number held by a
+           group read as FREE here. The server's own `numberTaken` was updated and this
+           second implementation in another language was not — the divergence class
+           `adminToolParity.test.ts` exists for, which until now only compared WRITE
+           strategies and so could not see a missing clash check.
+
+           `number_reservations` was missed for a different reason: the apply reserves
+           before it writes, so it ALREADY refuses a reserved number — but only after
+           the dry run has said the change looks fine. An operator who reads "0
+           rewritten, looks right" and then gets a hard refusal has been told two
+           different things about one number, and the whole point of a dry run is that
+           its answer is the apply's answer.
+
+           The ledger check reports `claimedAt`, because the two cases need OPPOSITE
+           actions: a STAMPED row is a deliberate retirement — v2.100.0's purge
+           tombstones a deleted person's number precisely so it can never reach a
+           stranger, and the ledger is monotonic on purpose — while an UNCLAIMED row
+           with no holder in any table is debris from an allocation that reserved and
+           then failed (v2.99.49 R2). Saying which is what lets somebody decide. */
         const clashI = await one(`SELECT id FROM identities WHERE number = ?`, [to]);
         const clashP = await one(`SELECT id FROM party_lines WHERE number = ?`, [to]);
-        if (clashI || clashP) {
-          console.error(`${fmt(to)} is already in use (${clashI ? "an identity" : "a party line"})`);
+        const clashG = await one(`SELECT id FROM conversations WHERE number = ?`, [to]);
+        const resv = await one(
+          `SELECT number, claimedAt FROM number_reservations WHERE number = ?`,
+          [to],
+        );
+        if (clashI || clashP || clashG) {
+          const who = clashI ? "an identity" : clashP ? "a party line" : "a group";
+          console.error(`${fmt(to)} is already in use (${who})`);
+          exit = 4;
+        } else if (resv) {
+          /* No table holds it, yet the ledger does. Refuse and NAME the case rather
+             than clearing the row: releasing a tombstone would hand a purged person's
+             number to somebody else, which is the one thing the ledger's monotonicity
+             is for. Clearing genuine debris is a separate, deliberate decision. */
+          if (resv.claimedAt) {
+            console.error(`${fmt(to)} is RETIRED — the reservation ledger has it claimed at ${resv.claimedAt}.`);
+            console.error("A claimed reservation with no holder is a purged identity's number (v2.100.0),");
+            console.error("deliberately never reissued so it cannot reach a stranger. Pick another number.");
+          } else {
+            console.error(`${fmt(to)} is reserved in the ledger (claimedAt IS NULL) but held by no identity,`);
+            console.error("party line or group — i.e. debris from an allocation that reserved and then failed");
+            console.error("(v2.99.49 R2). Releasing it is a separate, deliberate decision, not this operation.");
+          }
           exit = 4;
         } else {
           const affected = await q(`SELECT id, ownerId, number FROM contacts WHERE number IN (?, ?)`, [number, to]);
