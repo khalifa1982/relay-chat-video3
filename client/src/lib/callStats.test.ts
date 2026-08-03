@@ -345,8 +345,23 @@ describe("v2.105.21 — the readout is wired without a second poller", () => {
   });
 
   it("can never disturb a call — the whole collector is inside a catch", () => {
-    const fn = CLIENT.slice(CLIENT.indexOf("async function collectCallQuality()"));
-    expect(fn.slice(0, 3000)).toMatch(/catch \{ \/\* the readout is decoration/);
+    /* REWRITTEN FROM A FIXED SLICE (v2.107.15). This read `fn.slice(0, 3000)`, so it
+       broke the moment the collector legitimately grew — the recurring fixed-slice
+       fragility, which fails on CORRECT source and says nothing about the property.
+       Bounded by the function's OWN end instead, with the slice proven non-trivial
+       first so it can never pass by reading nothing. */
+    const at = CLIENT.indexOf("async function collectCallQuality()");
+    expect(at).toBeGreaterThan(-1);
+    let depth = 0;
+    let end = -1;
+    for (let i = CLIENT.indexOf("{", at); i < CLIENT.length; i++) {
+      if (CLIENT[i] === "{") depth++;
+      else if (CLIENT[i] === "}" && --depth === 0) { end = i + 1; break; }
+    }
+    expect(end).toBeGreaterThan(at);
+    const fn = CLIENT.slice(at, end);
+    expect(fn.length).toBeGreaterThan(500);
+    expect(fn).toMatch(/catch \{ \/\* the readout is decoration/);
   });
 
   it("the chip is mounted and bound", () => {

@@ -1,5 +1,147 @@
 # Project TODO
 
+## v2.107.15 — THE FAILURE MOVED FROM RECEIVE TO SEND (`↑0kbps`)
+
+Khalifa on v2.107.12: *"Still no sound"*, with the full readout:
+
+```
+28ms · 0% loss · 4ms jit · direct · ↑0kbps · ↓7kbps
+host/udp · ↑opus · ↓aud 399pkt/0.03e
+```
+
+**The previous fix worked, and this reading is what proves it.** Energy is no
+longer *exactly* zero and no *"audio not playing out"* note appears, so playout
+is delivering — that was the v2.106.51 signature and it is gone.
+
+What the same line shows instead is **`↑0kbps`**: this handset sent **zero audio
+bytes** over the sample interval, on a voice call whose mic button read ON and
+whose outbound Opus stream existed. `bytesSent` is a *delta* and the same
+interval computed 7kbps inbound, so it is a real computed zero rather than a
+missing sample — and Opus with DTX still emits comfort-noise frames during
+silence, so zero bytes means the encoder was being fed nothing at all. Energy
+0.03 over ~8s (399 packets) is ~100x below the 2.6–4.0 a healthy call reads, so
+the far side was sending near-nothing too: one defect, both directions, on the
+**send** side this time.
+
+### Two things made it possible
+
+**1. Nothing in the app could see an OS-muted mic.** `watchLocalTracks` set only
+`onended`. A track the browser *mutes* stays live with `enabled` true, so
+`syncMicEnabled` saw nothing wrong, the button stayed lit, and the sender sent
+nothing with no signal anywhere. Video had watched `onmute`/`onunmute` for its
+tile placeholder since v2.80; **audio simply never got the mirror** — the
+fixed-in-one-of-N pattern this repo keeps paying for.
+
+**2. The local level meter was the only WebAudio consumer of the live mic, and
+it claimed it before WebRTC did.** `ensureLocalLevelMonitor()` runs at
+`ensureMediaInner`'s exit, while the track only reaches an `RTCRtpSender` later
+in `createPeer`. On iOS a WebAudio mic input reconfigures the shared
+AVAudioSession, and a muted capture track is the documented outcome. Its own
+comment made verbatim the claim v2.107.12 disproved: *"a NEW MediaStream
+wrapping the same track … can't interfere with anything else reading the track
+(e.g. the RTCRtpSender publishing it to peers)."*
+
+### On iOS it is a SKIP, not the same clone
+
+That is the load-bearing decision. A clone stops two **consumers** contending
+for one track and does nothing about the OS reconfiguring the **session**,
+because a clone is fed from the same input. Elsewhere the tap is kept — it has
+been harmless on desktop throughout — and hardened exactly like its sibling
+(clone, running-state gate, deferred-not-dropped retry, clone stopped on
+unregister), so the class is closed on every platform rather than papered over on
+one. The cost is a decorative pulse on the mic button: **metering is decoration;
+audio is the product.**
+
+### Recovery is delayed and re-checks the world on fire
+
+A brief interruption mutes and unmutes on its own, so re-acquiring on every edge
+would tear down a working mic to chase a blip. Only a mute that *persists* past
+`MIC_MUTE_RECOVER_MS` acts; `recoverDeadLocalTrack` is already single-flight
+(#160); and the pending timer is cleared in `releaseLocalMedia`, because firing
+after teardown would re-open the microphone with nothing left able to stop it
+(the #160 orphan class).
+
+`localLevelCtx` was the **third** context still built after the gesture was
+spent, so it joins `primeCallAudio()` — that funnel exists precisely so an entry
+point cannot prime some and forget others, which is the omission that armed
+v2.107.12.
+
+### The readout now says which of the two `↑0kbps` causes it is
+
+"We are not being given audio to send" and "we are sending and they cannot play
+it" looked identical, so this reading had to be *argued* rather than read.
+`↑mic muted by OS` / `ended` / `none` / `disabled` is derived from the **live**
+track at render time, and lives in `relayClient.ts` rather than `callStats.ts`
+because it is a fact about our capture and that module is deliberately pure over
+a stats report. Rendered **only when something is wrong**, unlike `↓aud`, since
+"the mic is fine" is the silent default and saying it every 2s is noise.
+
+There is deliberately **no mirrored `micTrackMuted` flag** — the readout reads
+`track.muted` live, and a second copy of one fact is how the two come to
+disagree.
+
+### Verification
+
+- **8 of 8 tripwires verified by mutation** off a confirmed-green baseline from
+  byte-exact backups; the mutator aborts unless its target occurs exactly once.
+  Source byte-identical afterwards. Mutations: the iOS gate removed, the live mic
+  tapped again, the running-state gate removed, `onmute` unwatched, the recovery
+  made immediate, the pending timer left to outlive the call, the mic note dropped
+  from the readout, and the funnel forgetting the third context.
+- One **aborted at two occurrences**, because `tap = live.clone();` is now the
+  correct line in *both* taps — the mutator refusing rather than recording a
+  result about the wrong one. It bit once re-anchored.
+- `pnpm verify` (unpiped) → **342 files, 6512 passed, 1 skipped**, build clean.
+- **Two pre-existing pins rewritten to the property.** `statsIdentity` froze the
+  exact expression `const detail = formatCallDetail(stats);`, i.e. it forbade the
+  detail line ever being *composed*. `callStats` bounded the collector's catch at
+  a **fixed 3000 characters**, so it failed on correct source the moment that
+  function legitimately grew — the recurring fixed-slice fragility, now bounded by
+  the function's own end with the slice proven non-trivial first.
+- **The prose trap fired again in my own test**, in the very assertion written to
+  forbid the mirrored flag: the engine comment names it in order to say it must
+  not exist. Now on comment-stripped source, with a companion assertion proving
+  the reason really is recorded.
+
+### Not verified on a handset, said plainly
+
+What is proven: no WebAudio graph touches the live mic on iOS, an OS-muted mic is
+detected and surfaced instead of silent, and the readout distinguishes the two
+causes of `↑0kbps`. Not that the owner's next call has sound — only their device
+can measure that.
+
+
+### The version collided a THIRD time
+
+A parallel session released its own **v2.107.13** (locked-group card) and then its
+own **v2.107.14** (*"tapping Merge could end the call you were on, and a merged
+room kept its media"*), so this ships as **.15**.
+
+All three collisions were **byte-identical `APP_VERSION` edits**, which git merges
+with **no conflict at all** — the renumber is what *creates* the conflict that
+makes it visible, so nothing catches this automatically. That defeats the
+auto-updater's own premise: it compares the client's *baked* version against the
+server's *runtime* value, so two builds sharing a string breaks refresh detection
+for whichever deploys second.
+
+Worth noting for the next one: the .14 base also touched `relayClient.ts`, and the
+rebase came out clean only because the hunks sit in different regions of a
+6,500-line file. That is luck, not a property.
+
+**AND THE SHARPER HALF, FOUND BY CHECKING WHETHER MY OWN REBASE HAD DROPPED
+THEIR NOTES: it had not, because they never wrote any.** The base `afee7d8`
+carries `APP_VERSION = "2.107.14"` while its own CLAUDE.md version line still
+reads **v2.107.12**, and neither `.13` nor `.14` has a changelog entry in either
+file — same as `.11`. So the collisions are the visible symptom of something
+worse: CLAUDE.md is the contract file every agent reads first, and its stated
+version had gone **two releases stale**, with three shipped releases leaving no
+record of what they changed. This commit is what re-syncs the line, because it
+carries the highest number; the three missing entries are theirs and cannot be
+reconstructed from here.
+
+`client/src/lib/meshTapPlayout.test.ts` (17). No schema change, no new
+dependency, no new env var, no server change. 6539 tests.
+
 ## v2.107.12 — THE ACTIVE-SPEAKER TAP WAS STARVING REMOTE AUDIO (silent-call fix)
 
 **A VERSION COLLISION, RECORDED RATHER THAN PAPERED OVER.** This shipped as
