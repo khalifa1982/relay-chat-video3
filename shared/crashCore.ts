@@ -23,13 +23,18 @@
 /** Every platform a report may claim. Anything else is clamped to "web" rather
  *  than rejected: a mislabelled crash is still worth keeping, an invented enum
  *  value in the table is not. `server` exists because the Node process reports
- *  its own uncaught exceptions through the same pipe. */
+ *  its own uncaught exceptions through the same pipe. The `-shell` pair is the
+ *  Capacitor apps' NATIVE layer (Java / NSException, v2.107.21) — distinct from
+ *  plain "ios"/"android", which is the SAME web bundle reporting from inside
+ *  those shells, and from "-native", which is the React Native app. */
 export const CRASH_PLATFORMS = [
   "web",
   "ios",
   "android",
   "ios-native",
   "android-native",
+  "ios-shell",
+  "android-shell",
   "server",
 ] as const;
 export type CrashPlatform = (typeof CRASH_PLATFORMS)[number];
