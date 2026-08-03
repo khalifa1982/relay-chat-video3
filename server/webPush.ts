@@ -25,6 +25,13 @@ import { sendExpoPush } from "./expoPush";
 import { sendVoipRing } from "./apnsVoip";
 import { buildCallPush, type CallPushType } from "./callPushPayload";
 import { appBaseUrl } from "./appUrl";
+import {
+  parseAlertPrefs,
+  pushDisposition,
+  REDACTED_BODY,
+  REDACTED_TITLE,
+  type PushDisposition,
+} from "../shared/alertPrefs";
 
 export interface PushPayload {
   kind: "incoming-call" | "missed-call" | "voicemail" | "contact-online" | "message";
@@ -162,19 +169,72 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
   // kind that gets forgotten when a new notification is added. Reads NULL/true
   // as on and fails OPEN on DB trouble, so a hiccup can never silence a call.
   if (!(await pushEnabledForIdentity(identityId))) return 0;
-  let subs: Array<{ endpoint: string; p256dh: string; auth: string; kind?: string | null }>;
+  let subs: Array<{
+    endpoint: string;
+    p256dh: string;
+    auth: string;
+    kind?: string | null;
+    alertPrefs?: string | null;
+  }>;
   try {
     subs = await listPushSubscriptions(identityId);
   } catch {
     return 0;
   }
   if (subs.length === 0) return 0;
+
+  /* ── PER-DEVICE SUPPRESSION FOR THE OS-RENDERED TRANSPORTS (v2.107.11) ───────
+   *
+   * Do Not Disturb, per-conversation mute and the group lock are per-device
+   * settings, and until v2.107.8 the service worker was the only thing that could
+   * raise an OS alert, so enforcing them there was enough. Attaching an FCM
+   * `notification` block and sending Expo pushes changed that: the OS renders both
+   * with no app code and no worker, so all three switches stopped applying on the
+   * native shells — and since the same release put the message BODY in the banner,
+   * a locked group's text began appearing on the lock screen.
+   *
+   * So each device's own copy of those switches, mirrored onto its subscription
+   * row, is consulted for exactly the transports the OS renders. Web Push is left
+   * alone: it still passes through the worker, which applies the same rule from
+   * Cache Storage, and duplicating it here would only add a second place to drift.
+   *
+   * An unsynced or unreadable row suppresses NOTHING — see `parseAlertPrefs`.
+   */
+  const dispositionOf = (s: { alertPrefs?: string | null }): PushDisposition =>
+    pushDisposition({
+      kind: payload.kind,
+      tag: payload.tag,
+      prefs: parseAlertPrefs(s.alertPrefs ?? null),
+    });
+  /** Split one transport's endpoints into "as composed" and "named nobody". */
+  const partition = (transport: string): { normal: string[]; redacted: string[] } => {
+    const normal: string[] = [];
+    const redacted: string[] = [];
+    for (const s of subs) {
+      if (s.kind !== transport) continue;
+      const d = dispositionOf(s);
+      if (d === "drop") continue;
+      (d === "redact" ? redacted : normal).push(s.endpoint);
+    }
+    return { normal, redacted };
+  };
+  /** The same notification with the sender and the text taken out of it. */
+  const redactedPayload: PushPayload = {
+    ...payload,
+    title: REDACTED_TITLE,
+    body: REDACTED_BODY,
+  };
+
   // NATIVE ANDROID (kind="fcm"): the endpoint IS the FCM device token; deliver
   // the same payload as a data message so RelayFcmService renders the
   // full-screen ring / notification even with the app closed.
-  const fcmTokens = subs.filter(s => s.kind === "fcm").map(s => s.endpoint);
+  const fcm = partition("fcm");
   let fcmDelivered = 0;
-  if (fcmTokens.length > 0) {
+  for (const [fcmTokens, p] of [
+    [fcm.normal, payload],
+    [fcm.redacted, redactedPayload],
+  ] as const) {
+    if (fcmTokens.length === 0) continue;
     // THE OS-DISPLAYED BLOCK GOES ON EVERYTHING EXCEPT A RING, and this one
     // condition is the load-bearing line of the message-notification feature
     // (2026-08-02).
@@ -195,15 +255,15 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
     // logs would show. Calls stay exactly as they were, which is also what the
     // owner's spec asks for.
     const display =
-      payload.kind === "incoming-call"
+      p.kind === "incoming-call"
         ? null
-        : { title: payload.title, body: payload.body ?? "", collapseId: payload.tag ?? "" };
+        : { title: p.title, body: p.body ?? "", collapseId: p.tag ?? "" };
     const r = await sendFcmData(fcmTokens, {
-      kind: payload.kind,
-      title: payload.title,
-      body: payload.body ?? "",
-      tag: payload.tag ?? "",
-      url: payload.url ?? "",
+      kind: p.kind,
+      title: p.title,
+      body: p.body ?? "",
+      tag: p.tag ?? "",
+      url: p.url ?? "",
       // THE CALL BLOCK WAS DROPPED HERE, AND ANDROID COULD NOT ANSWER (2026-08-01).
       // Only the APNs branch below read `payload.call`, so an FCM ring arrived
       // carrying `kind: "incoming-call"` and NO ROOM — the shell could render a
@@ -211,11 +271,11 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
       // ringing because the user acts on it. The composed envelope is spread LAST
       // so `kind` resolves to the call discriminator rather than the notification
       // one; every value is already a string (see `buildCallPush`).
-      ...(payload.kind === "incoming-call" && payload.call
-        ? buildCallPush({ type: "incoming_call", nowMs: Date.now(), ...payload.call })
+      ...(p.kind === "incoming-call" && p.call
+        ? buildCallPush({ type: "incoming_call", nowMs: Date.now(), ...p.call })
         : {}),
     }, display);
-    fcmDelivered = r.delivered;
+    fcmDelivered += r.delivered;
     await Promise.all(r.invalidTokens.map(t => deletePushSubscription(t).catch(() => {})));
   }
   subs = subs.filter(s => s.kind !== "fcm");
@@ -223,22 +283,29 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
   // Expo's own push tokens are NOT FCM registration tokens — they must go through
   // Expo's service, which then talks to FCM/APNs with credentials uploaded to EAS.
   // Routing one to FCM drops it silently, so it gets its own transport (v2.99.79).
-  const expoTokens = subs.filter(s => s.kind === "expo").map(s => s.endpoint);
+  // Expo renders every push it delivers, so it takes the same per-device split as
+  // FCM — a muted or DND'd device must not be handed one at all, and a locked
+  // conversation's must name nobody.
+  const expo = partition("expo");
   let expoDelivered = 0;
-  if (expoTokens.length > 0) {
+  for (const [expoTokens, p] of [
+    [expo.normal, payload],
+    [expo.redacted, redactedPayload],
+  ] as const) {
+    if (expoTokens.length === 0) continue;
     const r = await sendExpoPush(expoTokens, {
-      title: payload.title,
-      body: payload.body ?? "",
-      kind: payload.kind,
+      title: p.title,
+      body: p.body ?? "",
+      kind: p.kind,
       data: {
-        kind: payload.kind,
-        title: payload.title,
-        body: payload.body ?? "",
-        tag: payload.tag ?? "",
-        url: payload.url ?? "",
+        kind: p.kind,
+        title: p.title,
+        body: p.body ?? "",
+        tag: p.tag ?? "",
+        url: p.url ?? "",
       },
     });
-    expoDelivered = r.sent;
+    expoDelivered += r.sent;
     // Only "DeviceNotRegistered" reaches `dead`; a transient failure must never
     // cost the user their registration.
     await Promise.all(r.dead.map(t => deletePushSubscription(t).catch(() => {})));

@@ -10,7 +10,7 @@
  * the gate sits where no route can go round it, and that the hashing is IMPORTED
  * rather than copied.
  * ────────────────────────────────────────────────────────────────────────── */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 import fs from "fs";
 import path from "path";
@@ -577,5 +577,56 @@ describe("the lock control is offered to any MEMBER, not just an admin", () => {
     const flat = SHEET.replace(/\s+/g, " ");
     expect(copyOnScreen(SHEET, "not a permission")).toBe(true);
     expect(copyOnScreen(SHEET, "other devices still show them")).toBe(true);
+  });
+});
+
+/**
+ * THE RECOVERY MUST SURVIVE A STORAGE THAT REFUSES THE WRITE.
+ *
+ * Both removal paths delete the entry, call `writeStore`, and then drop the
+ * session unlock. `writeStore` returns false rather than throwing (private mode,
+ * quota), and its result was ignored — so on a browser that refuses the write the
+ * entry stayed in localStorage while the session unlock was cleared. The user was
+ * told "recovered", and the gate came straight back up on a group whose app
+ * passcode they had just entered correctly. The only way past it is the group code
+ * they have demonstrably forgotten, which is the exact trap the app-passcode
+ * requirement exists to prevent.
+ */
+describe("a refused write cannot strand the user behind the gate", () => {
+  beforeEach(async () => {
+    store.throwOnWrite = false;
+    await setPasscode("9999");
+    await setGroupLock(A, "1234");
+    relockGroup(A);
+  });
+  afterEach(() => {
+    store.throwOnWrite = false;
+  });
+
+  it("the app-passcode recovery leaves the group OPEN even if it cannot be removed", async () => {
+    store.throwOnWrite = true;
+    expect(await attemptOpenGroup(A, "9999")).toBe("recovered");
+    // The lock could not be erased — that part is storage's call, not ours…
+    expect(isGroupLocked(A)).toBe(true);
+    // …but the person who just proved they may see it is not shut out again.
+    expect(isGroupHidden(A)).toBe(false);
+  });
+
+  it("removing a lock by hand does the same", async () => {
+    store.throwOnWrite = true;
+    expect(await removeGroupLock(A, "1234")).toBe(true);
+    expect(isGroupHidden(A)).toBe(false);
+  });
+
+  it("and when the write SUCCEEDS the lock really is gone, not merely bypassed", async () => {
+    expect(await attemptOpenGroup(A, "9999")).toBe("recovered");
+    expect(isGroupLocked(A)).toBe(false);
+    expect(isGroupHidden(A)).toBe(false);
+  });
+
+  it("a wrong code still opens nothing when storage is refusing writes", async () => {
+    store.throwOnWrite = true;
+    expect(await attemptOpenGroup(A, "0000")).toBe("no");
+    expect(isGroupHidden(A)).toBe(true);
   });
 });

@@ -94,7 +94,12 @@ describe("server — FCM transport", () => {
   });
 
   it("sendPushToIdentity fans out to FCM tokens as DATA messages and prunes dead tokens", () => {
-    expect(WEBPUSH).toMatch(/const fcmTokens = subs\.filter\(s => s\.kind === "fcm"\)\.map\(s => s\.endpoint\);/);
+    // v2.107.11: the token list comes from `partition("fcm")`, which selects the
+    // same rows and then splits them by this device's DND / mute / lock state —
+    // so a muted phone is not in the list at all and a locked conversation's batch
+    // carries the redacted copy. Still one FCM data message per batch.
+    expect(WEBPUSH).toMatch(/const fcm = partition\("fcm"\);/);
+    expect(WEBPUSH).toMatch(/if \(s\.kind !== transport\) continue;/);
     expect(WEBPUSH).toMatch(/sendFcmData\(fcmTokens/);
     expect(WEBPUSH).toMatch(/r\.invalidTokens\.map\(t => deletePushSubscription\(t\)/);
     expect(FCM).toMatch(/https:\/\/fcm\.googleapis\.com\/v1\/projects\//);

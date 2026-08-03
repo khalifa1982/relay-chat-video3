@@ -259,8 +259,12 @@ describe("classifyNativeToken is the one routing rule", () => {
     for (const bad of ["", "   ", "short", null, undefined, 42, {}]) {
       expect(classifyNativeToken(bad as unknown)).toBeNull();
     }
-    expect(WEBPUSH).toMatch(/subs\.filter\(s => s\.kind === "fcm"\)/);
-    expect(WEBPUSH).toMatch(/subs\.filter\(s => s\.kind === "expo"\)/);
+    // Both native kinds still have a transport. Since v2.107.11 the endpoint list
+    // is built by `partition`, which selects on the same `s.kind` and additionally
+    // drops or redacts per that device's DND / mute / lock state.
+    expect(WEBPUSH).toMatch(/if \(s\.kind !== transport\) continue;/);
+    expect(WEBPUSH).toMatch(/partition\("fcm"\)/);
+    expect(WEBPUSH).toMatch(/partition\("expo"\)/);
   });
 });
 

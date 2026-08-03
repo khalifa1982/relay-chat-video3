@@ -19,6 +19,8 @@ import { isNativeAndroid, nativeEnsureNotifPermission, nativeGetPushToken } from
 import { VoicemailPrompt, type FailedDialInfo } from "./VoicemailPrompt";
 import { trpc } from "@/lib/trpc";
 import { mountNativeTokenBridge } from "./nativeTokenBridge";
+import { onAlertPrefsChanged, readAlertPrefs } from "./swPrefs";
+import type { AlertPrefs } from "@shared/alertPrefs";
 import { mountNativeCallBridge, parseNativeCallIntent } from "@/lib/nativeCallBridge";
 import { consumeNativeCallSearch } from "@/lib/bootUrl";
 
@@ -198,13 +200,56 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   // browsers/PWA use Web Push instead). No-op outside the native shell, and
   // resolves to nothing until Firebase is configured (mobile/README.md).
   const pushSubscribe = trpc.push.subscribe.useMutation();
+  /**
+   * The OS-RENDERED push endpoints this device has registered (v2.107.11).
+   *
+   * Kept so the device's Do Not Disturb / mute / lock switches can be mirrored to
+   * the rows the sender reads. Only the native transports need it: a Web Push still
+   * passes through the service worker, which already has the Cache Storage copy.
+   *
+   * A Set rather than one value because a shell can legitimately register more than
+   * once in a session (a token rotation, a re-mount) and the OLD row is still live
+   * until the server evicts it — leaving it unsynced is what would let a muted chat
+   * keep buzzing.
+   */
+  const nativeEndpoints = useRef<Set<string>>(new Set());
+  const setAlertPrefs = trpc.push.setAlertPrefs.useMutation();
+  const pushAlertPrefs = useRef<(p: AlertPrefs) => void>(() => {});
+  pushAlertPrefs.current = (p) => {
+    nativeEndpoints.current.forEach((endpoint) => {
+      // Best-effort by design: a failed mirror leaves the device exactly as
+      // unsuppressed as it was, and the next change tries again.
+      setAlertPrefs.mutate({ endpoint, dnd: p.dnd, muted: p.muted, locked: p.locked });
+    });
+  };
+  const rememberNativeEndpoint = (endpoint: string) => {
+    if (nativeEndpoints.current.has(endpoint)) return;
+    nativeEndpoints.current.add(endpoint);
+    // Sync IMMEDIATELY on registration, not only on the next change: a device whose
+    // switches were set before the token arrived would otherwise stay unsuppressed
+    // until the user happened to toggle something.
+    pushAlertPrefs.current(readAlertPrefs());
+  };
+
   useEffect(() => {
     if (!me || !isNativeAndroid()) return;
     void (async () => {
       await nativeEnsureNotifPermission();
       const token = await nativeGetPushToken();
-      if (token) pushSubscribe.mutate({ endpoint: token, kind: "fcm" });
+      if (token) {
+        pushSubscribe.mutate({ endpoint: token, kind: "fcm" });
+        rememberNativeEndpoint(token);
+      }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.id]);
+
+  // Keep those rows current. The settings live on this device and change here, so
+  // the mirror is driven by the same notification that updates the worker's copy —
+  // one subscription rather than a duty each writer has to remember.
+  useEffect(() => {
+    if (!me) return;
+    return onAlertPrefsChanged((p) => pushAlertPrefs.current(p));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me?.id]);
 
@@ -221,6 +266,9 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     if (!me) return;
     return mountNativeTokenBridge((endpoint, kind) => {
       pushSubscribe.mutate({ endpoint, kind });
+      // An `apns-voip` row is ring-only and carries no banner, so it has nothing to
+      // suppress; every other native kind is rendered by the OS and does.
+      if (kind !== "apns-voip") rememberNativeEndpoint(endpoint);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me?.id]);

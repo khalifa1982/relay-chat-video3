@@ -26,6 +26,7 @@ import { identities } from "../drizzle/schema";
 import { router, publicProcedure } from "./_core/trpc";
 import { GUEST_COOKIE } from "./_core/context";
 import { hashRecoveryKey, normalizeRecoveryKey } from "./guestRecovery";
+import { MAX_ALERT_IDS, normalizeAlertPrefs } from "../shared/alertPrefs";
 import { getSessionCookieOptions } from "./_core/cookies";
 import {
   adoptRecoveredIdentity,
@@ -127,6 +128,7 @@ import {
   listPushSubscriptions,
   pushEnabledForIdentity,
   deleteOwnPushSubscription,
+  setPushAlertPrefs,
   addOnlineWatch,
   takeOnlineWatchers,
   createPartyLine,
@@ -4650,6 +4652,46 @@ export const v2PushRouter = router({
       // FRESH endpoint rather than being silently unnotifiable — which is what
       // removes the downside that kept this residual open.
       return { ok: true, owned };
+    }),
+
+  /**
+   * Mirror this DEVICE's Do Not Disturb / mute / lock lists onto its own
+   * subscription row (v2.107.11).
+   *
+   * WHY THE SERVER NEEDS THEM AT ALL. All three are per-device localStorage
+   * settings enforced by the service worker, which was sufficient for exactly as
+   * long as every OS-level alert went through it. v2.107.8 attached an FCM
+   * `notification` block and started sending Expo pushes so message notifications
+   * would appear on the native shells — and the OS renders both of those directly.
+   * From that release DND silenced nothing on a phone, a muted conversation buzzed
+   * anyway, and a LOCKED group's message preview appeared on the lock screen naming
+   * the sender and quoting the text, which is exactly what the lock exists to stop.
+   *
+   * The page already mirrors these into Cache Storage for the worker; this is the
+   * same mirror, to the row the sender reads. It is authoritative for nothing — the
+   * settings still live on the device, and an unsynced row suppresses nothing.
+   */
+  setAlertPrefs: publicProcedure
+    .input(
+      z.object({
+        endpoint: z.string().min(10).max(500),
+        dnd: z.boolean().optional(),
+        muted: z.array(z.number().int().positive()).max(MAX_ALERT_IDS).optional(),
+        locked: z.array(z.number().int().positive()).max(MAX_ALERT_IDS).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const stored = await setPushAlertPrefs({
+        identityId: me.id,
+        endpoint: input.endpoint,
+        prefs: normalizeAlertPrefs(input),
+      });
+      // `stored:false` is NOT an error. A device can legitimately sync before its
+      // token is registered, or after the per-identity cap evicted the row; the
+      // honest answer is "nothing was written", and the page retries on its next
+      // change rather than showing anybody a failure they cannot act on.
+      return { ok: true as const, stored };
     }),
 
   /** Endpoint URLs are unguessable capability URLs, so possession is proof

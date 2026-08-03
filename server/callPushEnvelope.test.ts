@@ -151,13 +151,15 @@ describe("both transports send the SAME envelope", () => {
     expect(call).toMatch(/buildCallPush\(\{ type: "incoming_call"/);
     /* Spread LAST so `kind` resolves to the call discriminator rather than the
        notification one — a mutation moving it first bites. */
-    expect(call.indexOf("kind: payload.kind")).toBeLessThan(call.indexOf("buildCallPush"));
+    expect(call.indexOf("kind: p.kind")).toBeLessThan(call.indexOf("buildCallPush"));
   });
 
   it("only a RING composes one — a message push must not carry call fields", () => {
     const at = WEBPUSH.indexOf("const r = await sendFcmData(fcmTokens, {");
     const call = WEBPUSH.slice(at, at + 900);
-    expect(call).toMatch(/payload\.kind === "incoming-call" && payload\.call/);
+    // `p` is the batch's own payload since v2.107.11 (the composed one, or the
+    // redacted copy for a conversation locked on that device). Same property.
+    expect(call).toMatch(/\bp\.kind === "incoming-call" && p\.call/);
   });
 });
 

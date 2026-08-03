@@ -628,3 +628,44 @@ describe("green means ONLINE, and only online", () => {
     expect(UI.slice(at, UI.indexOf("\nfunction ", at))).toMatch(/bg-destructive motion-safe:animate-pulse/);
   });
 });
+
+/**
+ * A ROSTER NAME THAT PREFIXES THE TYPED WORD WAS RESOLVING.
+ *
+ * With only "Ali" in the group, `@Alice went home` matched `@Ali`: the renderer
+ * put it in accent bold and `mentions(body, roster, ali.id)` returned true, so Ali
+ * was told she had been addressed by a message that names somebody else. That is
+ * exactly the false ping the module's own header says it exists to prevent —
+ * sorting longest-first only prevents it when the longer name is ALSO a member.
+ */
+describe("a mention ends where the name ends", () => {
+  const roster = [{ id: 1, name: "Ali" }, { id: 2, name: "Sam" }];
+  const both = [{ id: 1, name: "Ali" }, { id: 3, name: "Alice" }];
+
+  it("does not resolve a longer word that merely starts with a member's name", () => {
+    expect(findMentions("@Alice went home", roster)).toEqual([]);
+    expect(mentions("@Alice went home", roster, 1)).toBe(false);
+    expect(findMentions("hi @Sammy", roster)).toEqual([]);
+    expect(findMentions("@Ali2", roster)).toEqual([]);
+    expect(findMentions("@Ali_b", roster)).toEqual([]);
+  });
+
+  it("still resolves the name itself, wherever it ends", () => {
+    for (const body of ["@Ali", "@Ali hi", "@Ali, hi", "@Ali. hi", "@Ali's turn", "hey @Ali"]) {
+      expect(findMentions(body, roster).map((m) => m.id), body).toEqual([1]);
+    }
+  });
+
+  it("falls through to a SHORTER candidate rather than giving up", () => {
+    // "Alice" prefixes the text and fails the boundary; "Ali" must then be tested
+    // too, and also fail — relying on the first rejection alone would be a match.
+    expect(findMentions("@Alicexyz", both)).toEqual([]);
+    // …and the exact-length ones still resolve, longest-first.
+    expect(findMentions("@Alice hi", both).map((m) => m.id)).toEqual([3]);
+    expect(findMentions("@Ali hi", both).map((m) => m.id)).toEqual([1]);
+  });
+
+  it("leaves the multiple-mention scan intact", () => {
+    expect(findMentions("@Ali and @Sam", roster).map((m) => m.id)).toEqual([1, 2]);
+  });
+});

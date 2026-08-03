@@ -15,6 +15,7 @@
 
 import { contactTagsOf, serializeContactTags, categoryMirror } from "../shared/contactTags";
 import { normalizeReactionEmoji, type ReactionRow } from "../shared/reactions";
+import { alertPrefsAreEmpty, type AlertPrefs } from "../shared/alertPrefs";
 import crypto from "crypto";
 import {
   and,
@@ -2679,6 +2680,9 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "push_subscriptions", column: "kind", ddl: "ADD COLUMN `kind` varchar(10)" },
     // v2.99.49 — proof-of-possession for an endpoint re-bind.
     { table: "push_subscriptions", column: "claimHash", ddl: "ADD COLUMN `claimHash` varchar(64)" },
+    // v2.107.11 — this device's DND / mute / lock lists, so the OS-rendered push
+    // transports can apply them. NULL = never synced = nothing suppressed.
+    { table: "push_subscriptions", column: "alertPrefs", ddl: "ADD COLUMN `alertPrefs` text" },
     // 4-digit login PIN + lockout (v2.87).
     { table: "users", column: "loginPinHash", ddl: "ADD COLUMN `loginPinHash` text" },
     { table: "users", column: "loginPinAttempts", ddl: "ADD COLUMN `loginPinAttempts` int" },
@@ -7463,9 +7467,63 @@ export async function deleteOwnPushSubscription(identityId: number, endpoint: st
     .where(and(eq(pushSubscriptions.endpoint, endpoint.slice(0, 500)), eq(pushSubscriptions.identityId, identityId)));
 }
 
+/**
+ * Record this DEVICE's alert prefs against the subscription it owns (v2.107.11).
+ *
+ * SCOPED TO THE CALLER'S OWN ROW, like `deleteOwnPushSubscription` and for the same
+ * reason: `endpoint` alone used to be enough to act on somebody else's registration
+ * (the v2.99.49 finding), and writing prefs is no less of a lever — DND on a
+ * stranger's row would silence every message notification they get.
+ *
+ * Returns whether a row was actually written. A `false` is not an error the caller
+ * should surface: a device can legitimately sync prefs before its token has been
+ * registered, or after the row was evicted by the per-identity cap. It simply means
+ * this device's OS-rendered pushes stay unsuppressed, which is the pre-existing
+ * behaviour.
+ */
+export async function setPushAlertPrefs(input: {
+  identityId: number;
+  endpoint: string;
+  /** Already-normalized prefs, or null to clear the row back to "nothing suppressed". */
+  prefs: AlertPrefs | null;
+}): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  // Stored as NULL rather than `{"dnd":false,...}` for the overwhelmingly common
+  // empty case, so the column reads the same as it did before it existed.
+  const value =
+    input.prefs && !alertPrefsAreEmpty(input.prefs) ? JSON.stringify(input.prefs) : null;
+  try {
+    const res = await db
+      .update(pushSubscriptions)
+      .set({ alertPrefs: value })
+      .where(
+        and(
+          eq(pushSubscriptions.endpoint, input.endpoint.slice(0, 500)),
+          eq(pushSubscriptions.identityId, input.identityId),
+        ),
+      );
+    return affectedRowsOf(res) > 0;
+  } catch (e) {
+    console.warn("[push] setPushAlertPrefs failed:", (e as Error)?.message || "");
+    return false;
+  }
+}
+
 export async function listPushSubscriptions(
   identityId: number,
-): Promise<Array<{ endpoint: string; p256dh: string; auth: string; kind: string | null }>> {
+): Promise<
+  Array<{
+    endpoint: string;
+    p256dh: string;
+    auth: string;
+    kind: string | null;
+    /** This device's DND / mute / lock lists as stored JSON, or NULL if it has
+     *  never synced them. The sender parses it — see `parseAlertPrefs`, which
+     *  reads anything unreadable as "suppress nothing". */
+    alertPrefs: string | null;
+  }>
+> {
   const db = await getDb();
   if (!db) return [];
   const rows = await db
@@ -7474,6 +7532,7 @@ export async function listPushSubscriptions(
       p256dh: pushSubscriptions.p256dh,
       auth: pushSubscriptions.auth,
       kind: pushSubscriptions.kind,
+      alertPrefs: pushSubscriptions.alertPrefs,
     })
     .from(pushSubscriptions)
     .where(eq(pushSubscriptions.identityId, identityId))

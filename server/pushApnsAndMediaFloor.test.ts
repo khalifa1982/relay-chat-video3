@@ -87,8 +87,11 @@ describe("v2.105.11 — an unroutable token must not suppress the email fallback
     // produce a notification nobody ever sees, and Apple terminates apps that
     // send VoIP pushes without reporting a call.
     const wp = read("server/webPush.ts");
-    expect(wp).toMatch(/s\.kind === "fcm"/);
-    expect(wp).toMatch(/s\.kind === "expo"/);
+    // The two OS-rendered transports are selected through `partition` (v2.107.11),
+    // which reads the same `s.kind` and then applies this device's DND / mute /
+    // lock state. Neither of them is the VoIP path this test is about.
+    expect(wp).toMatch(/partition\("fcm"\)/);
+    expect(wp).toMatch(/partition\("expo"\)/);
     // Gated on the KIND and on the call payload being present, both.
     expect(wp).toMatch(/apnsTokens\.length > 0 && payload\.kind === "incoming-call" && payload\.call/);
     expect(codeOnly(wp)).toMatch(/sendVoipRing\(apnsTokens, payload\.call\)/);

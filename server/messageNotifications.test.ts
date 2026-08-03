@@ -64,12 +64,16 @@ describe("a RING must never carry an OS-displayed notification block", () => {
   });
 
   it("the fan-out withholds `display` for a ring and supplies it for everything else", () => {
-    // The gate lives at the ONE place `payload.kind` is already the discriminator.
+    // The gate lives at the ONE place the payload's kind is already the
+    // discriminator. Since v2.107.11 the FCM block runs once per DISPOSITION
+    // batch (`p` is that batch's payload — the composed one, or the redacted copy
+    // for a locked conversation), so the pin reads the batch's kind rather than
+    // the outer name. The property is unchanged: a ring gets no display block.
     const code = codeOnly(read("server/webPush.ts"));
     const at = code.indexOf("const display =");
     expect(at, "webPush.ts must decide the display block").toBeGreaterThan(0);
     const decl = code.slice(at, at + 260);
-    expect(decl).toMatch(/payload\.kind === "incoming-call"/);
+    expect(decl).toMatch(/\bp\.kind === "incoming-call"/);
     // Null on the CALL side of the ternary — the inverse would be the defect.
     expect(decl).toMatch(/\?\s*null/);
     // And it must actually reach the sender.

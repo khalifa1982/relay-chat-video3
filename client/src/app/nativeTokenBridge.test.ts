@@ -336,7 +336,11 @@ describe("the server stores and delivers it", () => {
   it("the fan-out gives expo its own transport", () => {
     // Routing an Expo token to FCM drops it silently: it is not an FCM
     // registration token.
-    expect(PUSH).toMatch(/const expoTokens = subs\.filter\(s => s\.kind === "expo"\)/);
+    // v2.107.11 partitions each OS-rendered transport by this device's DND / mute /
+    // lock state before sending, so the token list comes from `partition("expo")`
+    // rather than a bare filter. The property pinned here is unchanged: an Expo
+    // token goes to Expo's own sender and never to FCM.
+    expect(PUSH).toMatch(/const expo = partition\("expo"\)/);
     expect(PUSH).toMatch(/await sendExpoPush\(expoTokens, \{/);
     expect(PUSH).toMatch(/subs = subs\.filter\(s => s\.kind !== "expo"\);/);
     // …and EVERY native transport counts toward the delivered total. Pinned as

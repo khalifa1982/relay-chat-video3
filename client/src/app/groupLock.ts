@@ -133,7 +133,12 @@ export async function removeGroupLock(conversationId: number, code: string): Pro
   const s = readStore();
   delete s[String(conversationId)];
   writeStore(s);
-  unlocked.delete(conversationId);
+  // OPENED, not merely un-remembered. With the lock gone `unlocked` is not
+  // consulted at all, so this costs nothing in the normal case — but `writeStore`
+  // can fail (private mode, quota), and then the entry is still in localStorage.
+  // Clearing the session unlock there would re-hide a group the user has just
+  // proved they may see, and report success while doing it.
+  unlocked.add(conversationId);
   notify();
   return true;
 }
@@ -170,7 +175,12 @@ export async function attemptOpenGroup(conversationId: number, code: string): Pr
     const s = readStore();
     delete s[String(conversationId)];
     writeStore(s);
-    unlocked.delete(conversationId);
+    // Same reason as `removeGroupLock`, and it bites harder here: this IS the
+    // recovery path. If the write fails, dropping the session unlock leaves the
+    // gate up on a group whose app passcode has just been entered correctly —
+    // "recovered" is returned, the conversation re-hides, and the only way out is
+    // the code they have already demonstrated they do not know.
+    unlocked.add(conversationId);
     notify();
     return "recovered";
   }

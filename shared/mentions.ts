@@ -46,6 +46,25 @@ function boundaryOk(text: string, at: number): boolean {
 }
 
 /**
+ * The character AFTER a matched name must not continue a word.
+ *
+ * Without this, a roster name that is a PREFIX of the typed word resolved: with
+ * only "Ali" in the group, `@Alice went home` matched `@Ali`, rendered it in
+ * accent bold, and made `mentions(body, roster, ali.id)` true — so Ali was told
+ * she had been addressed by a message that names somebody else. That is exactly
+ * the false ping this module exists to prevent; sorting longest-first only
+ * prevents it when the longer name is ALSO a member.
+ *
+ * Only `[A-Za-z0-9_]` blocks. Punctuation must not: `@Ali's turn`, `@Ali,` and
+ * `@Ali.` are all real mentions, and refusing them would trade a false positive
+ * for a false negative on the far more common shape.
+ */
+function endsCleanly(text: string, end: number): boolean {
+  if (end >= text.length) return true;
+  return !/[A-Za-z0-9_]/.test(text[end]);
+}
+
+/**
  * Every mention in a body, in order, resolved against the roster.
  *
  * Candidates are sorted longest-name-first ONCE rather than per position, so this
@@ -74,7 +93,14 @@ export function findMentions(
        to reproduce the capitalisation of a display name — the resolved identity is
        the same person either way. */
     const lower = rest.toLowerCase();
-    const hit = sorted.find((m) => lower.startsWith(m.name.toLowerCase()));
+    /* A candidate must BOTH prefix the text and end at a word boundary, and a
+       failure of either falls through to the next (shorter) candidate rather than
+       giving up: with "Alice" and "Ali" both members, `@Alicexyz` must reject
+       "Alice" for its trailing `x` and then reject "Ali" for the same reason,
+       rather than rejecting the first and never testing the second. */
+    const hit = sorted.find(
+      (m) => lower.startsWith(m.name.toLowerCase()) && endsCleanly(body, at + 1 + m.name.length),
+    );
     if (hit) {
       const end = at + 1 + hit.name.length;
       out.push({ start: at, end, text: body.slice(at, end), id: hit.id });

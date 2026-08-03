@@ -936,6 +936,19 @@ export const pushSubscriptions = mysqlTable(
      *  existed; those are re-bound on a keys match instead (see
      *  upsertPushSubscription) so the account-switch flow never breaks. */
     claimHash: varchar("claimHash", { length: 64 }),
+    /**
+     * This DEVICE's Do Not Disturb / muted / locked lists, as JSON (v2.107.11).
+     *
+     * NULL means "never synced", which reads as nothing suppressed — the behaviour
+     * every row had before this column existed. It is here rather than on
+     * `conversation_participants` because the settings are per-device and this table
+     * already is: putting mute on the participant row would silence a thread on every
+     * device the account owns, which is a different feature.
+     *
+     * Only the OS-RENDERED transports consult it. A Web Push still passes through the
+     * service worker, which applies the same rule from its own Cache Storage mirror.
+     */
+    alertPrefs: text("alertPrefs"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({

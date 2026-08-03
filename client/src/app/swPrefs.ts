@@ -22,22 +22,24 @@ import { lockedConversationIds, onGroupLocksChanged } from "./groupLock";
 const CACHE = "relay-prefs-v1";
 const KEY = "/__relay_alert_prefs";
 
-export interface AlertPrefs {
-  dnd: boolean;
-  muted: number[];
-  /**
-   * Conversations locked on this device (v2.105.20). The worker does NOT suppress
-   * these — it REDACTS them, which is the difference between a lock and a mute.
-   *
-   * The push for a message is content-free already (v2.99.42: the sender's name,
-   * never a word of the body), but on a group the sender's name IS a leak — a
-   * locked chat whose notification reads "Ahmed sent you a message" tells the
-   * person holding the phone exactly who is in there and that they are active.
-   * Suppressing instead would lose the message entirely, which a privacy screen
-   * has no business doing.
-   */
-  locked: number[];
-}
+/**
+ * The shape, defined ONCE in `shared/` and re-exported so every existing import of
+ * `AlertPrefs` from this module is unchanged (v2.107.11).
+ *
+ * It moved because the server now needs the same three lists: the OS-rendered push
+ * transports do not pass through the worker, so the sender applies the rule itself
+ * and two declarations of "what a device has muted" would be two things to keep in
+ * step.
+ *
+ * `locked` is REDACTED rather than suppressed, which is the difference between a
+ * lock and a mute. The message push carries the body since v2.107.8, so a locked
+ * chat's banner would otherwise quote it — and even before that the sender's name
+ * alone told whoever is holding the phone who is in there and that they are active.
+ * Suppressing instead would lose the message, which a privacy screen has no
+ * business doing.
+ */
+export type { AlertPrefs } from "@shared/alertPrefs";
+import type { AlertPrefs } from "@shared/alertPrefs";
 
 export async function writeAlertPrefsToSw(prefs: AlertPrefs): Promise<void> {
   try {
@@ -54,9 +56,8 @@ export async function writeAlertPrefsToSw(prefs: AlertPrefs): Promise<void> {
   }
 }
 
-/** Read the two localStorage values and push them to the worker. Called on boot
- *  and whenever either setting changes. */
-export function syncAlertPrefsToSw(): void {
+/** This device's three switches, read from where each of them lives. */
+export function readAlertPrefs(): AlertPrefs {
   let dnd = false;
   let muted: number[] = [];
   try {
@@ -80,7 +81,46 @@ export function syncAlertPrefsToSw(): void {
   } catch {
     /* the worker fails open — an unread lock list only costs the redaction */
   }
-  void writeAlertPrefsToSw({ dnd, muted, locked });
+  return { dnd, muted, locked };
+}
+
+/* ── the SECOND mirror, for pushes the worker never sees (v2.107.11) ──────────
+ *
+ * The Cache Storage copy above is read by the service worker, and that covered
+ * every OS alert for as long as Web Push was the only way to raise one. v2.107.8
+ * gave the native shells OS-rendered notifications (an FCM `notification` block,
+ * and Expo pushes) which reach the notification centre with no worker involved —
+ * so on a phone, DND stopped silencing, a muted chat buzzed anyway, and a LOCKED
+ * group's message text appeared on the lock screen.
+ *
+ * Those transports are addressed by a subscription row, so the same prefs are
+ * mirrored there too, by whoever holds the endpoint. This module does not make the
+ * call — it has no tRPC client and importing one here would drag React state into
+ * a plain module — it just says WHEN, and `RelayEngine` (which registered the
+ * token and therefore knows the endpoint) does the sending.
+ */
+const prefListeners = new Set<(p: AlertPrefs) => void>();
+
+/** Subscribe to every change of this device's alert prefs. */
+export function onAlertPrefsChanged(fn: (p: AlertPrefs) => void): () => void {
+  prefListeners.add(fn);
+  return () => {
+    prefListeners.delete(fn);
+  };
+}
+
+/** Read the three settings and mirror them to every copy. Called on boot and
+ *  whenever any of them changes. */
+export function syncAlertPrefsToSw(): void {
+  const prefs = readAlertPrefs();
+  void writeAlertPrefsToSw(prefs);
+  prefListeners.forEach((l) => {
+    try {
+      l(prefs);
+    } catch {
+      /* one bad subscriber must not stop the worker mirror or the rest */
+    }
+  });
 }
 
 /**
