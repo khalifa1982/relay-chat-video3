@@ -48,7 +48,11 @@ describe("board 4e — the fullscreen media viewer carries its context", () => {
     // A caller that passes none must get exactly the previous viewer rather than an
     // empty row where the name would be.
     expect(src).toMatch(/\{\(media\.sender \|\| media\.at\) && \(/);
-    expect(src).toMatch(/\{media\.caption && \(/);
+    /* Since v2.107.32 the caption line is PAGER-AWARE: an album page shows its
+       own caption, the album-level one (the message body) as the fallback, and
+       a single-media caller sees exactly the old `media.caption` behavior. The
+       chrome rule is unchanged — no caption supplied, no row rendered. */
+    expect(src).toMatch(/\{\(items \? \(current\.caption \|\| media\.caption\) : media\.caption\) && \(/);
   });
 
   it("the timestamp is LTR-isolated and the name follows its own direction", () => {

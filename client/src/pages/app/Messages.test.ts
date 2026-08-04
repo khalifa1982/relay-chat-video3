@@ -49,7 +49,9 @@ describe("Messages.tsx — messaging overhaul", () => {
   });
 
   it("the lightbox is dismissible (Escape + close button)", () => {
-    expect(SRC).toMatch(/e\.key === "Escape" && onClose/);
+    /* v2.107.32 turned the single-key handler into a small router (Escape +
+       the pager's arrow keys); the CONTRACT stays what it was — Escape closes. */
+    expect(SRC).toMatch(/if \(e\.key === "Escape"\) onClose\(\);/);
     expect(SRC).toMatch(/aria-label=\{t\("msg\.closePreview"\)\}/);
   });
 

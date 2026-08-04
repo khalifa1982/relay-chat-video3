@@ -105,8 +105,11 @@ describe("the composer's Send is permanent (v2.106.65)", () => {
   const MSG = codeOnly(read("client/src/pages/app/Messages.tsx"));
 
   it("Send renders unconditionally and is DISABLED when there is nothing to send", () => {
+    /* v2.107.32: a staged ALBUM is a third thing worth sending, so the
+       disabled clause names it — the guarantee is unchanged: Send always
+       renders, and is disabled exactly when there is nothing to send. */
     expect(MSG).toMatch(
-      /disabled=\{\(!text\.trim\(\) && !pendingUpload\) \|\| sendMutation\.isPending \|\| uploading\}/,
+      /disabled=\{\(!text\.trim\(\) && !pendingUpload && pendingAlbum\.length === 0\) \|\| sendMutation\.isPending \|\| uploading\}/,
     );
     // …never gated on having something to send, which is what made the mic occupy the slot.
     expect(MSG).not.toMatch(/\{text\.trim\(\) \|\| pendingUpload \? \(/);

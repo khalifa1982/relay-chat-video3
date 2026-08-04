@@ -36,15 +36,24 @@ describe("mergeSessionEvents", () => {
   });
 
   it("sheds oldest while over the char cap instead of failing", () => {
+    /* NEVER RAN until v2.107.32 — the vitest globs omitted shared/ — and the
+       day it first ran it failed on ITS OWN arithmetic, not the function's:
+       199 x's + a three-digit index is 202 chars, so the per-message cap this
+       very suite pins two cases below truncated "…299" to "…2" before any
+       shedding happened. 190 keeps every index intact. The INTENT was always
+       the function's behavior: the END of the journey survives (that is where
+       crashes live), the start is what sheds. */
     const big: SessionEvent[] = Array.from({ length: 300 }, (_, i) => ({
       t: i,
       kind: "nav",
-      msg: "x".repeat(199) + i,
+      msg: "x".repeat(190) + i,
     }));
     const out = mergeSessionEvents(null, big, 400, 10_000);
     expect(out.length).toBeLessThanOrEqual(10_000);
     const parsed = JSON.parse(out) as SessionEvent[];
     expect(parsed[parsed.length - 1].msg.endsWith("299")).toBe(true);
+    // The head was genuinely shed — the first survivor is not event 0.
+    expect(Number(parsed[0].msg.slice(190))).toBeGreaterThan(0);
   });
 
   it("replaces a corrupt stored trail rather than throwing", () => {

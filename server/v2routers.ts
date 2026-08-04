@@ -33,6 +33,7 @@ import { router, publicProcedure } from "./_core/trpc";
 import { GUEST_COOKIE } from "./_core/context";
 import { hashRecoveryKey, normalizeRecoveryKey } from "./guestRecovery";
 import { MAX_ALERT_IDS, normalizeAlertPrefs } from "../shared/alertPrefs";
+import { ALBUM_MIN_ITEMS, albumCounts, albumKindFor } from "../shared/albumRules";
 import { getSessionCookieOptions } from "./_core/cookies";
 import {
   adoptRecoveredIdentity,
@@ -167,6 +168,9 @@ import {
   canRingIdentity,
   saveAttachmentTranscript,
   saveAttachmentTranscriptAlt,
+  saveMessageAlbum,
+  getAlbumsForMessages,
+  getAttachmentsForIdentityBatch,
 } from "./v2db";
 import { adminPurgeIdentity, guestDaysLeft } from "./purgeIdentity";
 import {
@@ -2809,6 +2813,9 @@ export const v2MessagesRouter = router({
         .map((r) => r.attachmentId)
         .filter((x): x is number => typeof x === "number");
       const attById = new Map((await getAttachmentsByIds(attIds)).map((a) => [a.id, a]));
+      // ALBUMS (v2.107.32): one indexed IN-query for the page; messages without
+      // an album — almost all of them — simply aren't in the map.
+      const albumByMsg = await getAlbumsForMessages(rows.map((r) => r.id));
       // Reactions for this page (board 4c) — ONE indexed range over ids already in
       // hand, and it returns nothing at all for a thread nobody has reacted in,
       // which is almost every thread. The map is projected into the contract's
@@ -2842,6 +2849,7 @@ export const v2MessagesRouter = router({
           readAt: r.readAt ?? null,
           editedAt: r.editedAt,
           attachment: locked ? null : r.attachmentId ? (attById.get(r.attachmentId) ?? null) : null,
+          album: locked ? null : (albumByMsg.get(r.id) ?? null),
           replyToId: r.replyToId ?? null,
           locked,
           // Sent for a LOCKED message too, deliberately: a reaction is not the
@@ -3001,6 +3009,9 @@ export const v2MessagesRouter = router({
         .map((r) => r.attachmentId)
         .filter((x): x is number => typeof x === "number");
       const attById = new Map((await getAttachmentsByIds(attIds)).map((a) => [a.id, a]));
+      // ALBUMS (v2.107.32): one indexed IN-query for the page; messages without
+      // an album — almost all of them — simply aren't in the map.
+      const albumByMsg = await getAlbumsForMessages(rows.map((r) => r.id));
       return rows.map((r) => ({
         id: r.id,
         conversationId: r.conversationId,
@@ -3009,6 +3020,7 @@ export const v2MessagesRouter = router({
         body: r.body,
         createdAt: r.createdAt,
         attachment: r.attachmentId ? (attById.get(r.attachmentId) ?? null) : null,
+        album: albumByMsg.get(r.id) ?? null,
       }));
     }),
 
@@ -3022,6 +3034,20 @@ export const v2MessagesRouter = router({
           .default("text"),
         body: z.string().max(8000).nullable().optional(),
         attachmentId: z.number().int().positive().nullable().optional(),
+        /** ALBUMS (v2.107.32): up to 100 photos + 100 videos in ONE message,
+         *  each with its own optional caption, in the sender's picked order.
+         *  The message's own `attachmentId` stays the COVER (item 0) so an
+         *  un-updated client renders the first photo instead of a blank. */
+        album: z
+          .array(
+            z.object({
+              attachmentId: z.number().int().positive(),
+              caption: z.string().max(2000).optional(),
+            }),
+          )
+          .min(ALBUM_MIN_ITEMS)
+          .max(200)
+          .optional(),
         replyToId: z.number().int().positive().nullable().optional(),
         /** Constrained metadata (v2.88; still a deliberately CLOSED shape —
          *  clients can't stuff arbitrary JSON into `messages.meta`).
@@ -3046,7 +3072,7 @@ export const v2MessagesRouter = router({
       // fires when there's no attachment) and got stored as meaningless
       // whitespace instead of being treated as "no body".
       const trimmedBody = input.body?.trim() || null;
-      if (!trimmedBody && !input.attachmentId) {
+      if (!trimmedBody && !input.attachmentId && !(input.album && input.album.length > 0)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Message must have body or attachment",
@@ -3061,6 +3087,44 @@ export const v2MessagesRouter = router({
         if (!owned) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Attachment not found or not yours" });
         }
+      }
+      /* ── ALBUM VALIDATION (v2.107.32) ─────────────────────────────────────
+         The album REWRITES the message's kind and cover rather than trusting
+         the client's: kind is derived from item 0's mime (that is what an old
+         client will render), the cover IS item 0, and every item must pass the
+         SAME gate a single attachment does — including the forward case, where
+         `getAttachmentsForIdentityBatch` falls back to the participant/view-once
+         check per item. Expiring albums are refused outright: the burn path
+         nulls ONE attachmentId, so a "disappearing" album would leave its other
+         199 items readable — a promise the feature could not keep. */
+      let effectiveKind: "text" | "image" | "video" | "audio" | "file" = input.kind;
+      let effectiveAttachmentId: number | null = input.attachmentId ?? null;
+      let albumItems: Array<{ attachmentId: number; caption?: string | null }> | null = null;
+      if (input.album && input.album.length > 0) {
+        if (input.meta?.expire != null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Albums can't be disappearing messages." });
+        }
+        const ids = input.album.map((a) => a.attachmentId);
+        if (new Set(ids).size !== ids.length) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "An album can't contain the same item twice." });
+        }
+        const atts = await getAttachmentsForIdentityBatch(ids, me.id);
+        if (!atts) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Attachment not found or not yours" });
+        }
+        const counts = albumCounts(atts.map((a) => a.mimeType));
+        if (!counts.ok) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              counts.reason === "kind"
+                ? "Albums can only contain photos and videos."
+                : "Up to 100 photos and 100 videos per album.",
+          });
+        }
+        albumItems = input.album.map((a) => ({ attachmentId: a.attachmentId, caption: a.caption ?? null }));
+        effectiveAttachmentId = ids[0];
+        effectiveKind = albumKindFor(atts[0].mimeType);
       }
       // Participant roster, fetched ONCE (v2.88 — this used to be re-queried
       // three times: block check, push fan-out, auto-reply). Best-effort: a
@@ -3089,12 +3153,21 @@ export const v2MessagesRouter = router({
       const row = await sendMessage({
         conversationId: input.conversationId,
         senderIdentityId: me.id,
-        kind: input.kind,
+        kind: effectiveKind,
         body: trimmedBody,
-        attachmentId: input.attachmentId ?? null,
+        attachmentId: effectiveAttachmentId,
         replyToId: input.replyToId ?? null,
         meta: input.meta ?? null,
       });
+      if (albumItems) {
+        // A failure past this point leaves a COVER-ONLY message — degraded but
+        // visible and resendable, never a silently lost send.
+        try {
+          await saveMessageAlbum(row.id, albumItems);
+        } catch {
+          /* the cover carries the message */
+        }
+      }
       // Voicemail (v2.88): wake the recipient's device — "Voicemail from X".
       // 1:1 only (that's the only place voicemails are recorded). Best-effort.
       if (input.meta?.voicemail && peerIds.length === 1) {

@@ -67,6 +67,7 @@ import {
   statuses,
   statusViews,
   users,
+  messageAttachments,
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { normalizeEmail } from "./authCrypto";
@@ -2829,6 +2830,17 @@ export async function ensureSchemaExtensions(): Promise<void> {
         \`participants\` json,
         KEY \`conf_started_idx\` (\`startedAt\`),
         KEY \`conf_room_idx\` (\`roomId\`)
+      )`,
+    },
+    {
+      name: "message_attachments",
+      ddl: `CREATE TABLE IF NOT EXISTS \`message_attachments\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`messageId\` int NOT NULL,
+        \`attachmentId\` int NOT NULL,
+        \`position\` smallint NOT NULL,
+        \`caption\` text,
+        KEY \`msg_att_msg_idx\` (\`messageId\`)
       )`,
     },
     {
@@ -5673,6 +5685,10 @@ export async function deleteMessage(input: {
   const claimed =
     Array.isArray(claim) && ((claim[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
   if (!claimed) return null; // lost the race — another unsend already did the work
+  // ALBUMS (v2.107.32): the join rows go with the message. `attachmentId` was
+  // just nulled above; leaving item rows behind would keep an unsent album
+  // reachable through any future reader of the table.
+  await db.delete(messageAttachments).where(eq(messageAttachments.messageId, input.messageId)).catch(() => {});
   // unreadCount is a stored per-recipient counter (bumped +1 on send, reset to 0
   // on read) — NOT derived from message ids. Unsending an as-yet-UNREAD message
   // therefore leaves a phantom badge: the row is gone from listThreads (deletedAt
@@ -6220,6 +6236,88 @@ export async function saveAttachmentTranscriptAlt(attachmentId: number, lang: st
     .update(attachments)
     .set({ transcriptAlt: textValue, transcriptAltLang: lang })
     .where(eq(attachments.id, attachmentId));
+}
+
+/** ALBUMS (v2.107.32) — persist a message's item list. Called right after the
+ *  message row lands; a failure here leaves a COVER-ONLY message (the
+ *  `attachmentId` column is the first item), which is degraded but visible and
+ *  resendable — never a lost send. */
+export async function saveMessageAlbum(
+  messageId: number,
+  items: Array<{ attachmentId: number; caption?: string | null }>,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  if (items.length === 0) return;
+  await db.insert(messageAttachments).values(
+    items.map((it, i) => ({
+      messageId,
+      attachmentId: it.attachmentId,
+      position: i,
+      caption: it.caption ?? null,
+    })),
+  );
+}
+
+/** One indexed IN-query per message page: every album item for these messages,
+ *  joined to its attachment row, grouped and ordered client-of-this-function
+ *  side. Messages without albums simply don't appear in the map — which is
+ *  almost every message, and costs nothing. */
+export async function getAlbumsForMessages(
+  messageIds: number[],
+): Promise<Map<number, Array<{ position: number; caption: string | null; attachment: typeof attachments.$inferSelect }>>> {
+  const out = new Map<number, Array<{ position: number; caption: string | null; attachment: typeof attachments.$inferSelect }>>();
+  if (messageIds.length === 0) return out;
+  const db = await getDb();
+  if (!db) return out;
+  const rows = await db
+    .select({
+      messageId: messageAttachments.messageId,
+      position: messageAttachments.position,
+      caption: messageAttachments.caption,
+      attachment: attachments,
+    })
+    .from(messageAttachments)
+    .innerJoin(attachments, eq(messageAttachments.attachmentId, attachments.id))
+    .where(inArray(messageAttachments.messageId, messageIds));
+  for (const r of rows) {
+    const list = out.get(r.messageId) ?? [];
+    list.push({ position: r.position, caption: r.caption, attachment: r.attachment });
+    out.set(r.messageId, list);
+  }
+  out.forEach((list) => list.sort((a, b) => a.position - b.position));
+  return out;
+}
+
+/** Batch ownership check for an album send. The FAST path is the only one an
+ *  album normally takes — the sender just uploaded every item, so
+ *  `uploadedByIdentityId` matches — and the per-id fallback exists for
+ *  FORWARDED albums, where each item must pass the same participant gate a
+ *  single forwarded attachment does (`getAttachmentForIdentity`, view-once
+ *  rules included). Returns null if ANY item fails: an album is one message,
+ *  and half an album is a different message than the one the sender approved. */
+export async function getAttachmentsForIdentityBatch(
+  ids: number[],
+  identityId: number,
+): Promise<Array<typeof attachments.$inferSelect> | null> {
+  const db = await getDb();
+  if (!db) return null;
+  if (ids.length === 0) return [];
+  const rows = await db.select().from(attachments).where(inArray(attachments.id, ids));
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out: Array<typeof attachments.$inferSelect> = [];
+  for (const id of ids) {
+    const att = byId.get(id);
+    if (!att) return null;
+    if (att.uploadedByIdentityId === identityId) {
+      out.push(att);
+      continue;
+    }
+    const gated = await getAttachmentForIdentity(id, identityId);
+    if (!gated) return null;
+    out.push(gated);
+  }
+  return out;
 }
 
 export async function getAttachmentForIdentity(attachmentId: number, identityId: number) {

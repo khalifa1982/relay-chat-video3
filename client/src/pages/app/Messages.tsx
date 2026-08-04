@@ -101,6 +101,8 @@ import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
 import { lastSeenLabel } from "@/app/presenceCopy";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
 import { captureVideoPoster } from "@/lib/videoPoster";
+import { ALBUM_MIN_ITEMS, albumCounts, albumKindFor } from "@shared/albumRules";
+import { albumGridPlan } from "@/lib/albumGrid";
 import { GroupCallScreen, PartyLinesSection } from "./GroupCallScreen";
 import { AvatarPicker } from "@/app/AvatarPicker";
 import { GroupAvatar } from "@/app/GroupAvatar";
@@ -1922,6 +1924,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         kind: m.attachment ? (m.kind as "image" | "video" | "audio" | "file") : "text",
         body: m.body ?? undefined,
         attachmentId: m.attachment ? (m.attachment as { id: number }).id : undefined,
+        /* ALBUMS (v2.107.32): a forwarded album forwards WHOLE — items,
+           captions, order. The server re-runs the same per-item gate a single
+           forwarded attachment passes, so this smuggles nothing the forwarder
+           couldn't already read. */
+        album:
+          (m.album?.length ?? 0) >= 2
+            ? m.album!.map((a) => ({
+                attachmentId: (a.attachment as { id: number }).id,
+                caption: a.caption ?? undefined,
+              }))
+            : undefined,
       });
       toast.success(t("msg.forwarded"));
       setForwarding(null);
@@ -2008,6 +2021,35 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         caption: m.body ?? "",
       });
   }
+  /** ALBUMS (v2.107.32): open the pager at a tapped tile. Same sender/time
+   *  chrome as openMedia; the message body rides as the album-level caption
+   *  and each page's own caption overrides it in the viewer. */
+  function openAlbumAt(m: {
+    senderIdentityId: number;
+    createdAt: string | Date;
+    body: string | null;
+    album?: Array<{ caption: string | null; attachment: { url: string; mimeType: string; filename: string | null } }> | null;
+  }) {
+    return (index: number) => {
+      const items = (m.album ?? []).map((a) => ({
+        url: a.attachment.url,
+        type: a.attachment.mimeType.startsWith("video/") ? ("video" as const) : ("image" as const),
+        name: a.attachment.filename ?? undefined,
+        caption: a.caption,
+      }));
+      if (items.length === 0) return;
+      const at = Math.min(Math.max(index, 0), items.length - 1);
+      setLightbox({
+        url: items[at].url,
+        type: items[at].type,
+        sender: senderLabel(m.senderIdentityId),
+        at: m.createdAt,
+        caption: m.body ?? "",
+        items,
+        index: at,
+      });
+    };
+  }
   function previewOf(msg: { body: string | null; kind: string; meta?: unknown } | undefined): string {
     if (!msg) return t("msg.message");
     // Never quote a self-destructing message's content (v2.96).
@@ -2028,6 +2070,26 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLInputElement>(null);
   const [pendingUpload, setPendingUpload] = useState<{ id: number; url: string; mimeType: string; filename?: string } | null>(null);
+  /* ── ALBUMS (v2.107.32) ─────────────────────────────────────────────────
+     The multi-item staging strip. Each entry is an ALREADY-UPLOADED attachment
+     plus what the strip needs: a tile (thumbUrl for photos AND video covers),
+     a per-item caption, and — for photos — the ORIGINAL File so "Edit" can
+     reopen the rotate/crop sheet and swap the item in place. One item is not
+     an album (the single path owns that); two is (`ALBUM_MIN_ITEMS`). */
+  const [pendingAlbum, setPendingAlbum] = useState<
+    Array<{
+      id: number;
+      url: string;
+      thumbUrl: string | null;
+      mimeType: string;
+      filename?: string;
+      caption: string;
+      file?: File;
+    }>
+  >([]);
+  const [albumSel, setAlbumSel] = useState(0);
+  const [albumEditIdx, setAlbumEditIdx] = useState<number | null>(null);
+  const [bulkUp, setBulkUp] = useState<{ done: number; total: number } | null>(null);
   const [uploading, setUploading] = useState(false);
   // In-app video recorder (v2.96.2): iOS blocks the SYSTEM camera's video
   // recording while on a call, so the image button opens a chooser — record
@@ -2053,6 +2115,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // staged and get attached to whatever they next send there.
   useEffect(() => {
     setPendingUpload(null);
+    setPendingAlbum([]);
+    setAlbumSel(0);
+    setAlbumEditIdx(null);
   }, [conversationId]);
 
   // ── in-conversation search ──
@@ -2158,12 +2223,21 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }
 
-  async function uploadFile(file: File) {
+  /** Upload ONE picked file through the full pipeline (photo downscale +
+   *  thumbnail, video first-frame cover, everything else raw) and return the
+   *  staged shape both the single slot and the album strip consume. Null =
+   *  reported failure; the caller decides whether the batch continues. */
+  async function uploadOne(file: File): Promise<{
+    id: number;
+    url: string;
+    thumbUrl: string | null;
+    mimeType: string;
+    filename?: string;
+  } | null> {
     if (file.size > 40 * 1024 * 1024) {
       toast.error(t("msg.tooLarge"));
-      return;
+      return null;
     }
-    setUploading(true);
     try {
       let json;
       // PHOTOS (v2.89): downscale on-canvas before upload (cap 2048px, webp
@@ -2221,10 +2295,62 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           mimeType: file.type || "application/octet-stream",
         });
       }
-      setPendingUpload({ id: json.id, url: json.url, mimeType: json.mimeType, filename: json.filename ?? file.name });
+      return {
+        id: json.id,
+        url: json.url,
+        thumbUrl: json.thumbUrl ?? null,
+        mimeType: json.mimeType,
+        filename: json.filename ?? file.name,
+      };
     } catch (err) {
       toast.error(t("msg.uploadFailed", { reason: err instanceof Error ? err.message : String(err) }));
+      return null;
+    }
+  }
+  async function uploadFile(file: File) {
+    setUploading(true);
+    try {
+      const staged = await uploadOne(file);
+      if (!staged) return;
+      /* A single pick while the STRIP is open joins the album; otherwise it is
+         the classic one-attachment message, exactly as before. */
+      if (pendingAlbum.length > 0) {
+        setPendingAlbum((prev) => [...prev, { ...staged, caption: "", file }]);
+      } else {
+        setPendingUpload({ id: staged.id, url: staged.url, mimeType: staged.mimeType, filename: staged.filename });
+      }
     } finally {
+      setUploading(false);
+    }
+  }
+  /** Multi-select → the album strip. Counts are checked BEFORE any bytes move
+   *  (shared rule, same numbers the server enforces), then items upload one by
+   *  one with a running counter; a failed item is reported and skipped, never
+   *  fatal to its neighbours. An existing single staged attachment is folded in
+   *  as item 0 — the person clearly changed their mind about "one". */
+  async function uploadMany(files: File[]) {
+    const existing = pendingAlbum.map((i) => i.mimeType);
+    const single = pendingUpload && pendingAlbum.length === 0 ? [pendingUpload.mimeType] : [];
+    const counts = albumCounts([...existing, ...single, ...files.map((f) => f.type || "")]);
+    if (!counts.ok) {
+      toast.error(counts.reason === "kind" ? t("msg.albumOnlyMedia") : t("msg.albumTooMany"));
+      return;
+    }
+    setUploading(true);
+    setBulkUp({ done: 0, total: files.length });
+    try {
+      if (pendingUpload && pendingAlbum.length === 0) {
+        const u = pendingUpload;
+        setPendingUpload(null);
+        setPendingAlbum([{ id: u.id, url: u.url, thumbUrl: null, mimeType: u.mimeType, filename: u.filename, caption: "" }]);
+      }
+      for (let i = 0; i < files.length; i++) {
+        setBulkUp({ done: i, total: files.length });
+        const staged = await uploadOne(files[i]);
+        if (staged) setPendingAlbum((prev) => [...prev, { ...staged, caption: "", file: files[i] }]);
+      }
+    } finally {
+      setBulkUp(null);
       setUploading(false);
     }
   }
@@ -2251,9 +2377,17 @@ function ConversationView({ conversationId }: { conversationId: number }) {
    * fast path slower for the case it exists to serve.
    */
   async function handleImagePick(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
+    // ALBUMS (v2.107.32): more than one file — or one more while the strip is
+    // open — goes to the strip. Exactly one, with no strip, keeps the original
+    // flow: an editable photo still gets the rotate/crop sheet first.
+    if (files.length > 1 || pendingAlbum.length > 0) {
+      await uploadMany(files);
+      return;
+    }
+    const file = files[0];
     if (isEditableImage(file.type)) {
       setEditImage(file);
       return;
@@ -2292,8 +2426,49 @@ function ConversationView({ conversationId }: { conversationId: number }) {
 
   async function send() {
     const body = text.trim();
-    if (!body && !pendingUpload) return;
-    const upload = pendingUpload;
+    if (!body && !pendingUpload && pendingAlbum.length === 0) return;
+    /* ── ALBUM SEND (v2.107.32) ──────────────────────────────────────────
+       Two or more staged items ship as ONE message: kind + cover derive from
+       item 0 (the shared rule — what an un-updated client renders), per-item
+       captions ride the album array, and the composer text is the album-level
+       caption. No `expire`: the burn path nulls one attachmentId, so a
+       disappearing album is a promise the feature can't keep — the server
+       refuses it and the client simply never offers it. Exactly ONE staged
+       item degrades to the classic single-attachment message. */
+    if (pendingAlbum.length >= ALBUM_MIN_ITEMS) {
+      const items = pendingAlbum;
+      const reply = replyingTo;
+      clearDraft();
+      setReplyingToState(null);
+      setPendingAlbum([]);
+      setAlbumSel(0);
+      setEmojiOpen(false);
+      setExpire(null);
+      try {
+        await sendMutation.mutateAsync({
+          conversationId,
+          kind: albumKindFor(items[0].mimeType),
+          body: body || null,
+          attachmentId: items[0].id,
+          album: items.map((i) => ({ attachmentId: i.id, caption: i.caption.trim() || undefined })),
+          replyToId: reply?.id ?? null,
+        });
+      } catch (e) {
+        setText(body);
+        if (reply) setReplyingToState(reply);
+        setPendingAlbum(items);
+        const why = e instanceof Error ? e.message.trim() : "";
+        toast.error(why || t("msg.sendFailed"));
+      }
+      return;
+    }
+    const upload = pendingAlbum.length === 1
+      ? { id: pendingAlbum[0].id, url: pendingAlbum[0].url, mimeType: pendingAlbum[0].mimeType, filename: pendingAlbum[0].filename }
+      : pendingUpload;
+    if (pendingAlbum.length === 1) {
+      setPendingAlbum([]);
+      setAlbumSel(0);
+    }
     const reply = replyingTo;
     const kind = upload
       ? upload.mimeType.startsWith("image/")
@@ -2891,7 +3066,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             {nameById.get(m.senderIdentityId) || t("msg.member")}
                           </div>
                         )}
-                        {m.attachment && (
+                        {/* ALBUMS (v2.107.32): the grid replaces the single
+                            attachment when the message carries one — the cover
+                            attachment still EXISTS on the row (that is what an
+                            un-updated client shows), the grid is just the
+                            richer rendering of the same message. */}
+                        {(m.album?.length ?? 0) > 0 && (
+                          <AlbumGrid items={m.album!} onOpen={openAlbumAt(m)} />
+                        )}
+                        {(m.album?.length ?? 0) === 0 && m.attachment && (
                           <AttachmentView
                             mimeType={m.attachment.mimeType}
                             url={m.attachment.url}
@@ -3545,6 +3728,84 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             </button>
           </div>
         )}
+        {/* ── THE ALBUM STRIP (v2.107.32) ─────────────────────────────────────
+            The side-by-side staging row: every picked item as a tile, in send
+            order. Tap a tile to select it — the caption field and the Edit
+            button below act on the SELECTED item — X removes it, and the
+            dashed [+] reopens the picker to add more. Nothing here is sent
+            until Send; the X on a tile discards an already-uploaded attachment
+            into a harmless orphan rather than a lost message. */}
+        {pendingAlbum.length > 0 && (
+          <div className="mb-2 rounded-xl bg-muted p-2">
+            <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {pendingAlbum.map((it, i) => (
+                <div key={it.id} className="relative shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setAlbumSel(i)}
+                    className={`block size-16 overflow-hidden rounded-lg bg-black/20 ${i === albumSel ? "ring-2 ring-primary" : ""}`}
+                  >
+                    {it.thumbUrl || it.mimeType.startsWith("image/") ? (
+                      <img src={it.thumbUrl || it.url} alt="" className="size-full object-cover" />
+                    ) : (
+                      <span className="grid size-full place-items-center text-white/80">
+                        <Play className="size-5" />
+                      </span>
+                    )}
+                    {it.mimeType.startsWith("video/") && it.thumbUrl && (
+                      <span className="absolute bottom-1 start-1 grid size-5 place-items-center rounded-full bg-black/60 text-white">
+                        <Play className="size-3 translate-x-px" />
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPendingAlbum((prev) => prev.filter((_, j) => j !== i));
+                      setAlbumSel((sel) => Math.max(0, Math.min(sel > i ? sel - 1 : sel, pendingAlbum.length - 2)));
+                    }}
+                    aria-label={t("msg.albumRemoveItem")}
+                    className="absolute -end-1 -top-1 grid size-5 place-items-center rounded-full bg-black/70 text-white shadow"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => imageRef.current?.click()}
+                aria-label={t("msg.albumAddMore")}
+                className="grid size-16 shrink-0 place-items-center rounded-lg border-2 border-dashed border-muted-foreground/40 text-muted-foreground hover:border-muted-foreground hover:text-foreground"
+              >
+                <Plus className="size-5" />
+              </button>
+            </div>
+            <div className="mt-1.5 flex items-center gap-2">
+              <input
+                type="text"
+                value={pendingAlbum[albumSel]?.caption ?? ""}
+                onChange={(e) =>
+                  setPendingAlbum((prev) => prev.map((it, i) => (i === albumSel ? { ...it, caption: e.target.value } : it)))
+                }
+                placeholder={t("msg.albumCaptionPh")}
+                dir="auto"
+                className="h-8 flex-1 rounded-lg border border-border bg-background px-2.5 text-sm outline-none placeholder:text-muted-foreground focus:border-primary"
+              />
+              {pendingAlbum[albumSel]?.file && isEditableImage(pendingAlbum[albumSel].mimeType) && (
+                <button
+                  type="button"
+                  onClick={() => setAlbumEditIdx(albumSel)}
+                  className="h-8 rounded-lg bg-background px-2.5 text-sm font-medium text-foreground border border-border hover:border-primary"
+                >
+                  {t("msg.albumEditItem")}
+                </button>
+              )}
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                {bulkUp ? t("msg.albumUploading", { done: String(bulkUp.done + 1), total: String(bulkUp.total) }) : t("msg.albumCount", { n: String(pendingAlbum.length) })}
+              </span>
+            </div>
+          </div>
+        )}
         {/* Board 3c — the @mention picker, IN FLOW above the composer. Not floating,
             for the same reason the reaction row is not: an absolutely-positioned list
             over a composer that sits above the tab bar and the on-screen keyboard needs
@@ -3737,6 +3998,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             ref={imageRef}
             type="file"
             accept="image/*,video/*"
+            multiple
             className="hidden"
             onChange={handleImagePick}
           />
@@ -3826,7 +4088,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <Button
             type="button"
             onClick={send}
-            disabled={(!text.trim() && !pendingUpload) || sendMutation.isPending || uploading}
+            disabled={(!text.trim() && !pendingUpload && pendingAlbum.length === 0) || sendMutation.isPending || uploading}
             size="icon"
             /* Board 1d: the composer's primary is the ACCENT circle. The orange stays
                where the owner asked for it in v2.99.85 — on their own message BUBBLES —
@@ -3889,6 +4151,29 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           onUse={(f) => {
             setEditImage(null);
             void uploadFile(f);
+          }}
+        />
+      )}
+      {/* Per-ITEM editor for a staged album photo (v2.107.32). `onUse` re-runs
+          the full upload pipeline on the edited file and swaps the item IN
+          PLACE — caption kept, position kept, old attachment left as a
+          harmless orphan. `onClose` is a pure dismissal: the item is already
+          uploaded and staged, so unlike the single-photo flow there is nothing
+          to attach on the way out. */}
+      {albumEditIdx != null && pendingAlbum[albumEditIdx]?.file && (
+        <ImageEditSheet
+          file={pendingAlbum[albumEditIdx].file!}
+          onClose={() => setAlbumEditIdx(null)}
+          onUse={(f) => {
+            const idx = albumEditIdx;
+            setAlbumEditIdx(null);
+            void (async () => {
+              const staged = await uploadOne(f);
+              if (!staged) return;
+              setPendingAlbum((prev) =>
+                prev.map((it, i) => (i === idx ? { ...it, ...staged, file: f } : it)),
+              );
+            })();
           }}
         />
       )}
@@ -4960,6 +5245,66 @@ function MessageMenu({
   );
 }
 
+/**
+ * ALBUMS (v2.107.32) — the bubble grid. At most FOUR tiles in two columns
+ * (`albumGridPlan`), the remainder folded into a "+N" veil on the last tile:
+ * the count is the information, the pager is where the items live. Every tile
+ * is the item's own ≤512px cover — the SAME thumbnail photos and video covers
+ * already ship — so a 200-item album costs the scroll four small images.
+ */
+function AlbumGrid({
+  items,
+  onOpen,
+}: {
+  items: Array<{
+    position: number;
+    caption: string | null;
+    attachment: { url: string; mimeType: string; filename: string | null; thumbUrl?: string | null };
+  }>;
+  onOpen: (index: number) => void;
+}) {
+  const t = useT();
+  const { shown, overflow } = albumGridPlan(items.length);
+  return (
+    <div className="mb-1 grid w-64 max-w-full grid-cols-2 gap-1">
+      {items.slice(0, shown).map((it, i) => {
+        const att = it.attachment;
+        const isVideo = att.mimeType.startsWith("video/");
+        const veiled = i === shown - 1 && overflow > 0;
+        return (
+          <button
+            key={i}
+            type="button"
+            onClick={() => onOpen(i)}
+            aria-label={t("msg.openAlbum")}
+            className="relative aspect-square overflow-hidden rounded-lg bg-black/20"
+          >
+            {att.thumbUrl || !isVideo ? (
+              <img src={att.thumbUrl || att.url} alt="" className="size-full object-cover" loading="lazy" />
+            ) : (
+              <span className="grid size-full place-items-center bg-black/60 text-white">
+                <Play className="size-6" />
+              </span>
+            )}
+            {isVideo && !veiled && att.thumbUrl && (
+              <span className="absolute inset-0 grid place-items-center">
+                <span className="grid size-9 place-items-center rounded-full bg-black/55 text-white shadow">
+                  <Play className="size-4 translate-x-px" />
+                </span>
+              </span>
+            )}
+            {veiled && (
+              <span className="absolute inset-0 grid place-items-center bg-black/55 text-lg font-semibold text-white">
+                +{overflow}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function AttachmentView({
   mimeType,
   url,
@@ -5834,6 +6179,11 @@ type LightboxMedia = {
   sender?: string;
   at?: string | Date;
   caption?: string;
+  /** ALBUMS (v2.107.32): when present the viewer becomes a PAGER over these,
+   *  starting at `index` — arrows, ←/→ keys, and swipe. `url`/`type` above
+   *  stay the COVER so every single-media caller is untouched. */
+  items?: Array<{ url: string; type: "image" | "video"; name?: string; caption?: string | null }>;
+  index?: number;
 };
 
 /**
@@ -5855,14 +6205,49 @@ function MediaLightbox({
   /* Attribute autoplay on the lightbox video was the same class as
      crash_reports #5 — closing the lightbox mid-start rejected an unownable
      promise. The hook owns the start and settles it with pause() on close. */
+  const t = useT();
   const lightboxVideoRef = useRef<HTMLVideoElement | null>(null);
-  useAutoplay(lightboxVideoRef, media.url);
+  /* ── THE PAGER (v2.107.32) ────────────────────────────────────────────────
+     `items` turns the viewer into a pager; without it every existing caller
+     behaves byte-for-byte as before (`current` IS `media`). Index is clamped,
+     the ends don't wrap — an album has a first and a last page, and wrapping
+     is how a swipe-happy thumb loses its place. */
+  const items = media.items && media.items.length > 0 ? media.items : null;
+  const [idx, setIdx] = useState(() =>
+    Math.min(Math.max(media.index ?? 0, 0), (media.items?.length ?? 1) - 1),
+  );
+  const current = items ? items[Math.min(idx, items.length - 1)] : media;
+  const go = (d: number) => {
+    if (items) setIdx((i) => Math.min(items.length - 1, Math.max(0, i + d)));
+  };
+  useAutoplay(lightboxVideoRef, current.url);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowRight") go(1);
+      else if (e.key === "ArrowLeft") go(-1);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  const t = useT();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose, items?.length]);
+  const touchX = useRef<number | null>(null);
+  /* Named handlers on purpose: an arrow body inside a JSX attribute puts a
+     bare `>` where the locale scanner's text-node extractor reads markup, and
+     it dutifully reported the handler's own code as untranslated copy. */
+  const onSwipeStart = (e: React.TouchEvent) => {
+    touchX.current = e.touches[0]?.clientX ?? null;
+  };
+  const onSwipeEnd = (e: React.TouchEvent) => {
+    const sx = touchX.current;
+    touchX.current = null;
+    if (sx == null) return;
+    const dx = (e.changedTouches[0]?.clientX ?? sx) - sx;
+    // Early-return form on purpose: `> 48) go(dx <` on ONE line is exactly the
+    // >text< span the locale sweep reads as an untranslated text node.
+    if (Math.abs(dx) < 48) return;
+    go(dx < 0 ? 1 : -1);
+  };
   return (
     <div
       className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 p-4"
@@ -5912,17 +6297,53 @@ function MediaLightbox({
         className="flex max-h-[90vh] max-w-[92vw] flex-col items-center gap-3"
         onClick={(e) => e.stopPropagation()}
       >
-        {media.type === "image" ? (
-          <img src={media.url} alt={media.name || t("msg.imageAlt")} className="max-h-[78vh] max-w-[92vw] rounded-lg object-contain" />
+        {current.type === "image" ? (
+          <img
+            src={current.url}
+            alt={current.name || t("msg.imageAlt")}
+            className="max-h-[78vh] max-w-[92vw] rounded-lg object-contain"
+            onTouchStart={onSwipeStart}
+            onTouchEnd={onSwipeEnd}
+          />
         ) : (
-          <video ref={lightboxVideoRef} src={media.url} controls className="max-h-[78vh] max-w-[92vw] rounded-lg" />
+          <video ref={lightboxVideoRef} src={current.url} controls className="max-h-[78vh] max-w-[92vw] rounded-lg" />
         )}
-        {media.caption && (
+        {/* The ITEM's caption when it has one; the album-level caption (the
+            message body) as the fallback, so a captionless page still says what
+            the album is about. Single-media callers land here unchanged. */}
+        {(items ? (current.caption || media.caption) : media.caption) && (
           <p className="max-w-[92vw] text-center text-sm text-white/90" dir="auto">
-            {media.caption}
+            {items ? (current.caption || media.caption) : media.caption}
           </p>
         )}
       </div>
+      {items && (
+        <>
+          <div className="pointer-events-none absolute inset-x-0 top-5 text-center font-mono text-xs text-white/80">
+            {idx + 1} / {items.length}
+          </div>
+          {idx > 0 && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); go(-1); }}
+              aria-label={t("msg.prev")}
+              className="absolute start-3 top-1/2 -translate-y-1/2 grid size-11 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
+            >
+              <ChevronLeft className="size-6 rtl:rotate-180" />
+            </button>
+          )}
+          {idx < items.length - 1 && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); go(1); }}
+              aria-label={t("msg.next")}
+              className="absolute end-3 top-1/2 -translate-y-1/2 grid size-11 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
+            >
+              <ChevronRight className="size-6 rtl:rotate-180" />
+            </button>
+          )}
+        </>
+      )}
       {/* The board's footer. `pointer-events-none` so it can never swallow the tap
           that closes the viewer — the whole backdrop is the close target.
 

@@ -20,6 +20,11 @@ export default defineConfig({
       "client/src/lib/**/*.test.ts",
       "client/src/app/**/*.test.ts",
       "client/src/pages/**/*.test.ts",
+      /* shared/ was never in these globs, so `shared/crashCore.test.ts` and
+         `shared/telemetryCore.test.ts` sat green-by-omission — never executed —
+         since the day they were written. Found when `shared/albumRules.test.ts`
+         (v2.107.32) "passed" without running. */
+      "shared/**/*.test.ts",
     ],
   },
 });

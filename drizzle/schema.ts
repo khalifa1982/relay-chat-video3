@@ -702,6 +702,29 @@ export const messages = mysqlTable(
     attachmentIdx: index("messages_attachment_idx").on(t.attachmentId),
   }),
 );
+/* ──────────────────────────────────────────────────────────────────────────
+ * message_attachments — ALBUM items (v2.107.32). A message has always carried
+ * ONE `attachmentId`; an album keeps that column as its COVER (so an
+ * un-updated client renders the first photo, not a blank) and lists the full
+ * set here, ordered by `position`, each with its own optional caption.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const messageAttachments = mysqlTable(
+  "message_attachments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    messageId: int("messageId").notNull(),
+    attachmentId: int("attachmentId").notNull(),
+    /** 0-based order in the strip/grid — the client's picked order, preserved. */
+    position: smallint("position").notNull(),
+    /** Per-ITEM caption; the album-level caption is the message body. */
+    caption: text("caption"),
+  },
+  (t) => ({
+    msgIdx: index("msg_att_msg_idx").on(t.messageId),
+  }),
+);
+export type MessageAttachment = typeof messageAttachments.$inferSelect;
+
 export type Message = typeof messages.$inferSelect;
 export type InsertMessage = typeof messages.$inferInsert;
 
