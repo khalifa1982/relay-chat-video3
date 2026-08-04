@@ -24,6 +24,7 @@ import {
   normalizeCrashPlatform,
   compareAppVersions,
 } from "../shared/crashCore";
+import { decodeCrashStack } from "./crashDecode";
 import { mergeSessionEvents, sessionStateOf, SESSION_STALE_MS } from "../shared/telemetryCore";
 import crypto from "crypto";
 import {
@@ -7958,6 +7959,17 @@ export async function recordCrash(r: CrashInsert): Promise<void> {
     const stack = r.stack ? capCrashField(r.stack, CRASH_CAPS.stack) : null;
     const fp = crashFingerprint(name, message, stack);
     const sessionId = r.sessionId ? capCrashField(r.sessionId, CRASH_CAPS.id) : null;
+    // Sourcemap translation (v2.107.28) — appended AFTER the fingerprint is
+    // taken, so grouping is untouched. Decode failure just stores the raw stack.
+    let storedStack = stack;
+    if (stack) {
+      try {
+        const decoded = decodeCrashStack(stack);
+        if (decoded) storedStack = capCrashField(stack + "\n" + decoded, CRASH_CAPS.stack);
+      } catch {
+        /* decoding is decorative */
+      }
+    }
 
     if (sessionId) {
       const dup = await db.execute(sql`
@@ -7983,7 +7995,7 @@ export async function recordCrash(r: CrashInsert): Promise<void> {
         (${normalizeCrashPlatform(r.platform)},
          ${capCrashField(r.appVersion || "unknown", CRASH_CAPS.version)},
          ${capCrashField(r.serverVersion || "unknown", CRASH_CAPS.version)},
-         ${fp}, ${name}, ${message}, ${stack},
+         ${fp}, ${name}, ${message}, ${storedStack},
          ${r.componentStack ? capCrashField(r.componentStack, CRASH_CAPS.componentStack) : null},
          ${r.breadcrumbs ? capCrashField(r.breadcrumbs, CRASH_CAPS.breadcrumbs) : null},
          ${r.device ? capCrashField(r.device, CRASH_CAPS.device) : null},

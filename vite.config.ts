@@ -174,6 +174,12 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    // HIDDEN sourcemaps (v2.107.28): .map files are emitted next to the bundles
+    // but the JS carries NO sourceMappingURL pointer, and static.ts refuses to
+    // serve .map over HTTP — so visitors can never fetch them. Their one reader
+    // is server/crashDecode.ts, which translates minified crash stacks at
+    // ingest so crash_reports rows arrive human-readable.
+    sourcemap: "hidden",
     rollupOptions: {
       output: {
         // Stable vendor chunks (v2.88): these libraries change only when we

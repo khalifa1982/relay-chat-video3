@@ -25,6 +25,17 @@ export function serveStatic(app: Express) {
   // (express.static's default sends NO Cache-Control at all). index.html (and
   // anything unhashed) stays no-cache so a publish is picked up immediately —
   // it references the NEW hashed filenames, which then download once.
+  // HIDDEN SOURCEMAPS (v2.107.28): the build emits .map files solely for the
+  // server's own crash-stack decoding (server/crashDecode.ts). They are private
+  // build artifacts — refuse them over HTTP so client source is never disclosed.
+  app.use((req, res, next) => {
+    if (req.path.endsWith(".map")) {
+      res.status(404).end();
+      return;
+    }
+    next();
+  });
+
   app.use(
     express.static(distPath, {
       setHeaders(res, filePath) {
@@ -37,8 +48,21 @@ export function serveStatic(app: Express) {
     })
   );
 
-  // fall through to index.html if the file doesn't exist
-  app.use("*", (_req, res) => {
+  // Fall through to index.html ONLY for app routes. A missing static file —
+  // a stale hashed bundle, an old map, an image — must be an honest 404:
+  // serving the SPA shell as "*.js" poisons caches and made map probes return
+  // HTML instead of a clean miss.
+  app.use("*", (req, res) => {
+    const p = (req.originalUrl || "").split("?")[0];
+    if (
+      p.startsWith("/assets/") ||
+      /\.(?:js|mjs|css|map|json|webmanifest|png|jpe?g|gif|svg|ico|webp|avif|txt|xml|woff2?|ttf|otf|wasm)$/i.test(
+        p
+      )
+    ) {
+      res.status(404).end();
+      return;
+    }
     res.setHeader("Cache-Control", "no-cache");
     res.sendFile(path.resolve(distPath, "index.html"));
   });
