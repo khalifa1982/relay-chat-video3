@@ -424,6 +424,12 @@ export const MESSAGES = {
   // ── Attachments ──
   "msg.imageAlt": { en: "Image", ar: "صورة" },
   "msg.videoAlt": { en: "Video", ar: "فيديو" },
+  /* Voice transcripts (v2.107.31). */
+  "msg.transcribe": { en: "Transcribe", ar: "نسخ الصوت إلى نص" },
+  "msg.transcribing": { en: "Transcribing…", ar: "جارٍ النسخ…" },
+  "msg.transcribeFailed": { en: "Couldn't transcribe that — try again.", ar: "تعذّر نسخ التسجيل — حاول مرة أخرى." },
+  "msg.translating": { en: "Translating…", ar: "جارٍ الترجمة…" },
+  "msg.translateFailed": { en: "Couldn't translate that — try again.", ar: "تعذّرت الترجمة — حاول مرة أخرى." },
   "msg.fileFallback": { en: "Attachment", ar: "مرفق" },
   "msg.tapToOpen": { en: "Tap to open or download", ar: "انقر للفتح أو التنزيل" },
 

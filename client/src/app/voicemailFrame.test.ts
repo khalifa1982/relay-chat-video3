@@ -71,9 +71,17 @@ describe("board 2g — this frame is the leave-a-message card, not a voicemail i
     expect(VM).not.toMatch(/transcript/i); // …and no code that renders one
   });
 
-  it("the app still has no transcription anywhere, so a preview would be invented", () => {
-    // A SWEEP rather than a list: this is the fact the refusal above rests on, so
-    // if transcription ever lands, this test is where the decision gets revisited.
+  it("transcription now EXISTS — deliberately, and only where v2.107.31 put it", () => {
+    /* THE TRIPWIRE FIRED, and this is the revisit it demanded. Voice-note
+       transcription landed in v2.107.31: ON DEMAND (a tap, never a background
+       sweep over histories), cached on the attachment row, EN↔AR translatable,
+       and behind `getAttachmentForIdentity` — the gate that already knows the
+       participant rule and the view-once lock. The frame's refusal ABOVE stands
+       unchanged: a LIVE recording still has nothing truthful to preview. What
+       flipped is the world-fact this sweep pinned, so the sweep now pins the
+       NEW one — these five files are the feature's entire footprint, and a
+       sixth file transcribing anything must come back through this test with a
+       reason, exactly as this one did.
     const dirs = ["client/src", "server", "shared"];
     const hits: string[] = [];
     const walk = (dir: string) => {
@@ -92,7 +100,13 @@ describe("board 2g — this frame is the leave-a-message card, not a voicemail i
       }
     };
     dirs.forEach(walk);
-    expect(hits).toEqual([]);
+    expect(hits.sort()).toEqual([
+      "client/src/app/dict/messages.ts",
+      "client/src/pages/app/Messages.tsx",
+      "server/v2db.ts",
+      "server/v2routers.ts",
+      "server/voiceTranscribe.ts",
+    ]);
   });
 });
 

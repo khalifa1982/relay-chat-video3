@@ -724,6 +724,13 @@ export const attachments = mysqlTable(
     durationMs: int("durationMs"),
     /** Optional original filename for files. */
     filename: varchar("filename", { length: 256 }),
+    /* Voice transcripts (v2.107.31). Filled lazily by messages.transcribeVoice —
+       the first listener pays the Gemini call, everyone after reads the row.
+       `transcriptAlt` holds the most recently requested TRANSLATION of it. */
+    transcript: text("transcript"),
+    transcriptLang: varchar("transcriptLang", { length: 8 }),
+    transcriptAlt: text("transcriptAlt"),
+    transcriptAltLang: varchar("transcriptAltLang", { length: 8 }),
     /* Image thumbnails (v2.89). Additive + nullable, applied to the live DB by
        ensureSchemaExtensions(). The client generates a ≤512px thumbnail on-canvas
        and uploads it BEFORE the full image; message bubbles render the thumb and

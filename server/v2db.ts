@@ -2764,6 +2764,12 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // of the signed-url cache). Without these it was a full table scan.
     { table: "attachments", column: "attachments_key_idx", ddl: "ADD INDEX `attachments_key_idx` (`storageKey`)" },
     { table: "attachments", column: "attachments_thumbkey_idx", ddl: "ADD INDEX `attachments_thumbkey_idx` (`thumbKey`)" },
+    // Voice transcripts (v2.107.31, mirrored in drizzle/schema.ts): cached on
+    // the row so a note is transcribed once and read forever.
+    { table: "attachments", column: "transcript", ddl: "ADD COLUMN `transcript` text" },
+    { table: "attachments", column: "transcriptLang", ddl: "ADD COLUMN `transcriptLang` varchar(8)" },
+    { table: "attachments", column: "transcriptAlt", ddl: "ADD COLUMN `transcriptAlt` text" },
+    { table: "attachments", column: "transcriptAltLang", ddl: "ADD COLUMN `transcriptAltLang` varchar(8)" },
     // M47: one identity per registered user. `ensureUserIdentity` is a
     // check-then-insert, so without this two concurrent sign-ins for the same
     // account could each mint an identity — giving one user two rows and two
@@ -6193,6 +6199,29 @@ export async function authorizeStorageKey(
  * caller cannot enumerate sequential attachment ids to read other people's
  * media (the public `attachments.get` endpoint must go through this).
  */
+/** Cache a fresh transcript on its attachment (v2.107.31). A transcript
+ *  REPLACES nothing — it is only ever written where none exists — so the
+ *  guard is in the route, and this stays a plain update. */
+export async function saveAttachmentTranscript(attachmentId: number, lang: string, textValue: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  await db
+    .update(attachments)
+    .set({ transcript: textValue, transcriptLang: lang })
+    .where(eq(attachments.id, attachmentId));
+}
+
+/** Cache the most recently requested translation (one slot — EN↔AR means the
+ *  slot is simply "the other language" in practice). */
+export async function saveAttachmentTranscriptAlt(attachmentId: number, lang: string, textValue: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  await db
+    .update(attachments)
+    .set({ transcriptAlt: textValue, transcriptAltLang: lang })
+    .where(eq(attachments.id, attachmentId));
+}
+
 export async function getAttachmentForIdentity(attachmentId: number, identityId: number) {
   const db = await getDb();
   if (!db) return null;

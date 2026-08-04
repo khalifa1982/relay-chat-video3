@@ -10,6 +10,12 @@ import { contactTagsOf, serializeContactTags } from "../shared/contactTags";
 import { TRPCError } from "@trpc/server";
 import { s3Config } from "./s3";
 import { storageGetSignedUrl } from "./storage";
+import {
+  MAX_TRANSCRIBE_BYTES,
+  geminiKey,
+  transcribeAudio,
+  translateText,
+} from "./voiceTranscribe";
 import { z } from "zod";
 import { personReelKey, groupReelKey } from "../shared/reelKey";
 import { mintGroupCallSeed } from "./groupCallSeed";
@@ -159,6 +165,8 @@ import {
   type PresenceLite,
 
   canRingIdentity,
+  saveAttachmentTranscript,
+  saveAttachmentTranscriptAlt,
 } from "./v2db";
 import { adminPurgeIdentity, guestDaysLeft } from "./purgeIdentity";
 import {
@@ -2842,6 +2850,78 @@ export const v2MessagesRouter = router({
           reactions: projectReactions(reactionRows.get(r.id) ?? []),
         };
       });
+    }),
+
+  /**
+   * VOICE TRANSCRIPTS (v2.107.31). Lazy and cached: the FIRST listener's tap
+   * pays the Gemini call, the row keeps the text, and every later reader — this
+   * person, the other participant, next month's scrollback — gets it from
+   * `messages.list` for free (the projection ships the whole attachment row).
+   *
+   * Behind `getAttachmentForIdentity` DELIBERATELY: that is the one gate that
+   * already knows the participant rule and the view-once lock (M28), so a
+   * transcript can never leak content the attachment itself would refuse.
+   */
+  transcribeVoice: publicProcedure
+    .input(z.object({ attachmentId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      if (!geminiKey()) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Transcription isn't set up on this server." });
+      }
+      const att = await getAttachmentForIdentity(input.attachmentId, me.id);
+      if (!att) throw new TRPCError({ code: "NOT_FOUND", message: "That recording isn't available." });
+      if (!/^audio\//i.test(att.mimeType)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Only voice messages can be transcribed." });
+      }
+      // The cache read comes FIRST, ahead of the size gate: an already-stored
+      // transcript is served whatever today's limits say.
+      if (att.transcript != null && att.transcriptLang) {
+        return { lang: att.transcriptLang, text: att.transcript };
+      }
+      if (Number(att.sizeBytes) > MAX_TRANSCRIBE_BYTES) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "That recording is too long to transcribe." });
+      }
+      const signed = await storageGetSignedUrl(att.storageKey);
+      const res = await fetch(signed).catch(() => null);
+      if (!res || !res.ok) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't read the recording." });
+      }
+      const bytes = Buffer.from(await res.arrayBuffer());
+      const out = await transcribeAudio(bytes, att.mimeType);
+      // The empty transcript is a REFUSAL, not a result — caching "" would pin
+      // "no speech" onto a note a retry might have read fine.
+      if (!out || out.text.length === 0) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't transcribe that — try again." });
+      }
+      await saveAttachmentTranscript(att.id, out.lang, out.text);
+      return out;
+    }),
+
+  /** Translate a cached transcript (EN↔AR). One alt slot on the row: with two
+   *  languages it is simply "the other one", and re-asking for a cached target
+   *  is a read. Asking for the ORIGINAL language returns the original — a
+   *  no-op, not an error, so a double-tap costs nothing. */
+  translateTranscript: publicProcedure
+    .input(z.object({ attachmentId: z.number().int().positive(), target: z.enum(["en", "ar"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      if (!geminiKey()) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Translation isn't set up on this server." });
+      }
+      const att = await getAttachmentForIdentity(input.attachmentId, me.id);
+      if (!att) throw new TRPCError({ code: "NOT_FOUND", message: "That recording isn't available." });
+      if (att.transcript == null || !att.transcriptLang) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Transcribe it first." });
+      }
+      if (att.transcriptLang === input.target) return { lang: att.transcriptLang, text: att.transcript };
+      if (att.transcriptAltLang === input.target && att.transcriptAlt != null) {
+        return { lang: att.transcriptAltLang, text: att.transcriptAlt };
+      }
+      const out = await translateText(att.transcript, input.target);
+      if (!out) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't translate that — try again." });
+      await saveAttachmentTranscriptAlt(att.id, input.target, out);
+      return { lang: input.target, text: out };
     }),
 
   /**

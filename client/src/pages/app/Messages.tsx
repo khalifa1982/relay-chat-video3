@@ -2900,6 +2900,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             width={m.attachment.width ?? null}
                             height={m.attachment.height ?? null}
                             durationMs={m.attachment.durationMs ?? null}
+                            attachmentId={(m.attachment as { id?: number }).id}
+                            transcript={(m.attachment as { transcript?: string | null }).transcript ?? null}
+                            transcriptLang={(m.attachment as { transcriptLang?: string | null }).transcriptLang ?? null}
+                            transcriptAlt={(m.attachment as { transcriptAlt?: string | null }).transcriptAlt ?? null}
+                            transcriptAltLang={(m.attachment as { transcriptAltLang?: string | null }).transcriptAltLang ?? null}
                             mine={mine}
                             glyph={bubbleGlyphColor({ mine: !!mine, isGroup, senderIdentityId: m.senderIdentityId })}
                             onOpen={openMedia(m)}
@@ -4968,6 +4973,11 @@ function AttachmentView({
   onOpen,
   messageId,
   nextVoiceId,
+  attachmentId,
+  transcript,
+  transcriptLang,
+  transcriptAlt,
+  transcriptAltLang,
 }: {
   mimeType: string;
   url: string;
@@ -4991,6 +5001,14 @@ function AttachmentView({
   /** v2.106.89 — identity + the next note of the run, for auto-advance. */
   messageId?: number;
   nextVoiceId?: number | null;
+  /** VOICE TRANSCRIPTS (v2.107.31): the attachment row's id + its cached
+   *  transcript fields, threaded so an already-transcribed note renders its
+   *  text with NO round trip — the row rode in on messages.list. */
+  attachmentId?: number;
+  transcript?: string | null;
+  transcriptLang?: string | null;
+  transcriptAlt?: string | null;
+  transcriptAltLang?: string | null;
 }) {
   const t = useT();
   // A thumb/image that 404s/403s used to render as a broken white rectangle —
@@ -5076,14 +5094,25 @@ function AttachmentView({
   }
   if (mimeType.startsWith("audio/")) {
     return (
-      <VoiceNotePlayer
-        url={url}
-        mine={mine}
-        durationMs={durationMs}
-        glyph={glyph}
-        messageId={messageId}
-        nextVoiceId={nextVoiceId}
-      />
+      <div className="mb-0.5">
+        <VoiceNotePlayer
+          url={url}
+          mine={mine}
+          durationMs={durationMs}
+          glyph={glyph}
+          messageId={messageId}
+          nextVoiceId={nextVoiceId}
+        />
+        {typeof attachmentId === "number" && (
+          <VoiceTranscript
+            attachmentId={attachmentId}
+            transcript={transcript ?? null}
+            transcriptLang={transcriptLang ?? null}
+            transcriptAlt={transcriptAlt ?? null}
+            transcriptAltLang={transcriptAltLang ?? null}
+          />
+        )}
+      </div>
     );
   }
   return <FileCard url={url} filename={filename} mine={mine} />;
@@ -5143,6 +5172,121 @@ function fmtClock(sec: number): string {
  * browsers fire about four times a second — enough to look like stuttering on a short
  * note, which is the other half of "it doesn't look like it's moving".
  */
+/**
+ * VOICE TRANSCRIPTS (v2.107.31) — the text under a voice note, with EN↔AR.
+ *
+ * THE SHAPE OF THE FEATURE: nothing until the first tap ("Transcribe"), because
+ * auto-running Gemini over every note a scroll ever passes would bill the owner
+ * for messages nobody asked to read. After that first tap the text is CACHED ON
+ * THE ROW server-side, so this component usually renders from props with no
+ * request at all — the tap is paid once per note, ever, across all readers.
+ *
+ * The language chips are ENDONYMS on purpose ("English" / "العربية") — a
+ * language's own name is the one label every reader can recognize, so the pair
+ * is deliberately identical in both locales.
+ */
+function endonym(lang: string): string {
+  if (lang === "ar") return "العربية";
+  if (lang === "en") return "English";
+  return lang.toUpperCase();
+}
+
+function VoiceTranscript({
+  attachmentId,
+  transcript,
+  transcriptLang,
+  transcriptAlt,
+  transcriptAltLang,
+}: {
+  attachmentId: number;
+  transcript: string | null;
+  transcriptLang: string | null;
+  transcriptAlt: string | null;
+  transcriptAltLang: string | null;
+}) {
+  const t = useT();
+  /* Server cache seeds local state; a FRESH transcription/translation lands
+     here directly, so the text appears without waiting for a list refetch. */
+  const [orig, setOrig] = useState<{ lang: string; text: string } | null>(
+    transcript != null && transcriptLang ? { lang: transcriptLang, text: transcript } : null,
+  );
+  const [alt, setAlt] = useState<{ lang: string; text: string } | null>(
+    transcriptAlt != null && transcriptAltLang ? { lang: transcriptAltLang, text: transcriptAlt } : null,
+  );
+  const [shown, setShown] = useState<"orig" | "alt">("orig");
+  const transcribe = trpc.messages.transcribeVoice.useMutation({
+    onSuccess: (r) => setOrig(r),
+    onError: (err) => toast.error(err.message || t("msg.transcribeFailed")),
+  });
+  const translate = trpc.messages.translateTranscript.useMutation({
+    onSuccess: (r) => {
+      setAlt(r);
+      setShown("alt");
+    },
+    onError: (err) => toast.error(err.message || t("msg.translateFailed")),
+  });
+
+  if (!orig) {
+    return (
+      <button
+        type="button"
+        disabled={transcribe.isPending}
+        onClick={() => transcribe.mutate({ attachmentId })}
+        className="mt-1 text-[12px] font-medium underline underline-offset-2 opacity-75 transition-opacity hover:opacity-100 disabled:no-underline disabled:opacity-60"
+      >
+        {transcribe.isPending ? t("msg.transcribing") : t("msg.transcribe")}
+      </button>
+    );
+  }
+
+  const showing = shown === "alt" && alt ? alt : orig;
+  /* Which translations to OFFER: the other one of the pair — or both, for the
+     rare note spoken in neither. A chip whose translation is already cached
+     just flips the view; a chip without one asks the server. */
+  const targets: Array<"en" | "ar"> =
+    orig.lang === "en" ? ["ar"] : orig.lang === "ar" ? ["en"] : ["en", "ar"];
+  return (
+    <div className="mt-1.5 border-t border-current/15 pt-1.5">
+      {/* dir="auto": an Arabic transcript must lay out RTL inside an English
+          bubble and vice versa — the TEXT decides, not the app locale. */}
+      <div dir="auto" className="whitespace-pre-wrap text-[13px] leading-snug opacity-90">
+        {showing.text}
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => setShown("orig")}
+          aria-pressed={showing === orig}
+          className={`rounded-full px-2 py-0.5 text-[11px] font-medium transition-opacity ${showing === orig ? "bg-current/15 opacity-100" : "opacity-60 hover:opacity-90"}`}
+        >
+          {endonym(orig.lang)}
+        </button>
+        {targets.map((target) => {
+          const cached = alt?.lang === target ? alt : null;
+          const active = showing !== orig && showing.lang === target;
+          return (
+            <button
+              key={target}
+              type="button"
+              disabled={translate.isPending}
+              onClick={() => {
+                if (cached) setShown("alt");
+                else translate.mutate({ attachmentId, target });
+              }}
+              aria-pressed={active}
+              className={`rounded-full px-2 py-0.5 text-[11px] font-medium transition-opacity disabled:opacity-50 ${active ? "bg-current/15 opacity-100" : "opacity-60 hover:opacity-90"}`}
+            >
+              {translate.isPending && translate.variables?.target === target
+                ? t("msg.translating")
+                : endonym(target)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function VoiceNotePlayer({
   url,
   mine,
