@@ -37,6 +37,9 @@ export const PEER = {
   // ── The avatar ring (PeerAvatar), on every surface that draws a face ──
   "peer.viewStory": { en: "View story", ar: "عرض القصة" },
   "peer.viewProfile": { en: "View profile", ar: "عرض الملف الشخصي" },
+  /** Shown under the person's own name when the viewer saved them under a
+   *  different alias — makes the alias visibly the VIEWER's label. */
+  "peer.savedAs": { en: "Saved in your contacts as “{name}”", ar: "محفوظ في جهات اتصالك باسم «{name}»" },
   "peer.newStoryTap": { en: "New story — tap to view", ar: "قصة جديدة — انقر للعرض" },
   /* The possessive has no Arabic equivalent, so the name MOVES: "X's story" becomes
      "story of X". Safe because `translate` substitutes by NAME rather than by position. */

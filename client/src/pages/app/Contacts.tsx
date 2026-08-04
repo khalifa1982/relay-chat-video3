@@ -678,7 +678,9 @@ export default function ContactsPage() {
           editing={editing}
           onClose={() => setEditing(null)}
           onSave={(values) =>
-            upsert.mutate(values, {
+            // The ONE surface where a typed name is an intentional rename — so it
+            // alone may replace an existing alias (upsertContact's gate).
+            upsert.mutate({ ...values, overwriteName: true }, {
               onSuccess: () => setEditing(null),
             })
           }

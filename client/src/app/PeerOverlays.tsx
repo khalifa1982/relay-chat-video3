@@ -682,6 +682,14 @@ export function PeerOverlaysHost() {
                 <span className="truncate max-w-[14rem]">{p.displayName || t("peer.guest")}</span>
                 <RoleBadge role={roleFromFlags(p.role, p.verified)} size={16} />
               </DialogTitle>
+              {/* Their ORIGINAL name stays the headline; the owner's private alias —
+                  when one exists and differs — is shown as exactly that, so a rename
+                  is visibly "my label", never a change to who they are. */}
+              {savedContact?.displayName && savedContact.displayName !== p.displayName && (
+                <div className="mt-0.5 text-xs text-muted-foreground truncate max-w-[16rem]">
+                  {t("peer.savedAs", { name: savedContact.displayName })}
+                </div>
+              )}
               {/* `dir="ltr"` + an explicit isolate: beside Arabic the bidi algorithm
                   otherwise reorders the two digit groups around the dash. */}
               <div
@@ -921,6 +929,12 @@ export function PeerOverlaysHost() {
               <h1 className="text-2xl font-extrabold tracking-tight">{p.displayName || t("peer.guest")}</h1>
               <RoleBadge role={roleFromFlags(p.role, p.verified)} size={20} />
             </div>
+            {/* Same rule as the popup: original as headline, private alias labelled. */}
+            {savedContact?.displayName && savedContact.displayName !== p.displayName && (
+              <div className="mt-1 text-sm text-muted-foreground truncate max-w-[20rem]">
+                {t("peer.savedAs", { name: savedContact.displayName })}
+              </div>
+            )}
             {/* As in the popup: isolated, or the digit groups reorder beside Arabic. */}
             <div
               className="mt-1 font-mono text-base text-muted-foreground [unicode-bidi:isolate]"

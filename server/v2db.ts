@@ -3489,6 +3489,13 @@ export async function upsertContact(input: {
   ownerId: number;
   number: string;
   displayName?: string | null;
+  /** ALIAS-PRESERVATION GATE (v2.107.28). `displayName` on this row is the
+   *  OWNER'S PRIVATE ALIAS for the person — never the person's own name. Several
+   *  quick-save surfaces (profile sheet, dialer, post-call) prefill it with the
+   *  peer's LIVE name, which is right for a brand-new row and silently REVERTS a
+   *  rename on an existing one. So a provided name only lands on a row that has
+   *  no alias yet, unless the caller is the edit dialog and says so explicitly. */
+  overwriteName?: boolean;
   avatarUrl?: string | null;
   favourite?: boolean;
   notes?: string | null;
@@ -3541,10 +3548,16 @@ export async function upsertContact(input: {
   // never be refused: a user at the ceiling still has to be able to rename,
   // favourite, or — most importantly — BLOCK someone.
   const [existing] = await db
-    .select({ id: contacts.id })
+    .select({ id: contacts.id, displayName: contacts.displayName })
     .from(contacts)
     .where(and(eq(contacts.ownerId, input.ownerId), eq(contacts.number, input.number)))
     .limit(1);
+  // The alias-preservation gate (see the field's doc above): on an EXISTING row
+  // that already carries an alias, a provided displayName is dropped from the
+  // update unless the caller opted in — so a quick-save can never revert a rename.
+  if (existing && existing.displayName != null && input.overwriteName !== true) {
+    delete set.displayName;
+  }
   await db
     .insert(contacts)
     .values(values)

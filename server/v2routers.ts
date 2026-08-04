@@ -1810,6 +1810,9 @@ export const v2ContactsRouter = router({
         tags: z.array(z.enum(["vip", "family", "friend", "team"])).max(4).optional(),
         /** Block this number: their calls auto-decline, their 1:1 messages are rejected. */
         blocked: z.boolean().optional(),
+        /** Explicit-rename opt-in — only the edit dialog sends this. Without it a
+         *  provided displayName cannot replace an existing alias (see upsertContact). */
+        overwriteName: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
