@@ -1,0 +1,22 @@
+name: Switch TURN to Doha
+on: {workflow_dispatch: {}}
+jobs:
+  s:
+    runs-on: ubuntu-latest
+    steps:
+      - name: rolling env switch A -> health -> B
+        run: |
+          mkdir -p ~/.ssh; printf '%s' "${{ secrets.DOHA_SSH_KEY }}" > ~/.ssh/id_rsa; chmod 600 ~/.ssh/id_rsa
+          switch() {
+            IP=$1
+            ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$IP 'sudo -u relay bash -lc "cd /home/relay && cp .env .env.bak-turn && sed -i \"s|^TURN_HOST=.*|TURN_HOST=turn3.your-chat.io|\" .env && sed -i \"s|^TURN_TCP_HOST=.*|TURN_TCP_HOST=turn3.your-chat.io|\" .env && sed -i \"s|^TURN_HOSTS=.*|TURN_HOSTS=turn3.your-chat.io,turn4.your-chat.io|\" .env && echo POST: && grep -E \"^TURN_HOST=|^TURN_TCP_HOST=|^TURN_HOSTS=|^TURN_TLS=|^TURN_TLS_PORT=\" .env && cd app && set -a && . /home/relay/.env && set +a && pm2 restart relay --update-env >/dev/null && pm2 save >/dev/null"'
+            for i in $(seq 1 15); do
+              c=$(curl -s -o /dev/null -m8 -w "%{http_code}" --resolve your-chat.io:443:$IP https://your-chat.io/api/health || echo 000)
+              [ "$c" = "200" ] && { echo "$IP healthy"; return 0; }
+              sleep 4
+            done
+            echo "$IP FAILED health"; return 1
+          }
+          switch 34.18.175.226
+          switch 34.18.145.249
+          echo "TURN SWITCHED TO DOHA on both boxes"
