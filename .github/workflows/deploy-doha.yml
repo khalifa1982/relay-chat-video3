@@ -1,0 +1,31 @@
+name: Deploy to Doha
+on:
+  workflow_dispatch: {}
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.DOHA_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+      - name: Rolling deploy (A -> health -> B)
+        run: |
+          set -e
+          deploy() {
+            H=$1
+            echo "=== $H"
+            rsync -az --exclude node_modules --exclude .git --exclude .env -e "ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no" ./ ubuntu@$H:/tmp/deploy-src/
+            ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$H 'sudo rsync -a --exclude node_modules --exclude .env /tmp/deploy-src/ /home/relay/app/ && sudo chown -R relay:relay /home/relay/app && sudo -u relay bash -lc "cd /home/relay/app && export NODE_ENV=production && npm install --no-audit --no-fund && npm run build && pm2 restart relay --update-env && pm2 save"'
+            for i in $(seq 1 12); do
+              code=$(curl -s -o /dev/null -m 8 -w "%{http_code}" --resolve your-chat.io:443:$H https://your-chat.io/api/health || echo 000)
+              [ "$code" = "200" ] && { echo "$H healthy"; return 0; }
+              sleep 4
+            done
+            echo "$H FAILED health"; return 1
+          }
+          deploy 34.18.175.226
+          deploy 34.18.145.249
+          echo "both boxes deployed + healthy"
