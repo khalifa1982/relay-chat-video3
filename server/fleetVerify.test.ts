@@ -560,8 +560,14 @@ describe("the workflow calls the script rather than re-implementing it", () => {
   it("the script is shipped to the instances' release tar", () => {
     // It runs on the RUNNER, but live-verify/mail-verify run on the instance, and
     // all three live in scripts/ — which the deploy must keep shipping.
-    const deploy = fs.readFileSync(path.resolve(__dirname, "..", ".github", "workflows", "deploy.yml"), "utf8");
-    expect(deploy).toMatch(/\[ -d scripts \] && echo scripts/);
+/* v2.107.34 - `deploy.yml` (Deploy to AWS) IS GONE. It kept firing on every
+       push after the Doha cutover, against decommissioned AWS infrastructure,
+       failing in ~46s and EMAILING THE OWNER each time - his report is why it
+       was finally excised. The live pipeline is `deploy-doha.yml`. Its rsync
+       ships the whole tree; the pin is that scripts/ is never excluded. */
+    const deploy = fs.readFileSync(path.resolve(__dirname, "..", ".github", "workflows", "deploy-doha.yml"), "utf8");
+    expect(deploy).toMatch(/rsync -az --exclude node_modules --exclude \.git --exclude \.env/);
+    expect(deploy).not.toMatch(/--exclude scripts/);
     expect(fs.existsSync(path.resolve(__dirname, "..", "scripts", "fleet-verify.mjs"))).toBe(true);
   });
 });

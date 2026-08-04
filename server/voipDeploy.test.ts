@@ -98,7 +98,12 @@ describe("voip-deploy can only ever touch a media node", () => {
     /* If it could be true on a media node, every deploy would refuse and the action would be
        useless; if it could be FALSE on an app box, a mis-tag would install there. `/home/relay`
        is where the app's env and release live — asserted against deploy.yml so it cannot rot. */
-    const deploy = fs.readFileSync(path.join(ROOT, ".github", "workflows", "deploy.yml"), "utf8");
+/* v2.107.34 - `deploy.yml` (Deploy to AWS) IS GONE. It kept firing on every
+       push after the Doha cutover, against decommissioned AWS infrastructure,
+       failing in ~46s and EMAILING THE OWNER each time - his report is why it
+       was finally excised. The live pipeline is `deploy-doha.yml`. Same
+       discriminator, new file: the Doha deploy writes to /home/relay/app. */
+    const deploy = fs.readFileSync(path.join(ROOT, ".github", "workflows", "deploy-doha.yml"), "utf8");
     expect(deploy, "the app really does live in /home/relay").toMatch(/\/home\/relay/);
     // …and the media agent lives somewhere else entirely.
     expect(fs.readFileSync(path.join(ROOT, "voip-node", "relay-voip-agent.service"), "utf8")).toMatch(
@@ -382,10 +387,17 @@ describe("the remote script itself is sound", () => {
   it("is not shipped in the app release tar", () => {
     // It lives in voip-node/, which deploy.yml excludes; adding a file there must not change
     // that. voipNodeParity.test.ts owns the rule — this asserts the new file is inside it.
-    const deploy = fs.readFileSync(path.join(ROOT, ".github", "workflows", "deploy.yml"), "utf8");
-    expect(deploy, "the release tar must still not carry voip-node").not.toMatch(
-      /tar[^\n]*\bvoip-node\b/,
-    );
+/* v2.107.34 - `deploy.yml` (Deploy to AWS) IS GONE. It kept firing on every
+       push after the Doha cutover, against decommissioned AWS infrastructure,
+       failing in ~46s and EMAILING THE OWNER each time - his report is why it
+       was finally excised. The live pipeline is `deploy-doha.yml`. There is no
+       release tar now - the rsync ships the whole tree, so voip-node/ lands on
+       app boxes as INERT BYTES. That is fine, and here is why the property
+       survives: the root install can never build mediasoup (the dependency
+       lives only in voip-node/package.json - voipNodeParity pins that), and
+       the deploy remote command never cds into or installs voip-node. */
+    const deploy = fs.readFileSync(path.join(ROOT, ".github", "workflows", "deploy-doha.yml"), "utf8");
+    expect(deploy, "the deploy never touches voip-node").not.toMatch(/voip-node/);
     expect(path.relative(ROOT, REMOTE_PATH).startsWith("voip-node" + path.sep)).toBe(true);
   });
 });

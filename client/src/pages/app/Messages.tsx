@@ -130,7 +130,7 @@ import {
 import { useTypers, useTypingConversations } from "@/app/typingStore";
 import { bubbleStyleFor, bubbleGlyphColor, nameColorFor, senderAvatarStyle } from "@/app/peerColors";
 import { TypingLine } from "@/app/TypingLine";
-import { useDraft } from "@/app/draftStore";
+import { useDraft, clearDraft as clearDraftFor } from "@/app/draftStore";
 
 /** Own (outgoing) message bubble — the brand "message" orange gradient with
  *  white copy. Received bubbles keep the neutral token surface (theme-safe). */
@@ -1329,6 +1329,12 @@ export default function MessagesPage({
               onClick={() => {
                 if (clearingThread) {
                   threadState.mutate({ conversationId: clearingThread.conversationId, clear: true });
+                  /* The never-sent draft is often the only reason this thread
+                     exists (v2.107.34, owner report) — leaving it behind would
+                     re-seed the composer with the abandoned text the moment
+                     the chat is reopened from Contacts, right after the
+                     person said "delete". */
+                  clearDraftFor(clearingThread.conversationId);
                   // Leaving the deleted thread open would show an empty conversation
                   // nobody can get out of except by tapping Back.
                   if (activeConvoId === clearingThread.conversationId) setLocation(basePath);

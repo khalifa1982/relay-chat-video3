@@ -86,7 +86,10 @@ describe("Messages.tsx — messaging overhaul", () => {
   });
 
   it("persists the composer draft (text + reply target) per conversation", () => {
-    expect(SRC).toMatch(/import \{ useDraft \} from "@\/app\/draftStore"/);
+    /* v2.107.34: the import gained `clearDraft as clearDraftFor` — deleting a
+       thread now wipes its local draft in the same confirm, because the
+       abandoned text is usually the only reason the thread existed. */
+    expect(SRC).toMatch(/import \{ useDraft, clearDraft as clearDraftFor \} from "@\/app\/draftStore"/);
     expect(SRC).toMatch(/useDraft\(conversationId\)/);
   });
 

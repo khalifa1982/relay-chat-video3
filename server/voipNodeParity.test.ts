@@ -158,10 +158,16 @@ describe("the agent's packaging keeps mediasoup out of the app", () => {
   it("the deploy tar does not ship the agent to the app fleet", () => {
     // Different machines, different lifecycle. Shipping it would install nothing (the app
     // never runs `pnpm install` inside it) but would imply it belongs there.
-    const wf = readFileSync(".github/workflows/deploy.yml", "utf8");
-    const tar = wf.split("\n").find((l) => l.includes("tar -czf relay.tar.gz")) ?? "";
-    expect(tar, "the tar line must exist").toContain("relay.tar.gz");
-    expect(tar).not.toContain("voip-node");
+/* v2.107.34 - `deploy.yml` (Deploy to AWS) IS GONE. It kept firing on every
+       push after the Doha cutover, against decommissioned AWS infrastructure,
+       failing in ~46s and EMAILING THE OWNER each time - his report is why it
+       was finally excised. The live pipeline is `deploy-doha.yml`. The tar is
+       gone with it; the guard that carries the load is the dependency-location
+       pin above (mediasoup lives ONLY in voip-node/package.json, which the app
+       boxes never install), plus: the live deploy commands never mention
+       voip-node at all. */
+    const wf = readFileSync(".github/workflows/deploy-doha.yml", "utf8");
+    expect(wf).not.toContain("voip-node");
   });
 
   it("the record module is importable WITHOUT starting mediasoup", () => {

@@ -101,7 +101,13 @@ describe("production-credential workflows pin every action to a SHA", () => {
       expect(fs.existsSync(path.join(ROOT, wf)), `${wf} should exist`).toBe(true);
     }
     // The files that hold credentials must be among them, by name.
-    for (const must of ["deploy.yml", "aws-ops.yml", "android-apk.yml", "native-rn.yml"]) {
+    /* v2.107.34 - `deploy.yml` (Deploy to AWS) IS GONE. It kept firing on every
+       push after the Doha cutover, against decommissioned AWS infrastructure,
+       failing in ~46s and EMAILING THE OWNER each time - his report is why it
+       was finally excised. The live pipeline is `deploy-doha.yml`. The by-name
+       floor follows: deploy-doha holds DOHA_SSH_KEY (root on both app boxes),
+       so it is exactly the kind of file this suite exists for. */
+    for (const must of ["deploy-doha.yml", "aws-ops.yml", "android-apk.yml", "native-rn.yml"]) {
       expect(CREDENTIAL_WORKFLOWS.join(",")).toContain(must);
     }
     // A global floor belongs here, not per-file: individual workflows legitimately
@@ -211,32 +217,40 @@ describe("production-credential workflows pin every action to a SHA", () => {
     }
   });
 
-  it("deploy.yml — the job that holds PRODUCTION credentials has no pending exemptions", () => {
-    // The Android workflows can carry a documented gap for a while; the workflow
-    // that can write the release bucket and drive SSM on the live fleet cannot.
-    const refs = actionRefs(fs.readFileSync(path.join(ROOT, ".github/workflows/deploy.yml"), "utf8"));
+  it("deploy-doha.yml — the job that holds PRODUCTION credentials has no pending exemptions", () => {
+    /* v2.107.34 - `deploy.yml` (Deploy to AWS) IS GONE. It kept firing on every
+       push after the Doha cutover, against decommissioned AWS infrastructure,
+       failing in ~46s and EMAILING THE OWNER each time - his report is why it
+       was finally excised. The live pipeline is `deploy-doha.yml`. Same rule,
+       live subject: this file holds DOHA_SSH_KEY (root on both app boxes), so
+       the zero-exemption bar transfers to it verbatim. */
+    const refs = actionRefs(fs.readFileSync(path.join(ROOT, ".github/workflows/deploy-doha.yml"), "utf8"));
+    expect(refs.length, "no vacuous pass - checkout at minimum").toBeGreaterThan(0);
     for (const r of refs) {
-      expect(r.ref, `${r.raw} must be a SHA — no exemptions in deploy.yml`).toMatch(/^[0-9a-f]{40}$/);
+      expect(r.ref, `${r.raw} must be a SHA - no exemptions in deploy-doha.yml`).toMatch(/^[0-9a-f]{40}$/);
     }
   });
 
-  it("deploy.yml still ships the files the fleet needs to boot", () => {
-    // Not about pinning — but this file is the one people hand-edit when they
-    // change the pins, and an older revision of it (missing these) has been
-    // circulated. Each was added after a real per-server failure: without
-    // ecosystem.config.cjs pm2 starts a stale path with no entry file, and
-    // without patches/ the server's `pnpm install --frozen-lockfile` ENOENTs on
-    // the lockfile's patched-dependency reference.
-    const yaml = fs.readFileSync(path.join(ROOT, ".github/workflows/deploy.yml"), "utf8");
-    const tar = yaml.slice(yaml.indexOf("tar -czf relay.tar.gz"));
-    const line = tar.slice(0, tar.indexOf("\n"));
-    // `scripts` carries the operational tools that must run ON an instance —
-    // turn-check.mjs (in-region, so it can reach :3478/:5349) and
-    // recover-orphan-identity.mjs (where DATABASE_URL actually lives).
-    for (const needed of ["ecosystem.config.cjs", "patches", "shared", "drizzle", "dist", "scripts"]) {
-      expect(line, `the release tar must include ${needed}`).toContain(needed);
-    }
-    // …and the landing page must still be stripped of the Manus host runtime.
-    expect(yaml).toMatch(/strip-manus-runtime\.mjs/);
+  it("every build path strips the Manus runtime - the lesson this test just taught", () => {
+    /* REWRITTEN v2.107.34, and the rewrite is the story. The old form pinned
+       deploy.yml's release-tar line (ecosystem.config.cjs, patches/, shared/,
+       drizzle/, dist/, scripts/) plus its `strip-manus-runtime.mjs` step. When
+       the AWS workflow was excised, updating this pin exposed a REAL live
+       regression: the strip lived ONLY in that dead workflow, so every Doha
+       deploy since the cutover rebuilt on-box with plain `npm run build` and
+       SHIPPED THE LANDING PAGE WITH THE MANUS HOST RUNTIME STILL IN IT. The
+       durable fix is structural: the strip now lives inside package.json's
+       `build` script itself, so every path that builds - the Doha box, a
+       laptop, any future pipeline - strips by construction, and no workflow
+       file can ever silently own that responsibility again. The tar-manifest
+       half of the old pin is covered structurally too: the Doha rsync ships
+       the whole tree minus exactly three exclusions, pinned here so no fourth
+       exclusion can quietly carve a boot-critical directory back out. */
+    const pkg = fs.readFileSync(path.join(ROOT, "package.json"), "utf8");
+    expect(pkg).toMatch(/vite build && node scripts\/strip-manus-runtime\.mjs dist\/public\/index\.html && esbuild/);
+    const doha = fs.readFileSync(path.join(ROOT, ".github/workflows/deploy-doha.yml"), "utf8");
+    expect(doha, "the deploy must run the build that strips").toMatch(/npm run build/);
+    expect(doha).toMatch(/rsync -az --exclude node_modules --exclude \.git --exclude \.env/);
+    expect(doha).not.toMatch(/--exclude (scripts|shared|drizzle|patches|dist|ecosystem)/);
   });
 });

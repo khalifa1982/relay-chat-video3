@@ -4860,7 +4860,11 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
   const clearedHidden = new Set<number>();
   const clearedByConvo = new Map<number, number>();
   for (const p of myParts) {
-    if (p.clearedUpToMessageId) clearedByConvo.set(p.conversationId, p.clearedUpToMessageId);
+    // `!= null`, NOT truthiness: 0 is a real watermark since v2.107.34 (an
+    // empty thread cleared before anything visible existed), and the old
+    // falsy check was the second half of the undeletable-thread bug — even a
+    // correctly stamped 0 would have sailed straight past it.
+    if (p.clearedUpToMessageId != null) clearedByConvo.set(p.conversationId, p.clearedUpToMessageId);
   }
   if (clearedByConvo.size > 0) {
     for (const [convoId, upTo] of Array.from(clearedByConvo.entries())) {
@@ -5347,15 +5351,32 @@ export async function setThreadState(input: {
     if (input.archived === true) set.pinnedAt = null;
     if (input.unread !== undefined) set.manualUnreadAt = input.unread ? now : null;
     if (input.clear) {
+      /* v2.107.34 — THE EMPTY THREAD WAS UNDELETABLE, and the owner hit it:
+         *"I wrote a message to 300000 then decided not to send it … I deleted
+         several times but nothing."* Opening a chat creates the conversation
+         row before anything is sent, so a changed mind leaves a message-less
+         thread in the list — and this function used to stamp NOTHING for it
+         ("stamping 0 would be a claim that message 0 exists"), which left
+         `clearedUpToMessageId` NULL and the hide filter with nothing to act
+         on. Delete confirmed, row stayed, forever.
+
+         The old objection confused the column with a message id. It is a
+         WATERMARK: "hide me until a visible id EXCEEDS this". Zero under that
+         reading means "hide until anything visible exists at all" — exactly
+         what deleting an empty thread asks for — and the rest of the file
+         already treats it that way (`visibleFloorFor` coalesces `?? 0`, and
+         `listMessages` turns a 0 floor into no filter). The same hole covered
+         a second case: a thread whose every message was UNSENT has no visible
+         newest either, so the select below deliberately includes soft-deleted
+         rows — their ids still order, they can never render again, and using
+         them keeps the watermark honest for that thread too. */
       const [newest] = await db
         .select({ id: messages.id })
         .from(messages)
-        .where(and(eq(messages.conversationId, input.conversationId), isNull(messages.deletedAt)))
+        .where(eq(messages.conversationId, input.conversationId))
         .orderBy(desc(messages.id))
         .limit(1);
-      // An empty conversation has nothing to clear, and stamping 0 would be a claim
-      // that a message id of 0 exists.
-      if (newest) set.clearedUpToMessageId = newest.id;
+      set.clearedUpToMessageId = newest?.id ?? 0;
       // Clearing takes the thread out of the list, so any badge on it must go too —
       // otherwise the unread total counts a thread nobody can see.
       set.unreadCount = 0;

@@ -424,7 +424,12 @@ describe("the ops action that runs it", () => {
   it("ships in the release tar, so the instance actually has it", () => {
     // scripts/ is already shipped for turn-check + recover; this asserts the rule
     // still holds, because a tool the box does not have is not a tool.
-    const deploy = read("..", ".github", "workflows", "deploy.yml");
-    expect(deploy).toMatch(/scripts/);
+/* v2.107.34 - `deploy.yml` (Deploy to AWS) IS GONE. It kept firing on every
+       push after the Doha cutover, against decommissioned AWS infrastructure,
+       failing in ~46s and EMAILING THE OWNER each time - his report is why it
+       was finally excised. The live pipeline is `deploy-doha.yml`. Whole-tree
+       rsync ships scripts/; the pin is that nothing excludes it. */
+    const deploy = read("..", ".github", "workflows", "deploy-doha.yml");
+    expect(deploy).not.toMatch(/--exclude scripts/);
   });
 });

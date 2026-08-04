@@ -274,9 +274,30 @@ describe("deleting a thread is recoverable, and says so", () => {
     const w = fn(V2DB, "setThreadState");
     expect(w).toMatch(/if \(input\.clear\) \{/);
     expect(w).toMatch(/orderBy\(desc\(messages\.id\)\)/);
-    expect(w).toMatch(/if \(newest\) set\.clearedUpToMessageId = newest\.id;/);
-    // An empty conversation stamps nothing: id 0 would be a claim that message 0 exists.
-    expect(codeOnly(w)).not.toMatch(/clearedUpToMessageId = 0/);
+    /* REWRITTEN v2.107.34, and this pin is the interesting one: the previous
+       form froze `if (newest) set.clearedUpToMessageId = newest.id;` PLUS a
+       ban on stamping 0, reasoning "id 0 would claim message 0 exists". That
+       reasoning mistook a WATERMARK for an id — and it froze a real bug: an
+       EMPTY conversation (chat opened, message typed, never sent — the owner's
+       777777→300000 report) stamped nothing, so Delete confirmed and did
+       nothing, forever. The corrected property: clear ALWAYS stamps —
+       the newest id when one exists (deleted rows included, so an
+       everything-unsent thread hides too), 0 when the thread is empty. */
+    expect(w).toMatch(/set\.clearedUpToMessageId = newest\?\.id \?\? 0;/);
+    expect(codeOnly(w)).not.toMatch(/if \(newest\) set\.clearedUpToMessageId/);
+  });
+
+  it("an EMPTY thread actually leaves the list — both halves of v2.107.34", () => {
+    /* The stamp above is half the fix. The other half is the reader:
+       `listThreads` gated its hide map on TRUTHINESS, so even a stamped 0
+       sailed past it. `!= null` is the pin; `!newest || newest.id <= upTo`
+       (pinned below) then hides the message-less thread and still resurrects
+       it the moment anything visible arrives. And the client wipes the LOCAL
+       draft on the same confirm — the abandoned text is usually the only
+       reason the thread existed, and leaving it would re-seed the composer
+       right after the person said "delete". */
+    expect(fn(V2DB, "listThreads")).toMatch(/if \(p\.clearedUpToMessageId != null\)/);
+    expect(MESSAGES).toMatch(/clearDraftFor\(clearingThread\.conversationId\);/);
   });
 
   it("clearing also drops the badge and leaves Archive", () => {

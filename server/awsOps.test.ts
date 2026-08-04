@@ -293,11 +293,19 @@ describe("aws-ops.yml — recover-identity: a production DB write, gated and inj
   });
 
   it("the script it invokes is actually shipped to the instances", () => {
+/* v2.107.34 - `deploy.yml` (Deploy to AWS) IS GONE. It kept firing on every
+       push after the Doha cutover, against decommissioned AWS infrastructure,
+       failing in ~46s and EMAILING THE OWNER each time - his report is why it
+       was finally excised. The live pipeline is `deploy-doha.yml`. Its rsync ships
+       the WHOLE tree (excluding only node_modules/.git/.env), so scripts/
+       reaches the instances structurally - the pin is that no exclusion ever
+       carves it back out. */
     const deploy = fs.readFileSync(
-      path.resolve(__dirname, "..", ".github", "workflows", "deploy.yml"),
+      path.resolve(__dirname, "..", ".github", "workflows", "deploy-doha.yml"),
       "utf8"
     );
-    expect(deploy).toMatch(/\[ -d scripts \] && echo scripts/);
+    expect(deploy).toMatch(/rsync -az --exclude node_modules --exclude \.git --exclude \.env/);
+    expect(deploy).not.toMatch(/--exclude scripts/);
     expect(
       fs.existsSync(path.resolve(__dirname, "..", "scripts", "recover-orphan-identity.mjs"))
     ).toBe(true);
@@ -362,10 +370,16 @@ describe("aws-ops.yml — live-verify: read-only, two vantage points, injection-
     // produces different bytes and a different content hash — the byte
     // comparison would then report a mismatch on a deployment that is perfectly
     // in sync, i.e. a false alarm on the check that carries the most weight.
-    const deploy = fs.readFileSync(
-      path.resolve(__dirname, "..", ".github", "workflows", "deploy.yml"),
-      "utf8"
-    );
+/* v2.107.34 - `deploy.yml` (Deploy to AWS) IS GONE. It kept firing on every
+       push after the Doha cutover, against decommissioned AWS infrastructure,
+       failing in ~46s and EMAILING THE OWNER each time - his report is why it
+       was finally excised. The live pipeline is `deploy-doha.yml`. The parity this
+       test compared has no workflow counterpart anymore: the Doha deploy
+       builds ON the instance with `. /home/relay/.env`, so the build env lives
+       per-box, out of git, and a byte-for-byte promise against a workflow file
+       cannot be made from here. What survives is self-consistency: the legacy
+       live-verify job still defines both values rather than silently building
+       an env-less bundle. */
     const envOf = (src: string) => ({
       forge: (src.match(/VITE_FRONTEND_FORGE_API_URL: (\S+)/) || [])[1],
       appId: (src.match(/VITE_APP_ID: (\S+)/) || [])[1],
@@ -373,7 +387,6 @@ describe("aws-ops.yml — live-verify: read-only, two vantage points, injection-
     const mine = envOf(OPS.slice(OPS.indexOf("live-verify (checkout + build)")));
     expect(mine.forge).toBeDefined();
     expect(mine.appId).toBeDefined();
-    expect(mine).toEqual(envOf(deploy));
   });
 
   it("is READ-ONLY: it mutates no AWS resource and writes nothing on the instance", () => {
@@ -445,14 +458,19 @@ describe("aws-ops.yml — live-verify: read-only, two vantage points, injection-
   });
 
   it("both scripts it invokes are actually shipped to the instances", () => {
+    /* v2.107.34 - `deploy.yml` (Deploy to AWS) IS GONE. It kept firing on every
+       push after the Doha cutover, against decommissioned AWS infrastructure,
+       failing in ~46s and EMAILING THE OWNER each time - his report is why it
+       was finally excised. The live pipeline is `deploy-doha.yml`. Its rsync ships
+       the whole tree - scripts/ and shared/ included - and the pin is that no
+       exclusion ever carves either back out (live-verify reads
+       shared/version.ts off disk; without it the version check would SKIP). */
     const deploy = fs.readFileSync(
-      path.resolve(__dirname, "..", ".github", "workflows", "deploy.yml"),
+      path.resolve(__dirname, "..", ".github", "workflows", "deploy-doha.yml"),
       "utf8"
     );
-    expect(deploy).toMatch(/\[ -d scripts \] && echo scripts/);
-    // shared/ too — live-verify reads shared/version.ts off disk to know what the
-    // fleet ought to be serving, so without it the version check would SKIP.
-    expect(deploy).toMatch(/drizzle\.config\.ts drizzle shared tsconfig\.json/);
+    expect(deploy).toMatch(/rsync -az --exclude node_modules --exclude \.git --exclude \.env/);
+    expect(deploy).not.toMatch(/--exclude (scripts|shared)/);
     for (const f of ["live-verify.mjs", "mail-verify.mjs"]) {
       expect(fs.existsSync(path.resolve(__dirname, "..", "scripts", f))).toBe(true);
     }
@@ -491,18 +509,25 @@ describe("no workflow can deploy to or write to a mediasoup media node", () => {
   /* `OPS` is already read once at module scope with a resolved path; reading it again here
      would be a second source of truth for the same file. `DEPLOY` follows the same resolution
      so the suite does not depend on the process's working directory. */
-  const DEPLOY = fs.readFileSync(
-    path.resolve(__dirname, "..", ".github", "workflows", "deploy.yml"),
-    "utf8",
-  );
-
-  it("the rolling deploy refuses a media node BEFORE it fetches anything", () => {
-    /* First command, so nothing is even downloaded onto a box that is not an app server. */
-    const cmds = DEPLOY.slice(DEPLOY.indexOf("--parameters 'commands=["));
-    const first = cmds.slice(0, cmds.indexOf('",'));
-    expect(first, "the guard must be the FIRST remote command").toMatch(/\/opt\/relay-voip/);
-    expect(first).toMatch(/SKIP_MEDIA_NODE/);
-    expect(first, "and it must exit 0, or a media node aborts the fleet deploy").toMatch(/exit 0/);
+  it("the rolling deploy CANNOT select a media node at all", () => {
+    /* v2.107.34 - `deploy.yml` (Deploy to AWS) IS GONE. It kept firing on every
+       push after the Doha cutover, against decommissioned AWS infrastructure,
+       failing in ~46s and EMAILING THE OWNER each time - his report is why it
+       was finally excised. The live pipeline is `deploy-doha.yml`. That
+       pipeline discovered targets by tag (`tag:Name=relay-app`), so a mis-tag
+       could aim it at a mediasoup box - hence the /opt/relay-voip guard this
+       test used to pin as its FIRST remote command. The Doha deploy has no
+       discovery to mis-aim: it addresses the two app boxes by literal IP and
+       never calls SSM, so the hazard the guard existed for is structurally
+       absent. The guard itself lives on in aws-ops.yml (manual, legacy) and
+       every pin below still holds it to that. */
+    const doha = fs.readFileSync(
+      path.resolve(__dirname, "..", ".github", "workflows", "deploy-doha.yml"),
+      "utf8",
+    );
+    expect(doha).toMatch(/34\.18\.175\.226/);
+    expect(doha).toMatch(/34\.18\.145\.249/);
+    expect(doha).not.toMatch(/tag:Name|ssm send-command/);
   });
 
   it("the guard is defined ONCE in aws-ops, not pasted per action", () => {
