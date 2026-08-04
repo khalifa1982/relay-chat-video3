@@ -423,6 +423,7 @@ export const MESSAGES = {
 
   // ── Attachments ──
   "msg.imageAlt": { en: "Image", ar: "صورة" },
+  "msg.videoAlt": { en: "Video", ar: "فيديو" },
   "msg.fileFallback": { en: "Attachment", ar: "مرفق" },
   "msg.tapToOpen": { en: "Tap to open or download", ar: "انقر للفتح أو التنزيل" },
 

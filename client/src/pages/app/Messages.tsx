@@ -100,6 +100,7 @@ import { matchQuery } from "@/app/searchMatch";
 import { suggestContacts, digitsOf, isNumberQuery } from "@/app/contactSuggest";
 import { lastSeenLabel } from "@/app/presenceCopy";
 import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale";
+import { captureVideoPoster } from "@/lib/videoPoster";
 import { GroupCallScreen, PartyLinesSection } from "./GroupCallScreen";
 import { AvatarPicker } from "@/app/AvatarPicker";
 import { GroupAvatar } from "@/app/GroupAvatar";
@@ -2188,6 +2189,30 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           mimeType: processed.main.mime,
           width: processed.main.width,
           height: processed.main.height,
+          thumbKey,
+        });
+      } else if ((file.type || "").startsWith("video/")) {
+        // VIDEO COVERS (v2.107.30): grab the opening frame at thumb size and ship
+        // it down the photo thumbnail's own lane (`thumbKey`), plus the pixel
+        // dimensions and duration the bubble and player were flying blind
+        // without. Best-effort at EVERY step — a video whose frame can't be
+        // captured uploads exactly as it always has.
+        const poster = await captureVideoPoster(file).catch(() => null);
+        let thumbKey: string | undefined;
+        if (poster) {
+          try {
+            const t = await uploadThumbnail(poster.blob, { mimeType: poster.mime });
+            thumbKey = t.storageKey;
+          } catch {
+            /* covers are decoration on the message, never a gate in front of it */
+          }
+        }
+        json = await uploadAttachment(file, {
+          filename: file.name,
+          mimeType: file.type,
+          width: poster?.width,
+          height: poster?.height,
+          durationMs: poster?.durationMs,
           thumbKey,
         });
       } else {
@@ -4997,6 +5022,39 @@ function AttachmentView({
     );
   }
   if (mimeType.startsWith("video/")) {
+    const hasDims = typeof width === "number" && width > 0 && typeof height === "number" && height > 0;
+    // THE COVER (v2.107.30): a real image of the opening frame, captured at
+    // upload. `preload="metadata"` below paints a first frame on desktop Chrome
+    // and a BLACK BOX on iOS Safari and most Android WebViews — the exact
+    // reported shape — so when a cover exists the bubble is an <img>: instant,
+    // lazy, layout-reserved, identical to a photo thumb. Tap opens the lightbox
+    // player either way.
+    if (thumbUrl && !imgBroken) {
+      return (
+        <button
+          type="button"
+          onClick={() => onOpen?.({ url, type: "video", name: filename })}
+          className="relative block mb-1"
+          aria-label={t("msg.playVideo")}
+        >
+          <img
+            src={thumbUrl}
+            alt={filename || t("msg.videoAlt")}
+            width={hasDims ? width! : undefined}
+            height={hasDims ? height! : undefined}
+            style={hasDims ? { aspectRatio: `${width} / ${height}` } : undefined}
+            className="rounded-xl max-h-64 w-auto max-w-full object-cover bg-black/40"
+            loading="lazy"
+            onError={() => setImgBroken(true)}
+          />
+          <span className="absolute inset-0 grid place-items-center">
+            <span className="grid size-12 place-items-center rounded-full bg-black/55 text-white shadow-lg">
+              <Play className="size-6 translate-x-0.5" />
+            </span>
+          </span>
+        </button>
+      );
+    }
     return (
       <button
         type="button"
@@ -5004,7 +5062,10 @@ function AttachmentView({
         className="relative block mb-1 group/vid"
         aria-label={t("msg.playVideo")}
       >
-        <video src={url} className="rounded-xl max-h-64 w-auto bg-black/40" muted preload="metadata" />
+        {/* Legacy rows without a stored cover: the media-fragment start time plus
+            `playsInline` is what makes iOS/Android actually PAINT a frame here
+            instead of the black rectangle. */}
+        <video src={`${url}#t=0.1`} className="rounded-xl max-h-64 w-auto bg-black/40" muted playsInline preload="metadata" />
         <span className="absolute inset-0 grid place-items-center">
           <span className="grid size-12 place-items-center rounded-full bg-black/55 text-white shadow-lg">
             <Play className="size-6 translate-x-0.5" />
