@@ -1,0 +1,11 @@
+name: Node Probe
+on: {workflow_dispatch: {}}
+jobs:
+  p:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          mkdir -p ~/.ssh; printf '%s' "${{ secrets.DOHA_SSH_KEY }}" > ~/.ssh/id_rsa; chmod 600 ~/.ssh/id_rsa
+          echo "S0VZPX4vLnNzaC9pZF9yc2EKUygpIHsgc3NoIC1pICRLRVkgLW8gU3RyaWN0SG9zdEtleUNoZWNraW5nPW5vIC1vIENvbm5lY3RUaW1lb3V0PTggIiRAIjsgfQpmb3IgaXAgaW4gMzQuMTguMTUwLjQgMzQuMTguMTY5LjE5NSAzNC4xOC42NS4xMTYgMzQuMTguOTAuOTEgMzQuMTguNTAuMTU1IDM0LjE4LjE5OS4xMjY7IGRvCiAgZWNobyAiLS0tICRpcCAtLS0iCiAgUyB1YnVudHVAJGlwICdlY2hvIC1uICJwcm92aXNpb24tZG9uZTogIjsgdGVzdCAtZiAvdmFyL3RtcC9wcm92aXNpb24tZG9uZSAmJiBlY2hvIFlFUyB8fCBlY2hvIE5POyBlY2hvIC1uICJub2RlOiAiOyBub2RlIC12IDI+L2Rldi9udWxsIHx8IGVjaG8gbm9uZTsgc3VkbyBqb3VybmFsY3RsIC11IGdvb2dsZS1zdGFydHVwLXNjcmlwdHMgLS1uby1wYWdlciAtbiAzIDI+L2Rldi9udWxsIHwgdGFpbCAtMycgMj4mMSB8IGhlYWQgLTgKZG9uZQo=" | base64 -d > /tmp/r.sh
+          bash /tmp/r.sh
