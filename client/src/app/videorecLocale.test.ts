@@ -41,7 +41,9 @@ const CODE = codeOnly(SRC);
 
 /** The rendered half, so TypeScript generics and the module header cannot be read as
  *  screen text. */
-const JSX = CODE.slice(CODE.indexOf("\n  return ("));
+/* v2.107.33: the sheet now returns THROUGH a portal (the stacking-context fix),
+   so the render-side slice starts at the portal call. */
+const JSX = CODE.slice(CODE.indexOf("\n  return createPortal("));
 
 /**
  * Every string a PERSON would read, if it were written as a literal rather than fetched

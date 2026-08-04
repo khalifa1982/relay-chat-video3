@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { X, SwitchCamera, Check, RotateCcw, Images, Send } from "lucide-react";
 import { useAutoplay } from "@/app/useAutoplay";
 import {
@@ -227,7 +228,17 @@ export function VideoRecordSheet({
   // A shutter that can only refuse is absent, not disabled.
   const shutterLive = !notice;
 
-  return (
+  /* PORTALLED (v2.107.33) — the owner's screenshot: Cancel / Use photo sliced
+     under the bottom tab bar, only their top edge peeking out. The page content
+     wrapper is a z-10 STACKING CONTEXT and the mobile chrome is z-30, so an
+     overlay mounted inside a page can never out-stack the nav, whatever its own
+     z says — this element's 130 resolves INSIDE the page wrapper and competes
+     as 10. Third strike of the class: v2.106.27 (canvas over unpositioned
+     content), v2.107.2 (the story viewer, fixed by portalling — the precedent
+     followed here), v2.107.25 (AppShell records the mechanics). The root's own
+     `dark relay-v2` classes are exactly what make it portal-safe: it carries
+     its theme with it instead of inheriting from the tree it just left. */
+  return createPortal(
     /* `dark relay-v2` is carried HERE as well as on <html>: the design utilities
        this sheet uses are scoped `.relay-v2 X` / `.dark.relay-v2 X`, and while
        AppShell puts `relay-v2` on the root it only adds `dark` in the dark theme
@@ -458,6 +469,7 @@ export function VideoRecordSheet({
           </div>
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }

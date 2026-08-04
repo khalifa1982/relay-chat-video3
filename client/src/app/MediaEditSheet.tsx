@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { X, Check, Undo2, Eraser, Pencil } from "lucide-react";
 import { EDIT_MAX_EDGE, isEditableImage } from "@/lib/imageEdit";
 import { fitWithin, renameForMime } from "@/lib/imageDownscale";
@@ -577,7 +578,17 @@ export function MediaEditSheet({
 
   const canUndo = strokes.length > 0;
 
-  return (
+    /* PORTALLED (v2.107.33) — the owner's screenshot: Cancel / Use photo sliced
+     under the bottom tab bar, only their top edge peeking out. The page content
+     wrapper is a z-10 STACKING CONTEXT and the mobile chrome is z-30, so an
+     overlay mounted inside a page can never out-stack the nav, whatever its own
+     z says — this element's 130 resolves INSIDE the page wrapper and competes
+     as 10. Third strike of the class: v2.106.27 (canvas over unpositioned
+     content), v2.107.2 (the story viewer, fixed by portalling — the precedent
+     followed here), v2.107.25 (AppShell records the mechanics). The root's own
+     `dark relay-v2` classes are exactly what make it portal-safe: it carries
+     its theme with it instead of inheriting from the tree it just left. */
+return createPortal(
     <div
       className="dark relay-v2 fixed inset-0 z-[130] flex flex-col bg-black"
       role="dialog"
@@ -704,7 +715,8 @@ export function MediaEditSheet({
           <Check className="size-4" /> {say("usePhoto")}
         </button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

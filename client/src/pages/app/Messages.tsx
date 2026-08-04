@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useSearch } from "wouter";
 import { useAutoplay } from "@/app/useAutoplay";
 import { useRelayEngine } from "@/app/RelayEngine";
@@ -6248,7 +6249,18 @@ function MediaLightbox({
     if (Math.abs(dx) < 48) return;
     go(dx < 0 ? 1 : -1);
   };
-  return (
+  /* PORTALLED (v2.107.33) — the editor sheets' buttons were sliced under
+     the bottom tab bar; this viewer shares the mount point and therefore the
+     trap — its bottom chrome sat under the nav the same way. The page content
+     wrapper is a z-10 STACKING CONTEXT and the mobile chrome is z-30, so an
+     overlay mounted inside a page can never out-stack the nav, whatever its own
+     z says — this element's 130 resolves INSIDE the page wrapper and competes
+     as 10. Third strike of the class: v2.106.27 (canvas over unpositioned
+     content), v2.107.2 (the story viewer, fixed by portalling — the precedent
+     followed here), v2.107.25 (AppShell records the mechanics). The root's own
+     `dark relay-v2` classes are exactly what make it portal-safe: it carries
+     its theme with it instead of inheriting from the tree it just left. */
+  return createPortal(
     <div
       className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 p-4"
       onClick={onClose}
@@ -6366,7 +6378,8 @@ function MediaLightbox({
       >
         {t("msg.encryptedInTransit")}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
