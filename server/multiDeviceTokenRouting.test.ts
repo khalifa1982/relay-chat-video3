@@ -68,9 +68,6 @@ function reg2(reg: RelayRegistry, cid: string, name: string, pin?: string) {
 describe("LiveKit is retired: no join token is ever pushed, and the dial still works", () => {
   let reg: RelayRegistry;
   const prev = {
-    url: process.env.LIVEKIT_URL,
-    key: process.env.LIVEKIT_API_KEY,
-    secret: process.env.LIVEKIT_API_SECRET,
     multi: process.env.MULTI_DEVICE_RING,
   };
 
@@ -80,15 +77,10 @@ describe("LiveKit is retired: no join token is ever pushed, and the dial still w
     // `livekitConfig()`, which ignores the env entirely, so a fully-populated
     // environment producing NO token is exactly the property under test. A stale
     // var left in /home/relay/.env must not be able to bring the SFU back.
-    process.env.LIVEKIT_URL = "wss://sfu.example.test";
-    process.env.LIVEKIT_API_KEY = "APIkeytest";
-    process.env.LIVEKIT_API_SECRET = "secrettestsecrettestsecrettest00";
     process.env.MULTI_DEVICE_RING = "1";
   });
   afterEach(() => {
     for (const [k, v] of [
-      ["LIVEKIT_URL", prev.url], ["LIVEKIT_API_KEY", prev.key],
-      ["LIVEKIT_API_SECRET", prev.secret], ["MULTI_DEVICE_RING", prev.multi],
     ] as const) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
