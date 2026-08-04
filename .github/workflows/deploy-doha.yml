@@ -20,7 +20,7 @@ jobs:
             H=$1
             echo "=== deploying $H"
             rsync -az --exclude node_modules --exclude .git --exclude .env -e "ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no" ./ ubuntu@$H:/tmp/deploy-src/
-            ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$H 'sudo rsync -a --exclude node_modules --exclude .env /tmp/deploy-src/ /home/relay/app/ && sudo chown -R relay:relay /home/relay/app && sudo -u relay bash -lc "cd /home/relay/app && export NODE_ENV=production && npm install --no-audit --no-fund --legacy-peer-deps && npm run build && set -a && . /home/relay/.env && set +a && pm2 restart relay --update-env && pm2 save"'
+            ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$H 'sudo rsync -a --exclude node_modules --exclude .env /tmp/deploy-src/ /home/relay/app/ && sudo chown -R relay:relay /home/relay/app && sudo -u relay bash -lc "cd /home/relay/app && npm install --no-audit --no-fund --legacy-peer-deps --include=dev && npm run build && set -a && . /home/relay/.env && set +a && pm2 restart relay --update-env && pm2 save"'
             for i in $(seq 1 15); do
               code=$(curl -s -o /dev/null -m 8 -w "%{http_code}" --resolve your-chat.io:443:$H https://your-chat.io/api/health || echo 000)
               [ "$code" = "200" ] && { echo "$H healthy"; return 0; }
