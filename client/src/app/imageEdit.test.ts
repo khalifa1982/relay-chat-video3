@@ -28,6 +28,7 @@ import {
   rotateCropQuarter,
   rotatedDims,
   rotationTransform,
+  flipCropRect,
 } from "@/lib/imageEdit";
 import { isDownscalableImage } from "@/lib/imageDownscale";
 
@@ -562,5 +563,46 @@ describe("#144 — the sheet keeps the app's contracts", () => {
     /* Without `touch-none` the crop box simply does not move on a phone — the
        feature is desktop-only and nothing says so. */
     expect(code(SHEET)).toMatch(/absolute inset-0 touch-none/);
+  });
+});
+
+describe("flip reaches the OUTPUT, not just a CSS preview", () => {
+  /* Same class of silent failure as rotation (the suite above): a mirrored
+     preview over unmirrored bytes looks perfect on screen and ships the wrong
+     photo. So the flags must break `isIdentity` — which is the single switch
+     between "re-encode" and "send the original bytes untouched". */
+
+  it("a flipped plan is not an identity, and carries its flags to the encoder", () => {
+    const base = { naturalWidth: 800, naturalHeight: 600, rotation: 0 };
+    expect(planEdit(base).isIdentity).toBe(true);
+    const h = planEdit({ ...base, flipH: true });
+    expect(h.isIdentity).toBe(false);
+    expect(h.flipH).toBe(true);
+    expect(h.flipV).toBe(false);
+    const v = planEdit({ ...base, flipV: true });
+    expect(v.isIdentity).toBe(false);
+    expect(v.flipV).toBe(true);
+  });
+
+  it("the crop MIRRORS with the picture, exactly", () => {
+    /* The user's box selects CONTENT. When the stage mirrors, that content moves
+       to the opposite side; a crop that stayed put would silently select the
+       other half of the photo. */
+    const rect = { x: 10, y: 20, width: 100, height: 50 };
+    expect(flipCropRect(rect, 400, 300, "h")).toEqual({ x: 290, y: 20, width: 100, height: 50 });
+    expect(flipCropRect(rect, 400, 300, "v")).toEqual({ x: 10, y: 230, width: 100, height: 50 });
+  });
+
+  it("flipping twice returns the caller's rectangle — no one-pixel creep", () => {
+    const rect = { x: 37, y: 41, width: 123, height: 77 };
+    expect(flipCropRect(flipCropRect(rect, 640, 480, "h"), 640, 480, "h")).toEqual(rect);
+    expect(flipCropRect(flipCropRect(rect, 640, 480, "v"), 640, 480, "v")).toEqual(rect);
+  });
+
+  it("a flip alone changes no dimension — the stage is the same size mirrored", () => {
+    const plain = planEdit({ naturalWidth: 800, naturalHeight: 600, rotation: 1 });
+    const flipped = planEdit({ naturalWidth: 800, naturalHeight: 600, rotation: 1, flipH: true, flipV: true });
+    expect([flipped.stageWidth, flipped.stageHeight]).toEqual([plain.stageWidth, plain.stageHeight]);
+    expect([flipped.outWidth, flipped.outHeight]).toEqual([plain.outWidth, plain.outHeight]);
   });
 });

@@ -222,6 +222,9 @@ export interface EditPlan {
   outHeight: number;
   /** No rotation and a crop covering the whole stage — nothing to do. */
   isIdentity: boolean;
+  /** Mirror the STAGE (what the user sees) about its vertical / horizontal axis. */
+  flipH: boolean;
+  flipV: boolean;
 }
 
 /**
@@ -229,10 +232,25 @@ export interface EditPlan {
  * browser. `crop` is in STAGE coordinates — i.e. what the user sees after the
  * rotation — because that is the space they dragged it in.
  */
+/**
+ * Mirror a crop rectangle across the stage, for the flip buttons: the stage's
+ * dimensions do not change under a mirror, so only the origin moves. Pure and
+ * exact — flipping twice must return the caller's rectangle, which the tests
+ * assert, because an off-by-one here shows up as a crop that CREEPS one pixel
+ * per toggle and is invisible in any single screenshot.
+ */
+export function flipCropRect(rect: CropRect, stageW: number, stageH: number, axis: "h" | "v"): CropRect {
+  return axis === "h"
+    ? { ...rect, x: stageW - (rect.x + rect.width) }
+    : { ...rect, y: stageH - (rect.y + rect.height) };
+}
+
 export function planEdit(opts: {
   naturalWidth: number;
   naturalHeight: number;
   rotation: number;
+  flipH?: boolean;
+  flipV?: boolean;
   crop?: Partial<CropRect> | null;
   maxEdge?: number;
 }): EditPlan {
@@ -252,7 +270,11 @@ export function planEdit(opts: {
     crop,
     outWidth: crop.width,
     outHeight: crop.height,
+    flipH: opts.flipH === true,
+    flipV: opts.flipV === true,
     isIdentity:
+      opts.flipH !== true &&
+      opts.flipV !== true &&
       normalizeQuarter(opts.rotation) === 0 &&
       crop.x === 0 &&
       crop.y === 0 &&
@@ -315,7 +337,7 @@ async function decodeImage(
  */
 export async function renderEdit(
   file: File,
-  opts: { rotation: number; crop?: Partial<CropRect> | null },
+  opts: { rotation: number; flipH?: boolean; flipV?: boolean; crop?: Partial<CropRect> | null },
 ): Promise<EditedImage | null> {
   if (!isEditableImage(file.type)) return null;
   if (typeof document === "undefined") return null;
@@ -326,6 +348,8 @@ export async function renderEdit(
       naturalWidth: decoded.width,
       naturalHeight: decoded.height,
       rotation: opts.rotation,
+      flipH: opts.flipH,
+      flipV: opts.flipV,
       crop: opts.crop,
     });
     if (plan.isIdentity) return null; // nothing was changed — keep the original bytes
@@ -340,6 +364,11 @@ export async function renderEdit(
        the whole edit is one draw rather than an intermediate full-stage canvas
        that would defeat the memory bound above. */
     ctx.translate(-plan.crop.x, -plan.crop.y);
+    /* The mirror is a STAGE-space operation — applied after the crop translate
+       and before the rotation, so what flips is exactly the picture the user
+       was looking at when they pressed the button, crop box and all. */
+    if (plan.flipH) { ctx.translate(plan.stageWidth, 0); ctx.scale(-1, 1); }
+    if (plan.flipV) { ctx.translate(0, plan.stageHeight); ctx.scale(1, -1); }
     ctx.translate(plan.translateX, plan.translateY);
     ctx.rotate(plan.radians);
     ctx.drawImage(decoded.source, 0, 0, plan.drawWidth, plan.drawHeight);

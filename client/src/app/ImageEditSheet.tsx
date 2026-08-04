@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X, RotateCcw, RotateCw, Check, Undo2, Crop as CropIcon } from "lucide-react";
+import { X, RotateCcw, RotateCw, Check, Undo2, Crop as CropIcon, FlipHorizontal2, FlipVertical2 } from "lucide-react";
 import {
   centeredAspectCrop,
   clampCrop,
@@ -8,6 +8,7 @@ import {
   normalizeQuarter,
   renderEdit,
   rotateCropQuarter,
+  flipCropRect,
   rotationTransform,
   planEdit,
   type CropRect,
@@ -83,6 +84,8 @@ export function ImageEditSheet({
 
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
   const [rotation, setRotation] = useState<Quarter>(0);
+  const [flipH, setFlipH] = useState(false);
+  const [flipV, setFlipV] = useState(false);
   const [crop, setCrop] = useState<CropRect | null>(null);
   const [aspect, setAspect] = useState<AspectKey>("free");
   const [busy, setBusy] = useState(false);
@@ -178,11 +181,15 @@ export function ImageEditSheet({
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, cv.width, cv.height);
+    /* Same stage-space mirror the encoder applies (renderEdit) — one geometry,
+       two callers, which is what keeps the preview a statement about the file. */
+    if (flipH) { ctx.translate(tr.canvasWidth, 0); ctx.scale(-1, 1); }
+    if (flipV) { ctx.translate(0, tr.canvasHeight); ctx.scale(1, -1); }
     ctx.translate(tr.translateX, tr.translateY);
     ctx.rotate(tr.radians);
     ctx.drawImage(src, 0, 0, dw, dh);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }, [natural, rotation]);
+  }, [natural, rotation, flipH, flipV]);
 
   useEffect(() => {
     paint();
@@ -195,6 +202,13 @@ export function ImageEditSheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage?.width, stage?.height]);
 
+  /* The crop follows the mirror (flipCropRect), so the box stays on the same
+     PICTURE content the user selected rather than jumping to the far side. */
+  function toggleFlip(axis: "h" | "v") {
+    if (!stage) return;
+    if (axis === "h") setFlipH((v) => !v); else setFlipV((v) => !v);
+    setCrop((c) => (c ? flipCropRect(c, stage.width, stage.height, axis) : c));
+  }
   function rotate(dir: 1 | -1) {
     if (!stage) return;
     setCrop((c) => (c ? rotateCropQuarter(c, stage.width, stage.height, dir) : c));
@@ -209,6 +223,8 @@ export function ImageEditSheet({
   }
 
   function reset() {
+    setFlipH(false);
+    setFlipV(false);
     setRotation(0);
     setAspect("free");
     setCrop(null); // the effect above re-selects the whole (un-rotated) frame
@@ -294,7 +310,7 @@ export function ImageEditSheet({
     setBusy(true);
     setFailed(false);
     try {
-      const edited = await renderEdit(file, { rotation, crop });
+      const edited = await renderEdit(file, { rotation, flipH, flipV, crop });
       if (!edited) {
         // Either nothing changed or the canvas refused — the original is right
         // in both cases, and only the second is worth telling the user about.
@@ -420,6 +436,24 @@ export function ImageEditSheet({
           className="grid size-11 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20 active:scale-95 transition-transform"
         >
           <RotateCw className="size-[18px]" strokeWidth={1.9} />
+        </button>
+        <button
+          type="button"
+          onClick={() => toggleFlip("h")}
+          aria-label={t("imageedit.flipH")}
+          aria-pressed={flipH}
+          className={`grid size-11 place-items-center rounded-full text-white active:scale-95 transition-transform ${flipH ? "bg-white/25" : "bg-white/10 hover:bg-white/20"}`}
+        >
+          <FlipHorizontal2 className="size-[18px]" strokeWidth={1.9} />
+        </button>
+        <button
+          type="button"
+          onClick={() => toggleFlip("v")}
+          aria-label={t("imageedit.flipV")}
+          aria-pressed={flipV}
+          className={`grid size-11 place-items-center rounded-full text-white active:scale-95 transition-transform ${flipV ? "bg-white/25" : "bg-white/10 hover:bg-white/20"}`}
+        >
+          <FlipVertical2 className="size-[18px]" strokeWidth={1.9} />
         </button>
         <span className="mx-1 h-6 w-px bg-white/15" role="presentation" />
         {(

@@ -49,6 +49,8 @@ export const IMAGEEDIT = {
   /* Distinction 3 — geometric direction, never mirrored. */
   "imageedit.rotateLeft": { en: "Rotate left", ar: "تدوير لليسار" },
   "imageedit.rotateRight": { en: "Rotate right", ar: "تدوير لليمين" },
+  "imageedit.flipH": { en: "Flip horizontally", ar: "قلب أفقيًا" },
+  "imageedit.flipV": { en: "Flip vertically", ar: "قلب رأسيًا" },
 
   /* The three crop modes. `cropFree` is the default: the user drags whatever they want. */
   "imageedit.cropFree": { en: "Free", ar: "حر" },

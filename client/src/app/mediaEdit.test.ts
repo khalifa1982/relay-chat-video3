@@ -130,6 +130,7 @@ type Op =
   | { op: "moveTo"; x: number; y: number }
   | { op: "lineTo"; x: number; y: number }
   | { op: "arc"; x: number; y: number; r: number }
+  | { op: "ellipse"; x: number; y: number; rx: number; ry: number }
   | { op: "stroke" }
   | { op: "fill" };
 
@@ -161,6 +162,9 @@ function fakeCtx() {
     },
     arc(x: number, y: number, r: number) {
       ops.push({ op: "arc", x, y, r });
+    },
+    ellipse(x: number, y: number, rx: number, ry: number) {
+      ops.push({ op: "ellipse", x, y, rx, ry });
     },
     stroke() {
       ops.push({ op: "stroke" });
@@ -588,5 +592,86 @@ describe("draw — stroke width", () => {
       expect(Number.isFinite(strokeWidthPx(w, h))).toBe(true);
       expect(strokeWidthPx(w, h)).toBeGreaterThanOrEqual(MIN_STROKE_PX);
     }
+  });
+});
+
+describe("circle tool — a drag's endpoints become an ellipse, everywhere the same", () => {
+  /* Same contract as freehand: unit-space endpoints, one painter for preview and
+     output. A circle stored in pixels of either canvas would be the wrong size on
+     the other — honest in shape and wrong in scale. */
+
+  it("sanitize keeps a two-point circle WITH its shape, first and last point only", () => {
+    const out = sanitizeStrokes([
+      {
+        color: "#3b82f6",
+        shape: "circle",
+        points: [
+          { x: 0.2, y: 0.2 },
+          { x: 0.4, y: 0.9 }, // a mid-drag sample: geometry-irrelevant, must drop
+          { x: 0.8, y: 0.6 },
+        ],
+      },
+    ]);
+    expect(out).toEqual([
+      { color: "#3b82f6", shape: "circle", points: [{ x: 0.2, y: 0.2 }, { x: 0.8, y: 0.6 }] },
+    ]);
+  });
+
+  it("a one-point circle has no geometry and sanitizes away", () => {
+    expect(sanitizeStrokes([{ color: "#fff", shape: "circle", points: [{ x: 0.5, y: 0.5 }] }])).toEqual([]);
+    expect(hasDrawing([{ color: "#fff", shape: "circle", points: [{ x: 0.5, y: 0.5 }] }])).toBe(false);
+  });
+
+  it("the ellipse lands at the drag's bounding box, at that fraction of ANY canvas", () => {
+    const circle: DrawStroke = {
+      color: "#22c55e",
+      shape: "circle",
+      points: [
+        { x: 0.25, y: 0.25 },
+        { x: 0.75, y: 0.75 },
+      ],
+    };
+    const { ctx, ops, strokeStyles } = fakeCtx();
+    paintStrokes(ctx, [circle], 400, 200);
+    expect(ops).toEqual([{ op: "ellipse", x: 200, y: 100, rx: 100, ry: 50 }, { op: "stroke" }]);
+    expect(strokeStyles).toEqual(["#22c55e"]);
+  });
+
+  it("preview-sized and output-sized canvases agree about the circle", () => {
+    const circle: DrawStroke = {
+      color: "#fff",
+      shape: "circle",
+      points: [
+        { x: 0.1, y: 0.2 },
+        { x: 0.9, y: 0.8 },
+      ],
+    };
+    const a = fakeCtx();
+    const b = fakeCtx();
+    paintStrokes(a.ctx, [circle], 1400, 933);
+    paintStrokes(b.ctx, [circle], 2048, 1365);
+    const frac = (ops: Op[], w: number, h: number) =>
+      ops
+        .filter((o): o is Extract<Op, { op: "ellipse" }> => o.op === "ellipse")
+        .map((o) => [o.x / w, o.y / h, o.rx / w, o.ry / h]);
+    const fa = frac(a.ops, 1400, 933);
+    expect(fa.length).toBe(1);
+    fa[0].forEach((v, i) => expect(v).toBeCloseTo(frac(b.ops, 2048, 1365)[0][i], 3));
+  });
+
+  it("a degenerate drag still paints a visible ring, never an invisible one", () => {
+    // Both radii floor at half the stroke width — a shaky tap-drag of 1px must
+    // not produce an ellipse thinner than the line that draws it.
+    const { ctx, ops } = fakeCtx();
+    paintStrokes(
+      ctx,
+      [{ color: "#fff", shape: "circle", points: [{ x: 0.5, y: 0.5 }, { x: 0.5005, y: 0.5 }] }],
+      400,
+      200,
+    );
+    const e = ops.find((o) => o.op === "ellipse") as Extract<Op, { op: "ellipse" }>;
+    const w = strokeWidthPx(400, 200);
+    expect(e.rx).toBeGreaterThanOrEqual(w / 2);
+    expect(e.ry).toBeGreaterThanOrEqual(w / 2);
   });
 });

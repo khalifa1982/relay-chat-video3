@@ -96,6 +96,8 @@ const COPY = {
   black: { en: "Black", ar: "أسود" },
   red: { en: "Red", ar: "أحمر" },
   amber: { en: "Amber", ar: "كهرماني" },
+  pen: { en: "Draw freehand", ar: "رسم حر" },
+  circleTool: { en: "Draw a circle", ar: "رسم دائرة" },
   green: { en: "Green", ar: "أخضر" },
   blue: { en: "Blue", ar: "أزرق" },
 } as const;
@@ -125,6 +127,10 @@ export interface DrawPoint {
 
 export interface DrawStroke {
   color: string;
+  /** Absent = freehand. "circle": exactly two points — the drag's start and end,
+   *  read as the ellipse's bounding box. Unknown shapes sanitize away to nothing
+   *  rather than to a misdrawn line. */
+  shape?: "circle";
   points: DrawPoint[];
 }
 
@@ -174,6 +180,13 @@ export function sanitizeStrokes(strokes: readonly DrawStroke[] | null | undefine
       if (!q || typeof q.x !== "number" || typeof q.y !== "number") continue;
       if (!Number.isFinite(q.x) || !Number.isFinite(q.y)) continue;
       points.push({ x: q.x, y: q.y });
+    }
+    if (s.shape === "circle") {
+      // A circle is its drag's two endpoints; anything less has no geometry.
+      if (points.length >= 2) {
+        out.push({ color: s.color, shape: "circle", points: [points[0], points[points.length - 1]] });
+      }
+      continue;
     }
     if (points.length > 0) out.push({ color: s.color, points });
   }
@@ -234,6 +247,18 @@ export function paintStrokes(
   ctx.lineJoin = "round";
   for (const stroke of clean) {
     const pts = stroke.points;
+    if (stroke.shape === "circle") {
+      const [a, b] = pts;
+      const cx = ((a.x + b.x) / 2) * width;
+      const cy = ((a.y + b.y) / 2) * height;
+      const rx = Math.max(w / 2, (Math.abs(b.x - a.x) / 2) * width);
+      const ry = Math.max(w / 2, (Math.abs(b.y - a.y) / 2) * height);
+      ctx.beginPath();
+      ctx.strokeStyle = stroke.color;
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      continue;
+    }
     if (pts.length === 1) {
       ctx.beginPath();
       ctx.fillStyle = stroke.color;
@@ -375,6 +400,7 @@ export function MediaEditSheet({
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
   const [strokes, setStrokes] = useState<DrawStroke[]>([]);
   const [colorIndex, setColorIndex] = useState(0);
+  const [tool, setTool] = useState<"pen" | "circle">("pen");
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -476,7 +502,10 @@ export function MediaEditSheet({
     if (!p) return;
     e.preventDefault();
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    liveRef.current = { color: DRAW_COLORS[colorIndex].css, points: [p] };
+    liveRef.current =
+      tool === "circle"
+        ? { color: DRAW_COLORS[colorIndex].css, shape: "circle", points: [p] }
+        : { color: DRAW_COLORS[colorIndex].css, points: [p] };
     paint();
   }
 
@@ -489,7 +518,13 @@ export function MediaEditSheet({
     // An exact repeat adds nothing to the picture and grows the array forever
     // on a finger held still.
     if (last && last.x === p.x && last.y === p.y) return;
-    live.points.push(p);
+    if (live.shape === "circle") {
+      // A circle is defined by its endpoints alone — the drag RESIZES it rather
+      // than leaving a trail, so the live array stays [start, current].
+      live.points = [live.points[0], p];
+    } else {
+      live.points.push(p);
+    }
     paint();
   }
 
@@ -593,6 +628,25 @@ export function MediaEditSheet({
 
       {/* palette + undo */}
       <div className="flex flex-wrap items-center justify-center gap-2 px-4 pt-3">
+        <button
+          type="button"
+          onClick={() => setTool("pen")}
+          aria-label={say("pen")}
+          aria-pressed={tool === "pen"}
+          className={`grid size-11 place-items-center rounded-full text-white transition-transform active:scale-95 ${tool === "pen" ? "bg-white/25" : "bg-white/10 hover:bg-white/20"}`}
+        >
+          <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+        </button>
+        <button
+          type="button"
+          onClick={() => setTool("circle")}
+          aria-label={say("circleTool")}
+          aria-pressed={tool === "circle"}
+          className={`grid size-11 place-items-center rounded-full text-white transition-transform active:scale-95 ${tool === "circle" ? "bg-white/25" : "bg-white/10 hover:bg-white/20"}`}
+        >
+          <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/></svg>
+        </button>
+        <span className="mx-1 h-6 w-px bg-white/15" role="presentation" />
         {DRAW_COLORS.map((c, i) => (
           <button
             key={c.key}
