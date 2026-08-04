@@ -1,0 +1,22 @@
+name: Doha Diagnostic
+on:
+  workflow_dispatch: {}
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH + inspect Doha config
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.DOHA_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@34.18.175.226 '
+            echo "===== .env keys (masked) ====="
+            sudo -u relay grep -ivE "^\s*#" /home/relay/.env | sed -E "s/(SECRET|PASSWORD|KEY|TOKEN|password|secret)=[^ ]*/\1=***/g; s#(://[^:]*:)[^@]*@#\1***@#g" | sort
+            echo
+            echo "===== .env refs to Mumbai VOIP/TURN IPs ====="
+            sudo -u relay grep -nE "13\.203\.36|13\.207\.213|13\.206\.168|13\.207\.218|13\.233\.62|3\.6\.85|15\.252\.23|3\.111\.211|13\.232\.119|13\.204\.23|13\.207\.121|35\.154\.208" /home/relay/.env || echo "  (none in .env)"
+            echo
+            echo "===== source refs to VOIP/SIP/SFU/media ====="
+            grep -rIn -iE "voip|sip |mediasoup|janus|freeswitch|asterisk|kurento|SFU" /home/relay/app/src 2>/dev/null | grep -v node_modules | head -15 || echo "  (none)"
+          '
