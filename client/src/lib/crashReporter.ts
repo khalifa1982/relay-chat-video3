@@ -220,6 +220,13 @@ export function initCrashReporter(): void {
       // Resource-load errors (img/script 404s) target an element, carry no
       // `.error`, and are noise here — real throws carry the Error object.
       if (!ev.error && ev.target !== window) return;
+      // Cross-origin masked errors: when a script from another origin throws, the
+      // browser withholds the Error object and reports the sentinel "Script error."
+      // with no usable filename. These are almost always injected third-party
+      // scripts — OEM browsers (HonorBrowser et al.) and extensions — that we
+      // neither own nor can diagnose; ingesting them only buries real crashes under
+      // undiagnosable noise (the "stack" ends up being the reporter's own). Drop them.
+      if (!ev.error && (!ev.filename || /^Script error\.?$/i.test(ev.message || ""))) return;
       reportCrash(ev.error ?? ev.message ?? "window.onerror", { kind: "WindowError" });
     });
     window.addEventListener("unhandledrejection", (ev) => {
