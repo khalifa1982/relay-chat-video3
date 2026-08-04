@@ -1,5 +1,7 @@
 name: Deploy to Doha
 on:
+  push:
+    branches: [web-app-main]
   workflow_dispatch: {}
 jobs:
   deploy:
@@ -16,16 +18,16 @@ jobs:
           set -e
           deploy() {
             H=$1
-            echo "=== $H"
+            echo "=== deploying $H"
             rsync -az --exclude node_modules --exclude .git --exclude .env -e "ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no" ./ ubuntu@$H:/tmp/deploy-src/
-            ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$H 'sudo rsync -a --exclude node_modules --exclude .env /tmp/deploy-src/ /home/relay/app/ && sudo chown -R relay:relay /home/relay/app && sudo -u relay bash -lc "cd /home/relay/app && export NODE_ENV=production && npm install --no-audit --no-fund && npm run build && pm2 restart relay --update-env && pm2 save"'
+            ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$H 'sudo rsync -a --exclude node_modules --exclude .env /tmp/deploy-src/ /home/relay/app/ && sudo chown -R relay:relay /home/relay/app && sudo -u relay bash -lc "cd /home/relay/app && export NODE_ENV=production && npm install --no-audit --no-fund && npm run build && set -a && . /home/relay/.env && set +a && pm2 restart relay --update-env && pm2 save"'
             for i in $(seq 1 12); do
               code=$(curl -s -o /dev/null -m 8 -w "%{http_code}" --resolve your-chat.io:443:$H https://your-chat.io/api/health || echo 000)
               [ "$code" = "200" ] && { echo "$H healthy"; return 0; }
               sleep 4
             done
-            echo "$H FAILED health"; return 1
+            echo "$H FAILED health after deploy"; return 1
           }
           deploy 34.18.175.226
           deploy 34.18.145.249
-          echo "both boxes deployed + healthy"
+          echo "ALL DEPLOYED + HEALTHY"
