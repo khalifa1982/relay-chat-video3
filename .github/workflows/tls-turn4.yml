@@ -1,0 +1,22 @@
+name: TLS turn4
+on: {workflow_dispatch: {}}
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    env:
+      WCERT: ${{ secrets.WCERT }}
+      WKEY: ${{ secrets.WKEY }}
+      TS: ${{ secrets.TURN_SECRET }}
+    steps:
+      - name: deploy TLS to turn4 + verify
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y coturn >/dev/null 2>&1
+          mkdir -p ~/.ssh; printf '%s' "${{ secrets.DOHA_SSH_KEY }}" > ~/.ssh/id_rsa; chmod 600 ~/.ssh/id_rsa
+          printf '%s' "$WCERT" | base64 -d > /tmp/fullchain.pem
+          printf '%s' "$WKEY"  | base64 -d > /tmp/privkey.pem
+          IP=34.18.203.22
+          scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no /tmp/fullchain.pem /tmp/privkey.pem ubuntu@$IP:/tmp/
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$IP 'sudo mkdir -p /etc/coturn && sudo mv /tmp/fullchain.pem /tmp/privkey.pem /etc/coturn/ && (sudo chown root:turnserver /etc/coturn/privkey.pem 2>/dev/null || true) && sudo chmod 640 /etc/coturn/privkey.pem && sudo chmod 644 /etc/coturn/fullchain.pem && (grep -q "^tls-listening-port" /etc/turnserver.conf || printf "tls-listening-port=443\ncert=/etc/coturn/fullchain.pem\npkey=/etc/coturn/privkey.pem\n" | sudo tee -a /etc/turnserver.conf >/dev/null) && sudo mkdir -p /etc/systemd/system/coturn.service.d && printf "[Service]\nAmbientCapabilities=CAP_NET_BIND_SERVICE\n" | sudo tee /etc/systemd/system/coturn.service.d/override.conf >/dev/null && sudo systemctl daemon-reload && sudo systemctl restart coturn && sleep 2 && echo "coturn=$(sudo systemctl is-active coturn)" && (sudo ss -tlnp 2>/dev/null | grep -q ":443" && echo "LISTENING on 443" || echo "NOT listening on 443")'
+          echo "===== TLS TURN allocation test on 443 ====="
+          U=$(( $(date +%s) + 3600 )); P=$(printf '%s' "$U" | openssl dgst -sha1 -hmac "$TS" -binary | base64)
+          timeout 25 turnutils_uclient -S -p 443 -u "$U" -w "$P" -n 2 turn4.your-chat.io 2>&1 | grep -iE 'total|lost|error|401|cannot|tls|handshak' | head -10 || true
