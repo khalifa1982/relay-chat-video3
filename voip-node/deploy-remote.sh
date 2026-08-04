@@ -145,11 +145,16 @@ fi
 echo "--- APPLY ---"
 command -v node >/dev/null 2>&1 || fail "REFUSED: node is not installed on this host" 91
 [ -n "$SVC_USER" ] || fail "REFUSED: neither the 'relayvoip' nor the 'relay' user exists (the unit runs as one of them)" 92
-[ -n "$VOIP_B64" ] || fail "REFUSED: no payload was supplied" 93
+[ -n "$VOIP_B64" ] || [ -n "${VOIP_TGZ:-}" ] || fail "REFUSED: no payload was supplied" 93
 
 umask 022
 install -d -m 0755 /opt/relay-voip "$AGENT_DIR"
-printf '%s' "$VOIP_B64" | base64 -d > /tmp/voip-node.tgz || fail "REFUSED: payload did not decode" 93
+if [ -n "${VOIP_TGZ:-}" ] && [ -f "${VOIP_TGZ}" ]; then
+  # File-path transport: immune to env/exec quoting layers; the sha256 gate below still applies.
+  cp "${VOIP_TGZ}" /tmp/voip-node.tgz || fail "REFUSED: payload copy failed" 93
+else
+  printf '%s' "$VOIP_B64" | base64 -d > /tmp/voip-node.tgz || fail "REFUSED: payload did not decode" 93
+fi
 GOT=$(sha256sum /tmp/voip-node.tgz | cut -d' ' -f1)
 if [ "$GOT" != "$VOIP_SHA" ]; then
   rm -f /tmp/voip-node.tgz
