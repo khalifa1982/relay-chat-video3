@@ -1,0 +1,17 @@
+name: envpeek
+on: { workflow_dispatch: {} }
+jobs:
+  peek:
+    runs-on: ubuntu-latest
+    steps:
+      - name: run
+        env:
+          SSH_KEY: ${{ secrets.DOHA_SSH_KEY }}
+        run: |
+          set -e
+          mkdir -p ~/.ssh && echo "$SSH_KEY" > ~/.ssh/id && chmod 600 ~/.ssh/id
+          for H in 34.18.175.226 34.18.145.249; do
+            echo "<<<BOX $H"
+            ssh -o StrictHostKeyChecking=no -i ~/.ssh/id ubuntu@$H "sudo grep -E '^(APNS_KEY_ID|APNS_TEAM_ID|APNS_VOIP_TOPIC|APNS_ENV|APNS_BUNDLE_ID|FIREBASE_SERVICE_ACCOUNT_JSON|GOOGLE_APPLICATION_CREDENTIALS|FCM_PROJECT_ID|EXPO_ACCESS_TOKEN)=' /home/relay/.env | sed 's/EXPO_ACCESS_TOKEN=.*/EXPO_ACCESS_TOKEN=(set)/'; ls -la /home/relay/apns-key.p8 /home/relay/fcm-sa.json 2>/dev/null || true"
+            echo "BOX>>>"
+          done
