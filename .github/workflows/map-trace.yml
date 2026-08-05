@@ -1,0 +1,11 @@
+name: Map Trace
+on: {workflow_dispatch: {}}
+jobs:
+  g:
+    runs-on: ubuntu-latest
+    steps:
+      - name: q
+        run: |
+          mkdir -p ~/.ssh; printf '%s' "${{ secrets.DOHA_SSH_KEY }}" > ~/.ssh/id_rsa; chmod 600 ~/.ssh/id_rsa
+          echo "c2V0IC1lCnNzaCAtaSB+Ly5zc2gvaWRfcnNhIC1vIFN0cmljdEhvc3RLZXlDaGVja2luZz1ubyAtbyBDb25uZWN0VGltZW91dD0xMiB1YnVudHVAMzQuMTguMTc1LjIyNiAnCiBlY2hvICIjIyMgd2hlcmUgYXJlIC5tYXAgZmlsZXMsIGFueXdoZXJlIHVuZGVyIGFwcC9kaXN0OiIKIHN1ZG8gZmluZCAvaG9tZS9yZWxheS9hcHAvZGlzdCAtbmFtZSAiKi5tYXAiIDI+L2Rldi9udWxsIHwgaGVhZCAtOAogZWNobyAiIyMjIGNvdW50OiI7IHN1ZG8gZmluZCAvaG9tZS9yZWxheS9hcHAvZGlzdCAtbmFtZSAiKi5tYXAiIDI+L2Rldi9udWxsIHwgd2MgLWwKIGVjaG8gIiMjIyBkaXN0IHRyZWUgdG9wOiI7IHN1ZG8gbHMgL2hvbWUvcmVsYXkvYXBwL2Rpc3QgMj4vZGV2L251bGwKIGVjaG8gIiMjIyBkaXN0L3B1YmxpYyB0cmVlOiI7IHN1ZG8gbHMgL2hvbWUvcmVsYXkvYXBwL2Rpc3QvcHVibGljIDI+L2Rldi9udWxsCiBlY2hvICIjIyMgd2hlcmUgc2VydmVyIGJ1bmRsZSBydW5zIGZyb20gKGRpc3QvaW5kZXguanMgZXhpc3RzPyk6Ijsgc3VkbyBscyAvaG9tZS9yZWxheS9hcHAvZGlzdC9pbmRleC5qcyAyPi9kZXYvbnVsbCAmJiBlY2hvIHByZXNlbnQKIGVjaG8gIiMjIyBkb2VzIGRpc3QvcHVibGljL2Fzc2V0cyBoYXZlIG1hcHM6Ijsgc3VkbyBscyAvaG9tZS9yZWxheS9hcHAvZGlzdC9wdWJsaWMvYXNzZXRzLyoubWFwIDI+L2Rldi9udWxsIHwgd2MgLWwKJyAyPiYxIHwgZ3JlcCAtdiBXYXJuaW5n" | base64 -d > /tmp/r.sh
+          bash /tmp/r.sh
