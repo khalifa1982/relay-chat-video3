@@ -811,10 +811,10 @@ body.relay-app-lock {
    control had ROOM to simply be 44px — the mobile back chevrons — it was
    upsized for real instead, and the sweep in tapTargets.test.ts holds both
    answers. */
-.rhit {
+.relay-v2 .rhit {
   position: relative;
 }
-.rhit::after {
+.relay-v2 .rhit::after {
   content: "";
   position: absolute;
   left: 50%;
