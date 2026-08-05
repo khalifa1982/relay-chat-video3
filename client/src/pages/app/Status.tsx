@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useAutoplay } from "@/app/useAutoplay";
-import { Plus, X, Camera, Type, Trash2, Eye, ChevronDown, ChevronLeft, ChevronRight, Send, Video, Smile, Users } from "lucide-react";
+import { Plus, X, Camera, Type, Trash2, Eye, ChevronDown, ChevronLeft, ChevronRight, Send, Video, Smile, Users, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { uploadStatusMedia } from "@/lib/uploadAttachment";
 import { videoRecorderSupported } from "@/lib/videoNote";
 import { VideoRecordSheet } from "@/app/VideoRecordSheet";
+import { ImageEditSheet } from "@/app/ImageEditSheet";
+import { MediaEditSheet } from "@/app/MediaEditSheet";
 import { AUDIENCE_OPTIONS, audienceOption } from "@/app/statusAudience";
 import { EmojiPicker } from "@/app/EmojiPicker";
 import { REACTION_QUICK } from "@/lib/emojiCatalog";
@@ -471,6 +473,14 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
   const [caption, setCaption] = useState("");
   const [bgIndex, setBgIndex] = useState(0);
   const [file, setFile] = useState<File | null>(null);
+  /* STORY MEDIA GOES THROUGH THE EDITORS NOW (v2.107.39). The chat composer has
+     had crop/rotate/draw (photos) and draw-on-video since v2.107.2x; a story is
+     MORE public than a message, so it deserves the same pass, not less. This
+     holds the file while its editor is open; Cancel posts the ORIGINAL byte for
+     byte (the editors' own contract), so the old pick→post flow is still one
+     tap away. Camera recordings route through here too — you can draw on a
+     just-recorded story clip. */
+  const [editing, setEditing] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
   // In-app recorder (v2.96.2) — iOS blocks the SYSTEM camera's video
@@ -549,7 +559,13 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
 
   function pickFile(f: File | null) {
     if (!f) return;
-    setFile(f);
+    const k = mediaKindOf(f);
+    if (k === "image" || k === "video") {
+      // The editor hands the file over via onUse/onClose; audio has no editor.
+      setEditing(f);
+    } else {
+      setFile(f);
+    }
     /* Land on the tab that matches WHAT WAS ACTUALLY PICKED, not the one that was
        open. The accept filters are a hint to the OS picker, not a guarantee — a file
        manager will happily hand a .mp4 to an `image/*` input — so trusting the open
@@ -737,7 +753,22 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
             ) : (
               <div className="flex min-h-0 flex-1 flex-col justify-center gap-3">
                 {previewUrl && file ? (
-                  <MediaPreview file={file} url={previewUrl} />
+                  <div className="relative">
+                    <MediaPreview file={file} url={previewUrl} />
+                    {/* Re-open the editor on what's already staged (v2.107.39) —
+                        same affordance as the chat composer's strip. Hidden for
+                        audio, which has no editor. */}
+                    {mediaKindOf(file) !== "audio" && (
+                      <button
+                        type="button"
+                        onClick={() => setEditing(file)}
+                        aria-label={t("status.editMedia")}
+                        className="absolute end-2 top-2 z-10 flex items-center gap-1.5 rounded-full bg-black/55 px-3 py-1.5 text-[11px] font-semibold text-white backdrop-blur-sm"
+                      >
+                        <Pencil className="size-3" /> {t("status.editMedia")}
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <button
                     type="button"
@@ -955,6 +986,22 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
             setRecOpen(false);
             pickFile(new File([r.blob], `status-video.${r.ext}`, { type: r.mimeType }));
           }}
+        />
+      )}
+      {/* The same editors the chat composer uses, above this dialog by their own
+          z-[130] portals. Cancel = the original, untouched — the editors' contract. */}
+      {editing && mediaKindOf(editing) === "image" && (
+        <ImageEditSheet
+          file={editing}
+          onClose={() => { setFile(editing); setEditing(null); }}
+          onUse={(f) => { setFile(f); setEditing(null); }}
+        />
+      )}
+      {editing && mediaKindOf(editing) === "video" && (
+        <MediaEditSheet
+          file={editing}
+          onClose={() => { setFile(editing); setEditing(null); }}
+          onUse={(f) => { setFile(f); setEditing(null); }}
         />
       )}
     </div>,

@@ -35,6 +35,8 @@ import type { Entry } from "./types";
  * how one fact acquires two Arabic words.
  */
 export const STATUS = {
+  // v2.107.39: stories go through the photo/video editors; the preview's re-edit pill.
+  "status.editMedia": { en: "Edit", ar: "تعديل" },
   "status.myStory": { en: "My story", ar: "قصتي" },
   "status.newStory": { en: "New story", ar: "قصة جديدة" },
   "status.close": { en: "Close", ar: "إغلاق" },
