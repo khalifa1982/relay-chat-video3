@@ -33,6 +33,8 @@ import {
   normalizeCrashPlatform,
   pushCrashBreadcrumb,
   classifyCrashNoise,
+  describeThrowable,
+  EMPTY_THROWABLE_SENTINEL,
 } from "./crashCore";
 import fs from "node:fs";
 import path from "node:path";
@@ -264,5 +266,85 @@ describe("classifyCrashNoise — somebody else's crash is not our report (v2.107
     );
     expect(rec).toMatch(/classifyCrashNoise\(\{/);
     expect(rec).toMatch(/if \(noise\) return;/);
+  });
+});
+
+
+describe("describeThrowable — real content out of non-Error throws (v2.107.45)", () => {
+  it("keeps a plain string throw as its own message", () => {
+    expect(describeThrowable("boom")).toEqual({ name: "Error", message: "boom", empty: false });
+  });
+
+  it("pulls .message / .reason / .error off an object instead of [object Object]", () => {
+    expect(describeThrowable({ message: "socket closed" }).message).toBe("socket closed");
+    expect(describeThrowable({ reason: "timeout" }).message).toBe("timeout");
+    expect(describeThrowable({ error: "nope" }).message).toBe("nope");
+  });
+
+  it("snapshots own keys as JSON when there is no obvious message field", () => {
+    const d = describeThrowable({ status: 503, path: "/x" });
+    expect(d.message).toContain("503");
+    expect(d.message).toContain("/x");
+    expect(d.empty).toBe(false);
+  });
+
+  it("uses name + code for DOMException-ish shapes", () => {
+    const d = describeThrowable({ name: "DataError", code: 0 });
+    // no string message, no enumerable snapshot content beyond name/code
+    expect(d.name).toBe("DataError");
+  });
+
+  it("flags a genuinely empty object throw so it can be dropped as noise", () => {
+    const d = describeThrowable({});
+    expect(d.empty).toBe(true);
+    expect(d.message).toBe(EMPTY_THROWABLE_SENTINEL);
+  });
+
+  it("survives a circular object without throwing", () => {
+    const o: Record<string, unknown> = {};
+    o.self = o;
+    expect(() => describeThrowable(o)).not.toThrow();
+  });
+});
+
+describe("classifyCrashNoise — the empty object-throw (crash #14 shape)", () => {
+  // #14: unhandledrejection carrying a plain {} on HonorBrowser; the reporter's
+  // own frames are the only stack, no message. Nothing to fix, nothing to group.
+  it("drops the #14 shape: empty message, stack is only the reporter's own frames", () => {
+    // Crash #14: the only frames were the crash reporter itself (index-*.js on
+    // OUR host, decoding to crashReporter.ts) — an object with no message that
+    // never touched product code. foreign-script does NOT fire (frames ARE ours),
+    // so the empty-throwable rule catches it.
+    const noise = classifyCrashNoise({
+      errorName: "Error",
+      errorMessage: EMPTY_THROWABLE_SENTINEL,
+      stack:
+        "Error\n    at ro (https://your-chat.io/assets/index-jmt9VmL-.js:2:5523)\n    at https://your-chat.io/assets/index-jmt9VmL-.js:2:6501",
+      platform: "web",
+      ownHost: "your-chat.io",
+    });
+    expect(noise).toBe("empty-throwable");
+  });
+
+  it("an empty throw with a foreign frame is also dropped (empty wins, either way noise)", () => {
+    const noise = classifyCrashNoise({
+      errorName: "Error",
+      errorMessage: EMPTY_THROWABLE_SENTINEL,
+      stack: "Error\n    at ro (https://cdn.some-oem.example/inject.js:2:10)",
+      platform: "web",
+      ownHost: "your-chat.io",
+    });
+    expect(noise).toBe("empty-throwable");
+  });
+
+  it("a real message is never treated as empty-throwable noise", () => {
+    const noise = classifyCrashNoise({
+      errorName: "TypeError",
+      errorMessage: "x is not a function",
+      stack: "TypeError\n    at fn (https://your-chat.io/assets/index-abc.js:2:99)",
+      platform: "web",
+      ownHost: "your-chat.io",
+    });
+    expect(noise).toBeNull();
   });
 });

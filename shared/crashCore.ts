@@ -212,18 +212,68 @@ export function compareAppVersions(a: string, b: string): -1 | 0 | 1 {
  * ours" must never be dropped. `ownHost` empty skips the foreign rule too:
  * better a stray row than a silenced real crash.
  */
+/**
+ * A readable message + name for something thrown that is NOT an Error.
+ *
+ * `String(someObject)` is "[object Object]" — which is exactly what a real crash
+ * from an unhandledrejection carrying a plain object produced (crash #14,
+ * v2.107.41): a genuine failure with every diagnostic byte thrown away. This
+ * digs out whatever the value actually carries — a `.message`/`.error`/`.reason`
+ * string, a `.name`/`.code`, or a JSON snapshot — so the report says something.
+ * Returns `{ name, message, empty }`; `empty` is true when the value yielded no
+ * usable content at all (e.g. `{}`), which the noise classifier uses to drop
+ * undiagnosable OEM-injected throws instead of storing a wall of "[object Object]".
+ */
+export function describeThrowable(err: unknown): { name: string; message: string; empty: boolean } {
+  if (typeof err === "string") return { name: "Error", message: err, empty: err.trim() === "" };
+  if (err == null) return { name: "Error", message: String(err), empty: false };
+  if (typeof err !== "object") return { name: "Error", message: String(err), empty: false };
+
+  const o = err as Record<string, unknown>;
+  const pick = (v: unknown): string => (typeof v === "string" && v.trim() ? v.trim() : "");
+  // Common shapes: {message}, {error:"…"}, {reason:"…"}, DOMException-ish {name,code}.
+  let message = pick(o.message) || pick(o.error) || pick(o.reason) || pick(o.description);
+  const name = pick(o.name) || "Error";
+  const code = pick(o.code) || (typeof o.code === "number" ? String(o.code) : "");
+
+  if (!message) {
+    // No obvious string field — take a bounded JSON snapshot of own enumerable keys.
+    try {
+      const keys = Object.keys(o);
+      if (keys.length > 0) {
+        const snap = JSON.stringify(o, keys.slice(0, 12));
+        if (snap && snap !== "{}") message = snap.slice(0, 300);
+      }
+    } catch {
+      /* circular / unserialisable — fall through to empty */
+    }
+  }
+  if (!message && code) message = name + " " + code;
+
+  const empty = message === "";
+  return { name, message: message || "[non-Error thrown, no message]", empty };
+}
+
 export function classifyCrashNoise(input: {
   errorName: string;
   errorMessage: string;
   stack: string | null | undefined;
   platform: string;
   ownHost: string;
-}): null | "abort" | "opaque-cross-origin" | "foreign-script" {
+}): null | "abort" | "opaque-cross-origin" | "foreign-script" | "empty-throwable" {
   const name = (input.errorName || "").trim();
   const msg = (input.errorMessage || "").trim();
   if (name === "AbortError") return "abort";
   if (input.platform !== "web") return null;
   if (/^Script error\.?$/.test(msg)) return "opaque-cross-origin";
+  // An object thrown with NO usable content (the "[object Object]" / empty-{}
+  // case the reporter tags with this sentinel) is undiagnosable no matter where
+  // it came from — there is nothing to fix and nothing to group on. Crash #14
+  // was exactly this: an unhandledrejection carrying a bare object on an OEM
+  // browser, whose only stack frames were the reporter itself. Checked before
+  // the frame-origin rule because the origin does not change the verdict.
+  if (msg === EMPTY_THROWABLE_SENTINEL) return "empty-throwable";
+
   const frames = (input.stack || "").match(/[a-z][a-z0-9+.-]*:\/\/[^\s)]+/gi) ?? [];
   if (frames.length > 0 && input.ownHost) {
     const own = frames.some((f) => {
@@ -237,3 +287,7 @@ export function classifyCrashNoise(input: {
   }
   return null;
 }
+
+/** Marker the client stamps as the message when describeThrowable found nothing;
+ *  lets the shared classifier recognise an undiagnosable object-throw. */
+export const EMPTY_THROWABLE_SENTINEL = "[non-Error thrown, no message]";

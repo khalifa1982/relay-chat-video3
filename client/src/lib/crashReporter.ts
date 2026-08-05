@@ -33,6 +33,7 @@ import {
   capCrashField,
   detectCrashPlatform,
   pushCrashBreadcrumb,
+  describeThrowable,
 } from "@shared/crashCore";
 import { getDeviceId } from "@/lib/deviceId";
 
@@ -179,7 +180,16 @@ export function reportCrash(
   extra?: { componentStack?: string | null; kind?: string }
 ): void {
   try {
-    const e = err instanceof Error ? err : new Error(String(err));
+    /* v2.107.45: a non-Error throwable used to become `new Error(String(err))`,
+       i.e. "[object Object]" for any plain object — which is exactly how crash
+       #14 arrived: a real unhandledrejection with every diagnostic byte lost.
+       describeThrowable pulls out a real message (a .message/.reason string, a
+       JSON snapshot, a code) and, when there is genuinely nothing, stamps the
+       empty sentinel so classifyCrashNoise can drop an undiagnosable OEM throw
+       rather than store a wall of "[object Object]". A real Error is untouched. */
+    const d = err instanceof Error ? null : describeThrowable(err);
+    const e = err instanceof Error ? err : new Error(d!.message);
+    if (d && !(err instanceof Error)) e.name = d.name;
     const name = capCrashField(e.name || extra?.kind || "Error", CRASH_CAPS.name);
     const message = capCrashField(e.message || "", CRASH_CAPS.message);
     const platform = detectCrashPlatform(
