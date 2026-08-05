@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { ListLoading } from "@/app/ListStates";
 import { PIN_INPUT_MAXLENGTH, capPinInput, pinDigits } from "@/app/pinInput";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -214,7 +215,7 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
         {/* Contact list */}
         <div className="min-h-0 flex-1 overflow-y-auto">
           {contacts.isLoading ? (
-            <div className="p-6 text-sm text-muted-foreground">{t("groupcall.loading")}</div>
+            <ListLoading label={t("groupcall.loading")} />
           ) : list.length === 0 ? (
             // `text-center` is direction-independent and stays physical.
             <div className="p-8 text-center text-sm text-muted-foreground">
@@ -539,7 +540,7 @@ export function PartyLinesSection({
             </div>
           )}
           {lines.isLoading ? (
-            <div className="py-1 text-xs text-muted-foreground">{t("groupcall.loading")}</div>
+            <ListLoading label={t("groupcall.loading")} className="justify-start p-0 py-1 text-xs" />
           ) : rows.length === 0 ? (
             <div className="py-1 text-xs text-muted-foreground">{t("groupcall.noLines")}</div>
           ) : (

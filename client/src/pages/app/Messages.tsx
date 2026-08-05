@@ -62,6 +62,7 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 import { trpc } from "@/lib/trpc";
+import { ListLoading } from "@/app/ListStates";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { EmojiPicker } from "@/app/EmojiPicker";
 import {
@@ -803,7 +804,7 @@ export default function MessagesPage({
               </button>
             </div>
           ) : threads.isLoading ? (
-            <div className="p-6 text-sm text-muted-foreground">{tr("msg.loading")}</div>
+            <ListLoading label={tr("msg.loading")} />
           ) : scopedThreads.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
               {only === "groups" ? (
@@ -3093,7 +3094,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 {t("msg.searchHint")}
               </div>
             ) : searchResults.isLoading ? (
-              <div className="text-sm text-muted-foreground">{t("msg.searching")}</div>
+              <ListLoading label={t("msg.searching")} className="mt-6 p-0" />
             ) : (searchResults.data?.length ?? 0) === 0 ? (
               <div className="text-center text-sm text-muted-foreground mt-10">
                 {t("msg.noMessagesMatch", { query: debouncedSearch })}
@@ -3178,7 +3179,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             top-margin spacer push content down when it doesn't fill the view. */}
         <div className="mt-auto shrink-0" aria-hidden="true" />
         {messagesQuery.isLoading ? (
-          <div className="text-sm text-muted-foreground">{t("msg.loading")}</div>
+          <ListLoading label={t("msg.loading")} className="p-0" />
         ) : (messagesQuery.data?.length ?? 0) === 0 ? (
           <div className="text-center text-sm text-muted-foreground mt-10">
             {t("msg.emptyThread")}

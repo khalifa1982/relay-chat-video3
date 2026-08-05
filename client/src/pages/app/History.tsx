@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { ListLoading } from "@/app/ListStates";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -979,7 +980,7 @@ export default function HistoryPage() {
               </button>
             </div>
           ) : loading ? (
-            <div className="p-6 text-sm text-muted-foreground">{t("history.loading")}</div>
+            <ListLoading label={t("history.loading")} />
           ) : visible.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
               {historySearch.trim()

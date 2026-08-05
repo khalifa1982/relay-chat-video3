@@ -36,6 +36,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { ListLoading } from "@/app/ListStates";
 import { QrGlyph, ShareNumberSheet } from "@/app/ShareNumber";
 import { useIdentity } from "@/app/useIdentity";
 import { useSignOut } from "@/app/useSignOut";
@@ -222,9 +223,7 @@ export default function ProfilePage() {
 
   if (!me) {
     return (
-      <div className="h-full grid place-items-center text-muted-foreground">
-        {t("profile.loading")}
-      </div>
+      <ListLoading label={t("profile.loading")} className="h-full" />
     );
   }
 

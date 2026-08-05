@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
+import { ListLoading } from "@/app/ListStates";
 import { arrivedWithDialTarget, consumeDialIntent } from "@/lib/bootUrl";
 import { RoleBadge, roleFromFlags, roleLabel } from "@/app/VerifiedBadge";
 import { openPeerProfile } from "@/app/PeerOverlays";
@@ -572,7 +573,7 @@ export default function DialerPage() {
           </div>
           <div className="flex-1 overflow-y-auto">
             {history.isLoading ? (
-              <div className="p-6 text-sm text-muted-foreground">{t("dialer.loading")}</div>
+              <ListLoading label={t("dialer.loading")} />
             ) : recent.length === 0 ? (
               <div className="p-10 text-center text-sm text-muted-foreground">
                 {t("dialer.noCalls")}

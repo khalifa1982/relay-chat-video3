@@ -48,6 +48,7 @@ import type { ReactNode } from "react";
 import { APP_VERSION } from "@shared/version";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { ListLoading } from "@/app/ListStates";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -494,7 +495,7 @@ export default function Admin() {
       </div>
 
       {found.isLoading ? (
-        <div className="p-6 text-center text-sm text-muted-foreground">{t("admin.loading")}</div>
+        <ListLoading label={t("admin.loading")} />
       ) : (found.data?.rows.length ?? 0) === 0 ? (
         <div className="p-6 text-center text-sm text-muted-foreground">
           {submitted ? t("admin.noMatches", { query: submitted }) : t("admin.noneYet")}
@@ -1383,7 +1384,11 @@ function SessionsConsole() {
       <p className="text-xs text-muted-foreground">{t("admin.sessions.body")}</p>
       {listQ.isError ? (
         <p className="text-xs text-destructive">{t("admin.sessions.loadError")}</p>
-      ) : (listQ.data?.rows ?? []).length === 0 && !listQ.isLoading ? (
+      ) : listQ.isLoading ? (
+        /* v2.107.41: while loading, this console used to render an EMPTY list —
+           a blank card that read as "no data" until the rows popped in. */
+        <ListLoading label={t("admin.loading")} className="p-3 text-xs" />
+      ) : (listQ.data?.rows ?? []).length === 0 ? (
         <p className="text-xs text-muted-foreground">{t("admin.sessions.empty")}</p>
       ) : (
         <ul className="space-y-1.5">
@@ -1482,7 +1487,9 @@ function CallsConsole() {
       <p className="text-xs text-muted-foreground">{t("admin.calls.body")}</p>
       {listQ.isError ? (
         <p className="text-xs text-destructive">{t("admin.calls.loadError")}</p>
-      ) : (listQ.data?.rows ?? []).length === 0 && !listQ.isLoading ? (
+      ) : listQ.isLoading ? (
+        <ListLoading label={t("admin.loading")} className="p-3 text-xs" />
+) : (listQ.data?.rows ?? []).length === 0 ? (
         <p className="text-xs text-muted-foreground">{t("admin.calls.empty")}</p>
       ) : (
         <ul className="space-y-1.5">
@@ -1645,7 +1652,9 @@ function CrashConsole() {
 
       {groupsQ.isError ? (
         <p className="text-xs text-destructive">{t("admin.crash.loadError")}</p>
-      ) : (groupsQ.data?.rows ?? []).length === 0 && !groupsQ.isLoading ? (
+      ) : groupsQ.isLoading ? (
+        <ListLoading label={t("admin.loading")} className="p-3 text-xs" />
+) : (groupsQ.data?.rows ?? []).length === 0 ? (
         <p className="text-xs text-muted-foreground">{t("admin.crash.empty")}</p>
       ) : (
         <ul className="space-y-1.5">
