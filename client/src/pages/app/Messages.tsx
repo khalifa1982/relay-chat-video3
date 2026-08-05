@@ -2808,7 +2808,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           <button
             type="button"
             aria-label={t("msg.back")}
-            className="grid size-8 shrink-0 place-items-center md:hidden hover:brightness-110"
+            className="grid size-11 shrink-0 place-items-center md:hidden hover:brightness-110"
             style={{ color: "#52e3d0" }}
             onClick={() => setLocation(basePath)}
           >
@@ -2841,7 +2841,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         <button
           type="button"
           aria-label={t("msg.back")}
-          className="md:hidden grid place-items-center size-8 shrink-0 hover:brightness-110"
+          className="md:hidden grid place-items-center size-11 shrink-0 hover:brightness-110"
           style={{ color: "#52e3d0" }}
           onClick={() => setLocation(basePath)}
         >
@@ -5079,7 +5079,7 @@ function QuickReact({
               aria-pressed={on}
               onClick={() => onPick(e)}
               className={
-                "grid size-8 place-items-center rounded-full text-lg leading-none transition active:scale-90 motion-reduce:transition-none " +
+                "rhit grid size-8 place-items-center rounded-full text-lg leading-none transition active:scale-90 motion-reduce:transition-none " +
                 (on ? "" : "hover:bg-foreground/10")
               }
               style={on ? { background: "rgba(var(--rb-rgb), 0.22)" } : undefined}
@@ -5092,7 +5092,7 @@ function QuickReact({
           type="button"
           aria-label={t("msg.moreReactions")}
           onClick={onMore}
-          className="grid size-8 place-items-center rounded-full text-muted-foreground transition hover:bg-foreground/10 active:scale-90 motion-reduce:transition-none"
+          className="rhit grid size-8 place-items-center rounded-full text-muted-foreground transition hover:bg-foreground/10 active:scale-90 motion-reduce:transition-none"
         >
           <Plus className="size-4" />
         </button>
@@ -5100,7 +5100,7 @@ function QuickReact({
           type="button"
           aria-label={t("msg.closeReactions")}
           onClick={onClose}
-          className="grid size-8 place-items-center rounded-full text-muted-foreground transition hover:bg-foreground/10 active:scale-90 motion-reduce:transition-none"
+          className="rhit grid size-8 place-items-center rounded-full text-muted-foreground transition hover:bg-foreground/10 active:scale-90 motion-reduce:transition-none"
         >
           <X className="size-4" />
         </button>

@@ -1272,7 +1272,7 @@ export function StatusViewer({
               : timeAgoText(item.createdAt, t)}
           </div>
         </div>
-        <button type="button" onClick={onClose} aria-label={t("status.close")} className="rounded-full p-1.5 hover:bg-white/10">
+        <button type="button" onClick={onClose} aria-label={t("status.close")} className="rhit rounded-full p-1.5 hover:bg-white/10">
           <X className="size-6" />
         </button>
       </div>

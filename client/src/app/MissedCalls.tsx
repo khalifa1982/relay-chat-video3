@@ -132,7 +132,7 @@ export function AwaySummaryToast({
             type="button"
             onClick={onDismiss}
             aria-label={t("alerts.dismiss")}
-            className="shrink-0 grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+            className="rhit shrink-0 grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
           >
             <X className="size-4" />
           </button>
@@ -269,7 +269,7 @@ export function MissedCallToast({
             type="button"
             onClick={onDismiss}
             aria-label={t("alerts.dismiss")}
-            className="shrink-0 grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+            className="rhit shrink-0 grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
           >
             <X className="size-4" />
           </button>

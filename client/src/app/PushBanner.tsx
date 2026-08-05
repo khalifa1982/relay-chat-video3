@@ -104,7 +104,7 @@ export function PushBanner() {
           type="button"
           onClick={dismiss}
           aria-label="Dismiss"
-          className="rounded-full p-1 text-sky-200/70 hover:bg-white/10"
+          className="rhit rounded-full p-1 text-sky-200/70 hover:bg-white/10"
         >
           <X className="size-4" />
         </button>
@@ -160,7 +160,7 @@ export function PushBanner() {
         type="button"
         onClick={dismiss}
         aria-label="Dismiss"
-        className="rounded-full p-1 text-foreground/60 hover:bg-white/10"
+        className="rhit rounded-full p-1 text-foreground/60 hover:bg-white/10"
       >
         <X className="size-4" />
       </button>

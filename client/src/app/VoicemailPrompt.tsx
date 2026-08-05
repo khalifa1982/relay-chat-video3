@@ -680,7 +680,7 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
             type="button"
             onClick={onClose}
             aria-label={t("voicemail.dismiss")}
-            className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+            className="rhit rounded-full p-1.5 text-muted-foreground hover:bg-muted"
           >
             <X className="size-4" />
           </button>

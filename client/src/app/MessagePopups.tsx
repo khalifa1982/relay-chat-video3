@@ -192,7 +192,7 @@ function PopupCard({ popup }: { popup: MessagePopup }) {
           onClick={doReply}
           disabled={!reply.trim() || send.isPending}
           aria-label="Send reply"
-          className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground disabled:opacity-40"
+          className="rhit grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground disabled:opacity-40"
         >
           <Send className="size-4" />
         </button>

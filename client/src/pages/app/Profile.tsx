@@ -2127,7 +2127,7 @@ function PasscodeSection({ displayName }: { displayName: string }) {
               disabled={bioBusy}
               onClick={toggleBiometric}
               className={
-                "relative shrink-0 h-7 w-12 rounded-full transition-colors duration-200 disabled:opacity-50 " +
+                "rhit relative shrink-0 h-7 w-12 rounded-full transition-colors duration-200 disabled:opacity-50 " +
                 (bioOn
                   ? "bg-[color:var(--relay-online,theme(colors.primary.DEFAULT))]"
                   : "bg-muted-foreground/30")

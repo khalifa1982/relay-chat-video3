@@ -131,7 +131,7 @@ export function AvatarPicker({
             onClick={onClose}
             disabled={busy}
             aria-label="Close"
-            className="rounded-full p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-50"
+            className="rhit rounded-full p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-50"
           >
             <X className="size-5" />
           </button>

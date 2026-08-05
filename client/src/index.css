@@ -800,6 +800,30 @@ body.relay-app-lock {
    NEARLY opaque rather than translucent, deliberately: an overlay sits over content the
    user is meant to stop reading, and a see-through sheet keeps that content competing. It
    also means no `backdrop-filter` is needed here at all — the cheapest way to satisfy a
+/* THE 44px HIT HALO (v2.107.42) — board rule 9 says every tap target on a
+   390×812 phone is at least 44px, and fourteen controls were under it: dismiss
+   ✕s, the reaction strip, a toggle, a mini send. Some of those are SUPPOSED to
+   look small — an ✕ drawn at 44px stops being an ✕ and starts being a button —
+   so the rule is satisfied where it actually lives: in hit-testing, not in
+   paint. The ::after square is invisible, centred, and never smaller than
+   44×44 in either axis (max() keeps oversized hosts unchanged); it belongs to
+   the control, so clicks on the halo ARE clicks on the control. Where a
+   control had ROOM to simply be 44px — the mobile back chevrons — it was
+   upsized for real instead, and the sweep in tapTargets.test.ts holds both
+   answers. */
+.rhit {
+  position: relative;
+}
+.rhit::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  transform: translate(-50%, -50%);
+}
+
    glass look is not to blur anything (the v2.99.84 rule). */
 .dark.relay-v2 .rsheet {
   background: linear-gradient(180deg, rgba(15, 21, 25, 0.96), rgba(8, 12, 15, 0.98));
