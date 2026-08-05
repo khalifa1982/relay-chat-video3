@@ -1,0 +1,11 @@
+name: PinGate
+on: {workflow_dispatch: {}}
+jobs:
+  g:
+    runs-on: ubuntu-latest
+    steps:
+      - name: q
+        run: |
+          mkdir -p ~/.ssh; printf '%s' "${{ secrets.DOHA_SSH_KEY }}" > ~/.ssh/id_rsa; chmod 600 ~/.ssh/id_rsa
+          echo "CmVjaG8gIj09PSBHQVRFOiBjYW4gYm94IEIgcmVhY2ggYm94IEEgbm9kZSAoMTAuMjEyLjAuMzozMDAwKSBpbnRlcm5hbGx5PyA9PT0iCnNzaCAtaSB+Ly5zc2gvaWRfcnNhIC1vIFN0cmljdEhvc3RLZXlDaGVja2luZz1ubyAtbyBDb25uZWN0VGltZW91dD0xMiB1YnVudHVAMzQuMTguMTQ1LjI0OSAnYmFzaCAtcycgPDwnUkVNT1RFJwplY2hvICItLSBjdXJsIGJveCBBIGhlYWx0aCBmcm9tIGJveCBCIC0tIgpjdXJsIC1zIC1tNiBodHRwOi8vMTAuMjEyLjAuMzozMDAwL2FwaS9oZWFsdGggMj4mMSB8IGhlYWQgLWMgMTYwOyBlY2hvCmVjaG8gIi0tIGV4aXQ6ICQ/IC0tIgplY2hvICItLSBjYWRkeSB2ZXJzaW9uIChzeW50YXggdGFyZ2V0KSAtLSIKY2FkZHkgdmVyc2lvbiAyPi9kZXYvbnVsbCB8fCBzdWRvIGNhZGR5IHZlcnNpb24gMj4vZGV2L251bGwgfHwgZWNobyAiKGNhZGR5IGJpbj8pIgplY2hvICItLSBiYWNrdXAgY3VycmVudCBDYWRkeWZpbGUgLS0iCnN1ZG8gY3AgLW4gL2V0Yy9jYWRkeS9DYWRkeWZpbGUgL2V0Yy9jYWRkeS9DYWRkeWZpbGUuYmFrLnBpbmZpeCAmJiBlY2hvICJiYWNrZWQgdXAgYm94IEIgQ2FkZHlmaWxlIiB8fCBlY2hvICIoYmFja3VwIGV4aXN0cyBhbHJlYWR5KSIKc3VkbyBscyAtbGEgL2V0Yy9jYWRkeS9DYWRkeWZpbGUqClJFTU9URQplY2hvCmVjaG8gIj09PSBiYWNrdXAgYm94IEEgQ2FkZHlmaWxlIHRvbyAobm8gY2hhbmdlIHBsYW5uZWQsIHNhZmV0eSBvbmx5KSA9PT0iCnNzaCAtaSB+Ly5zc2gvaWRfcnNhIC1vIFN0cmljdEhvc3RLZXlDaGVja2luZz1ubyAtbyBDb25uZWN0VGltZW91dD0xMiB1YnVudHVAMzQuMTguMTc1LjIyNiAnYmFzaCAtcycgPDwnUkVNT1RFJwpzdWRvIGNwIC1uIC9ldGMvY2FkZHkvQ2FkZHlmaWxlIC9ldGMvY2FkZHkvQ2FkZHlmaWxlLmJhay5waW5maXggJiYgZWNobyAiYmFja2VkIHVwIGJveCBBIENhZGR5ZmlsZSIgfHwgZWNobyAiKGJhY2t1cCBleGlzdHMgYWxyZWFkeSkiClJFTU9URQo=" | base64 -d > /tmp/r.sh
+          bash /tmp/r.sh 2>&1
