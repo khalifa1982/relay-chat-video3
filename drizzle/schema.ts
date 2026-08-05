@@ -723,6 +723,29 @@ export const messageAttachments = mysqlTable(
     msgIdx: index("msg_att_msg_idx").on(t.messageId),
   }),
 );
+
+/**
+ * PER-POST GROUP READ RECEIPTS (v2.107.35). Owner: *"in the group, when someone
+ * posts something, the post owner and admins can see who read it and what time
+ * for each post."* One row per (message, reader), stamped the moment the
+ * reader's watermark passes the message inside `markThreadRead`'s transaction —
+ * so a receipt can never exist without the read that produced it. Group
+ * conversations only: the 1:1 panel already has `readAt` on the message row,
+ * and a DM's "who" is never in question.
+ */
+export const messageReads = mysqlTable(
+  "message_reads",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    messageId: int("messageId").notNull(),
+    readerId: int("readerId").notNull(),
+    readAt: timestamp("readAt").notNull(),
+  },
+  (t) => [
+    // One receipt per reader per message — the insert relies on this to be idempotent.
+    uniqueIndex("msg_reads_unique").on(t.messageId, t.readerId),
+  ],
+);
 export type MessageAttachment = typeof messageAttachments.$inferSelect;
 
 export type Message = typeof messages.$inferSelect;

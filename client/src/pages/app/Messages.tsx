@@ -304,6 +304,45 @@ function formatExact(iso: string | Date): string {
 }
 
 /**
+ * "READ BY" - the group section of the message-info panel (v2.107.35).
+ *
+ * Owner: *"in the group, when someone posts something, the post owner and
+ * admins can see who read it and what time for each post."* Mounted only when
+ * the viewer is that audience (and the server enforces the same rule), it asks
+ * `readsFor` fresh each open - a receipt list is exactly the thing that should
+ * never be stale - and renders name + exact time per reader. Three honest
+ * states besides the list: loading, a failed fetch (an em-dash, never a fake
+ * empty), and nobody-yet in words.
+ */
+function GroupReadBy({ messageId }: { messageId: number }) {
+  const t = useT();
+  const q = trpc.messages.readsFor.useQuery({ messageId });
+  return (
+    <div className="mt-3 border-t border-border/60 pt-2">
+      <div className="text-xs uppercase tracking-wider text-muted-foreground">{t("msg.readBy")}</div>
+      {q.isLoading ? (
+        <div className="pt-1 text-sm text-muted-foreground">…</div>
+      ) : q.isError ? (
+        <div className="pt-1 text-sm text-muted-foreground">—</div>
+      ) : !q.data || q.data.length === 0 ? (
+        <div className="pt-1 text-sm text-muted-foreground">{t("msg.readByNone")}</div>
+      ) : (
+        <div className="max-h-44 space-y-1 overflow-y-auto pt-1">
+          {q.data.map((r) => (
+            <div key={r.identityId} className="flex items-baseline justify-between gap-4">
+              <span className="truncate text-sm">{r.displayName || r.number}</span>
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                {formatExact(r.readAt)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Is this a self-destructing message? (v2.99.74)
  *
  * Used to withhold FORWARD, whose whole effect is to make a second, permanent copy
@@ -4246,6 +4285,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                           {t("msg.infoReceivedNote")}
                         </p>
                       )}
+                      {isGroup && (iSent || iAmGroupAdmin) && <GroupReadBy messageId={m.id} />}
                     </>
                   );
                 })()}

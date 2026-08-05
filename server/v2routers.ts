@@ -126,6 +126,7 @@ import {
   markOnline,
   markOffline,
   markThreadRead,
+  listMessageReads,
   markThreadDelivered,
   recordAttachment,
   recordCallStart,
@@ -2326,6 +2327,29 @@ export const v2MessagesRouter = router({
    * Members of a conversation (id, number, name, avatar) — used by the group
    * conversation view to label messages with sender names and show the roster.
    */
+  /** Per-post group read receipts (v2.107.35): who read this post, and when.
+   *  The audience gate lives in `listMessageReads` - author or group admin
+   *  (creator included) - so a second call site could not forget it. */
+  readsFor: publicProcedure
+    .input(z.object({ messageId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const res = await listMessageReads({ messageId: input.messageId, viewerId: me.id });
+      if (!res.ok) {
+        if (res.reason === "not-allowed")
+          throw new TRPCError({ code: "FORBIDDEN", message: "not-allowed" });
+        if (res.reason === "unavailable")
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "unavailable" });
+        throw new TRPCError({ code: "NOT_FOUND", message: res.reason });
+      }
+      return res.readers.map((r) => ({
+        identityId: r.identityId,
+        displayName: r.displayName,
+        number: r.number,
+        readAt: r.readAt,
+      }));
+    }),
+
   conversationInfo: publicProcedure
     .input(z.object({ conversationId: z.number().int().positive() }))
     .query(async ({ ctx, input }) => {

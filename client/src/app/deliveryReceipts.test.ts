@@ -175,20 +175,24 @@ describe("the server transition — delivered means the app has it", () => {
     // get the third state at all — ticks would stop going blue for anyone whose app
     // reported delivery first, which is everyone. It already accepted both before this
     // release; pinned so a future narrowing has to come back and think about it.
-    const read = V2DB.slice(
-      V2DB.indexOf("export async function markThreadRead("),
-      V2DB.indexOf("export async function markThreadRead(") + 4000
-    );
+    /* v2.107.35: was a hardcoded +4000-char window, which silently pushed the
+       read-transition line out of range the day the group-receipts hook grew
+       the function above it. Sliced to the next export now, so the pin tracks
+       the FUNCTION rather than a byte count. */
+    const start = V2DB.indexOf("export async function markThreadRead(");
+    const read = V2DB.slice(start, V2DB.indexOf("\nexport ", start + 1));
     expect(read).toMatch(/or\(eq\(messages\.status, "sent"\), eq\(messages\.status, "delivered"\)\)/);
   });
 
   it("reading a message BACKFILLS its delivered time", () => {
     // Otherwise the info panel shows a message read at 10:05 that was never delivered,
     // which is not a thing that can happen and reads as a bug in the panel.
-    const read = V2DB.slice(
-      V2DB.indexOf("export async function markThreadRead("),
-      V2DB.indexOf("export async function markThreadRead(") + 4000
-    );
+    /* v2.107.35: was a hardcoded +4000-char window, which silently pushed the
+       read-transition line out of range the day the group-receipts hook grew
+       the function above it. Sliced to the next export now, so the pin tracks
+       the FUNCTION rather than a byte count. */
+    const start = V2DB.indexOf("export async function markThreadRead(");
+    const read = V2DB.slice(start, V2DB.indexOf("\nexport ", start + 1));
     expect(read).toMatch(/deliveredAt: sql`COALESCE\(\$\{messages\.deliveredAt\}, \$\{now\}\)`/);
     expect(read).toMatch(/readAt: now,/);
   });

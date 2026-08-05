@@ -68,6 +68,7 @@ import {
   statusViews,
   users,
   messageAttachments,
+  messageReads,
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { normalizeEmail } from "./authCrypto";
@@ -2842,6 +2843,18 @@ export async function ensureSchemaExtensions(): Promise<void> {
         \`caption\` text,
         KEY \`msg_att_msg_idx\` (\`messageId\`)
       )`,
+    },
+    {
+      // Per-post group read receipts (v2.107.35): who read each group message,
+      // and when — written inside markThreadRead's transaction.
+      name: "message_reads",
+      ddl: `CREATE TABLE IF NOT EXISTS \`message_reads\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`messageId\` int NOT NULL,
+        \`readerId\` int NOT NULL,
+        \`readAt\` timestamp NOT NULL,
+        UNIQUE KEY \`msg_reads_unique\` (\`messageId\`, \`readerId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
     },
     {
       name: "conference_participants",
@@ -5974,7 +5987,14 @@ export async function markThreadRead(input: {
     // corrupting real participants' delivery receipts. Check inside the same
     // tx (no TOCTOU) and bail out for non-members.
     const membership = await tx
-      .select({ id: conversationParticipants.identityId })
+      .select({
+        id: conversationParticipants.identityId,
+        // The OLD watermark, read in the same statement that proves membership:
+        // it bounds the receipt insert below to exactly the messages this call
+        // is newly marking read — cheap, and idempotent-by-construction on top
+        // of the unique key.
+        lastReadMessageId: conversationParticipants.lastReadMessageId,
+      })
       .from(conversationParticipants)
       .where(
         and(
@@ -5985,6 +6005,7 @@ export async function markThreadRead(input: {
       .limit(1);
     if (membership.length === 0) return;
     isMember = true;
+    const prevRead = membership[0]?.lastReadMessageId ?? 0;
     // last visible message id — must match listMessages/listThreads' deletedAt
     // filter, or a soft-deleted message could become lastReadMessageId and get
     // skipped over forever (its content is gone, but its id still "counts").
@@ -6030,9 +6051,111 @@ export async function markThreadRead(input: {
             or(eq(messages.status, "sent"), eq(messages.status, "delivered"))
           )
         );
+      /* -- PER-POST GROUP READ RECEIPTS (v2.107.35) --------------------------
+         Owner: the post's author and the group's admins see WHO read each post
+         and WHEN. Recorded here - inside the same transaction that advances
+         the watermark - so the receipt and the read it reports can never come
+         apart. Group-only (a DM's reader is never in question, and its panel
+         already shows `readAt`), never for one's own messages, and bounded to
+         the (prevRead, lastId] delta this very call produced: re-opening a
+         chat re-inserts nothing, and the unique key makes even a raced
+         double-call harmless. The 500 cap is for the pathological first read
+         of a giant backlog - the NEWEST 500 are kept, which are the only ones
+         anyone will ever ask the panel about. */
+      const [convoRow] = await tx
+        .select({ kind: conversations.kind })
+        .from(conversations)
+        .where(eq(conversations.id, input.conversationId))
+        .limit(1);
+      if (convoRow?.kind === "group" && lastId > prevRead) {
+        const newlyRead = await tx
+          .select({ id: messages.id })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, input.conversationId),
+              gt(messages.id, prevRead),
+              lte(messages.id, lastId),
+              sql`${messages.senderIdentityId} <> ${input.identityId}`,
+              isNull(messages.deletedAt)
+            )
+          )
+          .orderBy(desc(messages.id))
+          .limit(500);
+        if (newlyRead.length > 0) {
+          await tx
+            .insert(messageReads)
+            .values(newlyRead.map((r) => ({ messageId: r.id, readerId: input.identityId, readAt: now })))
+            .onDuplicateKeyUpdate({ set: { readerId: sql`${messageReads.readerId}` } });
+        }
+      }
     }
   });
   return isMember;
+}
+
+/**
+ * WHO READ THIS GROUP POST, AND WHEN (v2.107.35) - the info panel's group
+ * section. The audience rule is the owner's, verbatim: the post's AUTHOR, and
+ * the group's ADMINS (the creator counts as one). Everyone else gets
+ * "not-allowed" - a member should not be able to audit who has seen somebody
+ * else's message. Deleted messages report "gone": unsending a post revokes its
+ * audit trail along with its content.
+ */
+export async function listMessageReads(input: {
+  messageId: number;
+  viewerId: number;
+}): Promise<
+  | { ok: true; readers: Array<{ identityId: number; displayName: string | null; number: string; readAt: Date }> }
+  | { ok: false; reason: "not-found" | "gone" | "not-a-group" | "not-allowed" | "unavailable" }
+> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  const [msg] = await db
+    .select({
+      id: messages.id,
+      conversationId: messages.conversationId,
+      senderIdentityId: messages.senderIdentityId,
+      deletedAt: messages.deletedAt,
+    })
+    .from(messages)
+    .where(eq(messages.id, input.messageId))
+    .limit(1);
+  if (!msg) return { ok: false, reason: "not-found" };
+  if (msg.deletedAt) return { ok: false, reason: "gone" };
+  const [convo] = await db
+    .select({ kind: conversations.kind, ownerIdentityId: conversations.ownerIdentityId })
+    .from(conversations)
+    .where(eq(conversations.id, msg.conversationId))
+    .limit(1);
+  if (!convo || convo.kind !== "group") return { ok: false, reason: "not-a-group" };
+  let allowed = msg.senderIdentityId === input.viewerId || convo.ownerIdentityId === input.viewerId;
+  if (!allowed) {
+    const [mine] = await db
+      .select({ groupRole: conversationParticipants.groupRole })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, msg.conversationId),
+          eq(conversationParticipants.identityId, input.viewerId)
+        )
+      )
+      .limit(1);
+    allowed = mine?.groupRole === "admin";
+  }
+  if (!allowed) return { ok: false, reason: "not-allowed" };
+  const rows = await db
+    .select({
+      identityId: messageReads.readerId,
+      displayName: identities.displayName,
+      number: identities.number,
+      readAt: messageReads.readAt,
+    })
+    .from(messageReads)
+    .innerJoin(identities, eq(identities.id, messageReads.readerId))
+    .where(eq(messageReads.messageId, input.messageId))
+    .orderBy(messageReads.readAt);
+  return { ok: true, readers: rows };
 }
 
 /* ── attachments ──────────────────────────────────────────────── */

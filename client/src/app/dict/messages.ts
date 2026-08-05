@@ -161,6 +161,9 @@ export const MESSAGES = {
     en: "These are the times recorded on your side for a message you received.",
     ar: "هذه الأوقات مسجّلة من جهتك لرسالة استلمتها.",
   },
+  // Per-post group read receipts (v2.107.35) - the info panel's group section.
+  "msg.readBy": { en: "Read by", ar: "قرأها" },
+  "msg.readByNone": { en: "No one has read this yet", ar: "لم يقرأها أحد بعد" },
 
   // ── Forward ──
   "msg.forwardTitle": { en: "Forward to…", ar: "إعادة توجيه إلى…" },
