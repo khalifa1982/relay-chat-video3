@@ -30,6 +30,7 @@ import { NotificationBell } from "./MissedCalls";
 import { BrandMark, IdentityStrip, AvatarRing } from "./TopBar";
 import { openPeerStatus } from "./PeerOverlays";
 import { PushBanner } from "./PushBanner";
+import { usePushKeepAlive } from "./usePushKeepAlive";
 import { CallHealthBanner } from "./CallHealthBanner";
 import { PeerOverlaysHost } from "./PeerOverlays";
 import { unlockAudio } from "./notifications";
@@ -224,6 +225,10 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
   // Server pushes message/read/presence/contact hints → hook invalidates the
   // right tRPC queries so the UI feels near-instant without WebSockets.
   useRealtime(Boolean(me), me?.id ?? null);
+  // Keep this web/PWA session wakeable for calls even when backgrounded — a
+  // silent, permission-respecting (re)subscribe that runs for every signed-in
+  // session, not only when the (native-hidden, self-dismissing) banner is shown.
+  usePushKeepAlive(Boolean(me));
 
   // Lock the DOCUMENT while the shell is mounted: every scrollable area lives
   // INSIDE the shell, so the page itself must never scroll or rubber-band.
