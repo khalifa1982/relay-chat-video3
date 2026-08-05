@@ -705,7 +705,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
           // used, because the panel's desktop position is anchored to the bell as its
           // offset parent and a portal would have to recompute that by hand.
           "relay-appshell-chrome relative z-20 hidden md:flex md:flex-col md:w-64 lg:w-72 shrink-0 " +
-          "border-r border-border/70 bg-sidebar/65 " +
+          "border-e border-border/70 bg-sidebar/65 " +
           "supports-[backdrop-filter]:bg-sidebar/45 supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150"
         }
       >
@@ -1211,7 +1211,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
                     />
                     {tab.key === "messages" && hasUnseenStatus && (
                       <span
-                        className="absolute -top-0.5 -left-0.5 size-2.5 rounded-full bg-gradient-to-tr from-[#06d6a0] to-[#0ea5e9] ring-2 ring-card"
+                        className="absolute -top-0.5 -start-0.5 size-2.5 rounded-full bg-gradient-to-tr from-[#06d6a0] to-[#0ea5e9] ring-2 ring-card"
                         title="New stories"
                       />
                     )}
@@ -1233,7 +1233,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
                       (tab.key === "messages" ? unreadDirect : unreadGroups) > 0 && (
                         <span
                           className={
-                            "relay-blink absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full text-[10px] items-center justify-center font-bold ring-2 ring-card " +
+                            "relay-blink absolute -top-0.5 -end-0.5 inline-flex min-w-4 h-4 px-1 rounded-full text-[10px] items-center justify-center font-bold ring-2 ring-card " +
                             (accentNav ? "rbadge-accent" : "bg-primary text-primary-foreground")
                           }
                         >
@@ -1244,7 +1244,7 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
                         </span>
                       )}
                     {tab.key === "history" && missedCount > 0 && (
-                      <span className="relay-blink absolute -top-0.5 -right-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-destructive text-white text-[10px] items-center justify-center font-bold ring-2 ring-card">
+                      <span className="relay-blink absolute -top-0.5 -end-0.5 inline-flex min-w-4 h-4 px-1 rounded-full bg-destructive text-white text-[10px] items-center justify-center font-bold ring-2 ring-card">
                         {missedCount > 99 ? "99+" : missedCount}
                       </span>
                     )}

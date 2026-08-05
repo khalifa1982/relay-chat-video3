@@ -1136,7 +1136,7 @@ export function AuthPanel({
                     <Camera className="size-7 text-muted-foreground" />
                   )}
                 </span>
-                <span className="absolute -bottom-0.5 -right-0.5 grid size-8 place-items-center rounded-full border-[3px] border-card bg-secondary text-primary">
+                <span className="absolute -bottom-0.5 -end-0.5 grid size-8 place-items-center rounded-full border-[3px] border-card bg-secondary text-primary">
                   {avatarUploading ? (
                     <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
                   ) : (

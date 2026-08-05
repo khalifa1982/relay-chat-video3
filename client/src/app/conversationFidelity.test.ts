@@ -153,17 +153,20 @@ describe("board 3c's bubble geometry and stamp", () => {
   it("the tail notch is the board's 5px, not Tailwind's 2px `rounded-*-sm`", () => {
     // `16px 16px 16px 5px` received / `16px 16px 5px 16px` mine. In Tailwind v4
     // `rounded-bl-sm` is 2px, close enough to a square corner at bubble scale to read as one.
-    expect(MESSAGES).toMatch(/rounded-br-\[5px\]/);
-    expect(MESSAGES).toMatch(/rounded-bl-\[5px\]/);
+    /* v2.107.40: the tails went LOGICAL — `ee`/`es` instead of `br`/`bl` — because
+       the tail marks the SPEAKER'S side and in Arabic own bubbles sit on the LEFT.
+       Same property, correct in both directions now. */
+    expect(MESSAGES).toMatch(/rounded-ee-\[5px\]/);
+    expect(MESSAGES).toMatch(/rounded-es-\[5px\]/);
     expect(MESSAGES, "the 2px notch is gone").not.toMatch(/rounded-b[lr]-sm/);
   });
 
   it("the tail is on the side the speaker is on", () => {
     const tail = MESSAGES.slice(MESSAGES.indexOf("const tail = mine"));
-    const br = tail.indexOf("rounded-br-[5px]");
-    const bl = tail.indexOf("rounded-bl-[5px]");
-    expect(br).toBeGreaterThan(-1);
-    expect(bl).toBeGreaterThan(br); // mine (bottom-right) is the first arm of the ternary
+    const ee = tail.indexOf("rounded-ee-[5px]");
+    const es = tail.indexOf("rounded-es-[5px]");
+    expect(ee).toBeGreaterThan(-1);
+    expect(es).toBeGreaterThan(ee); // mine (end-end) is the first arm of the ternary
   });
 
   it("the in-bubble stamp is the board's mono 8.5px, muted per side", () => {

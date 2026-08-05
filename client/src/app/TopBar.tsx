@@ -292,7 +292,7 @@ export function AvatarRing({
       {/* Presence LED — amber while Do Not Disturb is on, so the ring's green can
           never be read as "alerts are getting through". */}
       <span
-        className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-card"
+        className="absolute -end-0.5 -bottom-0.5 size-3 rounded-full border-2 border-card"
         style={{ background: dnd ? "var(--relay-dnd)" : "var(--relay-online)" }}
       />
       {/* "There is a story here" lives on this pip, NOT on the ring. The ring means
@@ -301,7 +301,7 @@ export function AvatarRing({
           PeerAvatar, where a ring means somebody ELSE'S unseen story. */}
       {hasStatus && (
         <span
-          className="absolute -left-0.5 -top-0.5 size-2.5 rounded-full border-2 border-card"
+          className="absolute -start-0.5 -top-0.5 size-2.5 rounded-full border-2 border-card"
           style={{ background: "linear-gradient(135deg,#a855f7,#6d28d9)" }}
           title="You have an active story"
         />

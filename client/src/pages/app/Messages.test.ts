@@ -76,7 +76,10 @@ describe("Messages.tsx — messaging overhaul", () => {
        the RADIUS is not. This froze `rounded-br-sm` (Tailwind's 2px); board 1d/3c specify a
        5px notch, so the literal moved in v2.106.62 while the grouping rule it stands for did
        not. Matched on the shape of the conditional instead. */
-    expect(SRC).toMatch(/lastOfGroup \? "rounded-br-\[?[\w.]+\]?"/);
+    /* v2.107.40: `br` became `ee` — LOGICAL corners, because the tail marks the
+       SPEAKER'S side and in Arabic own bubbles sit on the left. The grouping
+       property this pin stands for is unchanged. */
+    expect(SRC).toMatch(/lastOfGroup \? "rounded-ee-\[?[\w.]+\]?"/);
     expect(SRC).toMatch(/lastOfGroup \? "rounded-bl-\[?[\w.]+\]?"/);
   });
 

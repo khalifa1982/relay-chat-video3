@@ -348,7 +348,7 @@ export default function ProfilePage() {
                       </span>
                     )}
                   </span>
-                  <span className="absolute -bottom-0.5 -right-0.5 grid size-8 place-items-center rounded-full border-[3px] border-background bg-secondary text-primary">
+                  <span className="absolute -bottom-0.5 -end-0.5 grid size-8 place-items-center rounded-full border-[3px] border-background bg-secondary text-primary">
                     <Camera className="size-4" />
                   </span>
                 </button>
@@ -846,7 +846,7 @@ function HubRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full min-h-[60px] items-center gap-3 px-3.5 py-3 text-left transition active:bg-foreground/5 hover:bg-foreground/[0.03] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:ring-inset"
+      className="flex w-full min-h-[60px] items-center gap-3 px-3.5 py-3 text-start transition active:bg-foreground/5 hover:bg-foreground/[0.03] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:ring-inset"
     >
       {/* Board 1f: "hub rows (34px accent icon TILES)" — a rounded tile on the cycling
           accent, not a per-row coloured circle. The GLYPH keeps its own tint, so the
@@ -1884,7 +1884,7 @@ function StatusPrivacySection() {
               onClick={() => {
                 if (!active) setPrivacy.mutate({ audience: opt.value });
               }}
-              className="flex w-full items-start gap-3 p-4 text-left disabled:opacity-60"
+              className="flex w-full items-start gap-3 p-4 text-start disabled:opacity-60"
             >
               <span
                 className={`mt-0.5 shrink-0 ${active ? "text-primary" : "text-muted-foreground"}`}

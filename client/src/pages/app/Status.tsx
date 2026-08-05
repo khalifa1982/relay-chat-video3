@@ -334,7 +334,7 @@ export function StatusStrip() {
                  that is not presence, and the first the standing guard could not catch,
                  because the guard read only `Messages.tsx` and its allow-list matched
                  inside the token NAME. Both halves are fixed in `mentions.test.ts`. */
-              className="rcta absolute -bottom-0.5 -right-0.5 grid size-[17px] place-items-center rounded-full ring-[2.5px] ring-background"
+              className="rcta absolute -bottom-0.5 -end-0.5 grid size-[17px] place-items-center rounded-full ring-[2.5px] ring-background"
             >
               <Plus className="size-3.5" strokeWidth={3} />
             </span>
@@ -891,7 +891,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
                         type="button"
                         onClick={() => { setAudience(opt.value); setPanel(null); }}
                         aria-pressed={active}
-                        className={`min-w-0 flex-1 rounded-xl border px-2.5 py-2 text-left transition-colors ${
+                        className={`min-w-0 flex-1 rounded-xl border px-2.5 py-2 text-start transition-colors ${
                           active
                             ? "border-white bg-white/20 text-white"
                             : "border-white/30 bg-black/30 text-white/80 hover:bg-black/45"

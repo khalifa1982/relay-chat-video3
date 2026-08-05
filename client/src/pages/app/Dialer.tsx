@@ -507,7 +507,7 @@ export default function DialerPage() {
             <button
               type="button"
               onClick={() => setLocation("/app/history?filter=missed")}
-              className="flex flex-1 min-w-0 items-center gap-3 text-left outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-lg"
+              className="flex flex-1 min-w-0 items-center gap-3 text-start outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] rounded-lg"
             >
               <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-destructive/20 text-destructive">
                 <PhoneMissed className="size-5" />

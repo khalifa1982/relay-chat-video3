@@ -144,7 +144,7 @@ function PopupCard({ popup }: { popup: MessagePopup }) {
         <button
           type="button"
           onClick={open}
-          className="flex-1 min-w-0 text-left"
+          className="flex-1 min-w-0 text-start"
         >
           <span className="block truncate text-sm font-semibold hover:underline">{name}</span>
           {(peerNumber || when) && (
@@ -175,7 +175,7 @@ function PopupCard({ popup }: { popup: MessagePopup }) {
       <button
         type="button"
         onClick={open}
-        className="block w-full px-3 py-2.5 text-left text-sm hover:bg-muted/30"
+        className="block w-full px-3 py-2.5 text-start text-sm hover:bg-muted/30"
       >
         <span className="line-clamp-2 break-words">{preview}</span>
       </button>

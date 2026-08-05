@@ -3288,8 +3288,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                should do, and tailing every bubble is what makes a run stop reading as one
                run. */
             const tail = mine
-              ? (lastOfGroup ? "rounded-br-[5px]" : "")
-              : (lastOfGroup ? "rounded-bl-[5px]" : "");
+              /* LOGICAL corners (v2.107.40): the tail marks the SPEAKER'S side,
+                 and in Arabic own bubbles sit on the LEFT — `ee`/`es` are
+                 end-end / end-start, so the tail crosses over with the layout
+                 instead of pointing at the wrong person. */
+              ? (lastOfGroup ? "rounded-ee-[5px]" : "")
+              : (lastOfGroup ? "rounded-es-[5px]" : "");
             return (
               <div key={m.id}>
                 {/* Board 4c — the quick row, ABOVE the bubble it is about. In flow

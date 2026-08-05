@@ -146,7 +146,7 @@ export default function GroupInvite({ token }: { token: string }) {
                 </button>
               </>
             ) : (
-              <div className="mt-5 rounded-xl border border-border/60 bg-muted/40 p-4 text-left">
+              <div className="mt-5 rounded-xl border border-border/60 bg-muted/40 p-4 text-start">
                 <p className="flex items-center gap-2 text-sm font-medium">
                   <Lock className="size-4 shrink-0 text-muted-foreground" aria-hidden />
                   {g.audience === "registered"
