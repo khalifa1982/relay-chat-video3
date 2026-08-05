@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   X,
   Users,
@@ -114,7 +115,14 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
 
   const selectedArr = Array.from(selected);
 
-  return (
+  /* PORTAL TO BODY (v2.107.44): this `fixed inset-0` modal used to render inside
+     the page's content region — the scrolling sibling ABOVE the app shell's
+     in-flow tab bar (AppShell z-30) — so the bar composited ON TOP of the
+     footer and the "Start group call" button sat under it (owner screenshot).
+     Its working siblings (the story composer, AvatarPicker) escape that region
+     by portalling to body / sitting above z-30; this now does the same, so the
+     modal covers the whole viewport, tab bar included. z-50 still beats z-30. */
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4"
       onClick={onClose}
@@ -330,7 +338,8 @@ export function GroupCallScreen({ onClose }: { onClose: () => void }) {
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

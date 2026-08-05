@@ -468,11 +468,11 @@ export const MESSAGES = {
     en: "Couldn't change auto-reply. Try again.",
     ar: "تعذّر تغيير الرد التلقائي. أعد المحاولة.",
   },
-  "msg.autoReplySrHint": {
-    en: "Turn the away auto-reply on or off.",
-    ar: "شغّل أو أوقف الرد التلقائي أثناء الغياب.",
-  },
   "msg.autoReplyTitle": { en: "Auto-reply when I'm away", ar: "الرد التلقائي أثناء غيابي" },
+  "msg.autoReplyLede": {
+    en: "A one-time note back to anyone who messages you while you're offline.",
+    ar: "ملاحظة تُرسل مرة واحدة لكل من يراسلك أثناء عدم اتصالك.",
+  },
   "msg.autoReplyBody": {
     en: "If someone messages you while you're offline, RELAY replies once to let them know you'll get back to them. Off by default.",
     ar: "إذا راسلك أحد وأنت غير متصل، يرد RELAY مرة واحدة ليخبره أنك ستعود إليه. متوقف افتراضيًا.",

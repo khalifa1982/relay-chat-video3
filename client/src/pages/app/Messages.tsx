@@ -18,6 +18,7 @@ import {
   Video,
   Search,
   MessageSquare,
+  MessageCircleReply,
   MessageSquarePlus,
   X,
   StickyNote,
@@ -6518,17 +6519,39 @@ function AutoReplyToggle() {
         variant="ghost"
         onClick={() => setOpen(true)}
         aria-label={t("msg.options")}
-        title={t("msg.options")}
-        className={"size-8 " + (on ? "text-primary" : "text-muted-foreground")}
+        title={t("msg.autoReplyTitle")}
+        /* v2.107.44 (owner: the icon "look like a black white, doesn't have any
+           explanation"): the entry point was a mute StickyNote — a Notes glyph,
+           nothing to do with auto-reply. It is now MessageCircleReply, which
+           reads as "a reply happens on its own", and it carries a live status
+           dot: filled accent when auto-reply is ON, so the button says at a
+           glance whether the feature is armed. The tooltip names the feature
+           outright rather than the generic "Options". */
+        className={"relative size-8 " + (on ? "text-primary" : "text-muted-foreground")}
       >
-        <StickyNote className="size-5" />
+        <MessageCircleReply className="size-5" />
+        {on && (
+          <span
+            aria-hidden="true"
+            className="absolute -end-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-card"
+          />
+        )}
       </Button>
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent className="max-w-sm rounded-3xl">
           <AlertDialogHeader>
-            <AlertDialogTitle>{t("msg.options")}</AlertDialogTitle>
-            <AlertDialogDescription className="sr-only">
-              {t("msg.autoReplySrHint")}
+            {/* v2.107.44 (owner: "put little explanation, little emoji showing"):
+                the sheet was a bare title over a switch. It now leads with an
+                accent icon badge and an emoji so it reads as a friendly feature
+                card, not a black-and-white settings row. */}
+            <div className="mx-auto mb-1 grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary">
+              <MessageCircleReply className="size-6" aria-hidden="true" />
+            </div>
+            <AlertDialogTitle className="text-center">
+              {t("msg.autoReplyTitle")} <span aria-hidden="true">💬</span>
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-center text-xs">
+              {t("msg.autoReplyLede")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <button
@@ -6552,7 +6575,10 @@ function AutoReplyToggle() {
               />
             </span>
             <span className="min-w-0">
-              <span className="block text-sm font-semibold">{t("msg.autoReplyTitle")}</span>
+              <span className="block text-sm font-semibold">
+                <span aria-hidden="true" className="me-1">🌙</span>
+                {t("msg.autoReplyTitle")}
+              </span>
               <span className="block text-xs text-muted-foreground mt-0.5">
                 {t("msg.autoReplyBody")}
               </span>
@@ -6676,7 +6702,13 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
       >
         <MessageSquarePlus className="size-[18px]" />
       </button>
-      {open && (
+      {open && createPortal(
+        /* PORTAL TO BODY (v2.107.44): un-portalled, this `fixed inset-0` sheet
+           rendered inside the page content region — clipped ABOVE the app
+           shell's in-flow tab bar (z-30) — so with a few members added the
+           "Create group · N members" button collided with the tab bar row
+           (owner screenshot). Portalling lifts it over the whole viewport, the
+           tab bar included, matching every other bounded sheet in the app. */
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={resetAll}>
           <div
             /* Board 3d: the sheet's material is the shared `.rsheet` recipe (v2.106.10),
@@ -6988,7 +7020,8 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
       {/* ONE picker component, an injected sink (v2.102.1). There is no conversation yet,
           so `onSave` only holds the url — the write happens with the create. A second
