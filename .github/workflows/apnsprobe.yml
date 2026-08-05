@@ -1,0 +1,15 @@
+name: apnsprobe
+on: { workflow_dispatch: {} }
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: run
+        env:
+          SSH_KEY: ${{ secrets.DOHA_SSH_KEY }}
+          PROG: "aW1wb3J0IHsgcmVhZEZpbGVTeW5jIH0gZnJvbSAibm9kZTpmcyI7Ci8vIExvYWQgcHJvZCBlbnYgQkVGT1JFIGltcG9ydGluZyBhcHAgbW9kdWxlcyB0aGF0IHJlYWQgaXQgYXQgaW1wb3J0IHRpbWUuCnRyeSB7CiAgY29uc3QgZW52ID0gcmVhZEZpbGVTeW5jKCIvaG9tZS9yZWxheS8uZW52IiwgInV0ZjgiKTsKICBmb3IgKGNvbnN0IGxpbmUgb2YgZW52LnNwbGl0KCJcbiIpKSB7CiAgICBjb25zdCBtID0gbGluZS5tYXRjaCgvXlxzKihbQS1aMC05X10rKVxzKj1ccyoiPyhbXiJcbl0qKSI/XHMqJC8pOwogICAgaWYgKG0gJiYgIShtWzFdIGluIHByb2Nlc3MuZW52KSkgcHJvY2Vzcy5lbnZbbVsxXV0gPSBtWzJdOwogIH0KfSBjYXRjaCB7fQooYXN5bmMgKCkgPT4gewogIGNvbnN0IG1vZCA9IGF3YWl0IGltcG9ydCgiLi9zZXJ2ZXIvYXBuc1ZvaXAiKTsKICBjb25zdCBjZmcgPSBtb2QuYXBuc1ZvaXBDb25maWcoKTsKICBjb25zdCBvdXQgPSB7CiAgICBhcG5zVm9pcENvbmZpZ3VyZWQ6IG1vZC5hcG5zVm9pcENvbmZpZ3VyZWQoKSwKICAgIG1vZGU6IGNmZz8ubW9kZSA/PyBudWxsLAogICAgdG9waWM6IGNmZz8udG9waWMgPz8gbnVsbCwKICAgIGhvc3Q6IGNmZz8uaG9zdCA/PyBudWxsLAogICAga2V5SWQ6IGNmZyAmJiBjZmcubW9kZSA9PT0gInRva2VuIiA/IChjZmcua2V5SWQgPyAic2V0IiA6ICJNSVNTSU5HIikgOiBudWxsLAogICAgdGVhbUlkOiBjZmcgJiYgY2ZnLm1vZGUgPT09ICJ0b2tlbiIgPyAoY2ZnLnRlYW1JZCA/ICJzZXQiIDogIk1JU1NJTkciKSA6IG51bGwsCiAgICBlbnZfcHJlc2VudDogewogICAgICBBUE5TX0JVTkRMRV9JRDogISFwcm9jZXNzLmVudi5BUE5TX0JVTkRMRV9JRCwKICAgICAgQVBOU19WT0lQX1RPUElDOiAhIXByb2Nlc3MuZW52LkFQTlNfVk9JUF9UT1BJQywKICAgICAgQVBOU19LRVlfSUQ6ICEhcHJvY2Vzcy5lbnYuQVBOU19LRVlfSUQsCiAgICAgIEFQTlNfVEVBTV9JRDogISFwcm9jZXNzLmVudi5BUE5TX1RFQU1fSUQsCiAgICAgIEFQTlNfUDhfS0VZOiAhIShwcm9jZXNzLmVudi5BUE5TX1A4X0tFWSB8fCBwcm9jZXNzLmVudi5BUE5TX0tFWV9QOCksCiAgICAgIEFQTlNfVk9JUF9DRVJUX1BFTTogISFwcm9jZXNzLmVudi5BUE5TX1ZPSVBfQ0VSVF9QRU0sCiAgICAgIEFQTlNfVk9JUF9LRVlfUEVNOiAhIXByb2Nlc3MuZW52LkFQTlNfVk9JUF9LRVlfUEVNLAogICAgICBBUE5TX0VOVjogcHJvY2Vzcy5lbnYuQVBOU19FTlYgfHwgIih1bnNldOKGknByb2QpIiwKICAgIH0sCiAgfTsKICBjb25zb2xlLmxvZygiPDw8QVBOUyAiICsgSlNPTi5zdHJpbmdpZnkob3V0KSArICIgQVBOUz4+PiIpOwp9KSgpLmNhdGNoKGUgPT4gY29uc29sZS5sb2coIjw8PEFQTlMgRVJSICIgKyAoZT8ubWVzc2FnZXx8ZSkgKyAiIEFQTlM+Pj4iKSk7Cg=="
+        run: |
+          set -e
+          mkdir -p ~/.ssh && echo "$SSH_KEY" > ~/.ssh/id && chmod 600 ~/.ssh/id
+          H=34.18.175.226
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id ubuntu@$H "echo $PROG | base64 -d > /tmp/apnsprobe.ts && sudo cp /tmp/apnsprobe.ts /home/relay/app/_apnsprobe.ts && sudo chown relay:relay /home/relay/app/_apnsprobe.ts && sudo -u relay bash -c 'cd /home/relay/app && ./node_modules/.bin/tsx _apnsprobe.ts 2>&1' ; sudo rm -f /home/relay/app/_apnsprobe.ts"
