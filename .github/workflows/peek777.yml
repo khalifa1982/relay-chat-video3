@@ -1,0 +1,18 @@
+name: peek777
+on: workflow_dispatch
+jobs:
+  peek:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ssh peek
+        env:
+          PROG_B64: "aW1wb3J0IHsgY3JlYXRlUmVxdWlyZSB9IGZyb20gIm1vZHVsZSI7CmNvbnN0IHJlcXVpcmUgPSBjcmVhdGVSZXF1aXJlKCIvaG9tZS9yZWxheS9hcHAvcGFja2FnZS5qc29uIik7CmNvbnN0IG15c3FsID0gcmVxdWlyZSgibXlzcWwyL3Byb21pc2UiKTsKaW1wb3J0IGZzIGZyb20gImZzIjsKY29uc3QgZW52ID0gZnMucmVhZEZpbGVTeW5jKCIvaG9tZS9yZWxheS8uZW52IiwidXRmOCIpOwpjb25zdCBtID0gZW52Lm1hdGNoKC9EQVRBQkFTRV9VUkxccyo9XHMqIj8oW14iXG5dKykiPy8pOwppZighbSl7IGNvbnNvbGUubG9nKCJOT19EQVRBQkFTRV9VUkwiKTsgcHJvY2Vzcy5leGl0KDApOyB9CmNvbnN0IHUgPSBuZXcgVVJMKG1bMV0udHJpbSgpKTsKY29uc3QgYyA9IGF3YWl0IG15c3FsLmNyZWF0ZUNvbm5lY3Rpb24oe2hvc3Q6dS5ob3N0bmFtZSxwb3J0Oit1LnBvcnR8fDMzMDYsdXNlcjpkZWNvZGVVUklDb21wb25lbnQodS51c2VybmFtZSkscGFzc3dvcmQ6ZGVjb2RlVVJJQ29tcG9uZW50KHUucGFzc3dvcmQpLGRhdGFiYXNlOnUucGF0aG5hbWUuc2xpY2UoMSksY29ubmVjdFRpbWVvdXQ6ODAwMH0pOwpjb25zb2xlLmxvZygiPDw8UDc3NyIpOwpjb25zdCBbaWRzXSA9IGF3YWl0IGMucXVlcnkoIlNFTEVDVCBpZCwgbnVtYmVyLCBkaXNwbGF5TmFtZSwgdmVyaWZpZWQsIGFsbENhbGxzVG9Wb2ljZW1haWwgRlJPTSBpZGVudGl0aWVzIFdIRVJFIG51bWJlciA9ICc3Nzc3NzcnIik7CmlmKGlkcy5sZW5ndGg9PT0wKXsgY29uc29sZS5sb2coIklERU5USVRZIDc3Nzc3NzogRE9FUyBOT1QgRVhJU1QiKTsgY29uc29sZS5sb2coIlA3Nzc+Pj4iKTsgYXdhaXQgYy5lbmQoKTsgcHJvY2Vzcy5leGl0KDApOyB9CmNvbnN0IGlkID0gaWRzWzBdOwpjb25zb2xlLmxvZygiaWRlbnRpdHk6IiwgSlNPTi5zdHJpbmdpZnkoe2lkOmlkLmlkLCBudW1iZXI6aWQubnVtYmVyLCBuYW1lOmlkLmRpc3BsYXlOYW1lLCB2ZXJpZmllZDppZC52ZXJpZmllZD09PTEsIGFsbENhbGxzVG9Wb2ljZW1haWw6aWQuYWxsQ2FsbHNUb1ZvaWNlbWFpbD09PTF9KSk7CmNvbnN0IFtwcmVzXSA9IGF3YWl0IGMucXVlcnkoIlNFTEVDVCBpc09ubGluZSwgbGFzdFNlZW5BdCwgaWRsZVNpbmNlLCAoc29ja2V0U2Vzc2lvbklkIElTIE5PVCBOVUxMKSBBUyBoYXNTb2NrZXQgRlJPTSBwcmVzZW5jZSBXSEVSRSBpZGVudGl0eUlkID0gPyIsIFtpZC5pZF0pOwppZihwcmVzLmxlbmd0aD09PTApeyBjb25zb2xlLmxvZygicHJlc2VuY2U6IE5PIFJPVyAobmV2ZXIgY29ubmVjdGVkKSIpOyB9CmVsc2UgeyBjb25zdCBwPXByZXNbMF07IGNvbnNvbGUubG9nKCJwcmVzZW5jZToiLCBKU09OLnN0cmluZ2lmeSh7aXNPbmxpbmU6cC5pc09ubGluZT09PTEsIGhhc0xpdmVTb2NrZXQ6cC5oYXNTb2NrZXQ9PT0xLCBsYXN0U2VlbkF0OnAubGFzdFNlZW5BdCwgaWRsZVNpbmNlOnAuaWRsZVNpbmNlfSkpOyB9CmNvbnN0IFt2bV0gPSBhd2FpdCBjLnF1ZXJ5KCJTRUxFQ1QgbnVtYmVyLCBkaXNwbGF5TmFtZSBGUk9NIGNvbnRhY3RzIFdIRVJFIG93bmVySWQgPSA/IEFORCBjYWxsc1RvVm9pY2VtYWlsID0gMSIsIFtpZC5pZF0pOwpjb25zb2xlLmxvZygiY29udGFjdHMgdGhpcyBhY2NvdW50IHNlbmRzIHRvIHZvaWNlbWFpbDoiLCB2bS5sZW5ndGgsIHZtLmxlbmd0aD8gSlNPTi5zdHJpbmdpZnkodm0ubWFwKHI9PnIubnVtYmVyKSkgOiAiIik7Ci8vIGhvdyBtYW55IHB1c2ggc3Vic2NyaXB0aW9ucyAoc28gd2Uga25vdyBpZiBhIGxvY2tlZCBwaG9uZSBjb3VsZCBiZSB3b2tlbikKY29uc3QgW3B0XSA9IGF3YWl0IGMucXVlcnkoIlNFTEVDVCBraW5kLCBDT1VOVCgqKSBBUyBuIEZST00gcHVzaFN1YnNjcmlwdGlvbnMgV0hFUkUgaWRlbnRpdHlJZCA9ID8gR1JPVVAgQlkga2luZCIsIFtpZC5pZF0pLmNhdGNoKCgpPT5bW11dKTsKY29uc29sZS5sb2coInB1c2ggc3Vic2NyaXB0aW9uczoiLCBwdC5sZW5ndGg/IEpTT04uc3RyaW5naWZ5KHB0Lm1hcChyPT4oe2tpbmQ6ci5raW5kLG46ci5ufSkpKSA6ICJub25lIik7CmNvbnNvbGUubG9nKCJQNzc3Pj4+Iik7CmF3YWl0IGMuZW5kKCk7Cg=="
+        run: |
+          mkdir -p ~/.ssh && printf '%s' "${{ secrets.DOHA_SSH_KEY }}" > ~/.ssh/id && chmod 600 ~/.ssh/id
+          printf '%s' "$PROG_B64" > /tmp/prog.b64
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id /tmp/prog.b64 ubuntu@34.18.175.226:/tmp/prog.b64
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id ubuntu@34.18.175.226 '
+            base64 -d /tmp/prog.b64 | sudo tee /home/relay/app/_peek777.mjs >/dev/null
+            sudo chown relay:relay /home/relay/app/_peek777.mjs
+            sudo -u relay bash -c "cd /home/relay/app && timeout 30 node /home/relay/app/_peek777.mjs"
+            sudo rm -f /home/relay/app/_peek777.mjs /tmp/prog.b64'
