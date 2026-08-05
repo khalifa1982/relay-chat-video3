@@ -65,6 +65,10 @@ export const ENGINE = {
 
   // ── The minimized mini window ──
   "engine.maximize": { en: "Maximize", ar: "تكبير" },
+  // v2.107.47 (owner) — the tiny floating call bubble state.
+  "engine.bubble": { en: "Bubble", ar: "فقاعة" },
+  "engine.bubbleLabel": { en: "Shrink call to a floating bubble", ar: "تصغير المكالمة إلى فقاعة عائمة" },
+  "engine.restoreCall": { en: "Restore call", ar: "استعادة المكالمة" },
   "engine.maximizeLabel": {
     en: "Maximize the call back to full screen",
     ar: "إعادة المكالمة إلى ملء الشاشة",

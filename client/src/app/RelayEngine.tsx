@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation } from "wouter";
-import { Loader2, PhoneOff, UserPlus, Minimize2, Maximize2, Scan, GripHorizontal, Users } from "lucide-react";
+import { Loader2, PhoneOff, UserPlus, Minimize2, Maximize2, Scan, GripHorizontal, Users, Phone, ChevronDown } from "lucide-react";
 // TYPE-ONLY import — erased at build. The call engine (relayClient + its
 // markup/CSS) is DYNAMICALLY imported inside the mount effect below (v2.88):
 // it's several hundred KB that only matters once a signed-in user is inside
@@ -148,6 +148,12 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   // so media keeps flowing. `minimized` is a display state, orthogonal to the
   // engine's phase machine.
   const [minimized, setMinimized] = useState(false);
+  // v2.107.47 (owner): a THIRD, tiniest display state on top of `minimized` — a
+  // small draggable BUBBLE that frees the whole screen. The call stays fully
+  // live (the engine div is never torn down, same as minimize); only a ~60px
+  // "call is live" dot shows, parked at a screen edge. Tap it to restore. Works
+  // for 1:1, group and video alike, since it is purely a display collapse.
+  const [bubbled, setBubbled] = useState(false);
   const [fitContain, setFitContain] = useState(false); // "fit screen": letterbox vs cover
   const [miniPos, setMiniPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [peopleCount, setPeopleCount] = useState(1);
@@ -158,7 +164,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (phase !== "idle") setFailedDial(null);
     // Returning to idle ends the call → reset the minimize/fit/drag display state.
-    if (phase === "idle") { setMinimized(false); setFitContain(false); setMiniPos({ x: 0, y: 0 }); }
+    if (phase === "idle") { setMinimized(false); setBubbled(false); setFitContain(false); setMiniPos({ x: 0, y: 0 }); }
   }, [phase]);
 
   // Tell the engine to force the compact 2-up layout while minimized (the
@@ -522,6 +528,25 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   // arithmetic written FOR a right anchor: `x` runs from 0 (at the right edge)
   // down to `-(vw - 120)`. Flip the anchor without flipping that arithmetic and the
   // box can be dragged straight off the screen in Arabic and never dragged back.
+  // When bubbled, the engine host collapses to a 1x1 invisible sliver pinned at the
+  // bubble's resting corner — media keeps flowing (a strictly-0 size can pause video
+  // decoding on some engines) but nothing is seen; the bubble below is what shows.
+  const bubbleEngineStyle: React.CSSProperties = {
+    position: "fixed",
+    inset: "auto",
+    right: 20,
+    bottom: 150,
+    top: "auto",
+    left: "auto",
+    width: 1,
+    height: 1,
+    transform: `translate(${miniPos.x}px, ${miniPos.y}px)`,
+    opacity: 0,
+    pointerEvents: "none",
+    overflow: "hidden",
+    zIndex: 1,
+  };
+
   const miniBoxStyle: React.CSSProperties = {
     position: "fixed",
     inset: "auto",
@@ -588,7 +613,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
           changes. */}
       <div
         ref={engineRoot}
-        style={active && minimized ? miniBoxStyle : undefined}
+        style={active && bubbled ? bubbleEngineStyle : active && minimized ? miniBoxStyle : undefined}
         className={
           "relay-root relay-embedded " +
           (fitContain ? "relay-fit " : "") +
@@ -644,8 +669,9 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
         </div>
       ) : null}
       {/* Minimized mini-box overlay (v2.99.8): a draggable header with the live
-          people-count + Maximize + Hang up, laid exactly over the engine box. */}
-      {active && minimized ? (
+          people-count + Maximize + Hang up, laid exactly over the engine box.
+          Hidden while bubbled — the bubble replaces it. */}
+      {active && minimized && !bubbled ? (
         <div style={{ ...miniBoxStyle, pointerEvents: "none" }} className="flex flex-col">
           <div
             onPointerDown={onMiniDragStart}
@@ -661,6 +687,17 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
             {/* `ms-auto`: this pins the two controls to the row's TRAILING edge, which
                 is reading-order and must swap sides in Arabic. */}
             <span className="ms-auto flex items-center gap-1">
+              {/* v2.107.47 (owner): collapse the mini-box further, down to a tiny
+                  floating bubble that frees the whole screen. */}
+              <button
+                type="button"
+                onClick={() => setBubbled(true)}
+                className="grid size-7 place-items-center rounded-lg bg-white/10 hover:bg-white/20 active:scale-95 transition-transform"
+                aria-label={t("engine.bubbleLabel")}
+                title={t("engine.bubble")}
+              >
+                <ChevronDown className="size-4" />
+              </button>
               <button
                 type="button"
                 onClick={() => setMinimized(false)}
@@ -683,6 +720,54 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
           </div>
           {/* The rest of the box is the engine's video grid, showing through. */}
           <div className="flex-1" />
+        </div>
+      ) : null}
+      {/* Floating call BUBBLE (v2.107.47, owner) — the tiniest live-call state: a
+          ~60px draggable dot that frees the whole screen while the call stays fully
+          live. Drag to reposition (same handlers/clamp as the mini-box); tap the
+          body to restore the mini-box; a small hang-up sits at its corner. The
+          engine host is a 1px invisible sliver behind this, so media keeps flowing. */}
+      {active && bubbled ? (
+        <div
+          style={{
+            position: "fixed",
+            right: 16,
+            bottom: 150,
+            top: "auto",
+            left: "auto",
+            transform: `translate(${miniPos.x}px, ${miniPos.y}px)`,
+            zIndex: 60,
+            touchAction: "none",
+          }}
+          className="pointer-events-auto"
+        >
+          <button
+            type="button"
+            onPointerDown={onMiniDragStart}
+            onPointerMove={onMiniDragMove}
+            onPointerUp={onMiniDragEnd}
+            onClick={() => { if (!dragRef.current) setBubbled(false); }}
+            aria-label={t("engine.restoreCall")}
+            title={t("engine.restoreCall")}
+            className="relative grid size-14 cursor-grab place-items-center rounded-full bg-primary text-primary-foreground shadow-[0_16px_40px_-10px_rgba(0,0,0,.7)] ring-2 ring-primary/40 active:cursor-grabbing active:scale-95 transition-transform"
+          >
+            {/* a soft live pulse */}
+            <span className="absolute inset-0 rounded-full bg-primary/40 motion-safe:animate-ping" />
+            <span className="relative flex items-center gap-1 text-sm font-bold">
+              <Phone className="size-4" />
+              {peopleCount > 1 ? peopleCount : ""}
+            </span>
+          </button>
+          {/* corner hang-up */}
+          <button
+            type="button"
+            onClick={() => handleRef.current?.hangup()}
+            aria-label={t("engine.endCall")}
+            title={t("engine.endCall")}
+            className="absolute -top-1 -end-1 grid size-6 place-items-center rounded-full bg-destructive text-destructive-foreground shadow-md ring-2 ring-card active:scale-95 transition-transform"
+          >
+            <PhoneOff className="size-3" />
+          </button>
         </div>
       ) : null}
       {/* v2.99.82 (owner): the top-left in-call "add contacts" chip is UNMOUNTED.
