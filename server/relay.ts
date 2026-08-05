@@ -1949,6 +1949,23 @@ export type PageCalleeHook = (info: {
 }) => Promise<{ exists: boolean; name?: string; pushed?: number } | null>;
 
 /**
+ * Should this callee's calls from this caller go to VOICEMAIL? (v2.107.46)
+ *
+ * The per-contact "appear offline for calls, send them to voicemail" boundary.
+ * Consulted for a REACHABLE target right before the ring: when it resolves
+ * `"voicemail"`, the callee is treated as offline FOR THIS CALLER — the caller
+ * gets the honest offline reply (which raises their leave-a-message card) and a
+ * missed-call row is recorded, exactly as a genuinely-offline callee would
+ * produce. Chat, status and presence are untouched — this ONLY gates the ring.
+ * Returns `null`/anything else to ring normally. A DB hiccup resolves to `null`
+ * (ring) so the boundary can only ever ADD a divert, never drop a real call.
+ */
+export type CallRoutingHook = (
+  calleePin: string,
+  callerPin: string
+) => Promise<"voicemail" | null>;
+
+/**
  * Fired when a ring that was delivered by PUSH is cancelled — the caller hung up
  * before the callee answered.
  *
@@ -1980,7 +1997,8 @@ export function handleMessage(
   onInvite?: InviteHook,
   onMissedCall?: MissedCallHook,
   onPageCallee?: PageCalleeHook,
-  onResolveDial?: ResolveDialHook
+  onResolveDial?: ResolveDialHook,
+  onCheckCallRouting?: CallRoutingHook
 ) {
   const type = msg && msg.type;
 
@@ -2514,6 +2532,67 @@ export function handleMessage(
           return;
         }
         if (!target) return; // unreachable (targetReachable ⇒ target) — narrows TS
+
+        /* PER-CONTACT VOICEMAIL ROUTING (v2.107.46) — the callee may have chosen
+           to appear offline FOR CALLS to this specific caller and send them to
+           voicemail, while chat stays completely normal. The target IS reachable;
+           we deliberately decline to ring it and instead give the caller the same
+           honest-offline outcome a truly-offline callee produces (their client
+           raises the leave-a-message card on `code:"offline"`), then record the
+           miss. Gated behind a hook + await, so we re-validate the caller's dial
+           context AFTER it resolves — a hang-up or newer dial mid-check aborts —
+           exactly as the paging path does. A DB failure resolves to null (ring):
+           the boundary can only ever ADD a divert, never swallow a real call.
+           `void` because handleMessage is synchronous; the ring below is moved
+           inside the continuation so it can never race ahead of the check. */
+        if (onCheckCallRouting) {
+          void onCheckCallRouting(to, callerPin).then(
+            (routing) => {
+              const now = reg.clients.get(callerPin);
+              if (!now || now.ctxEpoch !== ctxEpoch) return; // caller moved on
+              if (routing === "voicemail") {
+                // Honest offline → the caller reaches voicemail. Name only for a
+                // caller who proved who they are (same enumeration guard the
+                // genuinely-offline reply uses a few lines down).
+                const callerNow = reg.clients.get(callerPin);
+                // The target is LIVE in the registry, so its name is right here
+                // (unlike the paging path, which only has the hook's resolved
+                // name). Named only for a verified caller — an unverified dialer
+                // is the enumeration case, so it gets the generic line.
+                safeSend(callerSocket, {
+                  type: "error",
+                  code: "offline",
+                  pin: to,
+                  message: callerNow?.verifiedPin
+                    ? (target?.name || "They") + " is offline right now."
+                    : "They're offline right now.",
+                });
+                try {
+                  onMissedCall?.({ calleePin: to, callerPin, callerName: me.name, reason: "cancelled" });
+                } catch { /* never let a notification hook break call setup */ }
+                return;
+              }
+              // Not routed to voicemail — ring exactly as normal.
+              ringReachableTarget();
+            },
+            () => {
+              // Routing check FAILED (DB down): ring rather than strand the dial.
+              const now = reg.clients.get(callerPin);
+              if (!now || now.ctxEpoch !== ctxEpoch) return;
+              ringReachableTarget();
+            }
+          );
+          return;
+        }
+        // No routing hook wired (protocol unit tests, bare deploys) — ring inline,
+        // byte-identical to the pre-v2.107.46 path.
+        ringReachableTarget();
+        return;
+
+        // ── the reachable-target RING, extracted so the voicemail check above can
+        //    gate it without duplicating a line of it ─────────────────────────────
+        function ringReachableTarget() {
+        if (!target || !me) return; // re-narrow captured locals for the nested scope
         // CALL WAITING: we no longer reject the caller as "busy" when the target is
         // already in another call. Instead the invite rings through and the callee's
         // client shows a call-waiting popup (Answer = put the current call on hold
@@ -2595,6 +2674,7 @@ export function handleMessage(
             /* never let a notification hook break call setup */
           }
         }
+        } // end ringReachableTarget()
       };
       if (onResolveDial) {
         // PARTY LINES (v2.89): consult the DB-backed resolver BEFORE the
@@ -3978,7 +4058,8 @@ export function attachRelay(
   onConferenceEnd?: ConferenceEndHook,
   onPageCallee?: PageCalleeHook,
   onResolveDial?: ResolveDialHook,
-  onCancelRingPush?: CancelPushHook
+  onCancelRingPush?: CancelPushHook,
+  onCheckCallRouting?: CallRoutingHook
 ): RelayRegistry {
   const reg = createRegistry();
   reg.onConferenceEnd = onConferenceEnd;
@@ -4102,7 +4183,8 @@ export function attachRelay(
         onInvite,
         onMissedCall,
         onPageCallee,
-        onResolveDial
+        onResolveDial,
+        onCheckCallRouting
       );
     }
   }
@@ -4459,7 +4541,8 @@ export function attachRelay(
       onInvite,
       onMissedCall,
       onPageCallee,
-      onResolveDial
+      onResolveDial,
+      onCheckCallRouting
     );
     res.json({ ok: true });
   });
