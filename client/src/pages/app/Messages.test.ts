@@ -80,7 +80,7 @@ describe("Messages.tsx — messaging overhaul", () => {
        SPEAKER'S side and in Arabic own bubbles sit on the left. The grouping
        property this pin stands for is unchanged. */
     expect(SRC).toMatch(/lastOfGroup \? "rounded-ee-\[?[\w.]+\]?"/);
-    expect(SRC).toMatch(/lastOfGroup \? "rounded-bl-\[?[\w.]+\]?"/);
+    expect(SRC).toMatch(/lastOfGroup \? "rounded-es-\[?[\w.]+\]?"/);
   });
 
   it("supports in-conversation message search via trpc.messages.search", () => {
