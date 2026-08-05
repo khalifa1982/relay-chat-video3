@@ -63,6 +63,8 @@ export const ADMIN = {
   "admin.stat.online": { en: "Online", ar: "متصل" },
 
   // ── Search ───────────────────────────────────────────────────────────────────
+  // v2.107.38: the person finder became a card; every card carries a gold label.
+  "admin.people.label": { en: "People", ar: "الأشخاص" },
   "admin.search.placeholder": {
     en: "Find a person — name or number",
     ar: "ابحث عن شخص — بالاسم أو الرقم",

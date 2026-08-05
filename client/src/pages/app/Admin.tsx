@@ -453,13 +453,24 @@ export default function Admin() {
       <SessionsConsole />
       <CallsConsole />
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          setSubmitted(query.trim());
-        }}
-        className="flex gap-2"
-      >
+      {/* THE PERSON FINDER IS A CARD NOW (v2.107.38). Owner screenshot: on his
+          iPhone the search field and the number-change note rendered ON TOP of
+          each other. The source is a plain flex column — no engine following
+          the spec can interleave those two — but this was the ONLY block on
+          the admin page NOT inside an opaque `.rsheet` card: a 5%-white input
+          and a bare paragraph compositing straight onto the decorative
+          background, which is precisely the setup iOS Safari's compositor
+          garbles. An opaque card makes the overlap impossible by construction,
+          and matches every other block on this page besides. */}
+      <div className="rsheet space-y-2.5 rounded-[20px] border bg-card p-4">
+        <h3 className={GOLD_LABEL}>{t("admin.people.label")}</h3>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setSubmitted(query.trim());
+          }}
+          className="flex gap-2"
+        >
         <div className="relative flex-1">
           {/* LOGICAL, not `left-3.5`: this glyph marks the field's LEADING edge, which
               is the right-hand side in Arabic. `top-1/2 -translate-y-1/2` stays
@@ -471,15 +482,16 @@ export default function Admin() {
             placeholder={t("admin.search.placeholder")}
             aria-label={t("admin.search.aria")}
             dir="auto"
-            className="w-full rounded-[13px] border border-border bg-card/60 py-2.5 ps-9 pe-3 text-[12.5px] outline-none placeholder:text-muted-foreground focus:border-primary dark:border-white/10 dark:bg-white/5"
+            className="relative z-[1] w-full rounded-[13px] border border-border bg-card py-2.5 ps-9 pe-3 text-[12.5px] outline-none placeholder:text-muted-foreground focus:border-primary dark:border-white/10 dark:bg-white/[0.07]"
           />
         </div>
-        <Button type="submit" size="sm" variant="outline" className="rounded-[13px]">
-          {t("admin.search.submit")}
-        </Button>
-      </form>
+          <Button type="submit" size="sm" variant="outline" className="rounded-[13px]">
+            {t("admin.search.submit")}
+          </Button>
+        </form>
 
-      <p className="text-[10.5px] leading-relaxed text-muted-foreground">{t("admin.blurb")}</p>
+        <p className="text-[10.5px] leading-relaxed text-muted-foreground">{t("admin.blurb")}</p>
+      </div>
 
       {found.isLoading ? (
         <div className="p-6 text-center text-sm text-muted-foreground">{t("admin.loading")}</div>
