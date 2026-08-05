@@ -33,10 +33,23 @@ const cache = new Map<string, ParsedMap | null>();
 const CACHE_MAX = 4;
 
 function distDir(): string {
-  // Mirrors static.ts: bundled server runs from dist/, dev runs from server/.
-  return process.env.NODE_ENV === "development"
-    ? path.resolve(import.meta.dirname, "..", "dist", "public")
-    : path.resolve(import.meta.dirname, "public");
+  // Bundled server runs from dist/ (so `dist/public`); dev/tsx runs from server/
+  // (so `../dist/public`). v2.107.43: try the env-implied path FIRST, then fall
+  // back to the other — because a wrong or unset NODE_ENV used to make every map
+  // read miss silently, turning symbolication off with no error and no test to
+  // notice. The maps are in exactly one of these two places; we check both
+  // rather than trust the environment to be labelled correctly.
+  const bundled = path.resolve(import.meta.dirname, "public");
+  const dev = path.resolve(import.meta.dirname, "..", "dist", "public");
+  const primary = process.env.NODE_ENV === "development" ? dev : bundled;
+  const secondary = primary === dev ? bundled : dev;
+  try {
+    if (fs.existsSync(path.join(primary, "assets"))) return primary;
+    if (fs.existsSync(path.join(secondary, "assets"))) return secondary;
+  } catch {
+    /* fall through to primary */
+  }
+  return primary;
 }
 
 function parseMap(file: string): ParsedMap | null {
