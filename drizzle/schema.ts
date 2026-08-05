@@ -387,13 +387,6 @@ export const contacts = mysqlTable(
     /** Owner has BLOCKED this number: their calls are auto-declined on this
      *  device and their 1:1 messages to the owner are rejected (v2.82). */
     blocked: boolean("blocked"),
-    /** Owner sends this number's CALLS to voicemail (v2.107.46): their calls
-     *  reach the owner's voicemail and the owner shows as offline FOR CALLS to
-     *  them, while chat, status and everything else stay completely normal.
-     *  Distinct from `blocked`, which severs contact both ways — this is a
-     *  calls-only "screen this caller" boundary, not a block. Additive nullable
-     *  column, applied to live DBs by ensureSchemaExtensions(); NULL = off. */
-    callsToVoicemail: boolean("callsToVoicemail"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

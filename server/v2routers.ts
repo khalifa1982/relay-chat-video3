@@ -1762,7 +1762,6 @@ export const v2ContactsRouter = router({
            client on the previous bundle is reading it mid-deploy. */
         tags: contactTagsOf({ tags: r.tags ?? null, category: r.category ?? null }),
         blocked: r.blocked === true,
-        callsToVoicemail: r.callsToVoicemail === true,
         identityId: ident ?? null,
         isOnline: hidden ? false : (pres?.isOnline ?? false),
         idle: hidden ? false : (pres?.idle ?? false),
@@ -1824,10 +1823,6 @@ export const v2ContactsRouter = router({
         tags: z.array(z.enum(["vip", "family", "friend", "team"])).max(4).optional(),
         /** Block this number: their calls auto-decline, their 1:1 messages are rejected. */
         blocked: z.boolean().optional(),
-        /** Send this number's CALLS to voicemail (v2.107.46): the owner shows
-         *  offline FOR CALLS to them and their calls reach voicemail, while chat
-         *  and everything else stay normal. Calls-only — distinct from `blocked`. */
-        callsToVoicemail: z.boolean().optional(),
         /** Explicit-rename opt-in — only the edit dialog sends this. Without it a
          *  provided displayName cannot replace an existing alias (see upsertContact). */
         overwriteName: z.boolean().optional(),

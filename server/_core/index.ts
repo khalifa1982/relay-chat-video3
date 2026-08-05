@@ -16,7 +16,7 @@ import { registerV2Upload, uploadRateGate } from "../v2upload";
 import { registerV2Events, publishToIdentity, publishPresenceTo } from "../v2events";
 import { registerV2Offline } from "../v2offline";
 import { registerStatsFeed } from "../statsFeed";
-import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, reapStaleSessions, reapUnclaimedReservations, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, isCallRoutedToVoicemailBy, getPresenceAudienceIds,
+import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, reapStaleSessions, reapUnclaimedReservations, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds,
   claimMissedCallEmail,
   releaseMissedCallEmailClaim,
   MISSED_CALL_EMAIL_COOLDOWN_MS,
@@ -542,23 +542,6 @@ async function startServer() {
           /* a stale ring is the acceptable failure; a thrown hang-up is not */
         }
       })();
-    },
-    // onCheckCallRouting (v2.107.46): does the callee send THIS caller's calls
-    // to voicemail? A calls-only boundary — the caller reaches voicemail and the
-    // callee shows offline FOR CALLS to them, while chat stays normal. Resolve
-    // by number to id (works for a callee with no live registry entry) then read
-    // the per-contact flag. Fail-open to null (ring): a DB hiccup must only ever
-    // fail toward connecting a real call, never toward silently diverting one.
-    // Deliberately SEPARATE from the block check above — block severs contact
-    // both ways; this touches nothing but the ring.
-    async (calleePin: string, callerPin: string) => {
-      try {
-        const callee = await getIdentityByNumber(calleePin);
-        if (!callee) return null;
-        return (await isCallRoutedToVoicemailBy(callee.id, callerPin)) ? "voicemail" : null;
-      } catch {
-        return null;
-      }
     }
   );
   // Version endpoint for the client's auto-update checker. Returns the version

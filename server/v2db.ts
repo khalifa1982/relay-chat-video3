@@ -2603,8 +2603,6 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "contacts", column: "category", ddl: "ADD COLUMN `category` varchar(16)" },
     { table: "contacts", column: "tags", ddl: "ADD COLUMN `tags` varchar(64)" },
     { table: "contacts", column: "blocked", ddl: "ADD COLUMN `blocked` boolean" },
-    // Per-contact "send calls to voicemail / appear offline for calls" (v2.107.46).
-    { table: "contacts", column: "callsToVoicemail", ddl: "ADD COLUMN `callsToVoicemail` boolean" },
     // Self-hosted email/password auth (v2.54).
     { table: "users", column: "passwordHash", ddl: "ADD COLUMN `passwordHash` text" },
     { table: "users", column: "emailVerified", ddl: "ADD COLUMN `emailVerified` boolean" },
@@ -3481,7 +3479,7 @@ export function contactTagColumns(input: { tags?: string | null; category?: stri
 const CONTACT_UPDATABLE = [
   "displayName", "avatarUrl", "favourite", "notes",
   "email", "phone", "company", "jobTitle", "website", "birthday",
-  "category", "tags", "blocked", "callsToVoicemail",
+  "category", "tags", "blocked",
 ] as const;
 
 /**
@@ -3540,7 +3538,6 @@ export async function upsertContact(input: {
   category?: string | null;
   tags?: string | null;
   blocked?: boolean;
-  callsToVoicemail?: boolean;
 }) {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
@@ -3565,7 +3562,6 @@ export async function upsertContact(input: {
        single tag. */
     ...contactTagColumns(input),
     blocked: input.blocked ?? false,
-    callsToVoicemail: input.callsToVoicemail ?? false,
   };
   // Only overwrite columns the caller explicitly provided, so a partial update
   // (e.g. a favourite toggle that omits email/notes/…) never wipes saved fields.
@@ -3629,27 +3625,6 @@ export async function isNumberBlockedBy(ownerId: number, number: string): Promis
     .where(and(eq(contacts.ownerId, ownerId), eq(contacts.number, number)))
     .limit(1);
   return rows[0]?.blocked === true;
-}
-
-/**
- * Does `ownerId` route calls from `number` to voicemail? (v2.107.46)
- *
- * The calls-only counterpart to isNumberBlockedBy. When true, the call path
- * treats the owner as OFFLINE FOR CALLS to this one contact — their call reaches
- * the owner's voicemail instead of ringing — while chat, status and presence
- * everywhere else are untouched. Same shape and same fail-closed-to-`false`
- * contract as the block check (a DB hiccup must never silently divert a call),
- * so the call path can consult the two side by side.
- */
-export async function isCallRoutedToVoicemailBy(ownerId: number, number: string): Promise<boolean> {
-  const db = await getDb();
-  if (!db) return false;
-  const rows = await db
-    .select({ v: contacts.callsToVoicemail })
-    .from(contacts)
-    .where(and(eq(contacts.ownerId, ownerId), eq(contacts.number, number)))
-    .limit(1);
-  return rows[0]?.v === true;
 }
 
 export async function deleteContact(ownerId: number, contactId: number) {

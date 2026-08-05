@@ -38,8 +38,6 @@ const R = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const V2DB = R("server/v2db.ts");
 const ROUTERS = R("server/v2routers.ts");
 const SCHEMA = R("drizzle/schema.ts");
-const CORE = R("server/_core/index.ts");
-const RELAY = R("server/relay.ts");
 
 const c = (
   number: string,
@@ -288,72 +286,6 @@ describe("the store is additive and needs no backfill", () => {
     expect(codeOnly(ROUTERS)).toMatch(
       /tags: contactTagsOf\(\{ tags: r\.tags \?\? null, category: r\.category \?\? null \}\)/
     );
-  });
-});
-
-/* ============================================================
-   v2.107.46 — "send calls to voicemail" per-contact flag.
-
-   A calls-only boundary (offline FOR CALLS + voicemail, chat
-   untouched), distinct from `blocked`. The behaviour is proven
-   end-to-end in callVoicemailRouting.test.ts; THIS block guards
-   the plumbing that connects the toggle to that behaviour — the
-   column, its live-DB migration, the upsert allowlist, the read
-   function, the router accept/read, and the UI affordance. Any
-   one of these silently dropped turns the toggle into a no-op.
-   ============================================================ */
-describe("callsToVoicemail wiring (v2.107.46)", () => {
-  const CONTACTS_UI = codeOnly(
-    readFileSync(resolve(process.cwd(), "client/src/pages/app/Contacts.tsx"), "utf8")
-  );
-  const DICT = readFileSync(
-    resolve(process.cwd(), "client/src/app/dict/contacts.ts"),
-    "utf8"
-  );
-
-  it("the schema declares the additive nullable column", () => {
-    expect(codeOnly(SCHEMA)).toMatch(/callsToVoicemail: boolean\("callsToVoicemail"\)/);
-  });
-
-  it("the column lands on live DBs via ensureSchemaExtensions (not a migration)", () => {
-    expect(codeOnly(V2DB)).toMatch(
-      /table: "contacts", column: "callsToVoicemail", ddl: "ADD COLUMN `callsToVoicemail` boolean"/
-    );
-  });
-
-  it("the column is upsertable, or the toggle would silently do nothing", () => {
-    expect(codeOnly(V2DB)).toMatch(/"category", "tags", "blocked", "callsToVoicemail",/);
-  });
-
-  it("exposes a read function that fails closed to false (never diverts on a DB hiccup)", () => {
-    const src = codeOnly(V2DB);
-    expect(src).toMatch(/export async function isCallRoutedToVoicemailBy/);
-    // The function returns a strict boolean check, so a missing row / null reads false.
-    const fn = src.slice(src.indexOf("isCallRoutedToVoicemailBy"));
-    expect(fn.slice(0, 400)).toMatch(/=== true/);
-  });
-
-  it("the router accepts the flag on update and returns it on read", () => {
-    const src = codeOnly(ROUTERS);
-    expect(src).toMatch(/callsToVoicemail: z\.boolean\(\)\.optional\(\)/);
-    expect(src).toMatch(/callsToVoicemail: r\.callsToVoicemail === true/);
-  });
-
-  it("the server call path consults the flag through the wired hook", () => {
-    // The hook must be imported and called in _core, and defined + consulted in relay.
-    expect(codeOnly(CORE)).toMatch(/isCallRoutedToVoicemailBy/);
-    const relay = codeOnly(RELAY);
-    expect(relay).toMatch(/onCheckCallRouting/);
-    expect(relay).toMatch(/routing === "voicemail"/);
-  });
-
-  it("the contact menu offers the toggle, worded as calls-only (not a block)", () => {
-    expect(CONTACTS_UI).toMatch(/onToggleVoicemail/);
-    expect(CONTACTS_UI).toMatch(/callsToVoicemail: !c\.callsToVoicemail/);
-    expect(DICT).toMatch(/contacts\.callsVoicemailOn/);
-    // Bilingual, like every other key.
-    expect(DICT).toMatch(/Send calls to voicemail/);
-    expect(DICT).toMatch(/البريد الصوتي/);
   });
 });
 
