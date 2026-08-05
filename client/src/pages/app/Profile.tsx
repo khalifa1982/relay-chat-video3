@@ -295,8 +295,8 @@ export default function ProfilePage() {
             -translate-x-1/2 animate-in fade-in slide-in-from-top-2
             flex items-center gap-2 rounded-full px-4 py-2
             text-sm font-medium
-            border border-emerald-400/40
-            bg-emerald-500/15 text-emerald-100
+            border border-emerald-500/40 dark:border-emerald-400/40
+            bg-emerald-500/15 text-emerald-800
             dark:bg-emerald-500/20 dark:text-emerald-50
             shadow-lg shadow-emerald-500/20 backdrop-blur-md
           "
