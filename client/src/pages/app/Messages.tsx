@@ -2134,6 +2134,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     }>
   >([]);
   const [albumSel, setAlbumSel] = useState(0);
+  /* Tap-a-tile PREVIEW (v2.107.36). Owner: *"It shows me there as a thumbnail…
+     but when I click on it, I cannot see it. Like, I cannot preview it."* The
+     index of the staged item open in the pager, or null. */
+  const [stagedPreview, setStagedPreview] = useState<number | null>(null);
   const [albumEditIdx, setAlbumEditIdx] = useState<number | null>(null);
   const [bulkUp, setBulkUp] = useState<{ done: number; total: number } | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -2162,6 +2166,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   useEffect(() => {
     setPendingUpload(null);
     setPendingAlbum([]);
+    setStagedPreview(null);
     setAlbumSel(0);
     setAlbumEditIdx(null);
   }, [conversationId]);
@@ -2487,6 +2492,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       clearDraft();
       setReplyingToState(null);
       setPendingAlbum([]);
+      setStagedPreview(null);
       setAlbumSel(0);
       setEmojiOpen(false);
       setExpire(null);
@@ -2513,6 +2519,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       : pendingUpload;
     if (pendingAlbum.length === 1) {
       setPendingAlbum([]);
+      setStagedPreview(null);
       setAlbumSel(0);
     }
     const reply = replyingTo;
@@ -3533,9 +3540,19 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         <Timer className="size-3" /> {label}
                       </div>
                     );
-                    const content = (body: string | null, att: Msg["attachment"]) => (
+                    const content = (body: string | null, att: Msg["attachment"], album?: Msg["album"]) => (
                       <>
-                        {att && (
+                        {/* ALBUMS (v2.107.36) — and read the mention-roster note
+                            below first, because this is the SAME lesson paid for
+                            twice: v2.107.32 mounted the album grid ONLY in the
+                            search-results bubble ("the one place almost nobody
+                            looks"), so the owner sent a three-photo album and
+                            the live chat showed him exactly one photo. The
+                            ordinary path is THIS helper; the grid lives here
+                            now, and the pin suite holds both surfaces. */}
+                        {(album?.length ?? 0) > 0 ? (
+                          <AlbumGrid items={album!} onOpen={openAlbumAt(m)} />
+                        ) : att ? (
                           <AttachmentView
                             mimeType={att.mimeType}
                             url={att.url}
@@ -3558,7 +3575,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             mine={mine}
                             onOpen={openMedia(m)}
                           />
-                        )}
+                        ) : null}
                         {/* THE MENTION ROSTER HAS TO BE PASSED HERE, and until v2.106.62 it
                             was not — which meant board 3c's accent `@mention` had NEVER
                             rendered in a conversation. `content()` is the ordinary path
@@ -3571,7 +3588,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         {body && <div className="whitespace-pre-wrap leading-relaxed">{linkify(body, mentionRoster)}</div>}
                       </>
                     );
-                    if (!expiring) return content(m.body, m.attachment);
+                    if (!expiring) return content(m.body, m.attachment, m.album);
                     if (copy) {
                       const left =
                         copy.until != null ? Math.max(0, Math.ceil((copy.until - Date.now()) / 1000)) : null;
@@ -3788,7 +3805,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 <div key={it.id} className="relative shrink-0">
                   <button
                     type="button"
-                    onClick={() => setAlbumSel(i)}
+                    onClick={() => {
+                      // Select for the caption box AND open the preview — the
+                      // tap that only selected read as a broken tap (v2.107.36).
+                      setAlbumSel(i);
+                      setStagedPreview(i);
+                    }}
                     className={`block size-16 overflow-hidden rounded-lg bg-black/20 ${i === albumSel ? "ring-2 ring-primary" : ""}`}
                   >
                     {it.thumbUrl || it.mimeType.startsWith("image/") ? (
@@ -4152,6 +4174,26 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       </div>
 
       {lightbox && <MediaLightbox media={lightbox} onClose={() => setLightbox(null)} />}
+      {/* STAGED-ALBUM preview (v2.107.36): the same pager, fed the strip's own
+          local blob URLs — what he previews is byte-for-byte what will upload,
+          captions included. Closing keeps the selection, so the caption box
+          under the strip still targets the tapped item. */}
+      {stagedPreview != null && pendingAlbum.length > 0 && (
+        <MediaLightbox
+          media={{
+            url: pendingAlbum[0].url,
+            type: pendingAlbum[0].mimeType.startsWith("video/") ? "video" : "image",
+            items: pendingAlbum.map((it) => ({
+              url: it.url,
+              type: it.mimeType.startsWith("video/") ? ("video" as const) : ("image" as const),
+              name: it.filename,
+              caption: it.caption || null,
+            })),
+            index: Math.min(stagedPreview, pendingAlbum.length - 1),
+          }}
+          onClose={() => setStagedPreview(null)}
+        />
+      )}
       {/* The group's own name, photo and status (v2.102.1) — the editor for the data
           v2.102.0 added. Mounted at the view's root, outside the scroll area, so
           closing it can never unmount an open avatar picker from under the user. */}

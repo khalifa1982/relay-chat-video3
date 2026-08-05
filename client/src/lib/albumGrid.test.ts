@@ -75,3 +75,46 @@ describe("albums — the chain, source-pinned", () => {
     expect(messages).toMatch(/album:\s*\n\s*\(m\.album\?\.length \?\? 0\) >= 2/);
   });
 });
+
+describe("v2.107.36 — the grid lives on the ORDINARY path, and the strip previews", () => {
+  /* Owner, both verbatim: *"when I click send, it's only showing the first
+     attachment"* and *"It shows me there as a thumbnail… but when I click on
+     it, I cannot see it."* The first was the mention-roster lesson paid for a
+     second time: v2.107.32 mounted the album grid ONLY in the search-results
+     bubble, so the live chat rendered the cover alone while the server had
+     saved all three items (verified on prod, message 233). The grid now lives
+     inside `content()` — the helper EVERY non-expiring message renders
+     through — and these pins hold both surfaces so a third payment is
+     impossible. The second was a missing affordance: a strip tile now opens
+     the same pager over the staged blob URLs, so what is previewed is
+     byte-for-byte what will upload. */
+  const MSG = read("client/src/pages/app/Messages.tsx");
+
+  it("content() takes the album and the ordinary call passes it", () => {
+    expect(MSG).toMatch(/const content = \(body: string \| null, att: Msg\["attachment"\], album\?: Msg\["album"\]\)/);
+    expect(MSG).toMatch(/if \(!expiring\) return content\(m\.body, m\.attachment, m\.album\);/);
+    expect(MSG).toMatch(/\(album\?\.length \?\? 0\) > 0 \? \(\s*<AlbumGrid items=\{album!\} onOpen=\{openAlbumAt\(m\)\} \/>/);
+  });
+
+  it("…and STILL in the search bubble — both surfaces, or the lesson repeats", () => {
+    expect(MSG).toMatch(/\{\(m\.album\?\.length \?\? 0\) > 0 && \(\s*<AlbumGrid items=\{m\.album!\}/);
+  });
+
+  it("tapping a strip tile selects AND previews, over the staged blobs", () => {
+    expect(MSG).toMatch(/setAlbumSel\(i\);\s*setStagedPreview\(i\);/);
+    expect(MSG).toMatch(/stagedPreview != null && pendingAlbum\.length > 0 && \(/);
+    expect(MSG).toMatch(/items: pendingAlbum\.map\(\(it\) => \(\{\s*url: it\.url,/);
+    // Closing the preview must NOT clear the selection — the caption box keeps
+    // targeting the tapped item.
+    expect(MSG).toMatch(/onClose=\{\(\) => setStagedPreview\(null\)\}/);
+  });
+
+  it("every path that clears the strip clears the preview with it", () => {
+    const hits = MSG.split("setPendingAlbum([]);").length - 1;
+    const paired = MSG.split("setPendingAlbum([]);\n").filter((seg, i) => i > 0 || true);
+    expect(hits).toBeGreaterThanOrEqual(3);
+    // Each clear is immediately followed by the preview reset (same indent).
+    const re = /setPendingAlbum\(\[\]\);\n\s*setStagedPreview\(null\);/g;
+    expect((MSG.match(re) ?? []).length).toBe(hits);
+  });
+});

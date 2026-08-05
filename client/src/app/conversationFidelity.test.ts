@@ -85,7 +85,11 @@ describe("@mentions actually reach a conversation", () => {
   it("the ordinary (non-expiring) path is the one that goes through content()", () => {
     // If this stops being true the sweep above stops covering the main bubble, so the
     // premise is pinned rather than assumed.
-    expect(MESSAGES).toMatch(/if \(!expiring\) return content\(m\.body, m\.attachment\)/);
+    // v2.107.36: the call grew a third argument when the album grid moved onto
+    // this path (it had shipped only in the search bubble — the very trap the
+    // sweep exists to catch). The premise is unchanged: the ordinary bubble
+    // still renders through content(), so the mention sweep still covers it.
+    expect(MESSAGES).toMatch(/if \(!expiring\) return content\(m\.body, m\.attachment, m\.album\)/);
   });
 
   it("the mention is the accent for every message, with no `mine` exception", () => {
