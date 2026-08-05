@@ -1,0 +1,23 @@
+name: fcmdbg
+on: { workflow_dispatch: {} }
+jobs:
+  dbg:
+    runs-on: ubuntu-latest
+    steps:
+      - name: run
+        env:
+          SSH_KEY: ${{ secrets.DOHA_SSH_KEY }}
+          DBG_B64: "IyEvYmluL2Jhc2gKZWNobyAiPT0gLmVudiBwdXNoLXJlbGF0ZWQgbGluZXMgKHZhbHVlcyByZWRhY3RlZCkgPT0iCnN1ZG8gLXUgcmVsYXkgZ3JlcCAtbkUgIkdPT0dMRV9BUFBMSUNBVElPTl9DUkVERU5USUFMU3xGSVJFQkFTRV9TRVJWSUNFX0FDQ09VTlRfSlNPTnxeRkNNfEFQTlNfVk9JUF9DRVJUfEFQTlNfVk9JUF9LRVl8QVBOU19LRVlfSUR8QVBOU19URUFNX0lEIiAvaG9tZS9yZWxheS8uZW52IHwgc2VkIC1FICdzLz0oLns2fSkuKi89XDHigKZbcmVkYWN0ZWRdLycKZWNobyAiPT0gZmlyZWJhc2Utc2EuanNvbiBvbiBkaXNrID09IgpzdWRvIGxzIC1sYSAvaG9tZS9yZWxheS9maXJlYmFzZS1zYS5qc29uIDI+JjEKc3VkbyAtdSByZWxheSBoZWFkIC1jIDYwIC9ob21lL3JlbGF5L2ZpcmViYXNlLXNhLmpzb24gMj4mMTsgZWNobwplY2hvICI9PSBjb3VudCBvZiBHT09HTEVfQVBQTElDQVRJT05fQ1JFREVOVElBTFMgbGluZXMgPT0iCnN1ZG8gLXUgcmVsYXkgZ3JlcCAtYyAiXkdPT0dMRV9BUFBMSUNBVElPTl9DUkVERU5USUFMUz0iIC9ob21lL3JlbGF5Ly5lbnYK"
+          DBG2_B64: "aW1wb3J0IHsgcmVhZEZpbGVTeW5jIH0gZnJvbSAibm9kZTpmcyI7CmNvbnN0IGVudjpSZWNvcmQ8c3RyaW5nLHN0cmluZz49e307CnRyeSB7IGZvciAoY29uc3QgbCBvZiByZWFkRmlsZVN5bmMoIi9ob21lL3JlbGF5Ly5lbnYiLCJ1dGY4Iikuc3BsaXQoIlxuIikpIHsgY29uc3QgbT1sLm1hdGNoKC9eXHMqKFtBLVowLTlfXSspXHMqPVxzKiI/KFteIlxuXSopIj9ccyokLyk7IGlmIChtKSBlbnZbbVsxXV09bVsyXTsgfSB9IGNhdGNoKGUpeyBjb25zb2xlLmxvZygiZW52IHJlYWQgZXJyIixlKTsgfQpmb3IgKGNvbnN0IG4gb2YgWyJGSVJFQkFTRV9TRVJWSUNFX0FDQ09VTlRfSlNPTiIsIkdPT0dMRV9BUFBMSUNBVElPTl9DUkVERU5USUFMUyJdKSB7CiAgY29uc3Qgdj1lbnZbbl07IGlmKCF2KXtjb25zb2xlLmxvZyhuLCI9ICh1bnNldCkiKTsgY29udGludWU7fQogIGNvbnN0IGlzSnNvbj12LnRyaW0oKS5zdGFydHNXaXRoKCJ7Iik7CiAgY29uc29sZS5sb2cobiwiPSIsaXNKc29uPyI8aW5saW5lIGpzb24+Ijp2KTsKICBpZighaXNKc29uKXsgdHJ5eyBjb25zdCBiPXJlYWRGaWxlU3luYyh2LCJ1dGY4Iik7IGNvbnNvbGUubG9nKCIgICBwYXRoIHJlYWRhYmxlLCBzdGFydHM6IixiLnNsaWNlKDAsMzApLnJlcGxhY2UoL1xuL2csIiAiKSk7IH1jYXRjaChlOmFueSl7IGNvbnNvbGUubG9nKCIgICBQQVRIIFVOUkVBREFCTEU6IixlLm1lc3NhZ2UpOyB9IH0KfQpjb25zb2xlLmxvZygiPDw8RE9ORT4+PiIpOwo="
+        run: |
+          set -e
+          mkdir -p ~/.ssh && echo "$SSH_KEY" > ~/.ssh/id && chmod 600 ~/.ssh/id
+          echo "$DBG_B64" | base64 -d > /tmp/dbg.sh
+          echo "$DBG2_B64" | base64 -d > /tmp/dbg2.ts
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id /tmp/dbg.sh /tmp/dbg2.ts ubuntu@34.18.175.226:/tmp/
+          echo "<<<SEC1"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id ubuntu@34.18.175.226 'bash /tmp/dbg.sh'
+          echo "SEC1>>>"
+          echo "<<<SEC2"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id ubuntu@34.18.175.226 'sudo cp /tmp/dbg2.ts /home/relay/app/_dbg2.ts && sudo chown relay:relay /home/relay/app/_dbg2.ts && sudo -u relay bash -c "cd /home/relay/app && ./node_modules/.bin/tsx _dbg2.ts 2>&1"; sudo rm -f /home/relay/app/_dbg2.ts /tmp/dbg2.ts /tmp/dbg.sh'
+          echo "SEC2>>>"
