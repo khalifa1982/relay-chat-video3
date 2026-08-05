@@ -28,6 +28,7 @@
 import { APP_VERSION } from "@shared/version";
 import {
   CRASH_CAPS,
+  classifyCrashNoise,
   type CrashBreadcrumb,
   capCrashField,
   detectCrashPlatform,
@@ -181,10 +182,27 @@ export function reportCrash(
     const e = err instanceof Error ? err : new Error(String(err));
     const name = capCrashField(e.name || extra?.kind || "Error", CRASH_CAPS.name);
     const message = capCrashField(e.message || "", CRASH_CAPS.message);
+    const platform = detectCrashPlatform(
+      window as unknown as Parameters<typeof detectCrashPlatform>[0]
+    );
+    /* v2.107.37: somebody else's crash is not our report. Checked before the
+       breadcrumb too — Instagram's injected logger dying on our page should
+       not even pollute the trail of a later, real crash. */
+    const noise = classifyCrashNoise({
+      errorName: name,
+      errorMessage: message,
+      stack: e.stack ?? "",
+      platform,
+      ownHost: location.host,
+    });
+    if (noise) {
+      rawWarn(`[crash] ${noise} noise dropped:`, name, message.slice(0, 80));
+      return;
+    }
     if (floodDrop(name, message)) return;
     crumb("error", `${name}: ${message.slice(0, 120)}`);
     const report: QueuedReport = {
-      platform: detectCrashPlatform(window as unknown as Parameters<typeof detectCrashPlatform>[0]),
+      platform,
       appVersion: APP_VERSION,
       errorName: name,
       errorMessage: message,

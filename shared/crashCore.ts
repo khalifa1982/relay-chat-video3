@@ -183,3 +183,57 @@ export function compareAppVersions(a: string, b: string): -1 | 0 | 1 {
   }
   return 0;
 }
+
+/**
+ * NOISE, CLASSIFIED (v2.107.37) — the owner asked to "check the crash report
+ * and fix it"; the check found ELEVEN rows and zero application crashes. The
+ * fix is therefore this filter, one pure function used by BOTH the client
+ * reporter and the server ingest, so the console only ever shows crashes that
+ * are OURS to fix. Three classes, each named after a real production row:
+ *
+ *   "abort"                — AbortError is cancellation as control flow: a
+ *                            navigation aborts a fetch, an unmount interrupts
+ *                            play() (rows 5 & 6 — "The play() request was
+ *                            interrupted because the media was removed…").
+ *   "opaque-cross-origin"  — the browser's redaction of an error thrown by a
+ *                            script it will not let us read: the literal
+ *                            string "Script error." and nothing else (rows
+ *                            9 & 10, HonorBrowser's injection on the landing
+ *                            page). There is nothing inside to fix.
+ *   "foreign-script"       — every URL frame in the stack belongs to somebody
+ *                            ELSE'S script: an in-app browser's injected
+ *                            logger, an extension. Row 13 was Instagram's own
+ *                            `iabjs://navigation_performance_logger_android`
+ *                            dying on our page. A crash of OURS always shows
+ *                            at least one frame on our host.
+ *
+ * Native shells are exempt from the web-only rules — their stacks carry no
+ * URLs — and a report with no URL frames at all is KEPT, because "could be
+ * ours" must never be dropped. `ownHost` empty skips the foreign rule too:
+ * better a stray row than a silenced real crash.
+ */
+export function classifyCrashNoise(input: {
+  errorName: string;
+  errorMessage: string;
+  stack: string | null | undefined;
+  platform: string;
+  ownHost: string;
+}): null | "abort" | "opaque-cross-origin" | "foreign-script" {
+  const name = (input.errorName || "").trim();
+  const msg = (input.errorMessage || "").trim();
+  if (name === "AbortError") return "abort";
+  if (input.platform !== "web") return null;
+  if (/^Script error\.?$/.test(msg)) return "opaque-cross-origin";
+  const frames = (input.stack || "").match(/[a-z][a-z0-9+.-]*:\/\/[^\s)]+/gi) ?? [];
+  if (frames.length > 0 && input.ownHost) {
+    const own = frames.some((f) => {
+      try {
+        return new URL(f).host === input.ownHost;
+      } catch {
+        return false;
+      }
+    });
+    if (!own) return "foreign-script";
+  }
+  return null;
+}

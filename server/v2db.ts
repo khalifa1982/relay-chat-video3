@@ -22,8 +22,7 @@ import {
   capCrashField,
   crashFingerprintInput,
   normalizeCrashPlatform,
-  compareAppVersions,
-} from "../shared/crashCore";
+  compareAppVersions, classifyCrashNoise } from "../shared/crashCore";
 import { decodeCrashStack } from "./crashDecode";
 import { mergeSessionEvents, sessionStateOf, SESSION_STALE_MS } from "../shared/telemetryCore";
 import crypto from "crypto";
@@ -8235,6 +8234,27 @@ export type CrashInsert = {
  *  inside CRASH_STORM_WINDOW_SEC bumps `dupCount` on the latest row instead of
  *  inserting — a render-loop that fires 400 times is one row saying 400. */
 export async function recordCrash(r: CrashInsert): Promise<void> {
+  /* v2.107.37: the client filters noise before sending, but bundles cached
+     from before this release still send everything — the server holds the
+     same line, with the same shared classifier. `ownHost` comes from the
+     report's own URL; unparseable/absent (native shells) skips the
+     foreign-frame rule rather than guessing. */
+  {
+    let ownHost = "";
+    try {
+      if (r.url) ownHost = new URL(r.url).host;
+    } catch {
+      ownHost = "";
+    }
+    const noise = classifyCrashNoise({
+      errorName: r.errorName,
+      errorMessage: r.errorMessage,
+      stack: r.stack,
+      platform: r.platform,
+      ownHost,
+    });
+    if (noise) return;
+  }
   const db = await getDb();
   if (!db) return;
   try {

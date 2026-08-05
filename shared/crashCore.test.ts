@@ -32,7 +32,11 @@ import {
   normalizeCrashMessage,
   normalizeCrashPlatform,
   pushCrashBreadcrumb,
+  classifyCrashNoise,
 } from "./crashCore";
+import fs from "node:fs";
+import path from "node:path";
+const read = (p: string) => fs.readFileSync(path.resolve(__dirname, "..", p), "utf8");
 
 describe("crashFingerprintInput — the group key survives what changes between users and builds", () => {
   it("is identical when only line:column numbers and cache busters differ (a rebuild)", () => {
@@ -162,5 +166,103 @@ describe("compareAppVersions (v2.107.23)", () => {
     expect(compareAppVersions("2.107", "2.107.0")).toBe(0);
     expect(compareAppVersions("2.107", "2.107.1")).toBe(-1);
     expect(compareAppVersions("3", "2.999.999")).toBe(1);
+  });
+});
+
+describe("classifyCrashNoise — somebody else's crash is not our report (v2.107.37)", () => {
+  /* The owner asked to "check the crash report and fix it". The check found
+     eleven production rows and ZERO application crashes; every case below is a
+     real row from that table, so this suite is the triage session, frozen. */
+  const OWN = "your-chat.io";
+  const c = (x: Partial<Parameters<typeof classifyCrashNoise>[0]>) =>
+    classifyCrashNoise({
+      errorName: "Error",
+      errorMessage: "",
+      stack: "",
+      platform: "web",
+      ownHost: OWN,
+      ...x,
+    });
+
+  it("AbortError is cancellation, not a crash — any platform (prod rows 5 & 6)", () => {
+    expect(
+      c({
+        errorName: "AbortError",
+        errorMessage:
+          "The play() request was interrupted because the media was removed from the document. https://goo.gl/LdLk22",
+      }),
+    ).toBe("abort");
+    expect(c({ errorName: "AbortError", platform: "ios-shell" })).toBe("abort");
+  });
+
+  it("the browser's cross-origin redaction is unreadable by design (rows 9 & 10)", () => {
+    expect(c({ errorMessage: "Script error." })).toBe("opaque-cross-origin");
+    expect(c({ errorMessage: "Script error" })).toBe("opaque-cross-origin");
+    // …but "Script error while parsing X" is a REAL message, kept.
+    expect(c({ errorMessage: "Script error while parsing config" })).toBe(null);
+  });
+
+  it("Instagram's injected logger dying on our page is Instagram's crash (row 13)", () => {
+    const igStack = [
+      "Error: Error invoking postMessage: Java object is gone",
+      "    at sendDataToNative (iabjs://navigation_performance_logger_android:1:10025)",
+      "    at sendBeforeUnloadMessage (iabjs://navigation_performance_logger_android:1:13577)",
+      "    at iabjs://navigation_performance_logger_android:1:18129",
+    ].join("\n");
+    expect(
+      c({ errorMessage: "Error invoking postMessage: Java object is gone", stack: igStack }),
+    ).toBe("foreign-script");
+    // One frame of OURS in the same stack and it is ours to look at.
+    expect(c({ stack: igStack + "\n    at https://your-chat.io/assets/index-abc.js:2:100" })).toBe(
+      null,
+    );
+  });
+
+  it("a crash with OUR frames — or with no URL frames at all — is always kept", () => {
+    expect(
+      c({
+        errorName: "TypeError",
+        errorMessage: "x is not a function",
+        stack:
+          "TypeError: x is not a function\n    at Qs (https://your-chat.io/assets/index-D035mJf_.js:2:5076)",
+      }),
+    ).toBe(null);
+    expect(c({ stack: "Error: boom\n    at fn (<anonymous>)" })).toBe(null);
+    expect(c({ stack: null })).toBe(null);
+  });
+
+  it("native shells are exempt from the web-only rules — their stacks have no URLs", () => {
+    expect(
+      c({
+        platform: "android-shell",
+        errorMessage: "Script error.",
+        stack: "java.lang.RuntimeException\n\tat org.yourchat.relay.CallService.onStartCommand(CallService.java:42)",
+      }),
+    ).toBe(null);
+  });
+
+  it("no ownHost, no foreign verdict — better a stray row than a silenced crash", () => {
+    expect(
+      c({ ownHost: "", stack: "Error\n    at chrome-extension://abcdef/content.js:1:1" }),
+    ).toBe(null);
+  });
+
+  it("both consumers actually call it: the reporter before queueing, the ingest before writing", () => {
+    const REPORTER = read("client/src/lib/crashReporter.ts");
+    const V2DB = read("server/v2db.ts");
+    // Client: classified before the breadcrumb AND before floodDrop, so foreign
+    // noise never pollutes the trail of a later real crash.
+    const at = REPORTER.indexOf("classifyCrashNoise({");
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(REPORTER.indexOf('crumb("error"'));
+    expect(REPORTER).toMatch(/ownHost: location\.host,/);
+    // Server: the guard sits at the top of recordCrash — cached old bundles
+    // still send everything, and the server holds the same line.
+    const rec = V2DB.slice(
+      V2DB.indexOf("export async function recordCrash("),
+      V2DB.indexOf("\nexport ", V2DB.indexOf("export async function recordCrash(") + 1),
+    );
+    expect(rec).toMatch(/classifyCrashNoise\(\{/);
+    expect(rec).toMatch(/if \(noise\) return;/);
   });
 });
