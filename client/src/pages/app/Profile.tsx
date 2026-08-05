@@ -34,6 +34,7 @@ import {
   User,
   Volume2,
   Wrench,
+  Voicemail,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { ListLoading } from "@/app/ListStates";
@@ -88,6 +89,7 @@ import {
   ContactInfoSection,
   SocialLinksSection,
 } from "./ProfileHubSections";
+import { CallSettingsSection } from "./CallSettingsSection";
 import { AuthPanel } from "@/app/AuthPanel";
 import {
   hasPasscode,
@@ -251,6 +253,7 @@ export default function ProfilePage() {
     devices: t("profile.paneDevices"),
     privacy: t("profile.panePrivacy"),
     notifs: t("profile.paneNotifs"),
+    calls: t("callSettings.paneTitle"),
     theme: t("appearance.title"),
   };
 
@@ -520,6 +523,13 @@ export default function ProfilePage() {
                 onClick={() => openPane("notifs")}
               />
               <HubRow
+                icon={<Voicemail className="size-4" />}
+                tint="#10b981"
+                label={paneTitle.calls}
+                sub={t("callSettings.paneSub")}
+                onClick={() => openPane("calls")}
+              />
+              <HubRow
                 icon={<Palette className="size-4" />}
                 tint="#64748b"
                 label={paneTitle.theme}
@@ -746,6 +756,7 @@ export default function ProfilePage() {
                 <DndSection />
               </>
             )}
+            {pane === "calls" && <CallSettingsSection />}
             {pane === "theme" && <ThemeToggleSection />}
           </div>
         )}
@@ -795,6 +806,7 @@ const PANES = [
   "devices",
   "privacy",
   "notifs",
+  "calls",
   "theme",
 ] as const;
 type Pane = (typeof PANES)[number];

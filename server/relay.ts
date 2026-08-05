@@ -377,6 +377,10 @@ export interface RelayRegistry {
    * sits here for the same reason.
    */
   onCancelRingPush?: CancelPushHook;
+  /** v2.107.48: fired (fire-and-forget) with a pin the moment it registers, so
+   *  the box can warm that number's in-memory call-routing config — off the ring
+   *  path. Stored on the registry (not threaded) for the same reason as above. */
+  onRegister?: (pin: string) => void;
 }
 
 export interface PendingRing {
@@ -1964,6 +1968,10 @@ export type PageCalleeHook = (info: {
  * than a broken hang-up.
  */
 export type CancelPushHook = (info: { calleePin: string; roomId: string }) => void;
+/** SYNCHRONOUS ring-time routing check (v2.107.48): true ⇒ divert the caller to
+ *  the callee's voicemail (honest-offline). MUST NOT touch the DB or await —
+ *  it is called in the ring hot path; back it with an in-memory cache. */
+export type VoicemailRoutingHook = (calleePin: string, callerPin: string) => boolean;
 
 /**
  * Protocol logic. Kept as a pure function over (registry, socket-state,
@@ -1980,7 +1988,8 @@ export function handleMessage(
   onInvite?: InviteHook,
   onMissedCall?: MissedCallHook,
   onPageCallee?: PageCalleeHook,
-  onResolveDial?: ResolveDialHook
+  onResolveDial?: ResolveDialHook,
+  onCheckVoicemailRouting?: VoicemailRoutingHook
 ) {
   const type = msg && msg.type;
 
@@ -2178,6 +2187,9 @@ export function handleMessage(
       reg.clients.set(pin, { socket: conn.socket, name, device: msg.device ? String(msg.device).slice(0, 16) : undefined, flag: msg.flag ? String(msg.flag).slice(0, 8) : undefined, roomId: null, cid: cid || null, graceT: null, ringing: new Set(), ctxEpoch: ++dialEpochSeq, verifiedPin: verifiedClaim(pin), ip: registerIp });
     }
     safeSend(conn.socket, { type: "registered", pin, name, iceServers: iceServers(pin), });
+    // Warm this number's call-routing config into the per-box cache (v2.107.48),
+    // fire-and-forget so registration never waits on it.
+    try { reg.onRegister?.(pin); } catch { /* cache warm is best-effort */ }
     // AUTO-REJOIN an active call this number is still a member of (no re-invite).
     // Multi-device (v2.99.5): NOT when the call lives on another device that
     // kept the primary slot — sending the rejoin here dragged every freshly
@@ -2514,6 +2526,33 @@ export function handleMessage(
           return;
         }
         if (!target) return; // unreachable (targetReachable ⇒ target) — narrows TS
+        // ── CALLS → VOICEMAIL (v2.107.48, owner) ─────────────────────────────
+        // The callee is LIVE and reachable. Before we ring, a SYNCHRONOUS,
+        // in-memory check: has the callee opted to send THIS caller's calls to
+        // voicemail (their global "all calls" switch, or this number in their
+        // selected set)? This is deliberately NOT the reverted design — there is
+        // no DB round-trip and no `.then()` here. `routeCallToVoicemail` is a
+        // plain Map lookup that returns false for anyone not opted in, so for the
+        // overwhelmingly common case this line is a single hash probe and the ring
+        // below runs byte-for-byte as before. When it DOES divert, we hand the
+        // caller the exact same honest-offline reply a genuinely-offline callee
+        // produces (which raises their leave-a-message card) and record the miss —
+        // chat is untouched, this is calls-only.
+        if (onCheckVoicemailRouting && onCheckVoicemailRouting(to, callerPin)) {
+          if (process.env.RELAY_DIAG === "1" || process.env.NODE_ENV === "development") {
+            console.log(`[relay-diag]    invite -> ${to} VOICEMAIL: callee routes this caller to voicemail`);
+          }
+          safeSend(callerSocket, {
+            type: "error",
+            code: "offline",
+            pin: to,
+            message: "They're offline right now.",
+          });
+          try {
+            onMissedCall?.({ calleePin: to, callerPin, callerName: me.name, reason: "cancelled" });
+          } catch { /* never let a notification hook break call setup */ }
+          return;
+        }
         // CALL WAITING: we no longer reject the caller as "busy" when the target is
         // already in another call. Instead the invite rings through and the callee's
         // client shows a call-waiting popup (Answer = put the current call on hold
@@ -3978,7 +4017,8 @@ export function attachRelay(
   onConferenceEnd?: ConferenceEndHook,
   onPageCallee?: PageCalleeHook,
   onResolveDial?: ResolveDialHook,
-  onCancelRingPush?: CancelPushHook
+  onCancelRingPush?: CancelPushHook,
+  onCheckVoicemailRouting?: VoicemailRoutingHook
 ): RelayRegistry {
   const reg = createRegistry();
   reg.onConferenceEnd = onConferenceEnd;
@@ -4102,7 +4142,8 @@ export function attachRelay(
         onInvite,
         onMissedCall,
         onPageCallee,
-        onResolveDial
+        onResolveDial,
+        onCheckVoicemailRouting
       );
     }
   }
@@ -4459,7 +4500,8 @@ export function attachRelay(
       onInvite,
       onMissedCall,
       onPageCallee,
-      onResolveDial
+      onResolveDial,
+      onCheckVoicemailRouting
     );
     res.json({ ok: true });
   });

@@ -25,6 +25,7 @@ import {
   ChevronDown,
   ChevronRight,
   Radio,
+  Voicemail,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -642,6 +643,9 @@ export default function ContactsPage() {
                           onToggleBlock={() =>
                             upsert.mutate({ number: c.number, blocked: !c.blocked })
                           }
+                          onToggleVoicemail={() =>
+                            upsert.mutate({ number: c.number, callsToVoicemail: !c.callsToVoicemail })
+                          }
                           /* SEND THE WHOLE FACT, not the mirror. `category` is the derived
                              mirror of `tags[0]`, and `contactUpdateKeys` couples the two —
                              so a category-only write re-derived `tags` FROM it and silently
@@ -742,6 +746,7 @@ function ContactRow({
   onDelete,
   onToggleFavorite,
   onToggleBlock,
+  onToggleVoicemail,
   onSetCategory,
 }: {
   c: {
@@ -767,6 +772,7 @@ function ContactRow({
      *  contact (category only) still shows its chip. */
     tags?: string[];
     blocked: boolean;
+    callsToVoicemail?: boolean;
   };
   onVoice: () => void;
   onVideo: () => void;
@@ -775,6 +781,7 @@ function ContactRow({
   onDelete: () => void;
   onToggleFavorite: () => void;
   onToggleBlock: () => void;
+  onToggleVoicemail: () => void;
   onSetCategory: (cat: Category) => void;
 }) {
   const t = useT();
@@ -1048,6 +1055,10 @@ function ContactRow({
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={onEdit}>
               <Pencil className="size-4" /> {t("contacts.edit")}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onToggleVoicemail}>
+              <Voicemail className={"size-4 " + (c.callsToVoicemail ? "text-primary" : "")} />
+              {c.callsToVoicemail ? t("contacts.callsVoicemailOff") : t("contacts.callsVoicemailOn")}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={onToggleBlock}>
               <Ban className={"size-4 " + (c.blocked ? "" : "text-red-500")} />

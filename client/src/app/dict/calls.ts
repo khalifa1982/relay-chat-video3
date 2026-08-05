@@ -302,4 +302,31 @@ export const CALLS = {
   "calls.statusEncrypting": { en: "Securing connection…", ar: "جارٍ تأمين الاتصال…" },
   "calls.statusLive": { en: "Connected", ar: "متصل" },
   "calls.statusReconnecting": { en: "Reconnecting…", ar: "إعادة الاتصال…" },
+  // ── Call Settings — "send my calls to voicemail" (v2.107.48, owner) ──────────
+  "callSettings.paneTitle": { en: "Call settings", ar: "إعدادات المكالمات" },
+  "callSettings.paneSub": { en: "Send calls to voicemail", ar: "تحويل المكالمات إلى البريد الصوتي" },
+  "callSettings.title": { en: "Calls to voicemail", ar: "المكالمات إلى البريد الصوتي" },
+  "callSettings.lede": {
+    en: "Send incoming calls to your voicemail instead of ringing you. Chat is never affected — this is calls only.",
+    ar: "تحويل المكالمات الواردة إلى بريدك الصوتي بدلاً من الرنين. لا تتأثر المحادثة إطلاقاً — هذا للمكالمات فقط.",
+  },
+  "callSettings.allTitle": { en: "Send all calls to voicemail", ar: "تحويل كل المكالمات إلى البريد الصوتي" },
+  "callSettings.allDesc": {
+    en: "Everyone who calls you reaches your voicemail.",
+    ar: "كل من يتصل بك يصل إلى بريدك الصوتي.",
+  },
+  "callSettings.allOnToast": { en: "All calls now go to voicemail", ar: "كل المكالمات تُحوَّل الآن إلى البريد الصوتي" },
+  "callSettings.allOffToast": { en: "Calls will ring you again", ar: "ستُرِنّ المكالمات لديك مرة أخرى" },
+  "callSettings.selectedTitle": { en: "Selected contacts", ar: "جهات اتصال محددة" },
+  "callSettings.selectedDesc": {
+    en: "Pick the people whose calls should go to voicemail.",
+    ar: "اختر الأشخاص الذين يجب تحويل مكالماتهم إلى البريد الصوتي.",
+  },
+  "callSettings.selectedSupersededDesc": {
+    en: "All calls are going to voicemail, so these picks are paused. Turn off the switch above to use them.",
+    ar: "كل المكالمات تُحوَّل إلى البريد الصوتي، لذا هذه الاختيارات متوقفة. أوقف المفتاح أعلاه لاستخدامها.",
+  },
+  "callSettings.searchContacts": { en: "Search contacts", ar: "بحث في جهات الاتصال" },
+  "callSettings.noContacts": { en: "No contacts to show", ar: "لا توجد جهات اتصال لعرضها" },
+  "callSettings.saveFailed": { en: "Couldn't save that — try again", ar: "تعذّر الحفظ — حاول مرة أخرى" },
 } as const satisfies Record<string, Entry>;

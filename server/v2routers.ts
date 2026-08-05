@@ -173,6 +173,7 @@ import {
   getAlbumsForMessages,
   getAttachmentsForIdentityBatch,
 } from "./v2db";
+import { publishRoutingChanged } from "./callRouting";
 import { adminPurgeIdentity, guestDaysLeft } from "./purgeIdentity";
 import {
   MAX_STATUS_NOTE,
@@ -608,6 +609,7 @@ export const v2AuthRouter = router({
       guestExpiresAt: ctx.identity.guestExpiresAt,
       email,
       bio: ctx.identity.bio,
+      allCallsToVoicemail: ctx.identity.allCallsToVoicemail === true,
       statusOverride: (ctx.identity.statusOverride as "" | "away" | "travel" | null) ?? "",
       // The profile LABEL (v2.101.1) — separate from the presence override above,
       // and normalized on the way out so a hand-edited row cannot render a label
@@ -905,6 +907,8 @@ export const v2AuthRouter = router({
           .array(z.object({ platform: z.string().max(20), value: z.string().max(200) }))
           .max(20)
           .optional(),
+        /** Global "send all my calls to voicemail" master switch (v2.107.48). */
+        allCallsToVoicemail: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -933,6 +937,11 @@ export const v2AuthRouter = router({
       }
       // updateIdentityProfile sanitizes mobiles/socials/status server-side.
       await updateIdentityProfile(me.id, input);
+      // v2.107.48: if the global voicemail switch moved, refresh this user's
+      // routing across boxes so the ring-time cache reflects it. Fire-and-forget.
+      if (Object.prototype.hasOwnProperty.call(input, "allCallsToVoicemail")) {
+        void publishRoutingChanged(me.number);
+      }
       const fresh = await getIdentityById(me.id);
       return fresh;
     }),
@@ -1762,6 +1771,7 @@ export const v2ContactsRouter = router({
            client on the previous bundle is reading it mid-deploy. */
         tags: contactTagsOf({ tags: r.tags ?? null, category: r.category ?? null }),
         blocked: r.blocked === true,
+        callsToVoicemail: r.callsToVoicemail === true,
         identityId: ident ?? null,
         isOnline: hidden ? false : (pres?.isOnline ?? false),
         idle: hidden ? false : (pres?.idle ?? false),
@@ -1823,6 +1833,9 @@ export const v2ContactsRouter = router({
         tags: z.array(z.enum(["vip", "family", "friend", "team"])).max(4).optional(),
         /** Block this number: their calls auto-decline, their 1:1 messages are rejected. */
         blocked: z.boolean().optional(),
+        /** Send THIS number's calls to voicemail (v2.107.48): calls-only, opt-in;
+         *  chat is unaffected. Distinct from `blocked`. */
+        callsToVoicemail: z.boolean().optional(),
         /** Explicit-rename opt-in — only the edit dialog sends this. Without it a
          *  provided displayName cannot replace an existing alias (see upsertContact). */
         overwriteName: z.boolean().optional(),
@@ -1845,6 +1858,11 @@ export const v2ContactsRouter = router({
         ...rest,
         ...(tags ? { tags: serializeContactTags(tags) } : {}),
       });
+      // v2.107.48: a change to who-goes-to-voicemail must reach the box holding
+      // this user's live socket so the ring-time cache reflects it. Fire-and-forget.
+      if (Object.prototype.hasOwnProperty.call(input, "callsToVoicemail")) {
+        void publishRoutingChanged(me.number);
+      }
       return row;
     }),
 

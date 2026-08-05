@@ -99,6 +99,9 @@ export const CONTACTS = {
   "contacts.onACall": { en: "On a call right now", ar: "في مكالمة الآن" },
   "contacts.block": { en: "Block", ar: "حظر" },
   "contacts.unblock": { en: "Unblock", ar: "إلغاء الحظر" },
+  // v2.107.48 (owner) — per-contact "send this person's calls to voicemail".
+  "contacts.callsVoicemailOn": { en: "Send calls to voicemail", ar: "تحويل المكالمات إلى البريد الصوتي" },
+  "contacts.callsVoicemailOff": { en: "Stop sending to voicemail", ar: "إيقاف التحويل إلى البريد الصوتي" },
   "contacts.favorite": { en: "Favorite", ar: "إضافة إلى المفضلة" },
   "contacts.unfavorite": { en: "Unfavorite", ar: "إزالة من المفضلة" },
   "contacts.edit": { en: "Edit", ar: "تعديل" },

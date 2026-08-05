@@ -16,6 +16,7 @@ import { registerV2Upload, uploadRateGate } from "../v2upload";
 import { registerV2Events, publishToIdentity, publishPresenceTo } from "../v2events";
 import { registerV2Offline } from "../v2offline";
 import { registerStatsFeed } from "../statsFeed";
+import { routeCallToVoicemail, loadRoutingForNumber, initCallRoutingBus } from "../callRouting";
 import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, reapStaleSessions, reapUnclaimedReservations, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds,
   claimMissedCallEmail,
   releaseMissedCallEmailClaim,
@@ -224,7 +225,7 @@ async function startServer() {
   // The relay handler also emits a `call_offer` hint on the v2 SSE bus
   // when an invite is dispatched, so the callee gets a desktop
   // notification even if they're not on the call screen yet.
-  attachRelay(
+  const relayReg = attachRelay(
     app,
     async (info) => {
       // onInvite: alert the callee on their other tabs AND — when their app is
@@ -542,8 +543,20 @@ async function startServer() {
           /* a stale ring is the acceptable failure; a thrown hang-up is not */
         }
       })();
-    }
+    },
+    // onCheckVoicemailRouting (v2.107.48, owner): the SYNCHRONOUS ring-time gate.
+    // Reads a per-box in-memory cache — NO DB, NO await — so the normal ring path
+    // is byte-identical for anyone not opted in (which is the whole system by
+    // default). See server/callRouting.ts for why this replaces the reverted
+    // DB-in-the-ring-path design that broke calling for everyone.
+    (calleePin, callerPin) => routeCallToVoicemail(calleePin, callerPin),
   );
+  // Subscribe this box to cross-box routing-change envelopes so a toggle on
+  // another box refreshes the callee's cache here (where their socket may live).
+  initCallRoutingBus();
+  // Warm a number's routing config when it registers (fire-and-forget, off the
+  // ring path). This is what makes the ring-time cache lookup a warm hit.
+  relayReg.onRegister = (pin: string) => { void loadRoutingForNumber(pin); };
   // Version endpoint for the client's auto-update checker. Returns the version
   // baked into THIS (running) deploy; an older already-loaded tab polls it and
   // notices a mismatch after a new deploy. Cheap, no-auth, no-cache.

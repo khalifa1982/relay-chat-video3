@@ -323,6 +323,8 @@ export interface ResolvedIdentity {
   lastName: string | null;
   /** Away auto-reply, opt-in (v2.99.66). NULL column is treated as false. */
   autoReplyEnabled: boolean;
+  /** Global "send all my calls to voicemail" master switch (v2.107.48). NULL === off. */
+  allCallsToVoicemail: boolean;
   /**
    * An admin's SUGGESTED registration address (v2.105.15), or null. Only ever a
    * suggestion the guest's own app shows them — see the column comment in
@@ -360,6 +362,8 @@ function rowToResolved(row: typeof identities.$inferSelect): ResolvedIdentity {
     lastName: row.lastName ?? null,
     // Opt-in: only an explicit true enables the away auto-reply (v2.99.66).
     autoReplyEnabled: row.autoReplyEnabled === true,
+    // Opt-in: only an explicit true diverts all calls to voicemail (v2.107.48).
+    allCallsToVoicemail: row.allCallsToVoicemail === true,
     regInviteEmail: row.regInviteEmail ?? null,
     regInviteAt: row.regInviteAt ?? null,
   };
@@ -370,6 +374,37 @@ export async function getIdentityById(id: number): Promise<ResolvedIdentity | nu
   if (!db) return null;
   const rows = await db.select().from(identities).where(eq(identities.id, id)).limit(1);
   return rows.length > 0 ? rowToResolved(rows[0]) : null;
+}
+
+/**
+ * Load one identity's CALL-ROUTING config (v2.107.48): the global
+ * "all calls to voicemail" master switch + the set of individual numbers whose
+ * calls they send to voicemail. Read at register / on toggle into the per-box
+ * in-memory routing cache (server/callRouting.ts) — NEVER on the ring hot path.
+ * Two indexed reads (identities by PK, contacts by ownerId). Returns an empty,
+ * all-off config when the DB is unavailable so callers fail OPEN (ring).
+ */
+export async function loadCallRoutingConfigByNumber(
+  calleeNumber: string,
+): Promise<{ all: boolean; numbers: string[] } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  // Resolve number → identity (indexed). No live identity ⇒ nothing to route.
+  const idRows = await db
+    .select({ id: identities.id, all: identities.allCallsToVoicemail })
+    .from(identities)
+    .where(eq(identities.number, calleeNumber))
+    .limit(1);
+  if (idRows.length === 0) return null;
+  const ownerId = idRows[0].id;
+  const cRows = await db
+    .select({ number: contacts.number })
+    .from(contacts)
+    .where(and(eq(contacts.ownerId, ownerId), eq(contacts.callsToVoicemail, true)));
+  return {
+    all: idRows[0].all === true,
+    numbers: cRows.map((r) => r.number).filter((n): n is string => !!n),
+  };
 }
 
 export async function getIdentityByNumber(number: string): Promise<ResolvedIdentity | null> {
@@ -1455,6 +1490,7 @@ export async function updateIdentityProfile(
     statusNote?: string;
     mobiles?: unknown;
     socials?: unknown;
+    allCallsToVoicemail?: boolean;
   }
 ): Promise<void> {
   const db = await getDb();
@@ -1494,6 +1530,9 @@ export async function updateIdentityProfile(
   }
   if (patch.mobiles !== undefined) set.mobiles = JSON.stringify(sanitizeMobiles(patch.mobiles));
   if (patch.socials !== undefined) set.socials = JSON.stringify(sanitizeSocials(patch.socials));
+  // v2.107.48: the global "send ALL my calls to voicemail" master switch. Stored
+  // as a real boolean; the ring-time cache reads it (via loadCallRoutingConfig).
+  if (patch.allCallsToVoicemail !== undefined) set.allCallsToVoicemail = patch.allCallsToVoicemail === true;
   if (Object.keys(set).length === 0) return;
   await db.update(identities).set(set).where(eq(identities.id, id));
 }
@@ -2603,6 +2642,9 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "contacts", column: "category", ddl: "ADD COLUMN `category` varchar(16)" },
     { table: "contacts", column: "tags", ddl: "ADD COLUMN `tags` varchar(64)" },
     { table: "contacts", column: "blocked", ddl: "ADD COLUMN `blocked` boolean" },
+    // v2.107.48 — calls-to-voicemail routing (opt-in, defaults off).
+    { table: "contacts", column: "callsToVoicemail", ddl: "ADD COLUMN `callsToVoicemail` boolean" },
+    { table: "identities", column: "allCallsToVoicemail", ddl: "ADD COLUMN `allCallsToVoicemail` boolean" },
     // Self-hosted email/password auth (v2.54).
     { table: "users", column: "passwordHash", ddl: "ADD COLUMN `passwordHash` text" },
     { table: "users", column: "emailVerified", ddl: "ADD COLUMN `emailVerified` boolean" },
@@ -3479,7 +3521,7 @@ export function contactTagColumns(input: { tags?: string | null; category?: stri
 const CONTACT_UPDATABLE = [
   "displayName", "avatarUrl", "favourite", "notes",
   "email", "phone", "company", "jobTitle", "website", "birthday",
-  "category", "tags", "blocked",
+  "category", "tags", "blocked", "callsToVoicemail",
 ] as const;
 
 /**
@@ -3538,6 +3580,7 @@ export async function upsertContact(input: {
   category?: string | null;
   tags?: string | null;
   blocked?: boolean;
+  callsToVoicemail?: boolean;
 }) {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
@@ -3562,6 +3605,7 @@ export async function upsertContact(input: {
        single tag. */
     ...contactTagColumns(input),
     blocked: input.blocked ?? false,
+    callsToVoicemail: input.callsToVoicemail ?? false,
   };
   // Only overwrite columns the caller explicitly provided, so a partial update
   // (e.g. a favourite toggle that omits email/notes/…) never wipes saved fields.

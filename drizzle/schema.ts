@@ -178,6 +178,12 @@ export const identities = mysqlTable(
     bio: text("bio"),
     /** Manual status override: "away" | "travel" | null/"" (= auto from presence). */
     statusOverride: varchar("statusOverride", { length: 16 }),
+    /** Global "send ALL my incoming calls to voicemail" master switch (v2.107.48).
+     *  Opt-in, defaults off (NULL === off). When on, every caller reaches the
+     *  owner's voicemail / honest-offline for CALLS; chat is unaffected. Held in
+     *  a per-box in-memory routing cache at ring time so it never touches the DB
+     *  on the hot path (see server/callRouting.ts). */
+    allCallsToVoicemail: boolean("allCallsToVoicemail"),
     /** JSON array of optional mobile numbers (strings). */
     mobiles: text("mobiles"),
     /** JSON array of { platform, value } social/link entries. */
@@ -387,6 +393,11 @@ export const contacts = mysqlTable(
     /** Owner has BLOCKED this number: their calls are auto-declined on this
      *  device and their 1:1 messages to the owner are rejected (v2.82). */
     blocked: boolean("blocked"),
+    /** Owner sends THIS number's calls to voicemail (v2.107.48): the caller
+     *  reaches the owner's voicemail / an honest-offline, chat is untouched.
+     *  Distinct from `blocked` (which severs both ways) — this is calls-only,
+     *  opt-in, and defaults off (NULL === off). */
+    callsToVoicemail: boolean("callsToVoicemail"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
