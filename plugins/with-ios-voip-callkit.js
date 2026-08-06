@@ -250,11 +250,23 @@ extension AppDelegate: PKPushRegistryDelegate, CXProviderDelegate, WKScriptMessa
         // Retry after a delay if WebView not yet available
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
           guard let self = self, let webView = self.findWebView() else { return }
+          // iOS 27: WKUserContentController.add throws an NSException when a
+          // handler with this name is already registered, and this function can
+          // fire more than once (every VoIP-token refresh, every relaunch). That
+          // uncaught exception is what crashed the WebView before 1.0.35, whose
+          // fix was lost with its commit. removeScriptMessageHandler is a no-op
+          // when nothing is registered, so removing first makes a double-add —
+          // and therefore the crash — impossible.
+          webView.configuration.userContentController.removeScriptMessageHandler(forName: "RelayNative")
           webView.configuration.userContentController.add(self, name: "RelayNative")
           NSLog("[RELAY VoIP] RelayNative handler registered (delayed retry)")
         }
         return
       }
+      // See the delayed-retry branch above: remove any existing RelayNative
+      // handler before adding so a repeat call can never throw the "already
+      // registered" NSException that crashed the WebView on iOS 27 pre-1.0.35.
+      webView.configuration.userContentController.removeScriptMessageHandler(forName: "RelayNative")
       webView.configuration.userContentController.add(self, name: "RelayNative")
       NSLog("[RELAY VoIP] RelayNative handler registered")
     }
