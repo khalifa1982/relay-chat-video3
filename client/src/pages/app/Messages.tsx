@@ -132,7 +132,7 @@ import {
 import { useTypers, useTypingConversations } from "@/app/typingStore";
 import { bubbleStyleFor, bubbleGlyphColor, nameColorFor, senderAvatarStyle } from "@/app/peerColors";
 import { TypingLine } from "@/app/TypingLine";
-import { useDraft, clearDraft as clearDraftFor } from "@/app/draftStore";
+import { useDraft, clearDraft as clearDraftFor, getDraft, onDraftsChange } from "@/app/draftStore";
 
 /** Own (outgoing) message bubble — the brand "message" orange gradient with
  *  white copy. Received bubbles keep the neutral token surface (theme-safe). */
@@ -524,6 +524,15 @@ export default function MessagesPage({
   // Groups is groups. The complement is taken on the same INPUT for the same reason the
   // narrowing was: `archived` is kind-agnostic, so filtering by picking categories would
   // leave an archived GROUP sitting in a tab that no longer holds groups.
+  /* DRAFT TICK (v2.107.52, roadmap QW-2). The rows below read drafts
+     synchronously via getDraft, and the store is written by a DIFFERENT
+     component (the open conversation's composer hook) — so the list subscribes
+     to the store's own change signal and repaints on any write or clear. A bare
+     counter rather than the draft map itself: the rows re-read storage when
+     they render, so the state only has to make a render happen. */
+  const [, setDraftsTick] = useState(0);
+  useEffect(() => onDraftsChange(() => setDraftsTick((v) => v + 1)), []);
+
   const scopedThreads = useMemo(() => {
     const all = threads.data ?? [];
     return only === "groups"
@@ -961,6 +970,14 @@ export default function MessagesPage({
                            this session shows its preview normally, because you are
                            already reading it. */
                         const hidden = isGroup && isGroupHidden(t.conversationId);
+                        /* THE NEVER-SENT DRAFT (v2.107.52, roadmap QW-2).
+                           NOT the active row: that conversation repaints on every
+                           keystroke of this very draft, and its composer already
+                           shows the words themselves. NOT a locked row either —
+                           the draft is literally what you were saying in there,
+                           which is exactly the kind of content the lock exists
+                           to keep off this screen. */
+                        const draftText = !isActive && !hidden ? getDraft(t.conversationId).text.trim() : "";
                         /* #115 — A STORY REPLY GETS ITS CONTEXT.
                            A one-tap reaction IS an emoji-only message, so this row used
                            to show a floating ❤️ with nothing saying what it was about.
@@ -1227,6 +1244,21 @@ export default function MessagesPage({
                                         />
                                       ))}
                                     </span>
+                                  </span>
+                                ) : draftText ? (
+                                  /* DRAFT WINS LINE 2 (v2.107.52, roadmap QW-2) — the thread
+                                     you started answering and left is the one this list most
+                                     needs to point back to, and the unsent words say it better
+                                     than the message they were replying to. WhatsApp's exact
+                                     behaviour, minus their green: in THIS row the accent means
+                                     UNREAD, green means ONLINE and amber means MUTE (the pin
+                                     marker above settled the same question the same way), so a
+                                     drafted-but-read thread must not borrow any of them. A
+                                     quiet italic word is distinction enough. */
+                                  <span dir="auto" className="min-w-0 flex-1 truncate">
+                                    <span className="shrink-0 font-medium italic text-foreground/75">{tr("msg.draft")}</span>
+                                    <span aria-hidden="true" className="opacity-40">{" · "}</span>
+                                    {draftText}
                                   </span>
                                 ) : (
                                   <>
@@ -5570,6 +5602,26 @@ function AttachmentView({
  */
 const WAVE_BARS = [38, 62, 100, 74, 46, 88, 58, 30, 70, 96, 54, 42, 80, 64, 34, 90, 50, 26] as const;
 
+/**
+ * PLAYBACK SPEED (v2.107.52, roadmap QW-1) — WhatsApp's 1×/1.5×/2× cycle.
+ * ONE GLOBAL SETTING rather than per-note state, which is the behaviour people
+ * already know from there: speeding up is a property of the listener, not of
+ * the recording — somebody catching up on a thread of six notes should not have
+ * to tap six pills. Stored, so it survives reloads; read at element creation,
+ * so a chained run (v2.106.89's hand-over) inherits it note after note without
+ * any of those bubbles re-rendering.
+ */
+const VOICE_RATES = [1, 1.5, 2] as const;
+
+function readVoiceRate(): number {
+  try {
+    const v = Number(localStorage.getItem("relay_voice_rate"));
+    return (VOICE_RATES as readonly number[]).includes(v) ? v : 1;
+  } catch {
+    return 1;
+  }
+}
+
 function fmtClock(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
   const m = Math.floor(sec / 60);
@@ -5754,6 +5806,12 @@ function VoiceNotePlayer({
   const t = useT();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
+  /* Seeded from storage so every bubble's pill shows the app-wide speed. Local
+     state after that: the pill you tapped updates instantly, and the OTHER
+     mounted bubbles catch up the moment their element is (re)created — which is
+     the only moment their number matters, since only a playing element has a
+     rate anybody can hear. */
+  const [rate, setRate] = useState<number>(readVoiceRate);
   /**
    * This browser cannot decode this note (v2.106.89, owner: the voice bar is broken on
    * iPhone for notes recorded elsewhere).
@@ -5849,6 +5907,11 @@ function VoiceNotePlayer({
     if (audioRef.current) return audioRef.current;
     const a = new Audio(url);
     a.preload = "metadata";
+    // The stored speed, not this bubble's state: a run's NEXT note is started by
+    // the registered starter without this component re-rendering, and storage is
+    // the one place both agree on (roadmap QW-1).
+    a.defaultPlaybackRate = readVoiceRate();
+    a.playbackRate = a.defaultPlaybackRate;
     // A detached element's `play` never reaches `document`, so it is registered by hand
     // to take part in the app-wide one-at-a-time rule (v2.106.89).
     unregisterRef.current = registerDetachedMedia(a);
@@ -5951,6 +6014,22 @@ function VoiceNotePlayer({
     } else a.pause();
   };
 
+  const cycleRate = () => {
+    const i = (VOICE_RATES as readonly number[]).indexOf(rate);
+    const next = VOICE_RATES[(i + 1) % VOICE_RATES.length];
+    setRate(next);
+    try {
+      localStorage.setItem("relay_voice_rate", String(next));
+    } catch {
+      /* not persisted — still applied to this element below */
+    }
+    const a = audioRef.current;
+    if (a) {
+      a.playbackRate = next;
+      a.defaultPlaybackRate = next;
+    }
+  };
+
   const seek = (e: React.MouseEvent<HTMLDivElement>) => {
     const a = ensure();
     if (!Number.isFinite(dur) || dur <= 0) return;
@@ -6049,6 +6128,19 @@ function VoiceNotePlayer({
         </div>
         <div className={"mt-1 flex items-center justify-between font-mono text-[10px] " + sub}>
           <span>{fmtClock(cur)}</span>
+          {/* The speed pill sits BETWEEN the clocks: both ends of this row are
+              live numbers, and a control between them cannot be mistaken for
+              one. `{rate}×` needs no dictionary — numerals and the times sign
+              read the same in both locales; the aria-label is the translated
+              part. */}
+          <button
+            type="button"
+            onClick={cycleRate}
+            aria-label={t("msg.playbackSpeed")}
+            className="rounded-full bg-white/15 px-1.5 py-[1px] font-mono text-[9.5px] font-semibold leading-none transition hover:bg-white/25 active:scale-95"
+          >
+            {rate}×
+          </button>
           <span>{dur > 0 && Number.isFinite(dur) ? fmtClock(dur) : "· · ·"}</span>
         </div>
       </div>

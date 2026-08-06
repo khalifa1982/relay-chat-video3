@@ -23,6 +23,32 @@ function key(conversationId: number): string {
   return PREFIX + conversationId;
 }
 
+/**
+ * Change listeners (v2.107.52, roadmap QW-2) — the thread LIST paints a "Draft"
+ * line for a conversation you typed in and left, so it has to hear about writes
+ * made by a different component (the composer's hook). Same shape as
+ * mutedThreads' listener set: module-level, fired by BOTH writers below, and
+ * every write path in this file funnels through those two (the hook's debounce
+ * and flush both call `saveDraftNow`).
+ */
+const listeners = new Set<() => void>();
+
+function notify(): void {
+  listeners.forEach((l) => {
+    try {
+      l();
+    } catch {
+      /* one bad listener must not silence the rest */
+    }
+  });
+}
+
+/** Subscribe to any draft write/clear; returns the unsubscribe. */
+export function onDraftsChange(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+
 /** Pure read — exported for direct unit testing (mirrors isThreadMuted). */
 export function getDraft(conversationId: number): Draft {
   try {
@@ -47,6 +73,10 @@ export function saveDraftNow(conversationId: number, draft: Draft): void {
   } catch {
     /* storage unavailable — draft just won't persist */
   }
+  // AFTER the try/catch, not inside it: even when storage refused the write the
+  // in-memory state the listeners will re-read is whatever getDraft returns —
+  // letting them repaint is correct in both worlds.
+  notify();
 }
 
 export function clearDraft(conversationId: number): void {
@@ -55,6 +85,7 @@ export function clearDraft(conversationId: number): void {
   } catch {
     /* */
   }
+  notify();
 }
 
 /** React hook: loads the saved draft once per conversation, debounce-saves on

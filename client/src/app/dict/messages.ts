@@ -551,4 +551,7 @@ export const MESSAGES = {
     en: "Mic access required for voice notes: {reason}",
     ar: "يلزم الإذن بالوصول إلى الميكروفون للرسائل الصوتية: {reason}",
   },
+  /* v2.107.52 — feature roadmap wave 1. */
+  "msg.draft": { en: "Draft", ar: "مسودة" },
+  "msg.playbackSpeed": { en: "Playback speed", ar: "سرعة التشغيل" },
 } as const satisfies Record<string, Entry>;
