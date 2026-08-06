@@ -31,6 +31,17 @@ export default function RootLayout() {
       enableVibrate: true,
       showBadge: true,
     });
+    // The server's FCM display block targets channel_id "messages" (fcm.ts).
+    // Without this declared, Android falls back to FCM's own fallback channel,
+    // which works but is DEFAULT-importance — no heads-up banner. Declaring it
+    // MAX makes message and call banners pop over whatever is on screen.
+    void Notifications.setNotificationChannelAsync("messages", {
+      name: "Messages & Calls",
+      importance: Notifications.AndroidImportance.MAX,
+      enableVibrate: true,
+      showBadge: true,
+      sound: "default",
+    });
   }, []);
 
   return (
