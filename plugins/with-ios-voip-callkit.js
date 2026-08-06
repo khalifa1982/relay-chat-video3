@@ -135,8 +135,18 @@ import FirebaseMessaging`;
     setupCallKit()
     setupAudioRouteObserver()
 
-    // RELAY: Register for alert (message) push notifications via Firebase Messaging
-    FirebaseApp.configure()
+    // RELAY: Register for alert (message) push notifications via Firebase Messaging.
+    //
+    // Do NOT call FirebaseApp.configure() here. The @react-native-firebase/app
+    // config plugin already inserts FirebaseApp.configure() near the top of this
+    // same didFinishLaunchingWithOptions (in its own @generated block, which runs
+    // before this RELAY block). Calling it a second time raises the uncaught
+    // Objective-C exception "Default app has already been configured."
+    // (domain com.firebase.core), which calls abort() during launch. That was the
+    // SIGABRT that crashed RELAY 1.0.40 the instant it opened on iOS 27 (crash
+    // report RELAY-2026-08-06-044517: EXC_CRASH / __handleDelegateCallbacks ->
+    // +[NSException raise:format:]). Firebase is already configured by that
+    // earlier call, so Messaging.messaging() below is safe to use.
     UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     UIApplication.shared.registerForRemoteNotifications()
     Messaging.messaging().delegate = self
