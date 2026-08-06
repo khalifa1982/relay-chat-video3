@@ -35,27 +35,28 @@
     "cookie": "^1.1.1",
     "dotenv": "^16.6.1",
     "drizzle-orm": "^0.44.7",
-    "expo": "~54.0.29",
-    "expo-audio": "~1.1.0",
+    "expo": "~54.0.36",
+    "expo-asset": "~12.0.13",
+    "expo-audio": "~1.1.1",
     "expo-build-properties": "^1.0.10",
-    "expo-constants": "~18.0.12",
+    "expo-constants": "~18.0.13",
     "expo-crypto": "~15.0.9",
-    "expo-font": "~14.0.10",
+    "expo-font": "~14.0.12",
     "expo-haptics": "~15.0.8",
     "expo-image": "~3.0.11",
     "expo-intent-launcher": "~13.0.8",
     "expo-keep-awake": "~15.0.8",
     "expo-linear-gradient": "~15.0.8",
-    "expo-linking": "~8.0.10",
-    "expo-notifications": "~0.32.15",
-    "expo-router": "~6.0.19",
+    "expo-linking": "~8.0.12",
+    "expo-notifications": "~0.32.17",
+    "expo-router": "~6.0.24",
     "expo-secure-store": "~15.0.8",
-    "expo-splash-screen": "~31.0.12",
+    "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
     "expo-symbols": "~1.0.8",
     "expo-system-ui": "~6.0.9",
-    "expo-video": "~3.0.15",
-    "expo-web-browser": "~15.0.10",
+    "expo-video": "~3.0.16",
+    "expo-web-browser": "~15.0.11",
     "express": "^4.22.1",
     "jose": "6.1.0",
     "mysql2": "^3.16.0",
@@ -97,5 +98,17 @@
     "typescript": "~5.9.3",
     "vitest": "^2.1.9"
   },
-  "packageManager": "pnpm@9.12.0"
+  "packageManager": "pnpm@9.12.0",
+  "expo": {
+    "install": {
+      "//": "@react-navigation packages are intentionally a few minors ahead of the SDK-54 baseline; they resolve within major 7 and match the version the shipped 1.0.41 build runs on.",
+      "exclude": ["@react-navigation/native", "@react-navigation/bottom-tabs"]
+    },
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "//": "react-native-callkeep and react-native-voip-push-notification are flagged 'untested on New Architecture', but the incoming-call path (PKPushRegistry + CXProvider) runs in native Swift in plugins/with-ios-voip-callkit.js, not through these JS libraries — so their New-Arch status does not affect call ringing.",
+        "exclude": ["react-native-callkeep", "react-native-voip-push-notification"]
+      }
+    }
+  }
 }
