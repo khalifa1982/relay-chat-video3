@@ -49,6 +49,11 @@ export const MESSAGES = {
 
   // ── Thread-list chrome ──
   "msg.search": { en: "Search conversations", ar: "ابحث في المحادثات" },
+  // v2.107.51 (owner): the thread-list top bar now names each icon under it, and
+  // search hides behind one of them. These are the short labels for that row.
+  "msg.tabAutoReply": { en: "Auto-reply", ar: "رد تلقائي" },
+  "msg.tabSearch": { en: "Search", ar: "بحث" },
+  "msg.tabNew": { en: "New", ar: "جديد" },
   "msg.loadFailed": { en: "Couldn't load your conversations.", ar: "تعذّر تحميل محادثاتك." },
   "msg.groupConversation": { en: "Group conversation", ar: "محادثة جماعية" },
   "msg.notesToSelf": { en: "Notes to yourself", ar: "ملاحظات لنفسك" },

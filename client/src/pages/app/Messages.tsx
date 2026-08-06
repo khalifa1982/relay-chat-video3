@@ -504,6 +504,9 @@ export default function MessagesPage({
   // Thread-list search (v2.95): filter conversations by peer name/number. Pure
   // client filter over the already-loaded list — instant, no new request.
   const [threadSearch, setThreadSearch] = useState("");
+  // v2.107.51 (owner): search sits behind a top-bar icon now — tap to reveal the
+  // field, tap again (or clear it) to collapse it, so the list starts full-height.
+  const [searchOpen, setSearchOpen] = useState(false);
   const savedNameByNumber = useSavedNames();
   // The GROUPS tab is this same page narrowed to group threads. The narrowing is a memo
   // of its OWN, ahead of the categories, for two reasons. (1) Narrowing by picking
@@ -746,13 +749,42 @@ export default function MessagesPage({
           (activeConvoId == null ? "flex flex-1 md:flex-initial" : "hidden md:flex")
         }
       >
-        <header className="flex items-center justify-between px-4 md:px-5 py-4 border-b border-border">
+        <header className="flex items-center justify-between px-4 md:px-5 py-3 border-b border-border">
           <h2 className="text-base font-extrabold tracking-tight">
             {only === "groups" ? tr("nav.groups") : tr("nav.messages")}
           </h2>
-          <div className="flex items-center gap-1">
-            <AutoReplyToggle />
-            <NewMessageDialog defaultMode={only === "groups" ? "group" : "dm"} />
+          {/* v2.107.51 (owner): each top-bar action names itself underneath, and
+              search is one of them — its own field only unfolds when tapped. The
+              row aligns on the labels (items-end) so the icons sit in a tidy line. */}
+          <div className="flex items-end gap-2.5">
+            <div className="flex flex-col items-center gap-1">
+              <AutoReplyToggle />
+              <span className="text-[10px] leading-none text-muted-foreground">{tr("msg.tabAutoReply")}</span>
+            </div>
+            <div className="flex flex-col items-center gap-1">
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() =>
+                  setSearchOpen((v) => {
+                    const next = !v;
+                    if (!next) setThreadSearch(""); // collapsing clears the filter
+                    return next;
+                  })
+                }
+                aria-label={tr("msg.search")}
+                title={tr("msg.search")}
+                aria-pressed={searchOpen}
+                className={"size-8 " + (searchOpen ? "text-primary" : "text-muted-foreground")}
+              >
+                <Search className="size-5" />
+              </Button>
+              <span className="text-[10px] leading-none text-muted-foreground">{tr("msg.tabSearch")}</span>
+            </div>
+            <div className="flex flex-col items-center gap-1">
+              <NewMessageDialog defaultMode={only === "groups" ? "group" : "dm"} />
+              <span className="text-[10px] leading-none text-muted-foreground">{tr("msg.tabNew")}</span>
+            </div>
           </div>
         </header>
         {/* v2.106.66 — THE STORIES STRIP IS CHROME, NOT THE FIRST ROW OF THE LIST.
@@ -766,7 +798,7 @@ export default function MessagesPage({
             every one of them. Above the search because the search narrows THREADS — putting
             a stories row under it implies it filters those too. */}
         <StatusStrip />
-        {scopedThreads.length > 0 && (
+        {searchOpen && scopedThreads.length > 0 && (
           <div className="px-3 py-2 border-b border-border/60">
             <div className="relative">
               <Search className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
@@ -775,6 +807,7 @@ export default function MessagesPage({
                 onChange={(e) => setThreadSearch(e.target.value)}
                 placeholder={tr("msg.search")}
                 aria-label={tr("msg.search")}
+                autoFocus
                 className="h-9 w-full rounded-lg border border-border/60 bg-muted/40 ps-9 pe-3 text-sm outline-none focus:border-primary/50"
               />
             </div>
