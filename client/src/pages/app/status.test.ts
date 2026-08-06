@@ -52,7 +52,7 @@ describe("Status client", () => {
   it("is mounted at the top of the Messages tab", () => {
     const msgs = read("client/src/pages/app/Messages.tsx");
     expect(msgs).toMatch(/import \{ StatusStrip \}/);
-    expect(msgs).toMatch(/<StatusStrip \/>/);
+    expect(msgs).toMatch(/<StatusStrip[\s/]/);
   });
 });
 

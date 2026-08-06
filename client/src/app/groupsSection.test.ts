@@ -188,7 +188,7 @@ describe("v2.106.66 — the strip is chrome, and the tray does not reuse the bad
        the only signal it exists, so scrolling two threads down hid every one of them.
        Anchored on the field's `placeholder` (unique to the input) rather than its
        `aria-label`, which the header toggle now shares and which sits above the strip. */
-    const strip = MESSAGES.indexOf("<StatusStrip />");
+    const strip = MESSAGES.indexOf("<StatusStrip");
     const search = MESSAGES.indexOf('placeholder={tr("msg.search")}');
     const scroller = MESSAGES.indexOf('<div className="flex-1 overflow-y-auto">');
     expect(strip, "the strip is gone").toBeGreaterThan(-1);
@@ -196,8 +196,9 @@ describe("v2.106.66 — the strip is chrome, and the tray does not reuse the bad
     expect(scroller, "the thread scroller is gone").toBeGreaterThan(-1);
     expect(strip, "the strip must precede the search field").toBeLessThan(search);
     expect(strip, "…and must not be inside the scroller").toBeLessThan(scroller);
-    // Exactly one mount: a second would put two strips on one screen.
-    expect((MESSAGES.match(/<StatusStrip \/>/g) || []).length).toBe(1);
+    // Exactly one mount: a second would put two strips on one screen. (v2.107.51 the
+    // Groups tab passes `compact`, so match the tag with or without props.)
+    expect((MESSAGES.match(/<StatusStrip[\s/]/g) || []).length).toBe(1);
   });
 
   it("the Pin chip does not wear the registered tier's own hex", () => {

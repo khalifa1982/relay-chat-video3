@@ -305,7 +305,7 @@ function readMediaDurationMs(file: File): Promise<number | null> {
 
 /* ───────────────────────── Strip ───────────────────────── */
 
-export function StatusStrip() {
+export function StatusStrip({ compact = false }: { compact?: boolean } = {}) {
   const t = useT();
   const feed = trpc.status.feed.useQuery(undefined, { staleTime: 20_000, refetchOnWindowFocus: true });
   const [composerOpen, setComposerOpen] = useState(false);
@@ -315,17 +315,23 @@ export function StatusStrip() {
   const myGroup = groups.find((g) => g.subject.isMe) ?? null;
   const others = groups.filter((g) => !g.subject.isMe);
 
+  // v2.107.51 (owner: "shrink the My story section") — the Groups tab renders this compact
+  // so the group chats sit higher; the Messages tab keeps the full-size strip.
+  const av = compact ? "sm" : "md";
+  const tile = `flex shrink-0 flex-col items-center ${compact ? "gap-1 w-14" : "gap-1.5 w-16"}`;
+  const lbl = `${compact ? "text-[10px]" : "text-[11px]"} text-muted-foreground truncate w-full text-center`;
+
   return (
-    <div className="border-b border-border/60 px-3 py-3">
-      <div className="flex items-center gap-3 overflow-x-auto no-scrollbar">
+    <div className={`border-b border-border/60 px-3 ${compact ? "py-2" : "py-3"}`}>
+      <div className={`flex items-center overflow-x-auto no-scrollbar ${compact ? "gap-2.5" : "gap-3"}`}>
         {/* My status tile — opens my viewer if I have items, else the composer. */}
         <button
           type="button"
           onClick={() => (myGroup ? setViewerAt(groups.indexOf(myGroup)) : setComposerOpen(true))}
-          className="flex shrink-0 flex-col items-center gap-1.5 w-16"
+          className={tile}
         >
           <div className="relative">
-            <StatusAvatar name={t("status.you")} url={myGroup?.subject.avatarUrl ?? null} ring={myGroup ? "seen" : "none"} />
+            <StatusAvatar name={t("status.you")} url={myGroup?.subject.avatarUrl ?? null} ring={myGroup ? "seen" : "none"} size={av} />
             <span
               onClick={(e) => { e.stopPropagation(); setComposerOpen(true); }}
               /* v2.106.66 — the ACCENT, per board 1c (`background:var(--rb)`, glyph
@@ -334,12 +340,12 @@ export function StatusStrip() {
                  that is not presence, and the first the standing guard could not catch,
                  because the guard read only `Messages.tsx` and its allow-list matched
                  inside the token NAME. Both halves are fixed in `mentions.test.ts`. */
-              className="rcta absolute -bottom-0.5 -end-0.5 grid size-[17px] place-items-center rounded-full ring-[2.5px] ring-background"
+              className={`rcta absolute -bottom-0.5 -end-0.5 grid ${compact ? "size-[15px]" : "size-[17px]"} place-items-center rounded-full ring-[2.5px] ring-background`}
             >
-              <Plus className="size-3.5" strokeWidth={3} />
+              <Plus className={compact ? "size-3" : "size-3.5"} strokeWidth={3} />
             </span>
           </div>
-          <span className="text-[11px] text-muted-foreground truncate w-full text-center">{t("status.myStory")}</span>
+          <span className={lbl}>{t("status.myStory")}</span>
         </button>
 
         {others.map((g) => (
@@ -347,7 +353,7 @@ export function StatusStrip() {
             key={g.subject.key}
             type="button"
             onClick={() => setViewerAt(groups.indexOf(g))}
-            className="flex shrink-0 flex-col items-center gap-1.5 w-16"
+            className={tile}
           >
             <StatusAvatar
               name={g.subject.displayName}
@@ -357,8 +363,9 @@ export function StatusStrip() {
                  draws (v2.102.1), not two initials — a group's initials read as a
                  person's and the two rings sit side by side in this strip. */
               group={g.subject.kind === "group"}
+              size={av}
             />
-            <span className="text-[11px] text-muted-foreground truncate w-full text-center">
+            <span className={lbl}>
               {/* A group is named in full: its title is already short and the first
                   word of "Design team" is not a name anybody recognises. */}
               {g.subject.kind === "group"
@@ -404,13 +411,17 @@ function StatusAvatar({
   url,
   ring,
   group = false,
+  size = "md",
 }: {
   name: string;
   url: string | null;
   ring: "unseen" | "seen" | "none";
   /** Draw the generic group glyph instead of initials when there is no photo. */
   group?: boolean;
+  /** v2.107.51 — "sm" is the compact strip (Groups tab); "md" is the full Messages strip. */
+  size?: "md" | "sm";
 }) {
+  const sm = size === "sm";
   const ringStyle =
     ring === "unseen"
       ? "rstoryring" // v2.106.66 — the ONE recipe (index.css), not a third copy of it
@@ -418,16 +429,16 @@ function StatusAvatar({
         ? "bg-border"
         : "bg-transparent";
   return (
-    <span className={`grid size-16 place-items-center rounded-full p-[2.5px] ${ringStyle}`}>
+    <span className={`grid ${sm ? "size-12" : "size-16"} place-items-center rounded-full p-[2.5px] ${ringStyle}`}>
       <span className="grid size-full place-items-center overflow-hidden rounded-full bg-background ring-2 ring-background">
         {url ? (
           <img src={url} alt="" className="size-full rounded-full object-cover" />
         ) : group ? (
           <span className="grid size-full place-items-center rounded-full bg-primary/15 text-primary">
-            <Users className="size-6" />
+            <Users className={sm ? "size-5" : "size-6"} />
           </span>
         ) : (
-          <span className="grid size-full place-items-center rounded-full bg-primary/15 text-primary font-bold text-sm">
+          <span className={`grid size-full place-items-center rounded-full bg-primary/15 text-primary font-bold ${sm ? "text-xs" : "text-sm"}`}>
             {initials(name)}
           </span>
         )}

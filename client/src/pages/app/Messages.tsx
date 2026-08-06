@@ -817,7 +817,7 @@ export default function MessagesPage({
             the ring is the only signal it exists, so scrolling two threads down used to hide
             every one of them. Above the search because the search narrows THREADS — putting
             a stories row under it implies it filters those too. */}
-        <StatusStrip />
+        <StatusStrip compact={only === "groups"} />
         {searchOpen && scopedThreads.length > 0 && (
           <div className="px-3 py-2 border-b border-border/60">
             <div className="relative">
