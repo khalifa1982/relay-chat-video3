@@ -23,6 +23,7 @@ import { listPushSubscriptions, deletePushSubscription, pushEnabledForIdentity }
 import { sendFcmData } from "./fcm";
 import { sendExpoPush } from "./expoPush";
 import { sendVoipRing } from "./apnsVoip";
+import { sendApnsAlert } from "./apnsAlert";
 import { buildCallPush, type CallPushType } from "./callPushPayload";
 import { appBaseUrl } from "./appUrl";
 import {
@@ -235,29 +236,24 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
     [fcm.redacted, redactedPayload],
   ] as const) {
     if (fcmTokens.length === 0) continue;
-    // THE OS-DISPLAYED BLOCK GOES ON EVERYTHING EXCEPT A RING, and this one
-    // condition is the load-bearing line of the message-notification feature
-    // (2026-08-02).
+    // THE OS-DISPLAYED BLOCK NOW GOES ON EVERYTHING, RINGS INCLUDED (v2.107.50).
     //
     // Why it is needed at all: a data-only FCM message is displayed by NOTHING
-    // unless the app itself posts a notification from `onMessageReceived`. RELAY's
-    // own shell does that (`RelayFcmService` → `showGeneric`), but the shipping
-    // Expo shell has no such service, so every message push arrived and showed
-    // nothing on the phone — the reported symptom. A `notification` block is
-    // rendered by the OS with no app code at all, which is what makes this work on
-    // both shells and on iOS in the same payload.
+    // unless the app itself posts a notification from `onMessageReceived`. A
+    // `notification` block is rendered by the OS with no app code at all.
     //
-    // Why a RING must be excluded: for a message carrying `notification`, Android
-    // displays it itself and does NOT call `onMessageReceived` while backgrounded.
-    // A ring depends on that callback to raise the full-screen lock-screen
-    // Activity (v2.86), so including the block here would silently replace the
-    // CallKit-style ring with an ordinary banner — a regression nothing in the push
-    // logs would show. Calls stay exactly as they were, which is also what the
-    // owner's spec asks for.
-    const display =
-      p.kind === "incoming-call"
-        ? null
-        : { title: p.title, body: p.body ?? "", collapseId: p.tag ?? "" };
+    // Why rings USED to be excluded — and no longer are: shell ≤1.0.41 carried a
+    // native `RelayFcmService` that read the data-only ring in `onMessageReceived`
+    // and raised the full-screen lock-screen Activity (v2.86); attaching a
+    // `notification` block would have suppressed that callback while backgrounded
+    // and silently downgraded the ring to a banner. Shell 1.0.42 DELETED that
+    // service (owner's rebuild, 2026-08-06: thin WebView + OS notifications only),
+    // so a data-only ring now displays NOTHING — the phone simply never learns a
+    // call happened. A banner is the intended ring on 1.0.42, so the block goes on.
+    // Cost, accepted by the owner with the rebuild: a ≤1.0.41 shell shows a banner
+    // instead of its full-screen ring. The `call` data block below still rides
+    // along, so any shell that reads data can still deep-link the answer.
+    const display = { title: p.title, body: p.body ?? "", collapseId: p.tag ?? "" };
     const r = await sendFcmData(fcmTokens, {
       kind: p.kind,
       title: p.title,
@@ -324,9 +320,9 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
   // PushKit one (topic `<bundle>.voip`) and the ordinary ALERT one (topic
   // `<bundle>`). A VoIP push sent to an ALERT token earns `BadDeviceToken`,
   // which this function then reads as stale and PRUNES — deleting the very row
-  // v2.105.11 chose to keep so the admin push doctor could report it. So a plain
-  // `apns` row stays inert and diagnosable, exactly as it was, and only a token
-  // the shell explicitly declared as PushKit is ever rung.
+  // v2.105.11 chose to keep so the admin push doctor could report it. So only a
+  // token the shell explicitly declared as PushKit is ever rung; a plain `apns`
+  // row goes to the ALERT transport below instead (v2.107.50, no longer inert).
   const apnsTokens = subs.filter(s => s.kind === "apns-voip").map(s => s.endpoint);
   let apnsDelivered = 0;
   if (apnsTokens.length > 0 && payload.kind === "incoming-call" && payload.call) {
@@ -337,11 +333,39 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
     // defect v2.105.11 fixed on the FCM path, where a 400 was read as stale.
     await Promise.all(r.invalidTokens.map(t => deletePushSubscription(t).catch(() => {})));
   }
-  // Both hex kinds leave the webpush list: `apns-voip` was just handled, and a
-  // plain `apns` alert token is not a Web Push subscription and must never be
-  // handed to the webpush sender.
+  // PLAIN APNs ALERTS (kind="apns", v2.107.50). The endpoint IS the ordinary
+  // alert token that shell 1.0.42 registers now that PushKit is gone. Until this
+  // release these rows were deliberately inert — the only iOS transport was the
+  // VoIP ring above — which meant an iPhone on the thin shell received NOTHING
+  // for messages or calls: the exact symptom the owner reported on 2026-08-06.
+  // Same per-device DND/mute/redaction split as FCM and Expo, because the OS
+  // renders these with no app code in the path. A call alert carries the ring
+  // TTL so it can never land minutes late; see `apnsAlert.ts` for the topic and
+  // prune discipline (alert topic = bare bundle id; prune on 410/Unregistered
+  // ONLY — a voip token misfiled here answers 400 and must be kept, not deleted).
+  const apnsPlain = partition("apns");
+  let apnsAlertDelivered = 0;
+  for (const [alertTokens, p] of [
+    [apnsPlain.normal, payload],
+    [apnsPlain.redacted, redactedPayload],
+  ] as const) {
+    if (alertTokens.length === 0) continue;
+    const r = await sendApnsAlert(alertTokens, {
+      title: p.title,
+      body: p.body ?? "",
+      tag: p.tag ?? "",
+      url: p.url ?? "",
+      kind: p.kind,
+      isCall: p.kind === "incoming-call",
+    });
+    apnsAlertDelivered += r.sent;
+    await Promise.all(r.invalidTokens.map(t => deletePushSubscription(t).catch(() => {})));
+  }
+  // Both hex kinds leave the webpush list: `apns-voip` and `apns` were just
+  // handled by their own APNs transports and must never be handed to the
+  // webpush sender.
   subs = subs.filter(s => s.kind !== "apns-voip" && s.kind !== "apns");
-  const nativeDelivered = fcmDelivered + expoDelivered + apnsDelivered;
+  const nativeDelivered = fcmDelivered + expoDelivered + apnsDelivered + apnsAlertDelivered;
   const cfg = vapidConfig();
   if (!cfg) return nativeDelivered;
   if (subs.length === 0) return nativeDelivered;

@@ -63,21 +63,28 @@ describe("a RING must never carry an OS-displayed notification block", () => {
     expect(m.android).toEqual({ priority: "HIGH", ttl: "3600s" });
   });
 
-  it("the fan-out withholds `display` for a ring and supplies it for everything else", () => {
-    // The gate lives at the ONE place the payload's kind is already the
-    // discriminator. Since v2.107.11 the FCM block runs once per DISPOSITION
-    // batch (`p` is that batch's payload — the composed one, or the redacted copy
-    // for a locked conversation), so the pin reads the batch's kind rather than
-    // the outer name. The property is unchanged: a ring gets no display block.
+  it("the fan-out supplies `display` for EVERYTHING, rings included (v2.107.50)", () => {
+    // INVARIANT REVERSED, deliberately. Until v2.107.50 a ring was data-only so
+    // the ≤1.0.41 shell's native `RelayFcmService` could read `onMessageReceived`
+    // and raise its full-screen Activity — attaching `notification` suppresses
+    // that callback while backgrounded. Shell 1.0.42 DELETED that service
+    // (owner's thin-WebView rebuild, 2026-08-06), so a data-only ring displays
+    // NOTHING and the phone never learns a call happened. The banner IS the ring
+    // now. This pin exists so nobody "fixes" the ternary back in and silently
+    // re-silences every 1.0.42 Android call.
     const code = codeOnly(read("server/webPush.ts"));
     const at = code.indexOf("const display =");
     expect(at, "webPush.ts must decide the display block").toBeGreaterThan(0);
     const decl = code.slice(at, at + 260);
-    expect(decl).toMatch(/\bp\.kind === "incoming-call"/);
-    // Null on the CALL side of the ternary — the inverse would be the defect.
-    expect(decl).toMatch(/\?\s*null/);
+    // Unconditional: no kind check, no null branch, in the declaration itself.
+    expect(decl).not.toMatch(/\bp\.kind === "incoming-call"/);
+    expect(decl).not.toMatch(/\?\s*null/);
+    expect(decl).toMatch(/title:\s*p\.title/);
     // And it must actually reach the sender.
     expect(code).toMatch(/sendFcmData\([\s\S]{0,600}?,\s*display\)/);
+    // The call DATA block still rides along so a data-reading shell can deep-link
+    // the answer — display did not replace it.
+    expect(code).toMatch(/p\.kind === "incoming-call" && p\.call/);
   });
 
   it("apnsVoip stays ring-only — a message never rides PushKit", () => {
