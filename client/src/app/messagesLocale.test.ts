@@ -200,7 +200,6 @@ describe("every string on the Messages screen goes through the translator", () =
        have nothing to find in it — the failure would be silent. These are the ones that
        got one in this sweep. */
     for (const fn of [
-      "function GroupCallsSection",
       "function Receipt",
       "function FileCard",
       "function MediaLightbox",

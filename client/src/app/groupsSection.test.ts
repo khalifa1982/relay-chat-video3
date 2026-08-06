@@ -22,7 +22,6 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { codeOnly } from "../../../server/testing/codeOnly";
-import { copyOnScreen } from "../../../server/testing/copyOnScreen";
 
 const ROOT = path.resolve(__dirname, "..", "..", "..");
 const read = (p: string) => codeOnly(fs.readFileSync(path.join(ROOT, p), "utf8"));
@@ -126,35 +125,34 @@ describe("each tab's badge counts what that tab HOLDS", () => {
   });
 });
 
-describe("group calls live in the group section", () => {
-  it("the Groups tab renders a group-calls section and the Messages tab does not", () => {
-    expect(MESSAGES).toMatch(/only === "groups" && \(\s*\n?\s*<GroupCallsSection/);
-    expect(MESSAGES).toMatch(/function GroupCallsSection\(/);
+describe("group calls are reachable from the Groups tab — via a top-bar icon, not a section", () => {
+  it("the Groups tab's top bar has a group-call button that opens the picker; the section is gone", () => {
+    /* v2.107.51 (owner): *"I didn't tell you to remove the group feature, only to make it
+       up as icons rather than a section."* The in-list GROUP CALLS block was condensed to a
+       single top-bar icon so the group CHATS sit directly under the header. The icon is
+       gated on the groups scope and opens the SAME ad-hoc picker the section's button did. */
+    expect(MESSAGES).toMatch(/only === "groups" && \(/);
+    expect(MESSAGES).toMatch(/onClick=\{\(\) => setShowGroupCall\(true\)\}/);
+    // The bulky section function is gone — the icon replaces it, nothing is deleted.
+    expect(MESSAGES).not.toMatch(/function GroupCallsSection\(/);
   });
 
-  it("it offers BOTH halves — start a call now, and the lines you can return to", () => {
-    const sec = MESSAGES.slice(
-      MESSAGES.indexOf("function GroupCallsSection("),
-      MESSAGES.indexOf("function ConversationView("),
-    );
-    expect(sec.length).toBeGreaterThan(200);
-    expect(copyOnScreen(sec, "Start a group call")).toBe(true);
-    expect(sec).toMatch(/<PartyLinesSection onJoined=\{\(\) => \{\}\} defaultOpen \/>/);
-  });
-
-  it("the party-line list is ONE component with two mounts, never a second copy", () => {
-    /* Two lists of the same lines is how the two come to disagree about which exist —
-       the class this repo keeps removing (the sender label, the emoji catalogue, the
-       TURN endpoint list). Messages IMPORTS it; it does not re-implement it. */
-    expect(MESSAGES).toMatch(
-      /import \{ GroupCallScreen, PartyLinesSection \} from "\.\/GroupCallScreen"/,
-    );
+  it("both halves still reach the user — start a call, and the returnable lines — through the picker", () => {
+    // The picker (GroupCallScreen) is where BOTH now live: it mounts PartyLinesSection
+    // itself, so condensing the Messages-side section to an icon loses neither half.
     expect(PICKER).toMatch(/export function PartyLinesSection\(/);
-    // No rival query for the same rows.
+    expect(PICKER).toMatch(/<PartyLinesSection /);
+  });
+
+  it("the party-line list is ONE component, mounted only in the picker now — never a second copy in Messages", () => {
+    // Messages no longer imports or renders PartyLinesSection; it reaches those lines only
+    // by opening the picker. Two lists of the same lines is the class this repo keeps out.
+    expect(MESSAGES).toMatch(/import \{ GroupCallScreen \} from "\.\/GroupCallScreen"/);
+    expect(MESSAGES).not.toMatch(/PartyLinesSection/);
     expect(MESSAGES).not.toMatch(/trpc\.partyLines\./);
   });
 
-  it("the ad-hoc picker is mounted at the ROOT, not inside the scrolling list", () => {
+  it("the ad-hoc picker is still mounted at the ROOT, not inside the scrolling list", () => {
     // A full-screen modal nested in a scroll container that unmounts under it is how a
     // picker ends up half on screen.
     const tail = MESSAGES.slice(MESSAGES.indexOf("{showGroupCall && <GroupCallScreen"));
@@ -180,20 +178,23 @@ describe("a new group message rises to the top — already true, pinned", () => 
 
 describe("v2.106.66 — the strip is chrome, and the tray does not reuse the badge's green", () => {
   it("the stories strip sits ABOVE the search and OUTSIDE the scroller", () => {
-    /* Board 1c's own order is header → strip → search → threads, and its caption reads
-       "Stories strip · threads · swipe actions" — read off the board's markup rather than
-       a description of it. The app had the strip BELOW the search and INSIDE the scroller,
-       so it scrolled away with the threads.
+    /* Board 1c's own order is header → strip → search → threads. v2.107.51 moved the
+       search TOGGLE up into the header (an icon), but the strip still sits above the search
+       FIELD that unfolds below it, and — the load-bearing part — stays OUT of the scroller.
+       The app once had the strip BELOW the search and INSIDE the scroller, so it scrolled
+       away with the threads.
 
        Out of the scroller matters more than the order: a story lives 24h and the ring is
-       the only signal it exists, so scrolling two threads down hid every one of them. */
+       the only signal it exists, so scrolling two threads down hid every one of them.
+       Anchored on the field's `placeholder` (unique to the input) rather than its
+       `aria-label`, which the header toggle now shares and which sits above the strip. */
     const strip = MESSAGES.indexOf("<StatusStrip />");
-    const search = MESSAGES.indexOf('aria-label={tr("msg.search")}');
+    const search = MESSAGES.indexOf('placeholder={tr("msg.search")}');
     const scroller = MESSAGES.indexOf('<div className="flex-1 overflow-y-auto">');
     expect(strip, "the strip is gone").toBeGreaterThan(-1);
-    expect(search, "the search is gone").toBeGreaterThan(-1);
+    expect(search, "the search field is gone").toBeGreaterThan(-1);
     expect(scroller, "the thread scroller is gone").toBeGreaterThan(-1);
-    expect(strip, "the strip must precede the search").toBeLessThan(search);
+    expect(strip, "the strip must precede the search field").toBeLessThan(search);
     expect(strip, "…and must not be inside the scroller").toBeLessThan(scroller);
     // Exactly one mount: a second would put two strips on one screen.
     expect((MESSAGES.match(/<StatusStrip \/>/g) || []).length).toBe(1);

@@ -380,7 +380,10 @@ describe("the empty state and the search box ask the SCOPED list", () => {
     // groups it reads non-zero, the page skips the empty state, and the
     // no-search-matches branch renders `No conversations match “”` — a message about a
     // search nobody ran.
-    expect(MESSAGES_CODE).toMatch(/\{scopedThreads\.length > 0 && \(/);
+    // v2.107.51 prepends `searchOpen &&` (the field is behind a top-bar toggle now), so
+    // the gate no longer starts at a `{` — the property pinned here is that it still reads
+    // scopedThreads.length, not threads.data.length.
+    expect(MESSAGES_CODE).toMatch(/scopedThreads\.length > 0 && \(/);
     expect(MESSAGES_CODE).toMatch(/\) : scopedThreads\.length === 0 \? \(/);
     expect(MESSAGES_CODE).not.toMatch(/\(threads\.data\?\.length \?\? 0\)/);
   });

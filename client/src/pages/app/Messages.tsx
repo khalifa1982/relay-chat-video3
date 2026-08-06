@@ -106,7 +106,7 @@ import { isDownscalableImage, processImageForUpload } from "@/lib/imageDownscale
 import { captureVideoPoster } from "@/lib/videoPoster";
 import { ALBUM_MIN_ITEMS, albumCounts, albumKindFor } from "@shared/albumRules";
 import { albumGridPlan } from "@/lib/albumGrid";
-import { GroupCallScreen, PartyLinesSection } from "./GroupCallScreen";
+import { GroupCallScreen } from "./GroupCallScreen";
 import { AvatarPicker } from "@/app/AvatarPicker";
 import { GroupAvatar } from "@/app/GroupAvatar";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
@@ -781,6 +781,24 @@ export default function MessagesPage({
               </Button>
               <span className="text-[10px] leading-none text-muted-foreground">{tr("msg.tabSearch")}</span>
             </div>
+            {/* v2.107.51 (owner): the group-call entry is a top-bar ICON now, not an
+                in-list section — it opens the same ad-hoc picker (which itself lists the
+                party lines), so the group chats can start right under the header. */}
+            {only === "groups" && (
+              <div className="flex flex-col items-center gap-1">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={() => setShowGroupCall(true)}
+                  aria-label={tr("msg.startGroupCall")}
+                  title={tr("msg.startGroupCall")}
+                  className="size-8 text-muted-foreground"
+                >
+                  <PhoneCall className="size-5" />
+                </Button>
+                <span className="text-[10px] leading-none text-muted-foreground">{tr("msg.groupCalls")}</span>
+              </div>
+            )}
             <div className="flex flex-col items-center gap-1">
               <NewMessageDialog defaultMode={only === "groups" ? "group" : "dm"} />
               <span className="text-[10px] leading-none text-muted-foreground">
@@ -816,18 +834,9 @@ export default function MessagesPage({
           </div>
         )}
         <div className="flex-1 overflow-y-auto">
-          {/* v2.106.64 — GROUP CALLS live in the group section, per the owner: *"in the
-              group section, add group calls … so in the group section you will have a
-              group call and group message"*. A party line is the durable thing a group
-              call leaves behind (a titled room with its own 6-digit number you can
-              return to), which is why it is what this section lists; an ad-hoc
-              conference ends, and its record is History's job rather than a second copy
-              here. `PartyLinesSection` is the SAME component the dial picker mounts —
-              two lists of the same lines is how the two come to disagree about which
-              exist. It sits ABOVE the chats because it is the half that was missing. */}
-          {only === "groups" && (
-            <GroupCallsSection onOpenPicker={() => setShowGroupCall(true)} />
-          )}
+          {/* v2.107.51 (owner): the GROUP CALLS list used to sit here, above the chats.
+              It was condensed to a single top-bar icon (opens the same picker, which
+              lists the party lines), so the group chats now start under the header. */}
           {threads.isError ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
               <p>{tr("msg.loadFailed")}</p>
@@ -1434,53 +1443,10 @@ export default function MessagesPage({
 
 /* ────────────────────────────────────────────────────────────── */
 
-/**
- * GROUP CALLS, in the group section (v2.106.64).
- *
- * Owner: *"in the group section, add group calls where whenever you create any group
- * calls or conference call, it will be there so in the group section you will have a
- * group call and group message."*
- *
- * WHAT A "GROUP CALL THAT IS THERE" ACTUALLY IS. An ad-hoc conference is over when the
- * last person leaves — nothing persists but the History row, which is History's job. A
- * PARTY LINE is the durable one: a titled room with its own 6-digit number that stays
- * dialable and shows how many are on it right now, which is the thing you can come back
- * to and therefore the thing a list can hold. So this section lists the lines and offers
- * the picker for a call you want to place immediately.
- *
- * `PartyLinesSection` is the SAME component the Dialer's picker mounts, imported rather
- * than reimplemented — two lists of the same lines is how the two come to disagree about
- * which exist, which is the class this repo keeps removing.
- */
-function GroupCallsSection({ onOpenPicker }: { onOpenPicker: () => void }) {
-  const t = useT();
-  return (
-    <div className="border-b border-border/60">
-      <div className="flex items-center gap-2 px-4 md:px-5 pt-3 pb-1.5 text-muted-foreground">
-        <span className="grid place-items-center" style={{ color: "#22d3ee" }}>
-          <PhoneCall className="size-3.5" />
-        </span>
-        <span className="flex-1 text-start text-[11px] font-bold uppercase tracking-[0.12em]">
-          {t("msg.groupCalls")}
-        </span>
-      </div>
-      <div className="px-4 md:px-5 pb-2">
-        <button
-          type="button"
-          onClick={onOpenPicker}
-          className="rchip-accent flex min-h-11 w-full items-center justify-center gap-2 rounded-[11px] px-4 text-[12px] font-bold transition"
-        >
-          <Users className="size-4" />
-          {t("msg.startGroupCall")}
-        </button>
-      </div>
-      {/* `onJoined` is a no-op rather than a close: this is a LIST on a tab, not a modal
-          over the call, so there is nothing to dismiss — the engine's own call UI takes
-          the screen from here. */}
-      <PartyLinesSection onJoined={() => {}} defaultOpen />
-    </div>
-  );
-}
+/* GroupCallsSection was removed in v2.107.51 (owner): the group-call entry is now a
+   top-bar icon (see the Groups header) that opens GroupCallScreen. The picker itself
+   lists the party lines, so both halves — start a call, return to a line — still reach
+   the user; they are simply no longer a section that pushes the group chats down. */
 
 /* ────────────────────────────────────────────────────────────── */
 
