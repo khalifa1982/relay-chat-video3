@@ -64,7 +64,7 @@ export function setEngineTranslator(t: EngineTranslator | null): void {
   }
 }
 
-import { computeLayout } from "./callLayout";
+import { computeLayout, spotlightGridTemplate } from "./callLayout";
 import { buildAudioOutputList } from "./audioOutputs";
 import { detectDeviceType } from "./deviceType";
 import { probeBrowserMedia, buildCapabilityReport } from "@shared/mediaCapabilities";
@@ -1427,6 +1427,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         // Group dial: note the decline; the LAST one ends the dial (see
         // groupInviteeResolved) instead of ringing on into the backstop.
         groupInviteeResolved(m.from, "Everyone declined.");
+        resolveInvitedTile(m.from); // v2.107.51 — their Invited tile goes with them
         // A decline is only fatal to a lone 1:1 DIALER. In a group call or on
         // a party line the invite was an ADD — stay parked (inParkedCall).
         if (inCall && aloneInCall() && !inParkedCall()) {
@@ -1437,6 +1438,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       case "busy":
         toast("They're on another call.", true);
         groupInviteeResolved(m.from, "Nobody was available.");
+        resolveInvitedTile(m.from); // v2.107.51
         if (inCall && aloneInCall() && !inParkedCall()) {
           if (outgoingDial && !establishedOnce) failDial("They're on another call.", "peer-busy");
           else hangUp("peer-busy");
@@ -1573,6 +1575,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
           // An unreachable invitee is resolved either way; when the room already
           // exists this is the only thing that notices them.
           if (groupDialOutstanding && m.pin) groupDialOutstanding.delete(m.pin);
+          resolveInvitedTile(m.pin); // v2.107.51 — the unreachable invitee's tile too
         }
         if (reachErr && callIsGroup && outgoingDial && !establishedOnce && !roomId && aloneInCall()) {
           if (pendingGroupInvites.length) {
@@ -1585,7 +1588,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         }
         // A reachability error inside an ESTABLISHED parked call (a group/party-
         // line add-invite once the room exists) never ends the call — stay on it.
-        if (reachErr && inParkedCall()) break;
+        if (reachErr && inParkedCall()) { resolveInvitedTile(m.pin); break; }
         // Everything else: fatal to a peerless dialer/joiner. A LIVE call (peers
         // present) is spared by aloneInCall().
         if ((reachErr || joinErr) && inCall && aloneInCall()) {
@@ -3098,6 +3101,9 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     // whether a camera is opened at all.
     try { await ensureMedia(camOn); } catch { return; }
     const target = dialed; dialed = ""; refreshDisplay(); closeAddPad();
+    // v2.107.51: an invite sent from INSIDE a call is an ADD — the addee gets
+    // an Invited tile in the grid (a fresh 1:1 dial is covered by the dial card).
+    const wasInCall = inCall;
     if (!inCall) {
       inCall = true;
       // M37: dialing with the camera live IS our video consent, so a matching
@@ -3109,6 +3115,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       playRingtone("outgoing");
     }
     sendWS({ type: "invite", to: target, video: camOn });
+    if (wasInCall) ensureInvitedTile(target);
     toast("Calling " + target + "…");
   }
 
@@ -3141,6 +3148,8 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     // call no longer has, so the condition would now skip and leave a lit
     // camera button over a camera nobody opened.
     if (opts?.voice) setCam(false);
+    // v2.107.51: an invite sent from INSIDE a call is an ADD — see the pad path.
+    const wasInCall = inCall;
     if (!inCall) {
       inCall = true;
       videoOfferPending = !opts?.voice; videoOfferedForRoom = null; // M37 — a video dial offers video
@@ -3150,6 +3159,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       playRingtone("outgoing");
     }
     sendWS({ type: "invite", to: target, video: !opts?.voice });
+    if (wasInCall) ensureInvitedTile(target);
     toast("Calling " + target + "…");
     return true;
   }
@@ -3236,6 +3246,10 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         ...(opts?.seed ? { seed: opts.seed } : {}),
       });
     }
+    // v2.107.51: every not-yet-connected invitee gets an Invited tile NOW —
+    // both the room-creating first invite and the ones the `room` ack will
+    // flush — so the caller watches who the call is waiting on from the start.
+    clean.forEach(t => { if (!peers[t]) ensureInvitedTile(t); });
     toast("Starting group call (" + clean.length + ")…");
     return true;
   }
@@ -5789,6 +5803,37 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     if (el && el.dataset.ph === "1") el.remove();
   }
 
+  /**
+   * INVITED tile (v2.107.51 — the owner's group-grid reference): a group
+   * invitee who hasn't answered yet holds a place of their own in the grid —
+   * dimmed, dash-bordered, with an "Invited…" pill — so the caller sees WHO
+   * the call is still waiting on, arranged with the joined tiles rather than
+   * as a mystery. It rides ensurePlaceholderTile (data-ph), so the REAL tile
+   * replaces it the moment they join (addTile → dropPlaceholderTile). A
+   * decline / busy / unreachable removes it via resolveInvitedTile, and a 75s
+   * backstop clears one whose resolution never carried a pin (the dial's own
+   * 65s no-answer backstop has fired by then). The element reference is
+   * captured so a stale timer can never touch a LATER call's tile that reuses
+   * the same id.
+   */
+  function ensureInvitedTile(pin: string) {
+    if (!inCall || !pin || peers[pin]) return;
+    ensurePlaceholderTile(pin, nameOf(pin));
+    const el = document.getElementById("tile-" + pin);
+    if (!el || el.dataset.ph !== "1" || el.classList.contains("invited")) return;
+    el.classList.add("invited");
+    el.insertAdjacentHTML("beforeend", '<div class="connecting">' + T("calls.invited", "Invited…") + "</div>");
+    window.setTimeout(() => {
+      if (el.isConnected && el.dataset.ph === "1") { el.remove(); layoutGrid(); }
+    }, 75_000);
+  }
+  /** An invitee resolved WITHOUT joining (declined / busy / unreachable). */
+  function resolveInvitedTile(pin: string | undefined) {
+    if (!pin) return;
+    const el = document.getElementById("tile-" + pin);
+    if (el && el.dataset.ph === "1" && el.classList.contains("invited")) { el.remove(); layoutGrid(); }
+  }
+
   function addTile(id: string, name: string) {
     if (!inCall) return;
     const entry = peers[id]; if (!entry || entry.el) return;
@@ -5933,14 +5978,26 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       // is actually a screen share; a maximize with thumbs hidden = full-bleed.
       const maxNow = screenMaximized && screenShareIds.has(plan.focusId);
       g.classList.toggle("screen-max", maxNow);
-      const cols = Math.max(plan.thumbIds.length, 1);
-      g.style.gridTemplateColumns = maxNow ? "1fr" : "repeat(" + cols + ",minmax(0,1fr))";
-      g.style.gridTemplateRows = maxNow || !plan.thumbIds.length ? "1fr" : "minmax(0,1fr) 22%";
+      /* v2.107.51 (the owner's 5-person reference): the speaker spans the top
+         and the OTHER participants form a real grid below — 2-4 columns by
+         count — instead of one cramped filmstrip row. A 1:1 call keeps the
+         slim 22% self strip. The geometry itself is the pure
+         spotlightGridTemplate() in callLayout.ts, tested there. */
+      const tpl = spotlightGridTemplate(plan.thumbIds.length, maxNow);
+      g.style.gridTemplateColumns = tpl.columns;
+      g.style.gridTemplateRows = tpl.rows;
       const spot = byId(plan.focusId);
       if (spot) { spot.classList.add("is-spotlight"); spot.style.gridColumn = "1 / -1"; spot.style.gridRow = maxNow ? "1 / -1" : "1"; }
       plan.thumbIds.forEach(id => {
         const t = byId(id);
-        if (t) { t.classList.add("is-thumb"); t.style.gridRow = "2"; if (maxNow) t.style.display = "none"; }
+        if (!t) return;
+        t.classList.add("is-thumb");
+        /* ONE thumb pins to the strip row (the legacy 1:1 shape). With 2+, no
+           explicit row: row 1 is fully occupied by the spotlight, so grid
+           auto-placement flows them into rows 2..N in DOM order — which is what
+           lets the count grow without re-deriving every tile's coordinates. */
+        if (plan.thumbIds.length === 1) t.style.gridRow = "2";
+        if (maxNow) t.style.display = "none";
       });
       return;
     }
@@ -5995,6 +6052,8 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     }
     const tile = target?.closest?.(".relay-tile") as HTMLElement | null;
     if (!tile) return;
+    // v2.107.51: a placeholder (incl. an Invited tile) has no media to pin big.
+    if (tile.dataset.ph === "1") return;
     if (manualSpotlight && spotlightId === tile.id) {
       manualSpotlight = false; spotlightId = null; screenMaximized = false;
     } else {

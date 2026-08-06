@@ -108,3 +108,36 @@ export function computeLayout(input: LayoutInput): LayoutResult {
 
   return { mode: "grid", focusId: null, shownIds: tileIds.slice(), thumbIds: [] };
 }
+
+/**
+ * Grid template for the SPOTLIGHT view (v2.107.51 — the owner's 5-person
+ * reference): the focused speaker spans the full width on top, and the OTHER
+ * participants form a REAL GRID below it — 2 columns up to 4 others, 3 up to
+ * 9, 4 beyond — instead of the one cramped filmstrip row they used to share.
+ * Once the grid has two or more rows the fractions hold the speaker at about
+ * HALF the height (2.2fr vs 2×1fr ≈ 52%, 3.3fr vs 3×1fr ≈ 52%, …), so adding
+ * people shrinks the thumbs, never the person talking. A single other tile (a
+ * 1:1 call) keeps the slim 22% strip exactly as before, and a maximized
+ * screen share fills everything. Pure strings so the geometry is
+ * unit-testable without a DOM; layoutGrid() just applies them.
+ */
+export function spotlightGridTemplate(
+  thumbCount: number,
+  screenMax = false,
+): { columns: string; rows: string; thumbRows: number } {
+  if (screenMax || thumbCount <= 0) {
+    return { columns: "1fr", rows: "1fr", thumbRows: 0 };
+  }
+  if (thumbCount === 1) {
+    return { columns: "1fr", rows: "minmax(0,1fr) 22%", thumbRows: 1 };
+  }
+  const cols = thumbCount <= 4 ? 2 : thumbCount <= 9 ? 3 : 4;
+  const rows = Math.ceil(thumbCount / cols);
+  // Rounded to one decimal so 1.1 × 3 renders "3.3fr", not "3.3000000000000003fr".
+  const spotFr = Math.max(2.2, Math.round(rows * 1.1 * 10) / 10);
+  return {
+    columns: "repeat(" + cols + ",minmax(0,1fr))",
+    rows: "minmax(0," + spotFr + "fr) repeat(" + rows + ",minmax(0,1fr))",
+    thumbRows: rows,
+  };
+}

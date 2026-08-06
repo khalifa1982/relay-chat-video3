@@ -4,6 +4,7 @@ import {
   resolveFocus,
   rankTiles,
   pickScreenShareTile,
+  spotlightGridTemplate,
   type LayoutInput,
 } from "./callLayout";
 
@@ -134,5 +135,81 @@ describe("computeLayout", () => {
     const r = computeLayout({ ...base, tileIds: [] });
     expect(r.mode).toBe("grid");
     expect(r.shownIds).toEqual([]);
+  });
+});
+
+describe("spotlightGridTemplate — the owner's 5-person reference (v2.107.51)", () => {
+  it("a maximized screen share fills everything, whatever the count", () => {
+    expect(spotlightGridTemplate(4, true)).toEqual({ columns: "1fr", rows: "1fr", thumbRows: 0 });
+  });
+
+  it("no other tiles → the spotlight alone", () => {
+    expect(spotlightGridTemplate(0)).toEqual({ columns: "1fr", rows: "1fr", thumbRows: 0 });
+  });
+
+  it("ONE other tile (a 1:1 call) keeps the slim 22% strip exactly as before", () => {
+    expect(spotlightGridTemplate(1)).toEqual({
+      columns: "1fr",
+      rows: "minmax(0,1fr) 22%",
+      thumbRows: 1,
+    });
+  });
+
+  it("2 others sit side by side under a tall speaker (one thumb row)", () => {
+    expect(spotlightGridTemplate(2)).toEqual({
+      columns: "repeat(2,minmax(0,1fr))",
+      rows: "minmax(0,2.2fr) repeat(1,minmax(0,1fr))",
+      thumbRows: 1,
+    });
+  });
+
+  it("THE REFERENCE: 5 on the call = the speaker on top, the other 4 in a 2×2 grid", () => {
+    expect(spotlightGridTemplate(4)).toEqual({
+      columns: "repeat(2,minmax(0,1fr))",
+      rows: "minmax(0,2.2fr) repeat(2,minmax(0,1fr))",
+      thumbRows: 2,
+    });
+  });
+
+  it("5-9 others widen to 3 columns; the mesh cap's worst case (5 others) is 3×2", () => {
+    expect(spotlightGridTemplate(5)).toEqual({
+      columns: "repeat(3,minmax(0,1fr))",
+      rows: "minmax(0,2.2fr) repeat(2,minmax(0,1fr))",
+      thumbRows: 2,
+    });
+    expect(spotlightGridTemplate(9)).toEqual({
+      columns: "repeat(3,minmax(0,1fr))",
+      rows: "minmax(0,3.3fr) repeat(3,minmax(0,1fr))",
+      thumbRows: 3,
+    });
+  });
+
+  it("10+ others use 4 columns", () => {
+    expect(spotlightGridTemplate(10)).toEqual({
+      columns: "repeat(4,minmax(0,1fr))",
+      rows: "minmax(0,3.3fr) repeat(3,minmax(0,1fr))",
+      thumbRows: 3,
+    });
+  });
+
+  it("the speaker holds about half the height once the thumbs need 2+ rows", () => {
+    /* 2.2fr over 2×1fr = 52.4%; 3.3fr over 3×1fr = 52.4% — adding people
+       shrinks the thumbs, never the person talking. Asserted numerically so a
+       future fraction tweak that breaks the invariant is caught here. */
+    for (const t of [3, 4, 5, 9, 10]) {
+      const m = spotlightGridTemplate(t).rows.match(/^minmax\(0,([\d.]+)fr\) repeat\((\d+),/);
+      expect(m, `rows template for ${t} thumbs`).not.toBeNull();
+      const spotFr = Number(m![1]);
+      const rows = Number(m![2]);
+      const share = spotFr / (spotFr + rows);
+      expect(share).toBeGreaterThan(0.5);
+      expect(share).toBeLessThan(0.56);
+    }
+  });
+
+  it("fractions render with ONE decimal — never 3.3000000000000003fr", () => {
+    for (let t = 2; t <= 16; t++) {
+      expect(spotlightGridTemplate(t).rows).toMatch(/^minmax\(0,\d+(\.\d)?fr\) /);
+    }
   });
 });

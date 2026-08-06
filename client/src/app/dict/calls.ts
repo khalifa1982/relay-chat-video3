@@ -329,4 +329,7 @@ export const CALLS = {
   "callSettings.searchContacts": { en: "Search contacts", ar: "بحث في جهات الاتصال" },
   "callSettings.noContacts": { en: "No contacts to show", ar: "لا توجد جهات اتصال لعرضها" },
   "callSettings.saveFailed": { en: "Couldn't save that — try again", ar: "تعذّر الحفظ — حاول مرة أخرى" },
+  /* v2.107.51 — the pill on a group invitee's placeholder tile while their
+     phone is still being rung (see ensureInvitedTile in relayClient.ts). */
+  "calls.invited": { en: "Invited…", ar: "مدعو…" },
 } as const satisfies Record<string, Entry>;

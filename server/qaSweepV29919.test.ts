@@ -123,7 +123,10 @@ describe("v2.99.19 QA — #46 group-dial does not collapse when an invitee is of
     expect(src).toMatch(/pendingGroupInvites\.shift\(\)/);
   });
   it("a reachability error inside an established parked call never ends the call", () => {
-    expect(src).toMatch(/if \(reachErr && inParkedCall\(\)\) break;/);
+    // v2.107.51 wraps the break to also resolve the addee's Invited tile —
+    // the protected property is unchanged: the branch STILL only breaks, never
+    // hangs up or fails the dial.
+    expect(src).toMatch(/if \(reachErr && inParkedCall\(\)\) \{ resolveInvitedTile\(m\.pin\); break; \}/);
   });
   it("#51 add-person guard accepts BOTH offline and nonexistent", () => {
     expect(src).toMatch(/addInviteOfflineGuard && \(m\.code === "offline" \|\| m\.code === "nonexistent"/);

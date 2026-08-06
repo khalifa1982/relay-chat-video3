@@ -1451,6 +1451,13 @@ export const RELAY_CSS = `
 .relay-root .relay-tile .connecting{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.55);color:#fff;padding:7px 14px;border-radius:99px;font-size:12px;letter-spacing:.04em;backdrop-filter:blur(4px);border:1px solid var(--border2)}
 .relay-root .relay-tile[data-state="failed"] .connecting{color:var(--danger);border-color:rgba(255,92,114,.5)}
 .relay-root .relay-tile[data-state="disconnected"] .connecting{color:var(--warn);border-color:rgba(255,180,84,.5)}
+/* v2.107.51 — INVITED tiles (the owner's group-grid reference): a group invitee
+   who hasn't answered yet holds a dimmed, dash-bordered place in the SAME grid,
+   with an "Invited…" pill (the .connecting pill above), so the caller sees who
+   the call is still waiting on. Replaced by the real tile on join; removed on
+   decline / busy / unreachable (resolveInvitedTile) or by the 75s backstop. */
+.relay-root .relay-tile.invited{opacity:.72;border-style:dashed;border-color:var(--border2)}
+.relay-root .relay-tile.invited .connecting{color:#cbd5e1}
 .relay-root .relay-tile[data-state="connected"] .connecting{display:none!important}
 /* First connect to a peer still hasn't produced media after 15s — the generic
    "connecting…" pill is swapped for a named "Waiting for X…" and the tile's
