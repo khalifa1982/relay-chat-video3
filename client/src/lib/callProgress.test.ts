@@ -33,12 +33,15 @@ describe("staged call progress — Calling → Ringing → Connecting → connec
     expect(CLIENT).toMatch(/if \(opts\?\.outgoing\) \{[\s\S]*?setCallStatus\("calling"\);[\s\S]*?showDialCard\(\);/);
   });
 
-  it("the server's `ringing` ack flips the status only while still unanswered", () => {
-    // v2.105.12 gives the ack a second flavour: `paging` labels it "Reaching their
-    // phone…" because a woken-by-push callee is not audibly ringing yet. The
-    // GUARD is what this pins, and it is unchanged — an ack arriving after the
-    // call was answered must never rewind the status.
-    expect(CLIENT).toMatch(/case "ringing":[\s\S]*?if \(inCall && outgoingDial && !callAnswered\) \{[\s\S]*?setCallStatus\("ringing", m\.paging \? "Reaching their phone…" : undefined\);/);
+  it("the server's `ringing` ack flips the status only while still unanswered — and only for GROUP dials", () => {
+    // v2.105.12 gave the ack a second flavour: `paging` labels it "Reaching their
+    // phone…" because a woken-by-push callee is not audibly ringing yet.
+    // v2.107.51 (owner) then scoped the whole flip to GROUP dials: a one-to-one
+    // dial stays "Calling…" until answered (the staged Ringing/Reaching text read
+    // wrong on a direct call and duplicated the pill). The unanswered GUARD is
+    // unchanged — an ack arriving after the call was answered must never rewind
+    // the status — and the group-only branch is now pinned alongside it.
+    expect(CLIENT).toMatch(/case "ringing":[\s\S]*?if \(inCall && outgoingDial && !callAnswered\) \{[\s\S]*?if \(outgoingDial\.group\) \{[\s\S]*?setCallStatus\("ringing", m\.paging \? "Reaching their phone…" : undefined\);/);
   });
 
   it("the server acks the caller once the ring is delivered (callee pin + registered name)", () => {

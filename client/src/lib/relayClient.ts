@@ -1398,7 +1398,15 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         // card. When their app opens, `deliverPendingRing` sends a second
         // `ringing` ack WITHOUT `paging`, which upgrades this line in place.
         if (inCall && outgoingDial && !callAnswered) {
-          setCallStatus("ringing", m.paging ? "Reaching their phone…" : undefined);
+          // v2.107.51 (owner): a ONE-TO-ONE dial stays "Calling…" until answered.
+          // The staged "Ringing…"/"Reaching their phone…" text read wrong on a
+          // direct call — you are calling a person, not paging a device — and it
+          // duplicated the indicator that also shows in the floating pill. A GROUP
+          // dial keeps the delivered-ack distinction, where "Reaching their phone…"
+          // across many invitees is meaningful.
+          if (outgoingDial.group) {
+            setCallStatus("ringing", m.paging ? "Reaching their phone…" : undefined);
+          }
           // Upgrade the dial card with the callee's registered display name if
           // the dialer didn't know it (dialed a raw number, not a contact).
           if (m.name && !outgoingDial.group && !outgoingDial.name) {
