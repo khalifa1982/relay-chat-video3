@@ -783,7 +783,9 @@ export default function MessagesPage({
             </div>
             <div className="flex flex-col items-center gap-1">
               <NewMessageDialog defaultMode={only === "groups" ? "group" : "dm"} />
-              <span className="text-[10px] leading-none text-muted-foreground">{tr("msg.tabNew")}</span>
+              <span className="text-[10px] leading-none text-muted-foreground">
+                {only === "groups" ? tr("msg.tabNewGroup") : tr("msg.tabNew")}
+              </span>
             </div>
           </div>
         </header>

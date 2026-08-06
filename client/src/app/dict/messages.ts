@@ -54,6 +54,8 @@ export const MESSAGES = {
   "msg.tabAutoReply": { en: "Auto-reply", ar: "رد تلقائي" },
   "msg.tabSearch": { en: "Search", ar: "بحث" },
   "msg.tabNew": { en: "New", ar: "جديد" },
+  // On the Groups tab the compose button makes a GROUP, so it names itself so.
+  "msg.tabNewGroup": { en: "Group", ar: "مجموعة" },
   "msg.loadFailed": { en: "Couldn't load your conversations.", ar: "تعذّر تحميل محادثاتك." },
   "msg.groupConversation": { en: "Group conversation", ar: "محادثة جماعية" },
   "msg.notesToSelf": { en: "Notes to yourself", ar: "ملاحظات لنفسك" },
