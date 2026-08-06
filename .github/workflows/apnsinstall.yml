@@ -1,0 +1,27 @@
+name: apnsinstall
+on: { workflow_dispatch: {} }
+jobs:
+  ins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: run
+        env:
+          SSH_KEY: ${{ secrets.DOHA_SSH_KEY }}
+          P8_B64: "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR1RBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJIa3dkd0lCQVFRZ1h1bi9yVUNILzJoa1Fsb1kKbUNyUVIzL3BPd1RtYXZTUzlUVXFkVjNyV1JLZ0NnWUlLb1pJemowREFRZWhSQU5DQUFSRlRBOVQrMDROS0JkWAoybWpGWlYrQ1E4d0xsRmdvMFFkRXg4TVk3eFJPeURrTElaOXYwcXA0S3R0ZWlHSFdTT2MydXdLTWU2YmpLTGlaCnY5ZTc1VXJUCi0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0="
+          INST_B64: "IyEvYmluL2Jhc2gKc2V0IC1lCnN1ZG8gY3AgL3RtcC9hcG5zLnA4IC9ob21lL3JlbGF5L2FwbnMta2V5LnA4CnN1ZG8gY2hvd24gcmVsYXk6cmVsYXkgL2hvbWUvcmVsYXkvYXBucy1rZXkucDggJiYgc3VkbyBjaG1vZCA2MDAgL2hvbWUvcmVsYXkvYXBucy1rZXkucDgKc3VkbyAtdSByZWxheSBiYXNoIC1jICcKICBzZXQgLWUKICBzZWQgLWkgInN8XkFQTlNfS0VZX0lEPS4qfEFQTlNfS0VZX0lEPTRYUEhWVTdCUzl8IiAvaG9tZS9yZWxheS8uZW52CiAgaWYgZ3JlcCAtcSAiXkFQTlNfUDhfS0VZPSIgL2hvbWUvcmVsYXkvLmVudjsgdGhlbgogICAgc2VkIC1pICJzfF5BUE5TX1A4X0tFWT0uKnxBUE5TX1A4X0tFWT0vaG9tZS9yZWxheS9hcG5zLWtleS5wOHwiIC9ob21lL3JlbGF5Ly5lbnYKICBlbHNlCiAgICBwcmludGYgIlxuQVBOU19QOF9LRVk9L2hvbWUvcmVsYXkvYXBucy1rZXkucDhcbiIgPj4gL2hvbWUvcmVsYXkvLmVudgogIGZpCicKc3VkbyAtdSByZWxheSBiYXNoIC1sYyAiY2QgL2hvbWUvcmVsYXkvYXBwICYmIHNldCAtYSAmJiAuIC9ob21lL3JlbGF5Ly5lbnYgJiYgc2V0ICthICYmIHBtMiByZXN0YXJ0IHJlbGF5IC0tdXBkYXRlLWVudiA+L2Rldi9udWxsIDI+JjEgJiYgcG0yIHNhdmUgPi9kZXYvbnVsbCAyPiYxIgplY2hvICJhcG5zIGluc3RhbGxlZCtyZXN0YXJ0ZWQgb24gJChob3N0bmFtZSkiCg=="
+          VER_B64: "aW1wb3J0IHsgcmVhZEZpbGVTeW5jIH0gZnJvbSAibm9kZTpmcyI7CmltcG9ydCBodHRwMiBmcm9tICJub2RlOmh0dHAyIjsKZnVuY3Rpb24gbG9hZEVudigpeyB0cnkgeyBmb3IgKGNvbnN0IGwgb2YgcmVhZEZpbGVTeW5jKCIvaG9tZS9yZWxheS8uZW52IiwidXRmOCIpLnNwbGl0KCJcbiIpKXsgY29uc3QgbT1sLm1hdGNoKC9eXHMqKFtBLVowLTlfXSspXHMqPVxzKiI/KFteIlxuXSopIj9ccyokLyk7IGlmKG0gJiYgIShtWzFdIGluIHByb2Nlc3MuZW52KSkgcHJvY2Vzcy5lbnZbbVsxXV09bVsyXTsgfSB9IGNhdGNoKGUpe30gfQooYXN5bmMgKCkgPT4gewogIGxvYWRFbnYoKTsKICBjb25zdCBtb2Q6YW55ID0gYXdhaXQgaW1wb3J0KCIuL3NlcnZlci9hcG5zVm9pcCIpOwogIGNvbnN0IGNmZyA9IG1vZC5hcG5zVm9pcENvbmZpZygpOwogIGNvbnN0IHJlczphbnkgPSB7IGNvbmZpZ3VyZWQ6IG1vZC5hcG5zVm9pcENvbmZpZ3VyZWQoKSwgbW9kZTogY2ZnP2NmZy5tb2RlOm51bGwsIGtleUlkOihwcm9jZXNzLmVudi5BUE5TX0tFWV9JRHx8IiIpLnRyaW0oKSwgdG9waWM6IGNmZz9jZmcudG9waWM6bnVsbCwgaG9zdDogY2ZnP2NmZy5ob3N0Om51bGwgfTsKICBpZiAoY2ZnICYmIGNmZy5tb2RlPT09InRva2VuIikgewogICAgY29uc3Qgand0ID0gbW9kLmFwbnNQcm92aWRlclRva2VuKGNmZyk7CiAgICByZXMuand0ID0gand0PyAibWludGVkIjoiRkFJTEVEIjsKICAgIGlmIChqd3QpIHsKICAgICAgYXdhaXQgbmV3IFByb21pc2U8dm9pZD4oKHJlc29sdmUpPT57CiAgICAgICAgY29uc3QgcyA9IGh0dHAyLmNvbm5lY3QoImh0dHBzOi8vIitjZmcuaG9zdCk7CiAgICAgICAgcy5vbigiZXJyb3IiLChlOmFueSk9PnsgcmVzLmNvbm5FcnI9U3RyaW5nKGUmJmUubWVzc2FnZXx8ZSk7IHJlc29sdmUoKTsgfSk7CiAgICAgICAgY29uc3QgcmVxID0gcy5yZXF1ZXN0KHsgIjptZXRob2QiOiJQT1NUIiwgIjpwYXRoIjoiLzMvZGV2aWNlLyIrIjAiLnJlcGVhdCg2NCksICJhcG5zLXRvcGljIjpjZmcudG9waWMsICJhcG5zLXB1c2gtdHlwZSI6InZvaXAiLCAiYXBucy1wcmlvcml0eSI6IjEwIiwgImF1dGhvcml6YXRpb24iOiJiZWFyZXIgIitqd3QgfSk7CiAgICAgICAgbGV0IHN0YXR1cz0wLCBib2R5PSIiOyByZXEuc2V0RW5jb2RpbmcoInV0ZjgiKTsKICAgICAgICByZXEub24oInJlc3BvbnNlIiwoaDphbnkpPT57IHN0YXR1cz1OdW1iZXIoaFsiOnN0YXR1cyJdKXx8MDsgfSk7CiAgICAgICAgcmVxLm9uKCJkYXRhIiwoZDpzdHJpbmcpPT5ib2R5Kz1kKTsKICAgICAgICByZXEub24oImVuZCIsKCk9PnsgcmVzLmFwbnNTdGF0dXM9c3RhdHVzOyByZXMuYXBuc1JlYXNvbj1ib2R5fHwiKGVtcHR5KSI7IHRyeXtzLmNsb3NlKCk7fWNhdGNoKGUpe30gcmVzb2x2ZSgpOyB9KTsKICAgICAgICByZXEub24oImVycm9yIiwoZTphbnkpPT57IHJlcy5yZXFFcnI9U3RyaW5nKGUmJmUubWVzc2FnZXx8ZSk7IHRyeXtzLmNsb3NlKCk7fWNhdGNoKF8pe30gcmVzb2x2ZSgpOyB9KTsKICAgICAgICByZXEuZW5kKEpTT04uc3RyaW5naWZ5KHsgYXBzOnt9IH0pKTsKICAgICAgfSk7CiAgICB9CiAgfQogIGNvbnNvbGUubG9nKCI8PDxBUE5TICIrSlNPTi5zdHJpbmdpZnkocmVzKSsiIEFQTlM+Pj4iKTsKfSkoKS5jYXRjaChlPT5jb25zb2xlLmxvZygiPDw8QVBOUyBFUlIgIisoZSYmZS5tZXNzYWdlfHxlKSsiIEFQTlM+Pj4iKSk7Cg=="
+        run: |
+          set -e
+          mkdir -p ~/.ssh && echo "$SSH_KEY" > ~/.ssh/id && chmod 600 ~/.ssh/id
+          echo "$P8_B64" | base64 -d > /tmp/apns.p8
+          echo "$INST_B64" | base64 -d > /tmp/apnsinstall.sh
+          echo "$VER_B64" | base64 -d > /tmp/apnsverify.ts
+          for H in 34.18.175.226 34.18.145.249; do
+            scp -o StrictHostKeyChecking=no -i ~/.ssh/id /tmp/apns.p8 /tmp/apnsinstall.sh ubuntu@$H:/tmp/
+            ssh -o StrictHostKeyChecking=no -i ~/.ssh/id ubuntu@$H 'bash /tmp/apnsinstall.sh; rm -f /tmp/apns.p8 /tmp/apnsinstall.sh'
+            sleep 8
+          done
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/id /tmp/apnsverify.ts ubuntu@34.18.175.226:/tmp/
+          echo "<<<VERIFY"
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id ubuntu@34.18.175.226 'sudo cp /tmp/apnsverify.ts /home/relay/app/_av.ts && sudo chown relay:relay /home/relay/app/_av.ts && sudo -u relay bash -c "cd /home/relay/app && ./node_modules/.bin/tsx _av.ts 2>&1"; sudo rm -f /home/relay/app/_av.ts /tmp/apnsverify.ts'
+          echo "VERIFY>>>"
