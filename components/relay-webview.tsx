@@ -11,30 +11,13 @@ import {
   View,
 } from "react-native";
 import { WebView } from "react-native-webview";
-import type {
-  WebViewMessageEvent,
-  WebViewNavigation,
-} from "react-native-webview";
+import type { WebViewMessageEvent, WebViewNavigation } from "react-native-webview";
 import type { WebViewErrorEvent } from "react-native-webview/lib/WebViewTypes";
+import * as Notifications from "expo-notifications";
 
 import { RELAY_APP_URL, isInternalUrl } from "@/lib/relay-config";
-import { reconcileVersion } from "@/lib/version-watch";
-import { INJECTED_JS } from "@/lib/injected-scripts";
-import { parseRelayMessage } from "@/lib/call-messages";
-import { useCallSession } from "@/hooks/use-call-session";
-import { useCallNotifications } from "@/hooks/use-call-notifications";
-import { useBackgroundPresence } from "@/hooks/use-background-presence";
 import { usePushToken } from "@/hooks/use-push-token";
-import {
-  setVoipWebViewRef,
-  onVoipWebViewReady,
-  handleWebCallEnded,
-} from "@/lib/voip-call-manager";
-import { useAndroidCallIntent } from "@/hooks/use-android-call-intent";
 
-// Palette aligned to the live RELAY web app (oklch(0.12 0.008 245) background
-// ~ #050608) so the native shell's splash/error chrome blends seamlessly with
-// the web content instead of flashing a lighter navy.
 const COLORS = {
   navy: "#050608",
   surface: "#0E1117",
@@ -47,245 +30,173 @@ const COLORS = {
 
 const RELAY_LOGO = require("@/assets/images/relay-logo.png");
 
-// Script that asks the page to refresh its camera track (clears frozen preview).
-const REACQUIRE_CAMERA_JS =
-  "try { window.__relayReacquireCamera && window.__relayReacquireCamera(); } catch (e) {} true;";
-
 /**
- * RelayWebView renders the RELAY web app inside a native WebView and adds the
- * shell chrome: a branded loading overlay until first paint, an offline / load
- * error screen with retry, Android hardware-back navigation through web
- * history, and routing of external links to the system browser.
+ * RelayWebView — thin WebView shell.
+ *
+ * Responsibilities:
+ *  • Render your-chat.io full-screen with branded loading / error screens.
+ *  • Register the native push token (APNs / FCM) and deliver it to the web
+ *    app so the server can reach this device for incoming calls and messages.
+ *  • Route notification taps into the correct web-app screen (/app/dialer etc).
+ *  • Route external links to the system browser.
+ *  • Android hardware-back through web history.
+ *
+ * NOT here: CallKit, VoIP push, ringtones, call state, APK updater. All call
+ * and message UI lives in the web app.
  */
 export function RelayWebView() {
   const webViewRef = useRef<WebView>(null);
 
-  // Register WebView ref with VoIP call manager for JS injection
-  useEffect(() => {
-    setVoipWebViewRef(webViewRef);
-  }, []);
-  // `loading` only controls the FIRST-load splash overlay. Subsequent in-app
-  // (SPA) navigations must never re-show a full-screen overlay, otherwise the
-  // spinner can get stuck covering an already-rendered page.
   const [loading, setLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
-  const canGoBackRef = useRef(false);
-  const firstLoadDoneRef = useRef(false);
-  const loadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const firstLoadDone = useRef(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const canGoBack = useRef(false);
 
-  // Safety net: never let the first-load splash hang forever. If the first
-  // load has not reported completion within 12s, dismiss the overlay anyway.
+  // Push token registration
+  const { onWebViewLoadEnd: sendPushToken, onWebReady: sendPushTokenOnReady } =
+    usePushToken(webViewRef);
+
+  // ─── Loading splash safety net ───────────────────────────────────────────
   useEffect(() => {
-    loadTimeoutRef.current = setTimeout(() => {
-      firstLoadDoneRef.current = true;
+    timeoutRef.current = setTimeout(() => {
+      firstLoadDone.current = true;
       setLoading(false);
-    }, 12000);
+    }, 12_000);
     return () => {
-      if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
   }, []);
 
   const finishFirstLoad = useCallback(() => {
-    firstLoadDoneRef.current = true;
-    if (loadTimeoutRef.current) {
-      clearTimeout(loadTimeoutRef.current);
-      loadTimeoutRef.current = null;
+    firstLoadDone.current = true;
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
     }
     setLoading(false);
   }, []);
 
-  // Android hardware back button -> navigate WebView history when possible.
+  // ─── Notification URL navigation ─────────────────────────────────────────
+  const navigateToUrl = useCallback((path: string) => {
+    // path may be "/app/dialer" or a full URL
+    const target = /^https?:\/\//i.test(path)
+      ? path
+      : `${RELAY_APP_URL.replace(/\/app$/, "")}${path}`;
+    webViewRef.current?.injectJavaScript(
+      `window.location.href = ${JSON.stringify(target)}; true;`,
+    );
+  }, []);
+
+  // App foregrounded by tapping a notification (background → foreground)
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        const url = response.notification.request.content.data?.url as
+          | string
+          | undefined;
+        if (url) navigateToUrl(url);
+      },
+    );
+    return () => sub.remove();
+  }, [navigateToUrl]);
+
+  // Cold-start: app was launched from a killed state by tapping a notification
+  useEffect(() => {
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      const url = response?.notification.request.content.data?.url as
+        | string
+        | undefined;
+      if (url) {
+        // Defer until the WebView has finished loading and the user is auth'd
+        const timer = setTimeout(() => navigateToUrl(url), 2_500);
+        return () => clearTimeout(timer);
+      }
+    });
+  }, [navigateToUrl]);
+
+  // ─── Android hardware back ────────────────────────────────────────────────
   useEffect(() => {
     if (Platform.OS !== "android") return;
-    const onBackPress = () => {
-      if (canGoBackRef.current && webViewRef.current) {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (canGoBack.current && webViewRef.current) {
         webViewRef.current.goBack();
-        return true; // handled
+        return true;
       }
-      return false; // let the OS handle (exit app)
-    };
-    const subscription = BackHandler.addEventListener(
-      "hardwareBackPress",
-      onBackPress,
-    );
-    return () => subscription.remove();
-  }, []);
-
-  const handleNavStateChange = useCallback((nav: WebViewNavigation) => {
-    canGoBackRef.current = nav.canGoBack;
-  }, []);
-
-  // Ask the page (via injected helper) to re-acquire the camera on resume.
-  const reacquireCamera = useCallback(() => {
-    webViewRef.current?.injectJavaScript(REACQUIRE_CAMERA_JS);
-  }, []);
-
-  // Call lifecycle: background audio, keep-awake, PiP, camera re-acquire,
-  // plus audio output routing (earpiece/speaker/Bluetooth).
-  const { setCallState, applyAudioRoute } = useCallSession(reacquireCamera);
-
-  // Firebase push token: get the native device token and inject it into the
-  // WebView so the web app can register it with its server for push delivery.
-  const { onWebViewLoadEnd: sendPushToken, onWebReady: sendPushTokenOnReady } =
-    usePushToken(webViewRef);
-
-  // Track when WebView is ready (first load complete) for Android call intents
-  const [webViewReady, setWebViewReady] = useState(false);
-
-  // Android native call intent handling (cold start answer/decline from native FCM service)
-  useAndroidCallIntent(webViewRef, webViewReady);
-
-  // Online presence: keep RELAY reachable in the background so calls ring even
-  // when minimized. The injected script reports whether the user is signed in;
-  // we treat "logged in" (past the name-entry screen) as online.
-  const [online, setOnline] = useState(false);
-  useBackgroundPresence(online);
-  // Incoming-call ringtone + notification (with Accept/Decline handling).
-  const { showIncomingCall, dismissIncomingCall, showIncomingMessage } =
-    useCallNotifications({
-      onAccept: () => {
-        // Bring the call back into view and refresh the camera frame.
-        reacquireCamera();
-      },
-      onDecline: () => {
-        void dismissIncomingCall();
-      },
+      return false;
     });
-
-  // --- Web-content version change detection ---
-  const [webUpdateAvailable, setWebUpdateAvailable] = useState(false);
-  const webVersionRef = useRef<string | null>(null);
-
-  const handleVersion = useCallback((version: string) => {
-    const { next, shouldPromptReload } = reconcileVersion(
-      webVersionRef.current,
-      version,
-    );
-    webVersionRef.current = next;
-    if (shouldPromptReload) setWebUpdateAvailable(true);
+    return () => sub.remove();
   }, []);
 
-  const reloadWebContent = useCallback(() => {
-    setWebUpdateAvailable(false);
-    webViewRef.current?.reload();
+  // ─── Handlers ────────────────────────────────────────────────────────────
+  const handleNavState = useCallback((nav: WebViewNavigation) => {
+    canGoBack.current = nav.canGoBack;
   }, []);
 
-  const reload = useCallback(() => {
-    setHasError(false);
-    firstLoadDoneRef.current = false;
-    setLoading(true);
-    if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
-    loadTimeoutRef.current = setTimeout(() => {
-      firstLoadDoneRef.current = true;
-      setLoading(false);
-    }, 12000);
-    webViewRef.current?.reload();
-  }, []);
-
-  const handleError = useCallback((_event: WebViewErrorEvent) => {
-    setHasError(true);
-    finishFirstLoad();
-  }, [finishFirstLoad]);
-
-  // Route ONLY genuinely external links to the system browser. Everything on
-  // the RELAY site (including all /app/* sub-routes) stays inside the WebView.
-  const handleShouldStartLoad = useCallback((req: WebViewNavigation) => {
-    const url = req.url;
-    // Keep all internal RELAY navigation in the WebView.
+  const handleShouldLoad = useCallback((req: WebViewNavigation) => {
+    const { url } = req;
     if (isInternalUrl(url)) return true;
-    // mailto/tel/sms always go to the native handler.
     if (/^(mailto:|tel:|sms:)/i.test(url)) {
       Linking.openURL(url).catch(() => {});
       return false;
     }
-    // External http(s) links open in the system browser.
     if (/^https?:/i.test(url)) {
       Linking.openURL(url).catch(() => {});
       return false;
     }
-    // Anything else (custom schemes, etc.) — let the WebView decide.
     return true;
   }, []);
 
-  // Receive messages from the injected scripts (version, call, ring).
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
-      const msg = parseRelayMessage(event.nativeEvent.data);
-      switch (msg.type) {
-        case "version":
-          handleVersion(msg.version);
-          break;
-        case "call":
-          setCallState({ active: msg.active, hasVideo: msg.hasVideo });
-          // A connected call cancels any pending ringtone.
-          if (msg.active) void dismissIncomingCall();
-          break;
-        case "ring":
-          if (msg.ringing) void showIncomingCall(msg.caller ?? undefined);
-          else void dismissIncomingCall();
-          break;
-        case "message":
-          void showIncomingMessage();
-          break;
-        case "audio-route":
-          applyAudioRoute(msg.route);
-          break;
-        // The web app's bridge is listening NOW. Re-send the push token: onLoadEnd
-        // can fire before RELAY attaches its listener, in which case the token
-        // posted then was dropped and nothing anywhere said so.
-        case "web-ready":
+      try {
+        const msg = JSON.parse(event.nativeEvent.data) as { type?: string };
+        // The web app signals its bridge is ready — re-send the push token so
+        // it isn't dropped if loadEnd fired before the listener attached.
+        if (msg?.type === "RELAY_WEB_READY" || msg?.type === "web-ready") {
           sendPushTokenOnReady();
-          break;
-        case "online":
-          setOnline(msg.online);
-          break;
-        case "webCallEnded":
-          // Web page ended the call — report to native so system UI closes
-          if (Platform.OS === "ios" && msg.callId) {
-            handleWebCallEnded(msg.callId);
-          }
-          // On Android: the native RelayNativeInterface @JavascriptInterface
-          // handles webCallEnded directly (dismisses notification, deactivates
-          // audio router). The web app calls window.RelayNative.postMessage()
-          // which goes straight to native without passing through RN bridge.
-          // We still handle it here as a fallback for the RN message path.
-          if (Platform.OS === "android" && msg.callId) {
-            // Dismiss any ongoing call notification via Expo Notifications
-            // (best-effort — native interface handles it primarily)
-          }
-          break;
-        default:
-          break;
+        }
+      } catch {
+        // Non-JSON or irrelevant message; ignore.
       }
     },
-    [
-      handleVersion,
-      setCallState,
-      applyAudioRoute,
-      showIncomingCall,
-      dismissIncomingCall,
-      showIncomingMessage,
-      sendPushTokenOnReady,
-    ],
+    [sendPushTokenOnReady],
   );
 
+  const handleError = useCallback(
+    (_event: WebViewErrorEvent) => {
+      setHasError(true);
+      finishFirstLoad();
+    },
+    [finishFirstLoad],
+  );
+
+  const reload = useCallback(() => {
+    setHasError(false);
+    firstLoadDone.current = false;
+    setLoading(true);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      firstLoadDone.current = true;
+      setLoading(false);
+    }, 12_000);
+    webViewRef.current?.reload();
+  }, []);
+
+  // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <View style={styles.container}>
       <WebView
         ref={webViewRef}
         source={{ uri: RELAY_APP_URL }}
         style={styles.webview}
-        // --- Media / WebRTC ---
+        // ── Media / WebRTC ────────────────────────────────────────────────
         mediaCapturePermissionGrantType="grant"
         allowsInlineMediaPlayback
         allowsPictureInPictureMediaPlayback
         mediaPlaybackRequiresUserAction={false}
         allowsProtectedMedia
-        // --- Storage / cookies / cache so the session survives app restarts ---
-        // domStorageEnabled: keep localStorage/IndexedDB (login token, drafts).
-        // cacheEnabled + LOAD_DEFAULT: use the on-disk HTTP cache across launches
-        // instead of re-fetching everything, so cold starts are faster and the
-        // web app doesn't lose cached assets when the app is closed.
+        // ── Storage / session (persist login + cache across launches) ─────
         domStorageEnabled
         javaScriptEnabled
         cacheEnabled
@@ -293,72 +204,44 @@ export function RelayWebView() {
         incognito={false}
         sharedCookiesEnabled
         thirdPartyCookiesEnabled
-        // --- UX ---
+        // ── UX ────────────────────────────────────────────────────────────
         pullToRefreshEnabled
         allowsBackForwardNavigationGestures
         startInLoadingState={false}
         originWhitelist={["*"]}
         setSupportMultipleWindows={false}
-        // Only show the splash on the very first load. Do NOT toggle `loading`
-        // back on for subsequent SPA navigations — that is what made other tabs
-        // appear stuck on an endless spinner.
+        // ── Events ────────────────────────────────────────────────────────
         onLoadStart={() => {
-          if (!firstLoadDoneRef.current) setLoading(true);
+          if (!firstLoadDone.current) setLoading(true);
         }}
         onLoadEnd={() => {
           finishFirstLoad();
           sendPushToken();
-          setWebViewReady(true);
-          // Notify VoIP manager that WebView is ready for injection
-          if (Platform.OS === "ios") onVoipWebViewReady();
         }}
         onError={handleError}
         onHttpError={() => {}}
-        onNavigationStateChange={handleNavStateChange}
-        onShouldStartLoadWithRequest={handleShouldStartLoad}
+        onNavigationStateChange={handleNavState}
+        onShouldStartLoadWithRequest={handleShouldLoad}
         onMessage={handleMessage}
-        injectedJavaScript={INJECTED_JS}
       />
 
-      {webUpdateAvailable && !loading && !hasError ? (
-        <View style={styles.webUpdateWrap}>
-          <View style={styles.webUpdateBanner}>
-            <Text style={styles.webUpdateText}>
-              RELAY was updated. Reload for the latest.
-            </Text>
-            <Pressable
-              onPress={reloadWebContent}
-              style={({ pressed }) => [
-                styles.webUpdateButton,
-                pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
-              ]}
-              accessibilityRole="button"
-            >
-              <Text style={styles.webUpdateButtonText}>Reload</Text>
-            </Pressable>
-          </View>
-        </View>
-      ) : null}
-
-      {loading && !hasError ? (
+      {/* First-load splash */}
+      {loading && !hasError && (
         <View style={styles.overlay} pointerEvents="none">
           <Image source={RELAY_LOGO} style={styles.logo} resizeMode="contain" />
           <Text style={styles.brand}>RELAY</Text>
           <Text style={styles.tagline}>Voice · Video · Chat</Text>
-          <ActivityIndicator
-            size="large"
-            color={COLORS.cyan}
-            style={styles.spinner}
-          />
+          <ActivityIndicator size="large" color={COLORS.cyan} style={styles.spinner} />
         </View>
-      ) : null}
+      )}
 
-      {hasError ? (
+      {/* Error / offline screen */}
+      {hasError && (
         <View style={styles.errorOverlay}>
           <Image source={RELAY_LOGO} style={styles.logo} resizeMode="contain" />
           <Text style={styles.brand}>RELAY</Text>
           <View style={styles.errorCard}>
-            <Text style={styles.errorTitle}>Can&apos;t reach RELAY</Text>
+            <Text style={styles.errorTitle}>Can't reach RELAY</Text>
             <Text style={styles.errorBody}>
               Check your internet connection and try again.
             </Text>
@@ -374,20 +257,14 @@ export function RelayWebView() {
             </Pressable>
           </View>
         </View>
-      ) : null}
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.navy,
-  },
-  webview: {
-    flex: 1,
-    backgroundColor: COLORS.navy,
-  },
+  container: { flex: 1, backgroundColor: COLORS.navy },
+  webview: { flex: 1, backgroundColor: COLORS.navy },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: COLORS.navy,
@@ -401,10 +278,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 32,
   },
-  logo: {
-    width: 96,
-    height: 96,
-  },
+  logo: { width: 96, height: 96 },
   brand: {
     marginTop: 12,
     color: COLORS.foreground,
@@ -419,9 +293,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: 1,
   },
-  spinner: {
-    marginTop: 28,
-  },
+  spinner: { marginTop: 28 },
   errorCard: {
     marginTop: 28,
     width: "100%",
@@ -433,11 +305,7 @@ const styles = StyleSheet.create({
     padding: 24,
     alignItems: "center",
   },
-  errorTitle: {
-    color: COLORS.foreground,
-    fontSize: 18,
-    fontWeight: "700",
-  },
+  errorTitle: { color: COLORS.foreground, fontSize: 18, fontWeight: "700" },
   errorBody: {
     color: COLORS.muted,
     fontSize: 14,
@@ -452,49 +320,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 40,
     borderRadius: 999,
   },
-  retryText: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  webUpdateWrap: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    top: 0,
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 12,
-  },
-  webUpdateBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: COLORS.surface,
-    borderColor: COLORS.border,
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    maxWidth: 460,
-    width: "100%",
-  },
-  webUpdateText: {
-    color: COLORS.foreground,
-    fontSize: 13,
-    fontWeight: "600",
-    flexShrink: 1,
-  },
-  webUpdateButton: {
-    marginLeft: "auto",
-    backgroundColor: COLORS.cyan,
-    paddingVertical: 8,
-    paddingHorizontal: 18,
-    borderRadius: 999,
-  },
-  webUpdateButtonText: {
-    color: "#04121A",
-    fontSize: 13,
-    fontWeight: "800",
-  },
+  retryText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
 });
