@@ -7,11 +7,11 @@ import { RelayWebView } from "@/components/relay-webview";
  * Everything (dialer, calls, messages, contacts) lives in the web app.
  */
 export default function HomeScreen() {
+  /* No "bottom" edge (v1.0.43, owner): padding the WebView up off the bottom
+     left a dead grey strip under the web app's tab bar. The WebView now
+     reaches the bottom edge and the web tab bar's own env(safe-area-inset-
+     bottom) padding clears the home indicator (viewport-fit=cover is set). */
   return (
-    {/* No "bottom" edge (v1.0.43, owner): padding the WebView up off the bottom
-        left a dead grey strip under the web app's tab bar. The WebView now
-        reaches the bottom edge and the web tab bar's own env(safe-area-inset-
-        bottom) padding clears the home indicator (viewport-fit=cover is set). */}
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <RelayWebView />
     </SafeAreaView>
