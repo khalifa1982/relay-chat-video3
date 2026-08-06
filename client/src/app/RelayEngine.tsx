@@ -634,12 +634,14 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
         data-relay-engine-root="true"
       />
       {/* Fullscreen in-call controls (v2.99.8): a Minimize + Fit cluster centred
-          along the top edge (the engine owns the rest of the chrome). Hidden while
+          along the top. v2.107.51 (owner) drops it BELOW the engine's own
+          `.call-head` header (name/timer/lock) instead of `top-3` on top of it —
+          the timer and lock were colliding with the Fit button. Hidden while
           minimized (the mini box has its own controls) and pre-connect. */}
       {phase === "in-call" && !minimized ? (
         /* `left-1/2` + `-translate-x-1/2` is CENTRING, which is direction-independent
            — the logical `start-1/2` would push this cluster off-centre in Arabic. */
-        <div className="fixed top-3 left-1/2 z-[70] flex -translate-x-1/2 gap-2">
+        <div className="fixed top-16 left-1/2 z-[70] flex -translate-x-1/2 gap-2">
           <button
             type="button"
             onClick={() => setMinimized(true)}

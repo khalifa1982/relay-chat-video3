@@ -5682,6 +5682,13 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     establishedOnce = false;
     exitReconnecting();
     resetSpeakerView(); // fresh call → no stale spotlight/active-speaker focus
+    // v2.107.51 (owner): a fresh call must NOT carry the previous call's name in
+    // the top chip. On an outgoing dial the chip was still showing whoever the
+    // last call named (a lingering #callWho), so "dialing X" read "Y" up top.
+    // The chip is only correct once a single peer is actually connected —
+    // paintCallIdentity repaints it then — so it starts empty and the dial card
+    // owns the name until then.
+    { const w = $("callWho"); if (w) w.textContent = ""; const r = $("callWhoRole"); if (r) r.style.display = "none"; }
     startStatsSampler(); // live per-tile bitrate
     void seedAudioOutputs(); // snapshot outputs so a later BT connect is detected
     if (opts?.outgoing) {

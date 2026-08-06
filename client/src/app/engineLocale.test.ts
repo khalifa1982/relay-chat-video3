@@ -363,7 +363,7 @@ describe("direction: logical where it is reading order, physical where it is not
     /* `left-1/2` + `-translate-x-1/2` and `inset-x-0` + `mx-auto` are direction
        INDEPENDENT. Both halves are pinned together, so a half-conversion (which is what
        a blanket sweep produces) fails rather than silently de-centring a control. */
-    expect(JSX).toMatch(/fixed top-3 left-1\/2 z-\[70\] flex -translate-x-1\/2/);
+    expect(JSX).toMatch(/fixed top-16 left-1\/2 z-\[70\] flex -translate-x-1\/2/);
     expect(JSX).toMatch(/fixed inset-x-0 top-4 z-\[85\] mx-auto/);
     expect(JSX, "a `start-1/2` centre is not a centre").not.toMatch(/\bstart-1\/2\b/);
   });
