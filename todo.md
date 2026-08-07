@@ -1,5 +1,294 @@
 # Project TODO
 
+## v2.107.62 — THE ANDROID APP LOST A DEPENDENCY ITS OWN KOTLIN STILL IMPORTS
+
+Found by the drive-to-green pass on PR #154, not by anybody looking for it.
+
+### The mainline's own suite was already red
+
+The single failing case fails at `origin/web-app-main` too, so it is not a rebase
+artifact and not v2.107.61's. Reporting it as "the known device-only test" would have
+been wrong twice over — it is neither device-only nor benign.
+
+### `cd08ba7` removed a package the repo's own source says is load-bearing
+
+Its message reads *"drop unused @livekit/react-native cloud SDK dep (native engine uses
+raw WebRTC lib + RELAY signaling only)"*. Three places in the tree contradict the
+premise:
+
+- `mobile/native/android/app/src/main/java/com/relaynative/MainApplication.kt:9` —
+  `import com.livekit.reactnative.LiveKitReactNative`
+- the same file, line 32 — `LiveKitReactNative.setup(this)`
+- `mobile/native/src/call/engine.tsx:17-18` — states outright that this package is the
+  **Android initialiser** and that its `setup()` configures `WebRTCModuleOptions`, i.e.
+  the options of `@livekit/react-native-webrtc`, the binding the **mesh** is built on.
+
+**The package whose name says SFU is not an SFU client.** That is exactly the trap
+v2.106.55 recorded — its own first draft attempted the same deletion and it was caught
+before merge. The guard written that day (`nativeRewrite.test.ts:307`) fired correctly
+this time; the removal shipped regardless.
+
+**The cost is not a red test, it is an unresolved import.** The Kotlin has no package to
+resolve, so the Android build fails outright. Had it compiled, the loss would have been
+every mesh call's hardware AEC + noise suppression, the encoder/decoder factories, and
+`enableMediaProjectionService` — without which **screen share sends black frames**.
+
+### Restored from `cd08ba7^`, not retyped
+
+Both `package.json` and `package-lock.json`; neither has changed since that commit, so
+the restored pair is exactly the one that was in sync before the removal.
+
+The alternative fix — delete the Kotlin import and rewrite the test — would take a
+measured capability away to satisfy a manifest, so it was not taken.
+
+`mobile/native` is **not** a workspace member (no `pnpm-workspace.yaml`, no root
+`workspaces`, its own npm lockfile), so the root `pnpm install --frozen-lockfile` never
+sees it and the app deploy is untouched.
+
+### The new guard is for the risk the FIX introduces
+
+`native-rn.yml` installs with `npm ci`, which refuses a manifest and lockfile whose
+roots disagree — but that workflow fires only on a push touching `mobile/native/**`. So
+a **half-restore** (manifest fixed, lock not) sails through every PR and then breaks the
+Android build for whoever next touches that directory, with nothing saying why.
+
+`nativeRewrite.test.ts` now compares the two roots — precisely what `npm ci` checks,
+moved into the suite that runs on every change — plus:
+
+- **resolved, not merely requested**: a root entry with no `node_modules/` package is
+  what an interrupted `npm install` leaves behind.
+- a **non-vacuity floor**, since a lockfile listing nothing satisfies an empty manifest.
+
+**3 of 3 tripwires verified by mutation** off a confirmed-green baseline from byte-exact
+backups — the half-restore, the declared-but-unresolved entry, and `cd08ba7` reinstated
+*consistently* — with both files byte-identical afterwards.
+
+### Not verified, said plainly
+
+Nobody has run Gradle. What is proven is that the manifest and its lockfile agree and
+that the package the Kotlin imports is declared and resolved.
+
+**A claim of my own, corrected rather than left standing.** I first wrote that
+`native-rn.yml` would fire on this push and be the real check. **It will not.** Its
+trigger is:
+
+```yaml
+push:
+  branches: [main]
+  paths: ["mobile/native/**", ".github/workflows/native-rn.yml"]
+workflow_dispatch:
+```
+
+Both conditions — and `main` is the **Expo project**, not this app's mainline. So it runs
+on no PR and on no merge into `web-app-main`.
+
+**The same error is already in this file twice, from v2.99.52 / v2.99.53** (*"triggers on
+any push touching `mobile/native/**`, so the commit verifies itself"*), which is how I came
+to repeat it. A stale reason is worse than none, because it is the sentence the next reader
+trusts. Those historical entries are left as written; this correction is the current record.
+
+So the Android build is verified by **nobody** until somebody dispatches that workflow —
+which is exactly why the parity guard had to live in the suite that *does* run.
+
+No schema change, no new web dependency, no new env var, no server change, no web-app
+behaviour change of any kind. 6940 tests.
+
+---
+
+## v2.107.62 pt.1 (written as .61, renumbered) — THE LIGHT THEME WAS WHITE ON WHITE, AND THE NAV SPENT ITS WHOLE SAFE AREA ON NOTHING
+
+> **Version collision, fifth recorded.** A parallel session shipped its own
+> **v2.107.61** (`492381c`, QW-9 read-receipt and typing privacy toggles) to
+> `web-app-main` three minutes before this branch's second push, so this work
+> cannot keep a number that is already deployed and ships inside .62.
+>
+> **The second-order effect is the new lesson.** The base moving made PR #154
+> `mergeable_state: "dirty"`, and a PR whose test-merge commit cannot be built
+> creates **zero** workflow runs — silently. `get_status` answered `pending` with
+> `total_count: 0`, which is indistinguishable from "still running" unless you
+> look for the count rather than the colour. `ci.yml`'s own header records that
+> trap from PR #138 and says to read `mergeable_state` first; doing so answered it
+> in one call.
+>
+> The rebase conflicted in exactly two files and both were the *same* defect from
+> the other side: `groupDescription` / `pinnedMessages` had their frozen release
+> literal hand-bumped `2.107.60` → `2.107.61`, which is precisely the maintenance
+> burden the rewrite below removes. The property-based comparison won.
+
+Owner, with four screenshots and the request stated twice: *"If you see now the white
+theme, the coloring, it's not matching at all. I cannot read it everything in white. The
+background is white. The font is white. … Make sure the white theming is matched. … I
+already mentioned previously there is a gap space on the lower part of the navigation.
+… So take the navigation bar down, let it reach to the bottom exactly, and give the
+space. So at least the display, the middle display, is big and wide."*
+
+### 1. Light theme — a translucent fill means the surface tracks the PAGE
+
+Every message bubble is a translucent fill (`rgba(245,140,60,.17)` for mine,
+`rgba(255,255,255,.08)` for a received one) and the text over it was a **hard-coded
+near-white**. Over the board's near-black page the effective surface composites dark and
+that reads 15–17:1. Over the light page the effective surface *is* the page — so it was
+white on white.
+
+Measured against the real built stylesheet, compositing each fill over the real token:
+
+```
+                          BEFORE (light)     AFTER
+group / 1:1 bubble body       1.04:1        17.84:1
+own bubble body               1.18:1        15.51:1
+own reply quote               1.21:1         4.96:1
+received quote + stamps       2.15:1         5.71:1
+sender name (worst of 17)     1.34:1         5.47:1
+group-lock keypad digit       1.04:1        18.76:1
+new-message toggle label      1.09:1        18.76:1
+```
+
+**Thirteen of thirteen light cases failed AA; all thirteen dark ones passed.** That
+asymmetry *is* the diagnosis — the board is a dark design and the app ships light. It
+arrived at **v2.106.62**, which removed twelve `mine ? white : muted` ternaries and made
+bubble text white UNCONDITIONALLY: correct for the surfaces it was measured on, and it
+never met the light page.
+
+**AN INLINE STYLE CANNOT BRANCH ON THEME**, which is the whole shape of the fix — the same
+reason v2.106.38 had to move the contacts tag chips into `.rtag-*` recipes. The bubble
+keeps its inline fill and border; only the COLOURS become variables, declared on both
+sides in `index.css`. **Dark is byte-identical**: every base value is what was previously
+written inline, so the `:not(.dark)` block is a pure addition.
+
+**THE LIGHT VALUES ARE THE APP'S OWN TOKENS, not a second palette.** `--foreground` and
+`--muted-foreground` are already measured to read on `--background`/`--card`, and a
+bubble's fill is translucent enough that its effective surface stays within a few percent
+of the page — so the text tracks the page for free instead of needing a second palette
+that can drift from the first.
+
+**A SENDER'S NAME IS DARKENED, NEVER RE-PICKED.** Sixteen runtime hues cannot be sixteen
+static classes and must not become sixteen more hand-picked hexes. The call site hands
+over only the palette colour as `--rname`; the theme owns how far it is mixed toward
+black, and **at dark's 100% `color-mix` returns the hex unchanged**, so dark is untouched
+while light gets the same hue, darkened. 55% is the LIGHTEST mix clearing AA on all
+seventeen hues (worst 5.47:1; 62% fails at 4.18) — lightest-that-passes on purpose, so it
+stays closest to the colour the person is known by.
+
+**THREE SURFACES ARE JUDGED ON PARITY, NOT AA**, because they are not text — and my first
+pass picked all three by eye and every one was under-weighted:
+
+```
+                    dark      light (first pass)   light (measured)
+tile vs bubble      1.57         1.14  at 6%          1.52  at 18%
+wave track          2.27         1.52  at 18%         2.34  at 34%
+play-disc edge     16.4          1.97  at 28%         2.49  at 36%
+```
+
+The play **disc stays white in both themes** deliberately: its glyph is the bubble's own
+dark stop, measured at 4.92:1 across 36 surfaces (v2.106.40), and inverting the disc for
+light would cost that per-person identity. On the light page that same disc is 1.21
+against a near-white bubble, so the **ring** carries the edge instead.
+
+Final sweep: **84/84 pass, worst TEXT 4.58:1 overall and 4.96:1 in light**, every edge
+surface at parity with its dark counterpart.
+
+**THE GUARD FOUND TWO COMPONENTS I HAD NOT CONVERTED**, which is what it is for: the
+voice-note player and the file card both render INSIDE the bubble and both were
+white-on-near-white in light exactly like the body text — the fixed-in-one-of-N shape,
+and both would have shipped looking fixed. **The correction there is a REMOVAL rather
+than another variable**: the enclosing bubble already sets `color`, so deleting
+`text-white` inherits the right value per side and per theme for free.
+
+It then caught a **third** on the rebase: v2.107.60's new playback-rate pill shipped with
+`bg-white/15`, the same defect in code written after the fix.
+
+### 2. The bottom nav spent its whole safe-area inset on empty padding
+
+Measured at a 34px iPhone inset, against the real built stylesheet:
+
+```
+                       bar    scroll   dead band under the labels
+before                 77px   767px    34px
+after (reclaim 14px)   63px   781px    20px
+no home indicator      43px   801px     0px
+```
+
+`max(0px, calc(env(safe-area-inset-bottom) - 14px))` — **the `max(0px, …)` is what keeps
+v2.99.94 intact**: with no home indicator the inset is 0, the subtraction floors at 0, and
+the bar still ends exactly at the viewport edge instead of acquiring a new floor. 14px is
+bounded on both sides: it must reclaim something, and it must leave the home-indicator
+pill its room (the pill occupies roughly the bottom 13px of a 34px inset).
+
+### One change was reverted rather than shipped, and that is the honest part
+
+My first pass measured the voicemail sheet's callee name at 1.17:1 and added
+`text-foreground` to the card, on the theory that it inherited `.relay-root`'s private
+near-black theme. **Both halves were wrong**, and only measuring caught it: the overlay is
+a **SIBLING** of the `.relay-root` host in `RelayEngine.tsx` (that div is self-closing), so
+no such inheritance reaches it; and the real defect was that the overlay's own `relay-v2`
+wrapper matched `.relay-v2:not(.dark)` and re-scoped the tokens to light while the app was
+dark — which **v2.107.58 already fixed** from a parallel session, by the right mechanism.
+Re-measured on the rebased source the card reads **16.18:1 dark / 18.76:1 light, identical
+with and without the change**. A no-op with a false explanation attached is worse than
+nothing, so it was reverted and the reasoning recorded in the test file instead.
+
+### Tests
+
+`client/src/app/lightThemeReadable.test.ts` (11). **14 of 14 tripwires verified by
+MUTATION** off a confirmed-green baseline from byte-exact backups, the mutator aborting
+unless its target occurs exactly once and treating a changed test TOTAL as a harness
+failure; all five sources byte-identical afterwards.
+
+**FOUR DEFECTS IN MY OWN TEST, every one caught by it failing on CORRECT source:**
+
+- **`block()` took the FIRST matching selector** and `.relay-v2:not(.dark)` legitimately
+  appears TWICE (the pre-existing light palette, and the new overrides beside it) — so it
+  read the palette block and reported every new variable missing. CSS applies both, so the
+  helper now spans the selector's whole footprint.
+- **`.relay-v2 {` is a SUBSTRING of `.dark.relay-v2 {`** — a bare `indexOf` would have read
+  the dark palette as the shared one. The same collision class that made `--rb` match
+  `--rbub-*` while this was being written (which is why the vars are named `--mbub-*`).
+- **the prose trap**, ~20th recorded: the voicemail file's own header quotes
+  `className="rsheet ` while explaining the recipe, 560 lines above the real element.
+- **a fixed 900-character window** that did not reach `color: var(--text)` — it sits 1,536
+  characters into the rule, behind a long comment. Bounded by the rule's own end now.
+- **the `\n}` trap**: for `function VoiceNotePlayer({ … }: { … })` the first line-start `}`
+  closes the DESTRUCTURED PARAMETER, so the slice read 92 characters of signature and every
+  assertion in it would have passed vacuously. The non-empty guard is what caught it.
+
+**FIVE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, and two had frozen exactly what the
+owner asked to change:
+
+- `topBarStatus` and `fiveTabShell` each froze
+  `paddingBottom: "env(safe-area-inset-bottom)"` verbatim — i.e. they forbade the owner's
+  follow-up ask while saying nothing about the rule v2.99.94 stands for, which is only that
+  **no floor** is added under the tab row. Spending the whole inset as empty padding and
+  adding a floor are different mistakes and the literal could not tell them apart. Both now
+  require the padding to be driven by the real inset with any `max()` flooring at ZERO —
+  **stricter** than the string they replace, which banned only the one `0.55rem` spelling.
+- `conversationFrame` froze `ring-black/10` on the play disc, forbidding the theme-aware
+  ring while saying nothing about whether the disc has an edge at all.
+- `conversationFidelity` froze the two stamp hexes; `messagingColors` froze
+  `color: nameColorFor(...)` as a CSS property rather than as a call.
+- `groupDescription` and `pinnedMessages` (from v2.107.59/.60) each froze the exact release
+  string `2.107.60`, so both went red on this release while saying nothing about the feature
+  they are named for. Rewritten to "at or past the release that introduced it"; the version
+  has exactly one owner.
+
+### Not verified on a device, said plainly
+
+Every number here is measured in a real browser against the real built stylesheet, but
+nobody has opened a conversation or looked at the tab bar on the owner's phone.
+
+### The rebase, and a changelog that is 34 releases stale
+
+This was written against v2.107.26 and rebased onto v2.107.60 — parallel sessions shipped
+**34 releases** while it was open (starred messages, editing, formatting, silent send,
+group description, pinned messages, UGC safety). Every hunk applied cleanly except
+`shared/version.ts` and its pin, which conflicted exactly as the version-collision class
+predicts; resolved to **2.107.61**. `todo.md` on that mainline still opens at **v2.107.26**
+— none of .27 through .60 has an entry here. Those are theirs and cannot be reconstructed
+from this side, so they are named as a gap rather than papered over.
+
+No schema change, no new dependency, no new env var, no server change. 6937 tests
+(1 pre-existing device-only `nativeRewrite` failure, which fails at `origin/web-app-main`
+too and is documented in v2.107.58's own commit message).
+
 ## v2.107.26 — THE ADMIN TOOL'S DRY RUN SAID A NUMBER WAS FREE AND THE APPLY REFUSED IT
 
 Owner: *"Change 449243 to 666666"*.

@@ -308,7 +308,21 @@ describe("the owner's reclaimed bottom gap survives the redesign", () => {
     // board writes `padding:6px 4px 18px`; its 18px is a stand-in for the home
     // indicator, which we compute — re-adding it as a floor would undo that request on
     // every phone that has no indicator.
-    expect(SHELL_CODE).toMatch(/paddingBottom: "env\(safe-area-inset-bottom\)"/);
+    /* REWRITTEN TO THE PROPERTY (v2.107.27) — the sibling of the same rewrite in
+       `topBarStatus.test.ts`. Freezing the exact expression forbade the owner's follow-up
+       ask (reclaim the dead band under the labels) while saying nothing about the board's
+       18px, which is the only thing this test is named for. What must hold is that the
+       padding is DERIVED from the real inset and that nothing floors it above zero. */
+    const decl = /paddingBottom:\s*"([^"]+)"/.exec(SHELL_CODE);
+    expect(decl, "the tab bar sets its own bottom padding").toBeTruthy();
+    expect(decl![1], "derived from the real inset, never a literal").toMatch(
+      /env\(safe-area-inset-bottom\)/
+    );
+    for (const floor of decl![1].matchAll(/max\(\s*([^,]+),/g)) {
+      expect(floor[1].trim(), "no floor — that is the board's 18px by another name").toMatch(
+        /^0(px)?$/
+      );
+    }
     expect(SHELL_CODE).toMatch(/paddingTop: 6, paddingLeft: 4, paddingRight: 4/);
     expect(SHELL_CODE).not.toMatch(/paddingBottom:\s*(18|"18px")/);
   });

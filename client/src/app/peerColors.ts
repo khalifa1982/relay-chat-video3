@@ -68,7 +68,12 @@ export const OWN_BUBBLE_STYLE: CSSProperties = {
   // v2.106.40 `.rglass` defect, and a later gradient added on top of a shorthand is how
   // that returns.
   backgroundColor: "rgba(245,140,60,.17)",
-  color: "#f2fffa",
+  // THEME-AWARE (v2.107.27). This was the literal `#f2fffa`, which is right over the
+  // board's near-black page and measured 1.18:1 over the light one — the fill is
+  // TRANSLUCENT, so the effective surface tracks the page while the text did not. An
+  // inline style cannot branch on theme, so the value lives in `index.css` with a
+  // `:not(.dark)` override; the dark value there is this exact hex.
+  color: "var(--mbub-own-fg)",
   borderColor: "rgba(245,140,60,.45)",
 };
 
@@ -98,7 +103,7 @@ export const OWN_BUBBLE_STYLE: CSSProperties = {
 export const PEER_BUBBLE_STYLE: CSSProperties = {
   background:
     "linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.03))",
-  color: "#eef7f3",
+  color: "var(--mbub-peer-fg)",
   borderColor: "rgba(59,130,246,.45)",
 };
 
@@ -202,7 +207,7 @@ export function peerPaletteIndex(
 export const GROUP_BUBBLE_STYLE: CSSProperties = {
   background:
     "linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.03))",
-  color: "#eef7f3",
+  color: "var(--mbub-peer-fg)",
   borderColor: "rgba(255,255,255,.11)",
 };
 

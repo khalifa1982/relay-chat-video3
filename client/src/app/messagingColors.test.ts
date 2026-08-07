@@ -338,9 +338,14 @@ describe("the bubbles use the shared rule, not their own copy", () => {
   });
 
   it("the group sender label carries the person's own colour", () => {
+    /* The DELIVERY is no longer `color:` (v2.107.27) — the palette hex is handed over as
+       `--rname` so the `.rname` rule can darken it for the light theme, where these light
+       tints measured 1.34–1.71:1. Matching the call rather than the property it is assigned
+       to is strictly stronger: the property is that each label is coloured from this
+       person's own entry, not which CSS property carries it. */
     const labels = (
       MESSAGES.match(
-        /color: nameColorFor\(\{ isGroup, senderIdentityId: m\.senderIdentityId \}\)/g
+        /nameColorFor\(\{ isGroup, senderIdentityId: m\.senderIdentityId \}\)/g
       ) ?? []
     ).length;
     // THREE: both bubble paths AND the emoji-only path. The count is what caught the

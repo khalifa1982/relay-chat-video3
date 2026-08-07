@@ -153,7 +153,20 @@ describe("QW-9 — strings are bilingual and it ships in 2.107.61", () => {
     }
   });
 
-  it("the app version is 2.107.61", () => {
-    expect(version).toMatch(/APP_VERSION = "2\.107\.61"/);
+  /* REWRITTEN TO THE PROPERTY (v2.107.62), the THIRD file to carry this defect after
+     `groupDescription` and `pinnedMessages`. Freezing the exact release string makes the
+     pin go red on the NEXT release while saying nothing about the feature it is named
+     for, so it has to be hand-bumped every time anything else ships — and a pin nobody
+     trusts is a pin nobody reads. The version has exactly ONE owner
+     (`client/src/app/updateChecker.test.ts`); what matters here is only that this feature
+     shipped at or after the release that introduced it. */
+  it("the app version is at or past the release that introduced it", () => {
+    const m = /APP_VERSION = "(\d+)\.(\d+)\.(\d+)"/.exec(version);
+    expect(m, "version.ts must declare a version").toBeTruthy();
+    const got = [+m![1], +m![2], +m![3]];
+    const min = [2, 107, 61];
+    expect(got[0] * 1e6 + got[1] * 1e3 + got[2]).toBeGreaterThanOrEqual(
+      min[0] * 1e6 + min[1] * 1e3 + min[2],
+    );
   });
 });

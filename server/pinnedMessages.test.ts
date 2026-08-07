@@ -163,7 +163,12 @@ describe("QW-8 — the client can pin and shows the banner", () => {
 
 /* ─────────────────────────── i18n + version ─────────────────────────── */
 
-describe("QW-8 — strings are bilingual and it ships in 2.107.61", () => {
+/* REWRITTEN TO THE PROPERTY (v2.107.61). This froze the exact release string, so it went
+   red on the NEXT release while saying nothing about the feature it is named for — a pin
+   that has to be edited every time anything else ships is a pin nobody trusts. The version
+   has exactly ONE owner (`client/src/app/updateChecker.test.ts`); what matters here is
+   only that this feature shipped at or after the release that introduced it. */
+describe("QW-8 — strings are bilingual, and the version never went backwards", () => {
   it("pin action, failure and banner strings are in en and ar", () => {
     expect(hasBilingualKey(msgDict, "msg.pinAction", '"msg.')).toBe(true);
     expect(hasBilingualKey(msgDict, "msg.unpinAction", '"msg.')).toBe(true);
@@ -173,7 +178,13 @@ describe("QW-8 — strings are bilingual and it ships in 2.107.61", () => {
     expect(hasBilingualKey(msgDict, "msg.pinnedMedia", '"msg.')).toBe(true);
   });
 
-  it("the app version is 2.107.61", () => {
-    expect(version).toMatch(/APP_VERSION = "2\.107\.61"/);
+  it("the app version is at or past the release that introduced it", () => {
+    const m = /APP_VERSION = "(\d+)\.(\d+)\.(\d+)"/.exec(version);
+    expect(m, "version.ts must declare a version").toBeTruthy();
+    const got = [+m![1], +m![2], +m![3]];
+    const min = [2, 107, 60];
+    expect(got[0] * 1e6 + got[1] * 1e3 + got[2]).toBeGreaterThanOrEqual(
+      min[0] * 1e6 + min[1] * 1e3 + min[2]
+    );
   });
 });

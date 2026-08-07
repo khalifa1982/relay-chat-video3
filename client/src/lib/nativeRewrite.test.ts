@@ -323,6 +323,41 @@ describe("native rewrite — M5 screen share / PiP (Android)", () => {
     expect(eng).not.toMatch(/\bfrom "livekit-client"/);
   });
 
+  /* THE MANIFEST AND ITS LOCKFILE CANNOT DISAGREE, AND THIS GUARD EXISTS BECAUSE
+     THE WAY THEY BREAK IS SILENT. `native-rn.yml` installs this project with
+     `npm ci`, which REFUSES to run when package.json and package-lock.json declare
+     different roots — but READ ITS TRIGGER BEFORE RELYING ON IT: `push` on branch
+     **`main`** AND path `mobile/native/**`, plus `workflow_dispatch`. Both
+     conditions, and `main` is the Expo project rather than this app's mainline —
+     so it does NOT run on a PR, and does NOT run on a merge into `web-app-main`.
+     An older note (CLAUDE.md/todo.md, v2.99.52) claims it "triggers on any push
+     touching mobile/native/**, so the commit verifies itself"; that is wrong on
+     both counts and is corrected in the v2.107.62 entry.
+     That is precisely why this check has to live HERE: a half-restore (the
+     dependency put back in the manifest and not in the lock) sails through every
+     PR and every merge, and then breaks the Android build for whoever next
+     dispatches that workflow, with nothing saying why. Comparing the two roots is
+     the check `npm ci` performs, moved into the suite that runs on EVERY change. */
+  it("the mobile manifest and its lockfile declare the same dependencies", () => {
+    const pkg = JSON.parse(read("mobile/native/package.json"));
+    const lock = JSON.parse(read("mobile/native/package-lock.json"));
+    const root = lock.packages?.[""];
+    expect(root, "the lockfile's root package entry").toBeTruthy();
+    for (const section of ["dependencies", "devDependencies"] as const) {
+      expect(root[section] ?? {}, `${section} must match package.json`).toEqual(
+        pkg[section] ?? {},
+      );
+    }
+    // Non-vacuity: a lockfile listing nothing would satisfy an empty manifest.
+    expect(Object.keys(pkg.dependencies ?? {}).length).toBeGreaterThan(5);
+    // …and the initialiser must be RESOLVED, not merely requested: a root entry
+    // with no installed package is what an interrupted `npm install` leaves.
+    expect(
+      lock.packages?.["node_modules/@livekit/react-native"],
+      "the Android initialiser must be resolved in the lockfile",
+    ).toBeTruthy();
+  });
+
   it("PiP: in-call home press shrinks to Picture-in-Picture, gated by the engine", () => {
     expect(read("mobile/native/android/app/src/main/java/com/relaynative/MainActivity.kt"))
       .toContain("enterPictureInPictureMode");

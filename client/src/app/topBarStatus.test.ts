@@ -452,9 +452,27 @@ describe("the bottom bar sticks to the bottom", () => {
     // bottom down because I need the space for the middle frame." MEASURED at 390px
     // with no safe-area: the bar went 81px -> 68px, so 13px goes back to the scroll
     // area above it.
-    const nav = SHELL.slice(SHELL.indexOf("Docked glass tab bar"));
-    expect(nav).toMatch(/paddingBottom: "env\(safe-area-inset-bottom\)"/);
-    expect(codeOnly(nav)).not.toMatch(/max\(0\.55rem, env\(safe-area-inset-bottom\)\)/);
+    /* REWRITTEN TO THE PROPERTY (v2.107.27). This froze the exact expression
+       `paddingBottom: "env(safe-area-inset-bottom)"`, which forbade the owner's SECOND
+       request about this same bar — "take the navigation bar down, let it reach to the
+       bottom exactly, and give the space" — while saying nothing about the rule v2.99.94
+       stands for, which is only that NO FLOOR is added under the tab row. Spending the
+       whole inset as empty padding and adding a floor are different mistakes; the literal
+       could not tell them apart.
+       The rule with teeth: the padding is driven by the real inset, and any `max()` around
+       it floors at ZERO — so on a phone with no home indicator the bar still ends exactly
+       at the viewport edge. That is also STRICTER than the string it replaces, which
+       banned only the one `0.55rem` spelling. */
+    const nav = codeOnly(SHELL.slice(SHELL.indexOf("Docked glass tab bar")));
+    const decl = /paddingBottom:\s*"([^"]+)"/.exec(nav);
+    expect(decl, "the tab bar sets its own bottom padding").toBeTruthy();
+    expect(decl![1], "driven by the real inset").toMatch(/env\(safe-area-inset-bottom\)/);
+    for (const floor of decl![1].matchAll(/max\(\s*([^,]+),/g)) {
+      expect(
+        floor[1].trim(),
+        "a non-zero floor is exactly what v2.99.94 removed"
+      ).toMatch(/^0(px)?$/);
+    }
   });
 
   it("KEEPS the safe-area inset, which is not decoration", () => {
