@@ -1,0 +1,45 @@
+name: _crashdump
+on: workflow_dispatch
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: read crashes
+        env:
+          KEY: ${{ secrets.DOHA_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && printf "%s" "$KEY" > ~/.ssh/id && chmod 600 ~/.ssh/id
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id ubuntu@34.18.175.226 '
+            set -a; . /home/relay/.env; set +a
+            cd /home/relay/app
+            cat > /tmp/cr.cjs <<"JS"
+            const mysql = require("mysql2/promise");
+            (async () => {
+              const url = new URL(process.env.DATABASE_URL);
+              const c = await mysql.createConnection({
+                host: url.hostname, port: url.port||3306,
+                user: decodeURIComponent(url.username), password: decodeURIComponent(url.password),
+                database: url.pathname.slice(1), ssl: { rejectUnauthorized: false }
+              });
+              const [rows] = await c.query(
+                "SELECT `fingerprint`, COUNT(*) n, SUM(`dupCount`) hits, MAX(`createdAt`) last, " +
+                "SUBSTRING_INDEX(GROUP_CONCAT(`errorName` ORDER BY `createdAt` DESC SEPARATOR 0x1e),0x1e,1) name, " +
+                "SUBSTRING_INDEX(GROUP_CONCAT(`errorMessage` ORDER BY `createdAt` DESC SEPARATOR 0x1e),0x1e,1) msg, " +
+                "SUBSTRING_INDEX(GROUP_CONCAT(`platform` ORDER BY `createdAt` DESC SEPARATOR 0x1e),0x1e,1) plat, " +
+                "SUBSTRING_INDEX(GROUP_CONCAT(COALESCE(`appVersion`,\'?\') ORDER BY `createdAt` DESC SEPARATOR 0x1e),0x1e,1) ver, " +
+                "SUBSTRING_INDEX(GROUP_CONCAT(COALESCE(`stack`,\'\') ORDER BY `createdAt` DESC SEPARATOR 0x1e),0x1e,1) stack " +
+                "FROM `crash_reports` WHERE `createdAt` > NOW() - INTERVAL 30 DAY GROUP BY `fingerprint` ORDER BY hits DESC LIMIT 25"
+              );
+              if (!rows.length) { console.log("NO_CRASHES_30D"); }
+              for (const r of rows) {
+                console.log("=== " + r.hits + "x  " + r.plat + "  v" + r.ver + "  last=" + r.last);
+                console.log("NAME: " + r.name);
+                console.log("MSG:  " + String(r.msg||"").slice(0,200));
+                console.log("STK:  " + String(r.stack||"").split("\n").slice(0,4).join("  |  ").slice(0,400));
+                console.log("");
+              }
+              await c.end();
+            })().catch(e => { console.log("CRASH_QUERY_ERR: " + e.message); process.exit(0); });
+JS
+            node /tmp/cr.cjs 2>&1 || echo "NODE_RUN_FAILED"
+          '
