@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { findMentions, type MentionCandidate } from "@shared/mentions";
+import { parseInlineFormat, type Mark } from "@shared/messageFormat";
 
 // Matches http(s):// URLs and bare www. links; trailing punctuation is excluded.
 const URL_RE = /((?:https?:\/\/|www\.)[^\s<]+[^\s<.,!?)\]}"'])/gi;
@@ -55,6 +56,56 @@ function withMentions(text: string, members: readonly MentionCandidate[], keyBas
 }
 
 /**
+ * Wrap a run of text in the nested emphasis tags QW-5 supports, resolving
+ * @mentions within each formatted segment's literal text. The mark → element map is
+ * <strong>/<em>/<s>/<code>; `code` also gets a subtle monospace pill so a snippet
+ * reads as code on both the light and the tinted own-bubble. Marks nest by wrapping
+ * outermost-first, and mentions run on the innermost literal text so a mention inside
+ * *bold* still highlights.
+ */
+function markClass(mark: Mark): string {
+  switch (mark) {
+    case "bold":
+      return "font-semibold";
+    case "italic":
+      return "italic";
+    case "strike":
+      return "line-through";
+    case "code":
+      return "font-mono text-[0.92em] px-1 py-0.5 rounded bg-black/10 dark:bg-white/10";
+  }
+}
+
+function withFormatting(
+  text: string,
+  members: readonly MentionCandidate[] | undefined,
+  keyBase: number,
+): ReactNode {
+  const segs = parseInlineFormat(text);
+  return segs.map((seg, n) => {
+    // A code segment is literal — mentions are NOT resolved inside a code span (an
+    // @name in a snippet is code, not an address).
+    const hasCode = seg.marks.includes("code");
+    const leaf: ReactNode =
+      !hasCode && members && members.length
+        ? withMentions(seg.text, members, keyBase * 1000 + n)
+        : seg.text;
+    if (seg.marks.length === 0) return <Fragment key={`${keyBase}f${n}`}>{leaf}</Fragment>;
+    // Wrap outermost-first so the resulting DOM nests in a stable order.
+    let node: ReactNode = leaf;
+    for (let m = seg.marks.length - 1; m >= 0; m--) {
+      const mark = seg.marks[m];
+      node = (
+        <span key={`${keyBase}f${n}m${m}`} className={markClass(mark)}>
+          {node}
+        </span>
+      );
+    }
+    return <Fragment key={`${keyBase}f${n}`}>{node}</Fragment>;
+  });
+}
+
+/**
  * Turn URLs in a plain-text string into clickable links. Returns React nodes,
  * so the non-link text is still escaped by React (no XSS). Only http(s)/www
  * schemes are linked — never javascript:/data:.
@@ -87,11 +138,9 @@ export function linkify(
     }
     /* Mentions are resolved WITHIN the non-URL runs only, so a name that happens to
        appear inside a link's path cannot be turned into a mention span sitting
-       inside an anchor. */
-    return (
-      <Fragment key={i}>
-        {members && members.length ? withMentions(part, members, i) : part}
-      </Fragment>
-    );
+       inside an anchor. Formatting is applied at the same layer (URLs are already
+       split out, so a `*` inside a link can't be read as a marker), and mentions run
+       on each formatted segment's leaf text. */
+    return <Fragment key={i}>{withFormatting(part, members, i)}</Fragment>;
   });
 }

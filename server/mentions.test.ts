@@ -201,15 +201,22 @@ describe("the renderer", () => {
   it("members are OPTIONAL, so every pre-3c caller is unchanged", () => {
     // A DM has one other person in it: there is nobody a mention could disambiguate.
     expect(L).toMatch(/members\?: readonly MentionCandidate\[\]/);
-    expect(L).toMatch(/members && members\.length \? withMentions/);
+    // Mentions now flow through the QW-5 formatting layer, which resolves them on each
+    // formatted segment's leaf text — still gated on there being members.
+    expect(L).toMatch(/members && members\.length/);
+    expect(L).toMatch(/withFormatting\(part, members, i\)/);
   });
 
   it("mentions resolve INSIDE the non-URL runs only", () => {
     // Otherwise a name inside a link's path becomes a mention span inside an anchor.
-    const at = L.indexOf("withMentions(part");
+    // withFormatting is applied to the non-URL runs, and it calls withMentions on the
+    // leaf text of each segment.
+    const at = L.indexOf("withFormatting(part");
     expect(at).toBeGreaterThan(0);
     // The URL branch returns before this point.
     expect(at).toBeGreaterThan(L.indexOf("i % 2 === 1"));
+    // And the mention pass still exists, now inside withFormatting.
+    expect(L).toMatch(/withMentions\(seg\.text, members/);
   });
 
   it("EVERY message's mention is the accent, mine included", () => {

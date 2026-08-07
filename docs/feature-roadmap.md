@@ -36,7 +36,7 @@ approval.
 | QW-2 ▶ | Draft indicator on thread rows | quiet italic; lock- and active-row-aware |
 | QW-3 ▶ | Starred messages | per-user bookmarks; menu toggle, bubble marker, cross-chat Starred view |
 | QW-4 ▶ | Message editing + "edited" label | `messages.edit` proc + inline editor + bubble marker; sender/text/live-only |
-| QW-5 | Text formatting bold/italic/strike/mono | renderer first, composer hints after |
+| QW-5 ▶ | Text formatting bold/italic/strike/mono | renderer shipped (`shared/messageFormat` parser + linkify); composer hints deferred |
 | QW-6 | Silent send | long-press send → no sound at the far end |
 | QW-7 | Group description | photo exists; add the text field |
 | QW-8 | Pinned messages inside a chat | banner at top, admin-gated in groups |
