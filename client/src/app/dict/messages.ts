@@ -53,6 +53,7 @@ export const MESSAGES = {
   // search hides behind one of them. These are the short labels for that row.
   "msg.tabAutoReply": { en: "Auto-reply", ar: "رد تلقائي" },
   "msg.tabSearch": { en: "Search", ar: "بحث" },
+  "msg.tabStarred": { en: "Starred", ar: "المميزة" },
   "msg.tabNew": { en: "New", ar: "جديد" },
   // On the Groups tab the compose button makes a GROUP, so it names itself so.
   "msg.tabNewGroup": { en: "Group", ar: "مجموعة" },
@@ -577,5 +578,33 @@ export const MESSAGES = {
   "msg.reportFailed": {
     en: "Couldn't submit your report. Please try again.",
     ar: "تعذّر إرسال بلاغك. يرجى المحاولة مرة أخرى.",
+  },
+  "msg.starAction": {
+    en: "Star",
+    ar: "تمييز بنجمة",
+  },
+  "msg.unstarAction": {
+    en: "Unstar",
+    ar: "إزالة النجمة",
+  },
+  "msg.starFailed": {
+    en: "Couldn't update the star. Please try again.",
+    ar: "تعذّر تحديث النجمة. يرجى المحاولة مرة أخرى.",
+  },
+  "msg.starredTitle": {
+    en: "Starred messages",
+    ar: "الرسائل المميزة",
+  },
+  "msg.starredEmpty": {
+    en: "No starred messages yet",
+    ar: "لا توجد رسائل مميزة بعد",
+  },
+  "msg.starredHint": {
+    en: "Star a message to keep it here.",
+    ar: "ميّز رسالة بنجمة للاحتفاظ بها هنا.",
+  },
+  "msg.starredNoText": {
+    en: "(media message)",
+    ar: "(رسالة وسائط)",
   },
 } as const satisfies Record<string, Entry>;

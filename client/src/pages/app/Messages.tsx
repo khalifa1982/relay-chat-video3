@@ -27,6 +27,8 @@ import {
   Trash2,
   EyeOff,
   Flag,
+  Star,
+  StarOff,
   Pin,
   PinOff,
   MailOpen,
@@ -508,6 +510,8 @@ export default function MessagesPage({
   // v2.107.51 (owner): search sits behind a top-bar icon now — tap to reveal the
   // field, tap again (or clear it) to collapse it, so the list starts full-height.
   const [searchOpen, setSearchOpen] = useState(false);
+  // v2.107.53 — the Starred view sheet, opened by the top-bar star icon.
+  const [starredOpen, setStarredOpen] = useState(false);
   const savedNameByNumber = useSavedNames();
   // The GROUPS tab is this same page narrowed to group threads. The narrowing is a memo
   // of its OWN, ahead of the categories, for two reasons. (1) Narrowing by picking
@@ -790,6 +794,22 @@ export default function MessagesPage({
                 <Search className="size-5" />
               </Button>
               <span className="text-[10px] leading-none text-muted-foreground">{tr("msg.tabSearch")}</span>
+            </div>
+            {/* v2.107.53 — the caller's private Starred view. A top-bar action like
+                search: an icon that names itself and opens a sheet of every message
+                the person has starred, across all their conversations. */}
+            <div className="flex flex-col items-center gap-1">
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => setStarredOpen(true)}
+                aria-label={tr("msg.starredTitle")}
+                title={tr("msg.starredTitle")}
+                className="size-8 text-muted-foreground"
+              >
+                <Star className="size-5" />
+              </Button>
+              <span className="text-[10px] leading-none text-muted-foreground">{tr("msg.tabStarred")}</span>
             </div>
             {/* v2.107.51 (owner): the group-call entry is a top-bar ICON now, not an
                 in-list section — it opens the same ad-hoc picker (which itself lists the
@@ -1419,6 +1439,19 @@ export default function MessagesPage({
         )}
       </section>
 
+      {/* v2.107.53 — the Starred view, opened by the top-bar star. Its own overlay,
+          querying every message the caller has starred across conversations. Tapping
+          one opens that conversation. */}
+      <StarredSheet
+        open={starredOpen}
+        onClose={() => setStarredOpen(false)}
+        onOpenConversation={(cid) => {
+          setStarredOpen(false);
+          setLocation(`${basePath}?c=${cid}`);
+        }}
+        savedNameByNumber={savedNameByNumber}
+      />
+
       {/* Delete-a-thread confirmation (v2.103.0). The one swipe action behind a
           confirmation, and the copy's job is to say what it does NOT do: nobody else
           loses anything, and the chat comes back by itself if they write again — which
@@ -1760,6 +1793,30 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     },
     onError: (err: { message?: string }) => toast.error(err.message || t("msg.reportFailed")),
   });
+  // Starred-message overlay (v2.107.53). The set of ids the caller has starred in
+  // THIS conversation — fetched once per open thread, kept off the message read
+  // path. The mutation updates the set optimistically so the star fills the instant
+  // it is tapped, then reconciles on settle.
+  const starredIdsQuery = trpc.identity.starredIdsInConversation.useQuery(
+    { conversationId },
+    { staleTime: 30_000 }
+  );
+  const starredIds = useMemo(() => {
+    const ids = starredIdsQuery.data?.ids ?? [];
+    return new Set<number>(ids);
+  }, [starredIdsQuery.data]);
+  const starMutation = trpc.identity.setMessageStar.useMutation({
+    onError: (err: { message?: string }) => toast.error(err.message || t("msg.starFailed")),
+    onSettled: () => {
+      void starredIdsQuery.refetch();
+    },
+  });
+  const toggleStar = useCallback(
+    (messageId: number, currentlyStarred: boolean) => {
+      starMutation.mutate({ messageId, starred: !currentlyStarred });
+    },
+    [starMutation]
+  );
   // Countdown ticker: refresh the "Disappears in Ns" chip and purge timed
   // reveals whose window closed (the burned placeholder takes over).
   const [, forceTick] = useState(0);
@@ -3396,6 +3453,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     onForward={isExpiringMsg(m.meta) ? undefined : () => setForwarding(m)}
                     onInfo={() => setInfoOf(m)}
                     onHide={() => setHidingId(m.id)}
+                    onToggleStar={() => toggleStar(m.id, starredIds.has(m.id))}
+                    starred={starredIds.has(m.id)}
                     onDelete={() => deleteMessage(m.id)}
                   />
                 )}
@@ -3751,6 +3810,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     // else's words for everybody and cannot be undone — the same bar
                     // "delete this chat" is held to.
                     onAdminDelete={iAmGroupAdmin ? () => setAdminDeleting(m) : undefined}
+                    onToggleStar={() => toggleStar(m.id, starredIds.has(m.id))}
+                    starred={starredIds.has(m.id)}
                     // v2.107.52 (Apple 1.2): report this person's message for review.
                     onReport={() => { setReportReason(""); setReporting(m); }}
                   />
@@ -3767,6 +3828,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   mine={!!mine}
                   onToggle={(e) => toggleReaction(m, e)}
                 />
+                {/* Starred marker (v2.107.53) — a small filled star on the bubble's
+                    bottom edge, on the same side the bubble sits, so a person can see
+                    at a glance what they've starred without opening the menu. Only the
+                    icon; the count and the list live in the Starred view. */}
+                {starredIds.has(m.id) && (
+                  <div className={"flex " + (mine ? "justify-end" : "justify-start") + " mt-0.5"}>
+                    <Star className="size-3 fill-amber-400 text-amber-400" aria-label={t("msg.starAction")} />
+                  </div>
+                )}
                 {/* The full catalogue, opened by the row's `+`. It reuses the SAME
                     picker the composer uses rather than a second one, because two
                     emoji lists is how they come to hold different glyphs (v2.99.80
@@ -5309,6 +5379,108 @@ function ReactionChips({
   );
 }
 
+/**
+ * The Starred view (v2.107.53). A read-only overlay listing every message the caller
+ * has starred, across all their conversations, newest star first. Its own query
+ * (identity.starredMessages), so it stays empty-cheap until opened. Tapping a row
+ * opens that conversation; the per-message jump-to-star is a later refinement — for
+ * now landing in the right conversation is the job. Sender/þread labels come from the
+ * already-loaded threads list, so no extra lookup per row.
+ */
+function StarredSheet({
+  open,
+  onClose,
+  onOpenConversation,
+  savedNameByNumber,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onOpenConversation: (conversationId: number) => void;
+  savedNameByNumber: Map<string, string>;
+}) {
+  const t = useT();
+  const { locale } = useLocale();
+  const starred = trpc.identity.starredMessages.useQuery(
+    undefined,
+    { enabled: open, staleTime: 15_000 }
+  );
+  const threads = trpc.messages.threads.useQuery(undefined, { enabled: open, staleTime: 60_000 });
+  // conversationId → a human label for that thread, from the list we already hold.
+  const labelFor = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const th of threads.data ?? []) {
+      const saved = th.peerNumber ? savedNameByNumber.get(th.peerNumber) : undefined;
+      m.set(
+        th.conversationId,
+        th.title || saved || th.peerDisplayName || th.peerNumber || t("msg.thisChat")
+      );
+    }
+    return m;
+  }, [threads.data, savedNameByNumber, t]);
+
+  if (!open) return null;
+  const rows = starred.data?.messages ?? [];
+
+  return (
+    <div
+      className="fixed inset-0 z-[120] grid place-items-end sm:place-items-center p-0 sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("msg.starredTitle")}
+    >
+      <div aria-hidden className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative flex max-h-[85dvh] w-full flex-col overflow-hidden rounded-t-3xl border border-border bg-card shadow-2xl sm:w-[min(94vw,480px)] sm:rounded-3xl">
+        <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Star className="size-4 fill-amber-400 text-amber-400" />
+            <h2 className="text-base font-bold">{t("msg.starredTitle")}</h2>
+          </div>
+          <Button size="icon" variant="ghost" onClick={onClose} aria-label={t("common.close")} className="size-8">
+            <X className="size-5" />
+          </Button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {starred.isLoading ? (
+            <div className="grid place-items-center py-16 text-sm text-muted-foreground">
+              {t("common.loading")}
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="grid place-items-center gap-2 px-6 py-16 text-center">
+              <StarOff className="size-8 text-muted-foreground" />
+              <p className="text-sm font-medium">{t("msg.starredEmpty")}</p>
+              <p className="text-xs text-muted-foreground">{t("msg.starredHint")}</p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-border">
+              {rows.map((r) => (
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenConversation(r.conversationId)}
+                    className="flex w-full flex-col items-start gap-1 px-4 py-3 text-start hover:bg-muted"
+                  >
+                    <div className="flex w-full items-center justify-between gap-2">
+                      <span className="truncate text-sm font-semibold">
+                        {labelFor.get(r.conversationId) ?? t("msg.thisChat")}
+                      </span>
+                      <span className="shrink-0 text-[11px] text-muted-foreground">
+                        {timeAgo(t, r.starredAt, locale)}
+                      </span>
+                    </div>
+                    <span className="line-clamp-2 text-sm text-muted-foreground">
+                      {r.body?.trim() ? r.body : t("msg.starredNoText")}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MessageMenu({
   mine,
   onReply,
@@ -5320,6 +5492,8 @@ function MessageMenu({
   onDelete,
   onAdminDelete,
   onReport,
+  onToggleStar,
+  starred,
 }: {
   mine?: boolean;
   onReply: () => void;
@@ -5352,6 +5526,14 @@ function MessageMenu({
    * received-message call site and absent (undefined) on my own bubbles.
    */
   onReport?: () => void;
+  /**
+   * v2.107.53 — star this message into the caller's private "Starred" view.
+   * Offered on ANYBODY's message including your own (starring your own note is
+   * normal, same as reacting to it). `starred` drives the label and icon fill so
+   * the one item toggles both ways.
+   */
+  onToggleStar?: () => void;
+  starred?: boolean;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -5401,6 +5583,23 @@ function MessageMenu({
             >
               <Reply className="size-4" /> {t("msg.reply")}
             </button>
+            {onToggleStar && (
+              <button
+                type="button"
+                onClick={() => { onToggleStar(); setOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
+              >
+                {starred ? (
+                  <>
+                    <StarOff className="size-4" /> {t("msg.unstarAction")}
+                  </>
+                ) : (
+                  <>
+                    <Star className="size-4" /> {t("msg.starAction")}
+                  </>
+                )}
+              </button>
+            )}
             {onReact && (
               <button
                 type="button"

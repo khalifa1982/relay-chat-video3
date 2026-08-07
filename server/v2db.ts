@@ -3060,6 +3060,22 @@ export async function ensureSchemaExtensions(): Promise<void> {
       )`,
     },
     {
+      // Starred messages (v2.107.53). Starring is PER-USER — each person keeps
+      // their own set — so this is a join, not a column on `messages`. The PK is
+      // the pair, which makes star/unstar an idempotent INSERT ... ON DUPLICATE /
+      // DELETE and blocks a double-star by construction. `starredAt` orders the
+      // starred view newest-first. No FK to `messages`: an unsent message simply
+      // stops being fetchable, and a left join reads a vanished star as absent.
+      name: "message_stars",
+      ddl: `CREATE TABLE IF NOT EXISTS \`message_stars\` (
+        \`identityId\` int NOT NULL,
+        \`messageId\` bigint unsigned NOT NULL,
+        \`starredAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`identityId\`, \`messageId\`),
+        KEY \`star_identity_time_idx\` (\`identityId\`, \`starredAt\`)
+      )`,
+    },
+    {
       // Session journeys (v2.107.23): one row per client session — every tap,
       // navigation, failure and lifecycle beat, capped by shared/telemetryCore
       // so keep-forever stays affordable. `endedAt` NULL + stale `lastSeenAt`
@@ -8755,6 +8771,121 @@ export async function openReportCount(): Promise<number> {
     return Number(r?.n ?? 0);
   } catch {
     return 0;
+  }
+}
+
+// ── Starred messages (v2.107.53) ──────────────────────────────────────────
+// A private, per-user overlay: star/unstar toggle a row in message_stars, the
+// per-conversation lookup returns just the ids the client marks locally, and the
+// cross-conversation list backs the "Starred" view. All membership-gated the same
+// way listMessages is — a star only surfaces a message the caller may still read.
+
+/** Star a message FOR one identity. Membership-gated: you can only star a message
+ *  in a conversation you belong to, so a leaked id can't be used to pin — or, via
+ *  the starred view, exfiltrate — a message from a room you were never in. The
+ *  INSERT is idempotent (PK is the pair), so a double-star is a no-op, not an error. */
+export async function starMessage(identityId: number, messageId: number): Promise<{ ok: boolean }> {
+  const db = await getDb();
+  if (!db) return { ok: false };
+  try {
+    // Gate: the message must live in a conversation this identity is a member of.
+    const gate = await db.execute(sql`
+      SELECT 1 AS ok
+      FROM \`messages\` m
+      JOIN \`conversation_participants\` p
+        ON p.\`conversationId\` = m.\`conversationId\`
+      WHERE m.\`id\` = ${messageId}
+        AND p.\`identityId\` = ${identityId}
+        AND m.\`deletedAt\` IS NULL
+      LIMIT 1`);
+    const allowed = ((Array.isArray(gate) ? gate[0] : []) as unknown as { ok?: number }[])?.[0];
+    if (!allowed) return { ok: false };
+    await db.execute(sql`
+      INSERT INTO \`message_stars\` (\`identityId\`, \`messageId\`)
+      VALUES (${identityId}, ${messageId})
+      ON DUPLICATE KEY UPDATE \`starredAt\` = \`starredAt\``);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Unstar. No membership check needed — removing your own star is always safe,
+ *  and the PK means it only ever touches your row. Idempotent. */
+export async function unstarMessage(identityId: number, messageId: number): Promise<{ ok: boolean }> {
+  const db = await getDb();
+  if (!db) return { ok: false };
+  try {
+    await db.execute(sql`
+      DELETE FROM \`message_stars\`
+      WHERE \`identityId\` = ${identityId} AND \`messageId\` = ${messageId}`);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** The ids this identity has starred WITHIN one conversation — the client uses this
+ *  to mark bubbles as it renders a thread, so the star state costs one small query
+ *  per open conversation instead of a join on the message hot path. */
+export async function listStarredIdsInConversation(
+  identityId: number,
+  conversationId: number
+): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    const rows = await db.execute(sql`
+      SELECT s.\`messageId\` AS id
+      FROM \`message_stars\` s
+      JOIN \`messages\` m ON m.\`id\` = s.\`messageId\`
+      WHERE s.\`identityId\` = ${identityId}
+        AND m.\`conversationId\` = ${conversationId}
+        AND m.\`deletedAt\` IS NULL`);
+    const list = (Array.isArray(rows) ? rows[0] : []) as unknown as { id?: number }[];
+    return list.map((r) => Number(r.id)).filter((n) => Number.isFinite(n));
+  } catch {
+    return [];
+  }
+}
+
+export interface StarredMessage {
+  id: number;
+  conversationId: number;
+  senderIdentityId: number;
+  body: string | null;
+  createdAt: Date;
+  starredAt: Date;
+}
+
+/** Every message this identity has starred, across all conversations, newest star
+ *  first — the "Starred" view. Re-checks membership in the join so a star left over
+ *  from a conversation the person has since left (or a message since deleted) simply
+ *  drops out rather than leaking. Bounded by limit; stars are few per user. */
+export async function listStarredMessages(
+  identityId: number,
+  limit = 200
+): Promise<StarredMessage[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    const capped = Math.min(Math.max(limit, 1), 500);
+    const rows = await db.execute(sql`
+      SELECT m.\`id\` AS id, m.\`conversationId\` AS conversationId,
+             m.\`senderIdentityId\` AS senderIdentityId, m.\`body\` AS body,
+             m.\`createdAt\` AS createdAt, s.\`starredAt\` AS starredAt
+      FROM \`message_stars\` s
+      JOIN \`messages\` m ON m.\`id\` = s.\`messageId\`
+      JOIN \`conversation_participants\` p
+        ON p.\`conversationId\` = m.\`conversationId\` AND p.\`identityId\` = ${identityId}
+      WHERE s.\`identityId\` = ${identityId}
+        AND m.\`deletedAt\` IS NULL
+      ORDER BY s.\`starredAt\` DESC
+      LIMIT ${capped}`);
+    const list = (Array.isArray(rows) ? rows[0] : []) as unknown as StarredMessage[];
+    return list;
+  } catch {
+    return [];
   }
 }
 

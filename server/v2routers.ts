@@ -178,6 +178,10 @@ import {
   openReportCount,
   REPORT_REASONS,
   REPORT_CONTEXTS,
+  starMessage,
+  unstarMessage,
+  listStarredIdsInConversation,
+  listStarredMessages,
 } from "./v2db";
 import { publishRoutingChanged } from "./callRouting";
 import { adminPurgeIdentity, guestDaysLeft } from "./purgeIdentity";
@@ -927,6 +931,55 @@ export const v2AuthRouter = router({
         `[report] identity ${me.id} reported ${input.reportedId} (${input.context}/${input.reason}${input.messageId ? `, msg ${input.messageId}` : ""})`
       );
       return { ok: true as const };
+    }),
+
+  /**
+   * Star / unstar a message (v2.107.53). A private per-user bookmark. The DB layer
+   * gates star on membership, so passing input.messageId here can only ever pin a
+   * message the caller may already read — no id-guessing across rooms. requireIdentity
+   * (sync) supplies the identity; there is no identityId input by construction.
+   */
+  setMessageStar: publicProcedure
+    .input(
+      z.object({
+        messageId: z.number().int().positive(),
+        starred: z.boolean(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const res = input.starred
+        ? await starMessage(me.id, input.messageId)
+        : await unstarMessage(me.id, input.messageId);
+      if (!res.ok) {
+        // star returns !ok when the message isn't the caller's to see; surface it
+        // rather than pretending the star landed.
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Couldn't update the star.",
+        });
+      }
+      return { ok: true as const, starred: input.starred };
+    }),
+
+  /** The caller's starred message-ids within ONE conversation — the client marks
+   *  bubbles from this, keeping the star overlay off the message read hot path. */
+  starredIdsInConversation: publicProcedure
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      return { ids: await listStarredIdsInConversation(me.id, input.conversationId) };
+    }),
+
+  /** The caller's starred messages across every conversation, newest star first —
+   *  the "Starred" view. Membership re-checked in the query, so a star from a room
+   *  the person has left, or a since-deleted message, drops out. */
+  starredMessages: publicProcedure
+    .input(z.object({ limit: z.number().int().positive().max(500).optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const rows = await listStarredMessages(me.id, input?.limit ?? 200);
+      return { messages: rows };
     }),
 
   /**

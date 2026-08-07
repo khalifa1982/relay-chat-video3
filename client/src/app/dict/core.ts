@@ -49,5 +49,7 @@ export const CORE = {
   "common.done": { en: "Done", ar: "تم" },
   "common.retry": { en: "Try again", ar: "إعادة المحاولة" },
   "common.search": { en: "Search", ar: "بحث" },
+  "common.close": { en: "Close", ar: "إغلاق" },
+  "common.loading": { en: "Loading…", ar: "جارٍ التحميل…" },
   "common.signOut": { en: "Sign out", ar: "تسجيل الخروج" },
 } as const satisfies Record<string, Entry>;

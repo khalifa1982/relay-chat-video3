@@ -34,7 +34,7 @@ approval.
 |---|---------|-------|
 | QW-1 ▶ | Voice playback speed 1×/1.5×/2× | global setting, chained runs inherit it |
 | QW-2 ▶ | Draft indicator on thread rows | quiet italic; lock- and active-row-aware |
-| QW-3 | Starred messages | star action + starred filter view |
+| QW-3 ▶ | Starred messages | per-user bookmarks; menu toggle, bubble marker, cross-chat Starred view |
 | QW-4 | Message editing + "edited" label | server `editMessage` + bubble marker |
 | QW-5 | Text formatting bold/italic/strike/mono | renderer first, composer hints after |
 | QW-6 | Silent send | long-press send → no sound at the far end |
