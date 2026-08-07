@@ -3028,6 +3028,38 @@ export async function ensureSchemaExtensions(): Promise<void> {
       )`,
     },
     {
+      // CONTENT REPORTS (v2.107.52) — Apple App Store Guideline 1.2 requires a
+      // mechanism for users to flag objectionable content, and for the developer
+      // to act on reports within 24h. This is the durable record that makes both
+      // possible: every report a user files lands here for review.
+      //
+      // `reporterId` / `reportedId` are identity ids (the 6-digit person). A
+      // report is ALWAYS about a person; `messageId` is the optional specific
+      // message when the report was filed from a message menu, null when it was
+      // filed against the person as a whole. `context` distinguishes where it
+      // came from (message / story / party-line / profile) so review can find the
+      // content. `status` starts 'open' and an admin moves it to 'actioned' or
+      // 'dismissed'. Nothing here is ever auto-deleted: the review history is the
+      // point.
+      name: "content_reports",
+      ddl: `CREATE TABLE IF NOT EXISTS \`content_reports\` (
+        \`id\` bigint unsigned NOT NULL AUTO_INCREMENT,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`reporterId\` int NOT NULL,
+        \`reportedId\` int NOT NULL,
+        \`messageId\` bigint unsigned NULL,
+        \`context\` varchar(16) NOT NULL,
+        \`reason\` varchar(32) NOT NULL,
+        \`note\` varchar(1000) NULL,
+        \`status\` varchar(16) NOT NULL DEFAULT 'open',
+        \`snapshot\` text NULL,
+        PRIMARY KEY (\`id\`),
+        KEY \`report_status_time_idx\` (\`status\`, \`createdAt\`),
+        KEY \`report_reported_idx\` (\`reportedId\`, \`createdAt\`),
+        KEY \`report_reporter_idx\` (\`reporterId\`, \`createdAt\`)
+      )`,
+    },
+    {
       // Session journeys (v2.107.23): one row per client session — every tap,
       // navigation, failure and lifecycle beat, capped by shared/telemetryCore
       // so keep-forever stays affordable. `endedAt` NULL + stale `lastSeenAt`
@@ -8607,6 +8639,121 @@ export async function purgeCrashReports(olderThanDays: number): Promise<number> 
     return n;
   } catch (e) {
     console.warn("[crash] purge skipped:", (e as Error)?.message || "");
+    return 0;
+  }
+}
+
+/* ── CONTENT REPORTS (v2.107.52) — Apple 1.2 UGC safety ─────────────────────── */
+
+/** Valid report reasons — a closed set so the column stays a filterable enum
+ *  rather than free text. Anything else is clamped to "other". */
+export const REPORT_REASONS = [
+  "spam",
+  "harassment",
+  "hate",
+  "violence",
+  "sexual",
+  "csam",
+  "other",
+] as const;
+export type ReportReason = (typeof REPORT_REASONS)[number];
+
+/** Where the report was filed from, so review can find the content. */
+export const REPORT_CONTEXTS = ["message", "story", "party", "profile"] as const;
+export type ReportContext = (typeof REPORT_CONTEXTS)[number];
+
+/**
+ * File one content report. Fail-OPEN would be wrong here (unlike telemetry): a
+ * report the user believes they filed must actually be recorded, so a DB outage
+ * throws rather than silently swallowing — the caller surfaces it and the user
+ * can retry. The 24h action window Apple requires starts from `createdAt`.
+ *
+ * `snapshot` captures the reported text at report time so review is not blind if
+ * the sender later unsends it — the whole point of a report is that it survives
+ * the content being pulled.
+ */
+export async function fileContentReport(r: {
+  reporterId: number;
+  reportedId: number;
+  messageId: number | null;
+  context: ReportContext;
+  reason: ReportReason;
+  note: string | null;
+  snapshot: string | null;
+}): Promise<{ ok: true; id: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("database unavailable");
+  const reason: ReportReason = (REPORT_REASONS as readonly string[]).includes(r.reason)
+    ? r.reason
+    : "other";
+  const context: ReportContext = (REPORT_CONTEXTS as readonly string[]).includes(r.context)
+    ? r.context
+    : "profile";
+  const note = r.note ? r.note.slice(0, 1000) : null;
+  const snapshot = r.snapshot ? r.snapshot.slice(0, 2000) : null;
+  const res = await db.execute(sql`
+    INSERT INTO \`content_reports\`
+      (\`reporterId\`, \`reportedId\`, \`messageId\`, \`context\`, \`reason\`, \`note\`, \`snapshot\`)
+    VALUES
+      (${r.reporterId}, ${r.reportedId}, ${r.messageId}, ${context}, ${reason}, ${note}, ${snapshot})`);
+  const id = Array.isArray(res) ? ((res[0] as { insertId?: number })?.insertId ?? 0) : 0;
+  return { ok: true, id };
+}
+
+export interface ReportRow {
+  id: number;
+  createdAt: string;
+  reporterId: number;
+  reportedId: number;
+  messageId: number | null;
+  context: string;
+  reason: string;
+  note: string | null;
+  status: string;
+  snapshot: string | null;
+}
+
+/** The admin review queue — open reports first, newest first. */
+export async function listContentReports(status: string | null, limit: number): Promise<ReportRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const lim = Math.min(Math.max(Math.floor(limit), 1), 200);
+  const rows = status
+    ? await db.execute(sql`
+        SELECT \`id\`, \`createdAt\`, \`reporterId\`, \`reportedId\`, \`messageId\`,
+               \`context\`, \`reason\`, \`note\`, \`status\`, \`snapshot\`
+          FROM \`content_reports\` WHERE \`status\` = ${status}
+         ORDER BY \`createdAt\` DESC LIMIT ${sql.raw(String(lim))}`)
+    : await db.execute(sql`
+        SELECT \`id\`, \`createdAt\`, \`reporterId\`, \`reportedId\`, \`messageId\`,
+               \`context\`, \`reason\`, \`note\`, \`status\`, \`snapshot\`
+          FROM \`content_reports\`
+         ORDER BY \`createdAt\` DESC LIMIT ${sql.raw(String(lim))}`);
+  return ((Array.isArray(rows) ? rows[0] : []) as unknown as ReportRow[]) ?? [];
+}
+
+/** Move a report out of the open queue (admin action). */
+export async function setReportStatus(id: number, status: "actioned" | "dismissed"): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const res = await db.execute(
+    sql`UPDATE \`content_reports\` SET \`status\` = ${status} WHERE \`id\` = ${id}`
+  );
+  const n = Array.isArray(res) ? ((res[0] as { affectedRows?: number })?.affectedRows ?? 0) : 0;
+  return n === 1;
+}
+
+/** Count of open reports — for the admin badge. */
+export async function openReportCount(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  try {
+    const rows = await db.execute(
+      sql`SELECT COUNT(*) AS n FROM \`content_reports\` WHERE \`status\` = 'open'`
+    );
+    const r = ((Array.isArray(rows) ? rows[0] : []) as unknown as { n?: number }[])?.[0];
+    return Number(r?.n ?? 0);
+  } catch {
     return 0;
   }
 }

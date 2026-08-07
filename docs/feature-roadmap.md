@@ -69,6 +69,25 @@ Phone-number registration / SMS OTP (the 6-digit identity IS the product) ·
 Meta 3D avatars · FB/IG cross-posting · payments · Telegram-style premium
 tiers · games platform · nearby-people.
 
+## Apple App Store compliance (v2.107.52 — DONE)
+
+The June rejection (build 21) was content/metadata, not code quality. Two
+guideline blockers needed real code and are now built, tested, and typechecked:
+
+- **5.1.1(v) account deletion** — `identity.deleteMyAccount` reuses the full
+  erase-cascade with the self-guard inverted (actingId=null), tears down the
+  session, and is fronted by a Profile card behind a type-your-number confirm.
+- **1.2 UGC safety** — `content_reports` table + `identity.reportContent`
+  (fails loud, refuses self-reports, snapshots the text so a report survives an
+  unsend) + admin `listReports`/`resolveReport` for the 24h window. A **Report**
+  item sits in the message menu on received messages only, with a reason picker.
+  Block already existed (per-contact).
+
+The mic purpose string (5.1.1(ii)) was already fixed in build 43. Remaining
+items are NOT code — set in App Store Connect before resubmitting: the **age
+rating** must declare user-generated content, and **fresh screenshots** of the
+current build.
+
 ## Infrastructure rider (approved with "build everything")
 
 Self-deploy so releases stop depending on GitHub Actions: a pull-poller on each

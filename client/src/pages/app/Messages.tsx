@@ -26,6 +26,7 @@ import {
   UserPlus,
   Trash2,
   EyeOff,
+  Flag,
   Pin,
   PinOff,
   MailOpen,
@@ -1750,6 +1751,15 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       utils.messages.threads.invalidate();
     },
   });
+  /* REPORT (v2.107.52, Apple 1.2). No cache to touch — a report changes nothing
+     the reporter sees; the acknowledgement is the whole feedback. */
+  const reportMutation = trpc.identity.reportContent.useMutation({
+    onSuccess: () => {
+      setReporting(null);
+      toast.success(t("msg.reportThanks"));
+    },
+    onError: (err: { message?: string }) => toast.error(err.message || t("msg.reportFailed")),
+  });
   // Countdown ticker: refresh the "Disappears in Ns" chip and purge timed
   // reveals whose window closed (the burned placeholder takes over).
   const [, forceTick] = useState(0);
@@ -1953,6 +1963,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // v2.99.74 — message Info (sent/delivered/read) and Forward-to-another-thread.
   const [infoOf, setInfoOf] = useState<Msg | null>(null);
   const [forwarding, setForwarding] = useState<Msg | null>(null);
+  /* REPORTING (v2.107.52, Apple 1.2) — the message a report dialog is open for,
+     or null. Holds the whole Msg so the dialog has the sender id (who is
+     reported) and the body (the snapshot that survives an unsend). */
+  const [reporting, setReporting] = useState<Msg | null>(null);
+  /* The reason chosen in the open report dialog. Reset whenever the dialog opens
+     on a new message so a prior pick never carries over. */
+  const [reportReason, setReportReason] = useState<string>("");
   const [forwardBusy, setForwardBusy] = useState(false);
   // Every conversation EXCEPT this one — forwarding a message back into the thread
   // it is already in is never what anybody means, and offering it invites the tap.
@@ -3734,6 +3751,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     // else's words for everybody and cannot be undone — the same bar
                     // "delete this chat" is held to.
                     onAdminDelete={iAmGroupAdmin ? () => setAdminDeleting(m) : undefined}
+                    // v2.107.52 (Apple 1.2): report this person's message for review.
+                    onReport={() => { setReportReason(""); setReporting(m); }}
                   />
                   );
                 })()}
@@ -4501,6 +4520,87 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* REPORT (v2.107.52, Apple 1.2) — pick a reason, then submit. A reason
+          picker rather than a plain confirm because "act within 24h" needs the
+          review queue to carry WHAT was wrong, and the reasons are the closed set
+          the server validates. The reported message's text is sent as a snapshot
+          so the record survives an unsend. */}
+      <AlertDialog open={reporting !== null} onOpenChange={(open) => !open && setReporting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("msg.reportTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("msg.reportBody")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="grid grid-cols-1 gap-1.5 py-1">
+            {([
+              ["spam", "msg.reportSpam"],
+              ["harassment", "msg.reportHarassment"],
+              ["hate", "msg.reportHate"],
+              ["violence", "msg.reportViolence"],
+              ["sexual", "msg.reportSexual"],
+              ["csam", "msg.reportCsam"],
+              ["other", "msg.reportOther"],
+            ] as const).map(([value, key]) => {
+              const active = reportReason === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setReportReason(value)}
+                  aria-pressed={active}
+                  className={
+                    "flex w-full items-center justify-between rounded-lg border px-3 py-2 text-start text-sm transition " +
+                    (active
+                      ? "border-destructive/60 bg-destructive/10 font-medium text-destructive"
+                      : "border-border hover:bg-muted")
+                  }
+                >
+                  {t(key)}
+                  {active && <Flag className="size-3.5" />}
+                </button>
+              );
+            })}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={reportMutation.isPending}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              // No reason picked ⇒ inert (preventDefault stops the dialog closing),
+              // because a report with no reason gives review nothing to act on.
+              destructive
+              disabled={reportMutation.isPending || !reportReason}
+              onClick={(e) => {
+                if (!reporting || !reportReason) {
+                  e.preventDefault();
+                  return;
+                }
+                reportMutation.mutate({
+                  reportedId: reporting.senderIdentityId,
+                  messageId: reporting.id,
+                  context: "message",
+                  // The enum is validated server-side; the union of the picker
+                  // values is exactly the server's REPORT_REASONS set.
+                  reason: reportReason as
+                    | "spam"
+                    | "harassment"
+                    | "hate"
+                    | "violence"
+                    | "sexual"
+                    | "csam"
+                    | "other",
+                  // Snapshot the words so the report survives an unsend. Trimmed to
+                  // the server cap; media-only messages report with no snapshot.
+                  snapshot: reporting.body ? reporting.body.slice(0, 2000) : null,
+                });
+              }}
+            >
+              {reportMutation.isPending ? t("msg.reporting") : t("msg.reportSubmit")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Unsend confirmation (v2.88 — AlertDialog, not native confirm()). */}
       <AlertDialog open={unsendId !== null} onOpenChange={(open) => !open && setUnsendId(null)}>
         <AlertDialogContent>
@@ -5219,6 +5319,7 @@ function MessageMenu({
   onHide,
   onDelete,
   onAdminDelete,
+  onReport,
 }: {
   mine?: boolean;
   onReply: () => void;
@@ -5245,6 +5346,12 @@ function MessageMenu({
    * that is always refused is worse than an absent one.
    */
   onAdminDelete?: () => void;
+  /**
+   * v2.107.52 — flag this message for review (Apple 1.2). Received messages only:
+   * you report somebody else's content, never your own, so it is wired at the
+   * received-message call site and absent (undefined) on my own bubbles.
+   */
+  onReport?: () => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -5364,6 +5471,20 @@ function MessageMenu({
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm text-destructive hover:bg-destructive/10"
               >
                 <Trash2 className="size-4" /> {t("msg.adminRemoveAction")}
+              </button>
+            )}
+            {/* REPORT (v2.107.52, Apple 1.2) — flag somebody else's message for
+                review. Never on my own bubble (that call site passes no onReport),
+                and placed LAST because it is the one action aimed at the person
+                rather than the message. A flag glyph and the destructive tint, so
+                it reads as a moderation act, not another neutral menu row. */}
+            {!mine && onReport && (
+              <button
+                type="button"
+                onClick={() => { onReport(); setOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm text-destructive hover:bg-destructive/10"
+              >
+                <Flag className="size-4" /> {t("msg.reportAction")}
               </button>
             )}
           </div>

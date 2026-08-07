@@ -172,6 +172,12 @@ import {
   saveMessageAlbum,
   getAlbumsForMessages,
   getAttachmentsForIdentityBatch,
+  fileContentReport,
+  listContentReports,
+  setReportStatus,
+  openReportCount,
+  REPORT_REASONS,
+  REPORT_CONTEXTS,
 } from "./v2db";
 import { publishRoutingChanged } from "./callRouting";
 import { adminPurgeIdentity, guestDaysLeft } from "./purgeIdentity";
@@ -794,6 +800,134 @@ export const v2AuthRouter = router({
     ctx.res.clearCookie(COOKIE_NAME, { ...sess, maxAge: -1 });
     return { ok: true };
   }),
+
+  /**
+   * SELF-SERVE ACCOUNT DELETION (v2.107.52) — Apple App Store Guideline 5.1.1(v):
+   * "apps that support account creation must also offer account deletion." The
+   * admin path above deletes SOMEBODY ELSE and is gated on `requireAdmin`; this
+   * one lets the signed-in person erase THEIR OWN identity, which is the exact
+   * capability the guideline requires and the one the app did not have.
+   *
+   * Same cascade, one inversion. `adminPurgeIdentity` REFUSES a caller equal to
+   * its target — that guard exists so an admin cannot orphan the deployment by
+   * deleting themselves through the admin tool. Here self-deletion IS the whole
+   * point, so `actingIdentityId` is passed as `null`: the guard is skipped and
+   * the identical tombstone-number-then-cascade runs. Nothing about the erase
+   * differs between "an admin deleted you" and "you deleted yourself" — only who
+   * is allowed to ask, so only the authorization wrapper changes.
+   *
+   * `me.id` is re-derived from the session on THIS request (whoami), so the
+   * target is never client-supplied: a caller can only ever delete the identity
+   * the cookie already proves they are. There is no `identityId` input by
+   * construction, which is what makes it safe to run under the plain
+   * `protectedProcedure` that any signed-in user reaches.
+   */
+  deleteMyAccount: publicProcedure.mutation(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    // actingIdentityId=null → the self-guard in adminPurgeIdentity is bypassed on
+    // purpose. The number is tombstoned (never reissued) exactly as in the admin
+    // path, so a number the person shared can't later resurface as someone else.
+    const res = await adminPurgeIdentity(me.id, null);
+    if (!res.ok) {
+      const map: Record<
+        typeof res.reason,
+        { code: "CONFLICT" | "NOT_FOUND" | "INTERNAL_SERVER_ERROR"; message: string }
+      > = {
+        "not-eligible": {
+          code: "CONFLICT",
+          message: "This account can't be deleted right now.",
+        },
+        "not-found": {
+          code: "NOT_FOUND",
+          message: "Your account is already being deleted.",
+        },
+        unavailable: {
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Couldn't complete the deletion. Please try again.",
+        },
+      };
+      const m = map[res.reason];
+      throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+    }
+    // The identity row is gone; sever the session cookies too so the next request
+    // mints a fresh guest rather than 500ing against an identity that no longer
+    // exists. The exact three cookies `signOutGuest` clears — guest, local
+    // session, OAuth session — because a member could carry any combination.
+    // Best-effort: the identity is ALREADY erased, which is the part the guideline
+    // is about — a lingering cookie only means one dead whoami before re-mint.
+    try {
+      const opts = guestCookieOptions(ctx.req);
+      ctx.res.clearCookie(GUEST_COOKIE, { ...opts, maxAge: -1 });
+      const sess = getSessionCookieOptions(ctx.req);
+      ctx.res.clearCookie(LOCAL_SESSION_COOKIE, { ...sess, maxAge: -1 });
+      ctx.res.clearCookie(COOKIE_NAME, { ...sess, maxAge: -1 });
+    } catch {
+      /* cookie teardown is a convenience; the erase above already happened */
+    }
+    console.warn(
+      `[self-delete] identity ${me.id} (${res.number ?? "no number"}, account: ${res.hadAccount}) deleted their own account`
+    );
+    return { ok: true as const, hadAccount: res.hadAccount };
+  }),
+
+  /**
+   * REPORT CONTENT (v2.107.52) — Apple App Store Guideline 1.2: users must be
+   * able to flag objectionable content. The signed-in person files a report
+   * against another identity, optionally pinned to a specific message; it lands
+   * in `content_reports` for admin review within the 24h window the guideline
+   * requires.
+   *
+   * `reportedId` is client-supplied (you report a person you are looking at), but
+   * `reporterId` is always `me.id` from the session — a caller can file AS nobody
+   * but themselves. Filing a report against yourself is refused: it is either a
+   * mistake or an attempt to pollute the queue, and neither is a real report.
+   *
+   * `snapshot` is the reported text captured at report time so the record
+   * survives the sender later unsending it — a report whose evidence vanishes the
+   * moment the reported party deletes it would defeat its own purpose.
+   */
+  reportContent: publicProcedure
+    .input(
+      z.object({
+        reportedId: z.number().int().positive(),
+        messageId: z.number().int().positive().nullish(),
+        context: z.enum(REPORT_CONTEXTS),
+        reason: z.enum(REPORT_REASONS),
+        note: z.string().max(1000).nullish(),
+        snapshot: z.string().max(2000).nullish(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      if (input.reportedId === me.id) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "You can't report yourself.",
+        });
+      }
+      try {
+        await fileContentReport({
+          reporterId: me.id,
+          reportedId: input.reportedId,
+          messageId: input.messageId ?? null,
+          context: input.context,
+          reason: input.reason,
+          note: input.note ?? null,
+          snapshot: input.snapshot ?? null,
+        });
+      } catch {
+        // Fail-LOUD, unlike telemetry: a report the user believes they filed must
+        // actually be recorded, so a storage outage surfaces and they can retry.
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Couldn't submit your report. Please try again.",
+        });
+      }
+      console.warn(
+        `[report] identity ${me.id} reported ${input.reportedId} (${input.context}/${input.reason}${input.messageId ? `, msg ${input.messageId}` : ""})`
+      );
+      return { ok: true as const };
+    }),
 
   /**
    * ADOPT-AND-RETIRE, step 1: what does this recovery key name? (v2.99.68)
@@ -5816,6 +5950,55 @@ export const v2AdminRouter = router({
     return { admin: await isUserAdmin(userId) };
   }),
 
+  /* ── Content reports (v2.107.52) — Apple 1.2 review queue ──────────────────
+     The read + action side of user reports. Reports are FILED by any signed-in
+     user (identity.reportContent); reviewing and actioning them is admin-only,
+     because a report names two people and quotes private content. */
+
+  /** The review queue. Defaults to open reports, newest first; pass a status to
+   *  see actioned/dismissed history. */
+  listReports: publicProcedure
+    .input(
+      z.object({
+        status: z.enum(["open", "actioned", "dismissed"]).nullish(),
+        limit: z.number().int().min(1).max(200).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      await requireAdmin(ctx);
+      return { rows: await listContentReports(input.status ?? "open", input.limit ?? 100) };
+    }),
+
+  /** The open-report count — for the admin badge, so a reviewer sees there is
+   *  something waiting without opening the queue. */
+  openReportCount: publicProcedure.query(async ({ ctx }) => {
+    await requireAdmin(ctx);
+    return { count: await openReportCount() };
+  }),
+
+  /** Move a report out of the open queue: 'actioned' (the developer acted on it)
+   *  or 'dismissed' (reviewed, no action). Both are the closing act the 24h
+   *  window is measured against. */
+  resolveReport: publicProcedure
+    .input(
+      z.object({
+        id: z.number().int().positive(),
+        status: z.enum(["actioned", "dismissed"]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = await requireAdmin(ctx);
+      const ok = await setReportStatus(input.id, input.status);
+      if (!ok) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No report with that id, or it was already resolved.",
+        });
+      }
+      console.warn(`[report] ${input.id} ${input.status} by admin ${me.id}`);
+      return { ok: true as const };
+    }),
+
   /* ── Crash console (v2.107.x) ──────────────────────────────────────────────
      The read side of crash telemetry. Reports arrive via the no-auth
      /api/crash ingest (that path must work when the app is broken); REVIEWING
@@ -6230,6 +6413,7 @@ export const v2AdminRouter = router({
       );
       return { ok: true as const, hadAccount: res.hadAccount };
     }),
+
 
   /**
    * WHY A NOTIFICATION DID NOT ARRIVE (v2.99.91).

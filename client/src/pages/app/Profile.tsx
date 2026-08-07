@@ -180,6 +180,24 @@ export default function ProfilePage() {
   // Shared sign-out flow (v2.88): AlertDialog confirm + full session/device
   // teardown — the same code path as the AppShell's sign-out buttons.
   const { requestSignOut, signOutDialog, signOutPending } = useSignOut(me);
+
+  /* ACCOUNT DELETION (v2.107.52) — Apple 5.1.1(v). Its own confirm dialog with a
+     TYPED gate (the number, echoing the admin tool's own type-to-enable), because
+     this is the one destructive act on the page that nothing can undo and no admin
+     can reverse for you. On success the identity is already erased server-side, so
+     the only client job is to leave: hard-navigate to /app, where whoami mints a
+     fresh guest. */
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
+  const deleteMyAccount = trpc.identity.deleteMyAccount.useMutation({
+    onSuccess: () => {
+      // No refresh(): the identity is gone. A full navigation drops all in-memory
+      // React Query state and re-mints on the next whoami, which is exactly the
+      // clean slate a deletion should leave.
+      window.location.href = "/app";
+    },
+    onError: (err: { message?: string }) => toast.error(err.message || t("profile.deleteFailed")),
+  });
   // Read at the hub so the Appearance row can show which theme is live, rather than
   // making the reader open the pane to find out.
   const { theme } = useTheme();
@@ -636,6 +654,92 @@ export default function ProfilePage() {
                 <LogOut className="size-4" /> {t("common.signOut")}
               </button>
             </section>
+
+            {/* DELETE ACCOUNT (v2.107.52) — Apple 5.1.1(v): an app that lets you
+                create an account must let you delete it. Below sign-out because it
+                is the more destructive of the two and should read second; a plainer
+                treatment than the sign-out card so the two are not confused, with
+                the real weight moved into the typed-confirmation dialog. */}
+            <section className="pt-1">
+              <button
+                type="button"
+                disabled={deleteMyAccount.isPending}
+                onClick={() => {
+                  setDeleteConfirm("");
+                  setDeleteOpen(true);
+                }}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-[13px] font-medium text-destructive/80 underline-offset-4 transition hover:text-destructive hover:underline disabled:opacity-60"
+              >
+                <Trash2 className="size-3.5" /> {t("profile.deleteAccount")}
+              </button>
+            </section>
+
+            <AlertDialog
+              open={deleteOpen}
+              onOpenChange={(open) => {
+                if (!open) {
+                  setDeleteOpen(false);
+                  setDeleteConfirm("");
+                }
+              }}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>{t("profile.deleteTitle")}</AlertDialogTitle>
+                  <AlertDialogDescription>{t("profile.deleteBody")}</AlertDialogDescription>
+                </AlertDialogHeader>
+                {/* The exact things that go, so the confirmation is informed rather
+                    than a reflex tap — mirrors the admin tool's own bullet list. */}
+                <ul className="list-disc space-y-0.5 ps-4 text-[12px] leading-relaxed text-muted-foreground">
+                  <li>{t("profile.deleteBulletData")}</li>
+                  <li>{t("profile.deleteBulletContacts")}</li>
+                  <li>{t("profile.deleteBulletNumber")}</li>
+                </ul>
+                {/* TYPE THE NUMBER TO ARM — the same friction the admin delete uses.
+                    Accepts the number with or without its dash, since both are
+                    legitimate readings of what the person sees on their own card. */}
+                <div className="pt-1">
+                  <Label htmlFor="delete-confirm" className="text-[12px] text-muted-foreground">
+                    {t("profile.deleteTypeToEnable", { number: formatPin(me.number) })}
+                  </Label>
+                  <Input
+                    id="delete-confirm"
+                    value={deleteConfirm}
+                    onChange={(e) => setDeleteConfirm(e.target.value)}
+                    inputMode="numeric"
+                    autoComplete="off"
+                    dir="ltr"
+                    className="mt-1.5 font-mono tracking-widest"
+                    placeholder={formatPin(me.number)}
+                  />
+                </div>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={deleteMyAccount.isPending}>
+                    {t("common.cancel")}
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    // Armed only when the typed value matches the number (dash-agnostic).
+                    // A no-op onClick when unarmed rather than a disabled attribute,
+                    // because AlertDialogAction closes the dialog on click — the guard
+                    // has to STOP the delete, not merely grey the control.
+                    destructive
+                    disabled={
+                      deleteMyAccount.isPending ||
+                      deleteConfirm.replace(/\D/g, "") !== me.number
+                    }
+                    onClick={(e) => {
+                      if (deleteConfirm.replace(/\D/g, "") !== me.number) {
+                        e.preventDefault();
+                        return;
+                      }
+                      deleteMyAccount.mutate();
+                    }}
+                  >
+                    {deleteMyAccount.isPending ? t("profile.deleting") : t("profile.deleteConfirm")}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
 
             {/* build stamp — mirrors the prototype's mono footer line. Back here in
                 v2.105.19 with the hero restored; the version the owner asked to see at

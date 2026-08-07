@@ -554,4 +554,28 @@ export const MESSAGES = {
   /* v2.107.52 — feature roadmap wave 1. */
   "msg.draft": { en: "Draft", ar: "مسودة" },
   "msg.playbackSpeed": { en: "Playback speed", ar: "سرعة التشغيل" },
+  /* v2.107.52 — content reporting (Apple 1.2). */
+  "msg.reportAction": { en: "Report", ar: "إبلاغ" },
+  "msg.reportTitle": { en: "Report this message?", ar: "الإبلاغ عن هذه الرسالة؟" },
+  "msg.reportBody": {
+    en: "Tell us what's wrong. Our team reviews reports and takes action on content that breaks the rules.",
+    ar: "أخبرنا بالمشكلة. يراجع فريقنا البلاغات ويتخذ إجراءً بشأن المحتوى المخالف للقواعد.",
+  },
+  "msg.reportSpam": { en: "Spam", ar: "رسائل مزعجة" },
+  "msg.reportHarassment": { en: "Harassment or bullying", ar: "تحرش أو تنمر" },
+  "msg.reportHate": { en: "Hate speech", ar: "خطاب كراهية" },
+  "msg.reportViolence": { en: "Violence or threats", ar: "عنف أو تهديدات" },
+  "msg.reportSexual": { en: "Sexual content", ar: "محتوى جنسي" },
+  "msg.reportCsam": { en: "Child sexual abuse", ar: "إساءة جنسية للأطفال" },
+  "msg.reportOther": { en: "Something else", ar: "شيء آخر" },
+  "msg.reportSubmit": { en: "Submit report", ar: "إرسال البلاغ" },
+  "msg.reporting": { en: "Submitting…", ar: "جارٍ الإرسال…" },
+  "msg.reportThanks": {
+    en: "Thanks — your report was submitted.",
+    ar: "شكرًا — تم إرسال بلاغك.",
+  },
+  "msg.reportFailed": {
+    en: "Couldn't submit your report. Please try again.",
+    ar: "تعذّر إرسال بلاغك. يرجى المحاولة مرة أخرى.",
+  },
 } as const satisfies Record<string, Entry>;

@@ -525,4 +525,33 @@ export const PROFILE = {
     en: "Couldn't set up biometric unlock on this device.",
     ar: "تعذّر إعداد فتح القفل بالبصمة على هذا الجهاز.",
   },
+  /* v2.107.52 — self-serve account deletion (Apple 5.1.1(v)). */
+  "profile.deleteAccount": { en: "Delete account", ar: "حذف الحساب" },
+  "profile.deleteTitle": { en: "Delete your account?", ar: "حذف حسابك؟" },
+  "profile.deleteBody": {
+    en: "This permanently deletes your RELAY account. It can't be undone.",
+    ar: "سيؤدي هذا إلى حذف حساب RELAY الخاص بك نهائيًا. لا يمكن التراجع عن ذلك.",
+  },
+  "profile.deleteBulletData": {
+    en: "Your messages, calls, and history are erased.",
+    ar: "سيتم مسح رسائلك ومكالماتك وسجلك.",
+  },
+  "profile.deleteBulletContacts": {
+    en: "You're removed from everyone's contacts.",
+    ar: "ستتم إزالتك من جهات اتصال الجميع.",
+  },
+  "profile.deleteBulletNumber": {
+    en: "Your number is retired and can't be reissued.",
+    ar: "سيتم إيقاف رقمك ولا يمكن إعادة إصداره.",
+  },
+  "profile.deleteTypeToEnable": {
+    en: "Type your number ({number}) to confirm",
+    ar: "اكتب رقمك ({number}) للتأكيد",
+  },
+  "profile.deleteConfirm": { en: "Delete my account", ar: "حذف حسابي" },
+  "profile.deleting": { en: "Deleting…", ar: "جارٍ الحذف…" },
+  "profile.deleteFailed": {
+    en: "Couldn't delete your account. Please try again.",
+    ar: "تعذّر حذف حسابك. يرجى المحاولة مرة أخرى.",
+  },
 } as const satisfies Record<string, Entry>;
