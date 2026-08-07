@@ -4445,6 +4445,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           avatarUrl={thread?.groupAvatarUrl ?? null}
           status={thread?.groupStatus ?? null}
           statusNote={thread?.groupStatusNote ?? null}
+          description={thread?.groupDescription ?? null}
         />
       )}
       {/* In-app video recorder (v2.96.2): the clip lands in the normal

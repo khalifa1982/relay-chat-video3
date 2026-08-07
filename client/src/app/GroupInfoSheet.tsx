@@ -3,6 +3,7 @@ import { X, Users, Camera, Check, Copy, Lock, Link2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { AvatarPicker } from "@/app/AvatarPicker";
 import { ProfileStatusPicker } from "@/app/ProfileStatusPicker";
@@ -548,6 +549,7 @@ export function GroupInfoSheet({
   avatarUrl,
   status,
   statusNote,
+  description,
 }: {
   open: boolean;
   onClose: () => void;
@@ -557,6 +559,7 @@ export function GroupInfoSheet({
   avatarUrl: string | null;
   status: string | null;
   statusNote: string | null;
+  description: string | null;
 }) {
   const t = useT();
   const utils = trpc.useUtils();
@@ -569,6 +572,14 @@ export function GroupInfoSheet({
   useEffect(() => {
     if (!editingName) setName(title ?? "");
   }, [title, editingName]);
+
+  // The group description / "about" (v2.107.59). Same follow-the-server-unless-editing
+  // rule as the name, so a background refetch never wipes what someone is typing.
+  const [about, setAbout] = useState(description ?? "");
+  const [editingAbout, setEditingAbout] = useState(false);
+  useEffect(() => {
+    if (!editingAbout) setAbout(description ?? "");
+  }, [description, editingAbout]);
 
   const info = trpc.messages.conversationInfo.useQuery(
     { conversationId },
@@ -700,6 +711,15 @@ export function GroupInfoSheet({
     const next = name.trim().slice(0, 128);
     if (next === (title ?? "")) return;
     save.mutate({ conversationId, title: next });
+  };
+
+  const commitAbout = () => {
+    setEditingAbout(false);
+    const next = about.trim().slice(0, 500);
+    // No write when nothing changed — the same guard the name commit uses, so a
+    // focus/blur with no edit is silent.
+    if (next === (description ?? "")) return;
+    save.mutate({ conversationId, description: next });
   };
 
   const copyNumber = async () => {
@@ -886,6 +906,33 @@ export function GroupInfoSheet({
               </div>
               <p className="mt-1.5 text-[11px] text-muted-foreground">
                 {t("groups.nameHint")}
+              </p>
+            </div>
+
+            {/* About — the group description (v2.107.59). A multi-line "what this group
+                is for" blurb, longer than the status note and edited the same way the
+                name is: follow-the-server-unless-editing, commit on blur, no write when
+                nothing changed. Any member may edit; the server re-checks. */}
+            <div>
+              <Label htmlFor="group-about" className={LABEL}>
+                {t("groups.aboutLabel")}
+              </Label>
+              <div className="rounded-[13px] transition-shadow focus-within:shadow-[0_0_0_3px_rgba(var(--rb-rgb,63,224,197),0.12)]">
+                <Textarea
+                  id="group-about"
+                  value={about}
+                  maxLength={500}
+                  rows={3}
+                  placeholder={t("groups.aboutPlaceholder")}
+                  disabled={save.isPending}
+                  onFocus={() => setEditingAbout(true)}
+                  onChange={(e) => setAbout(e.target.value)}
+                  onBlur={commitAbout}
+                  className="resize-none rounded-[13px] text-foreground"
+                />
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                {t("groups.aboutHint")}
               </p>
             </div>
 

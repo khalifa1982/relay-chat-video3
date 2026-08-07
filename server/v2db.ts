@@ -2724,6 +2724,7 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "conversations", column: "avatarUrl", ddl: "ADD COLUMN `avatarUrl` text" },
     { table: "conversations", column: "profileStatus", ddl: "ADD COLUMN `profileStatus` varchar(16)" },
     { table: "conversations", column: "statusNote", ddl: "ADD COLUMN `statusNote` varchar(140)" },
+    { table: "conversations", column: "description", ddl: "ADD COLUMN `description` varchar(500)" },
     { table: "conversations", column: "ownerIdentityId", ddl: "ADD COLUMN `ownerIdentityId` int" },
     // v2.99.92 — the IDLE presence state. NULL means the app is in the foreground
     // (or offline), which is exactly the reading every pre-release row needs, so
@@ -4605,7 +4606,7 @@ export async function deleteMessageAsGroupAdmin(input: {
 export async function setGroupProfile(
   conversationId: number,
   identityId: number,
-  patch: { title?: string; avatarUrl?: string | null; profileStatus?: string; statusNote?: string },
+  patch: { title?: string; avatarUrl?: string | null; profileStatus?: string; statusNote?: string; description?: string },
 ): Promise<{ ok: boolean; reason?: "not-found" | "not-a-group" | "not-a-member" | "unavailable" }> {
   const db = await getDb();
   if (!db) return { ok: false, reason: "unavailable" };
@@ -4626,6 +4627,12 @@ export async function setGroupProfile(
       set.profileStatus = normalizeProfileStatus(patch.profileStatus);
     }
     if (patch.statusNote !== undefined) set.statusNote = normalizeStatusNote(patch.statusNote);
+    if (patch.description !== undefined) {
+      // Same clear-to-null rule as the title: an empty description means "no about
+      // blurb" rather than the empty string, so the UI omits the section entirely.
+      const d = patch.description.trim().slice(0, 500);
+      set.description = d || null;
+    }
     if (Object.keys(set).length === 0) return { ok: true };
     await db.update(conversations).set(set).where(eq(conversations.id, conversationId));
     return { ok: true };
@@ -4650,6 +4657,9 @@ export interface ThreadSummary {
   groupAvatarUrl: string | null;
   groupStatus: string | null;
   groupStatusNote: string | null;
+  /** The group's "about" blurb (v2.107.59). Null for a DM and for a group with no
+   *  description set. */
+  groupDescription: string | null;
   /** Swipe-action state, per person (v2.103.0). */
   pinned: boolean;
   archived: boolean;
@@ -4747,6 +4757,7 @@ export function composeThreadSummaries(input: {
     avatarUrl?: string | null;
     profileStatus?: string | null;
     statusNote?: string | null;
+    description?: string | null;
   }>;
   latestMessageByConvo: Map<
     number,
@@ -4818,6 +4829,7 @@ export function composeThreadSummaries(input: {
       groupAvatarUrl: null as string | null,
       groupStatus: null as string | null,
       groupStatusNote: null as string | null,
+      groupDescription: null as string | null,
       pinned: !!p.pinnedAt,
       archived: !!p.archivedAt,
       manualUnread: !!p.manualUnreadAt,
@@ -4853,6 +4865,7 @@ export function composeThreadSummaries(input: {
         groupAvatarUrl: convo.avatarUrl ?? null,
         groupStatus: normalizeProfileStatus(convo.profileStatus),
         groupStatusNote: normalizeStatusNote(convo.statusNote),
+        groupDescription: convo.description ?? null,
       });
     } else if (members.length > 0) {
       // Regular 1:1 DM — the single other participant.
@@ -5100,6 +5113,7 @@ export async function listThreads(identityId: number): Promise<ThreadSummary[]> 
       avatarUrl: c.avatarUrl,
       profileStatus: c.profileStatus,
       statusNote: c.statusNote,
+      description: c.description,
     })),
     latestMessageByConvo: new Map(
       Array.from(latestByConvo.entries()).map(([k, m]) => [

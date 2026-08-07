@@ -447,6 +447,15 @@ export const conversations = mysqlTable(
      *  from it — a group has no presence, so there is nothing to derive. */
     profileStatus: varchar("profileStatus", { length: 16 }),
     statusNote: varchar("statusNote", { length: 140 }),
+    /**
+     * THE GROUP DESCRIPTION / "ABOUT" (v2.107.59, owner: "group description") — a
+     * longer free-text blurb describing what the group is for, distinct from and
+     * longer than `statusNote` (a group's short status label). Shown on the group
+     * info sheet to every member and editable by any member, the same rule the name
+     * and status already follow. NULL for every DM and every group created before
+     * this release, so the migration is additive.
+     */
+    description: varchar("description", { length: 500 }),
     /** Who created it. Nullable: every pre-release group has no recorded creator,
      *  and the purge cascade must treat that as "no owner" rather than guessing. */
     ownerIdentityId: int("ownerIdentityId"),

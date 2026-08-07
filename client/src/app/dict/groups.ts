@@ -78,6 +78,17 @@ export const GROUPS = {
     en: "Leave it blank to fall back to the members' names.",
     ar: "اتركه فارغًا ليُشتق اسم المجموعة من أسماء أعضائها.",
   },
+  /* The group DESCRIPTION / "about" (v2.107.59) — a longer blurb about the group's
+     purpose, distinct from the short status note above. */
+  "groups.aboutLabel": { en: "Description", ar: "الوصف" },
+  "groups.aboutPlaceholder": {
+    en: "What's this group about?",
+    ar: "عن ماذا هذه المجموعة؟",
+  },
+  "groups.aboutHint": {
+    en: "A short description of the group, shown to everyone here.",
+    ar: "وصف موجز للمجموعة، يظهر لكل من في المجموعة.",
+  },
   /* «الحالة» — the profile label. NEVER «قصة», which is the ephemeral post
      (`dict/status.ts`). */
   "groups.statusLabel": { en: "Status", ar: "الحالة" },

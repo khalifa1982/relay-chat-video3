@@ -2145,6 +2145,7 @@ export const v2MessagesRouter = router({
         groupAvatarUrl: b.groupAvatarUrl,
         groupStatus: b.groupStatus,
         groupStatusNote: b.groupStatusNote,
+        groupDescription: b.groupDescription,
         // Swipe-action state (v2.103.0) — so the row can render the pin marker, the
         // hand-marked-unread dot, and which way the swipe buttons should read.
         pinned: b.pinned,
@@ -2351,6 +2352,7 @@ export const v2MessagesRouter = router({
         avatarUrl: z.string().max(1024).nullable().optional(),
         profileStatus: z.enum(["", ...PROFILE_STATUSES]).optional(),
         statusNote: z.string().max(MAX_STATUS_NOTE).optional(),
+        description: z.string().max(500).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -2364,6 +2366,7 @@ export const v2MessagesRouter = router({
         avatarUrl: input.avatarUrl,
         profileStatus: input.profileStatus,
         statusNote: input.statusNote !== undefined ? sanitizeUgcText(input.statusNote) : undefined,
+        description: input.description !== undefined ? sanitizeUgcText(input.description) : undefined,
       });
       if (!res.ok) {
         const map: Record<
