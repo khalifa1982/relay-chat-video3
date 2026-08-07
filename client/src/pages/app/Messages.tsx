@@ -1822,6 +1822,32 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     },
     [starMutation]
   );
+
+  // PINNED MESSAGES (v2.107.60, QW-8) — a CONVERSATION-WIDE overlay, unlike the star.
+  // The banner at the top reads this; the mutation refetches on settle and the SSE
+  // `message` event (which a pin fans out) already invalidates the thread, so every
+  // member's banner follows. In a group only an admin may pin; in a DM either person.
+  const pinnedQuery = trpc.identity.pinnedMessages.useQuery(
+    { conversationId },
+    { staleTime: 30_000 }
+  );
+  const pinnedIds = useMemo(() => {
+    const ids = (pinnedQuery.data?.pins ?? []).map((p) => p.id);
+    return new Set<number>(ids);
+  }, [pinnedQuery.data]);
+  const canPin = !isGroup || iAmGroupAdmin;
+  const pinMutation = trpc.identity.setMessagePin.useMutation({
+    onError: (err: { message?: string }) => toast.error(err.message || t("msg.pinFailed")),
+    onSettled: () => {
+      void pinnedQuery.refetch();
+    },
+  });
+  const togglePin = useCallback(
+    (messageId: number, currentlyPinned: boolean) => {
+      pinMutation.mutate({ conversationId, messageId, pinned: !currentlyPinned });
+    },
+    [pinMutation, conversationId]
+  );
   // Countdown ticker: refresh the "Disappears in Ns" chip and purge timed
   // reveals whose window closed (the burned placeholder takes over).
   const [, forceTick] = useState(0);
@@ -2441,6 +2467,20 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   function scrollToBottom() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }
+
+  // QW-8 — scroll a pinned message into view when its banner is tapped. Best-effort:
+  // if the message is currently rendered it scrolls to it and flashes it; if it isn't
+  // loaded (an old pin above the loaded window) it is a no-op rather than an error, and
+  // the banner still tells the person what's pinned. The flash is a brief ring, cleared
+  // on a timer, so tapping twice re-flashes rather than sticking.
+  const [flashMid, setFlashMid] = useState<number | null>(null);
+  const jumpToMessage = useCallback((messageId: number) => {
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-mid="${messageId}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setFlashMid(messageId);
+    window.setTimeout(() => setFlashMid((cur) => (cur === messageId ? null : cur)), 1600);
+  }, []);
 
   /** Upload ONE picked file through the full pipeline (photo downscale +
    *  thumbnail, video first-frame cover, everything else raw) and return the
@@ -3347,8 +3387,59 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           </div>
         </div>
       )}
+      {/* PINNED BANNER (v2.107.60, QW-8) — a sticky bar under the header showing the
+          most-recent pinned message, tap to jump to it. Sits OUTSIDE the scroller so it
+          stays put while the thread scrolls, the same reasoning the stories strip uses
+          on the list. Only the newest pin is shown with a "+N" when several are pinned;
+          the full set isn't a separate screen yet (a later refinement). Whether the
+          person can UNPIN from here follows `canPin` — admin in a group, anyone in a DM.
+          Rendered only when something is actually pinned, so an empty conversation is
+          unchanged. */}
+      {(() => {
+        const pins = pinnedQuery.data?.pins ?? [];
+        if (pins.length === 0) return null;
+        const top = pins[0];
+        const senderName =
+          top.senderIdentityId === me?.id
+            ? t("msg.you")
+            : (nameById.get(top.senderIdentityId) ?? "");
+        const preview = top.body?.trim() || t("msg.pinnedMedia");
+        return (
+          <div className="shrink-0 flex items-center gap-2 border-b border-border/70 bg-card/95 px-3 py-2 md:px-4">
+            <Pin className="size-4 shrink-0 text-primary" aria-hidden />
+            <button
+              type="button"
+              onClick={() => jumpToMessage(top.id)}
+              className="min-w-0 flex-1 text-start"
+              aria-label={t("msg.pinnedLabel")}
+            >
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-primary">
+                <span>{t("msg.pinnedLabel")}</span>
+                {pins.length > 1 && (
+                  <span className="text-muted-foreground">
+                    · {t("msg.pinnedCount", { n: String(pins.length) })}
+                  </span>
+                )}
+              </div>
+              <div dir="auto" className="truncate text-[13px] text-foreground">
+                {senderName ? <span className="text-muted-foreground">{senderName}: </span> : null}
+                {preview}
+              </div>
+            </button>
+            {canPin && (
+              <button
+                type="button"
+                onClick={() => togglePin(top.id, true)}
+                aria-label={t("msg.unpinAction")}
+                className="rhit shrink-0 rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+              >
+                <PinOff className="size-4" />
+              </button>
+            )}
+          </div>
+        );
+      })()}
       <div
-        ref={scrollRef}
         className="flex-1 min-h-0 overflow-y-auto px-3 md:px-5 py-4 space-y-0.5 bg-background md:bg-card flex flex-col"
       >
         {/* Anchors a short conversation to the BOTTOM (iMessage-style) instead
@@ -3473,7 +3564,18 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               ? (lastOfGroup ? "rounded-ee-[5px]" : "")
               : (lastOfGroup ? "rounded-es-[5px]" : "");
             return (
-              <div key={m.id}>
+              <div
+                key={m.id}
+                data-mid={m.id}
+                className={
+                  // QW-8 — a brief accent ring when this bubble is the jump target of a
+                  // pinned-banner tap. Additive: no class in the common case, so an
+                  // ordinary row is unchanged.
+                  flashMid === m.id
+                    ? "rounded-xl ring-2 ring-primary/60 transition-shadow"
+                    : "transition-shadow"
+                }
+              >
                 {/* Board 4c — the quick row, ABOVE the bubble it is about. In flow
                     rather than floating, so it cannot clip off either edge of a
                     phone (see QuickReact). */}
@@ -3524,6 +3626,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     onHide={() => setHidingId(m.id)}
                     onToggleStar={() => toggleStar(m.id, starredIds.has(m.id))}
                     starred={starredIds.has(m.id)}
+                    onTogglePin={canPin ? () => togglePin(m.id, pinnedIds.has(m.id)) : undefined}
+                    pinned={pinnedIds.has(m.id)}
                     onEdit={
                       m.kind === "text" && !isExpiringMsg(m.meta)
                         ? () => openEdit(m)
@@ -3891,6 +3995,8 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     onAdminDelete={iAmGroupAdmin ? () => setAdminDeleting(m) : undefined}
                     onToggleStar={() => toggleStar(m.id, starredIds.has(m.id))}
                     starred={starredIds.has(m.id)}
+                    onTogglePin={canPin ? () => togglePin(m.id, pinnedIds.has(m.id)) : undefined}
+                    pinned={pinnedIds.has(m.id)}
                     // v2.107.52 (Apple 1.2): report this person's message for review.
                     onReport={() => { setReportReason(""); setReporting(m); }}
                   />
@@ -3914,6 +4020,14 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 {starredIds.has(m.id) && (
                   <div className={"flex " + (mine ? "justify-end" : "justify-start") + " mt-0.5"}>
                     <Star className="size-3 fill-amber-400 text-amber-400" aria-label={t("msg.starAction")} />
+                  </div>
+                )}
+                {/* Pin marker (v2.107.60, QW-8) — a small pin on the bubble's edge so a
+                    conversation-wide pin is visible on the message itself, not only in
+                    the top banner. The accent colour, matching the banner's pin. */}
+                {pinnedIds.has(m.id) && (
+                  <div className={"flex " + (mine ? "justify-end" : "justify-start") + " mt-0.5"}>
+                    <Pin className="size-3 fill-current text-primary" aria-label={t("msg.pinnedLabel")} />
                   </div>
                 )}
                 {/* The full catalogue, opened by the row's `+`. It reuses the SAME
@@ -5654,6 +5768,8 @@ function MessageMenu({
   onReport,
   onToggleStar,
   starred,
+  onTogglePin,
+  pinned,
   onEdit,
 }: {
   mine?: boolean;
@@ -5695,6 +5811,15 @@ function MessageMenu({
    */
   onToggleStar?: () => void;
   starred?: boolean;
+  /**
+   * QW-8 — pin this message for the WHOLE conversation (v2.107.60). Unlike the star,
+   * which is private, this changes what every member sees at the top of the chat, so
+   * the call site passes it only when the caller MAY pin here: in a group that means an
+   * admin, in a DM either participant. `pinned` drives the label and icon so the one
+   * item toggles both ways; absent (undefined) when the caller can't pin.
+   */
+  onTogglePin?: () => void;
+  pinned?: boolean;
   /**
    * QW-4 — edit this message's text. Passed only on my OWN text bubbles (an edit
    * rewrites content, so it is meaningless on somebody else's message and on media),
@@ -5763,6 +5888,23 @@ function MessageMenu({
                 ) : (
                   <>
                     <Star className="size-4" /> {t("msg.starAction")}
+                  </>
+                )}
+              </button>
+            )}
+            {onTogglePin && (
+              <button
+                type="button"
+                onClick={() => { onTogglePin(); setOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
+              >
+                {pinned ? (
+                  <>
+                    <PinOff className="size-4" /> {t("msg.unpinAction")}
+                  </>
+                ) : (
+                  <>
+                    <Pin className="size-4" /> {t("msg.pinAction")}
                   </>
                 )}
               </button>

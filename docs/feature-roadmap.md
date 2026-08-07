@@ -38,8 +38,8 @@ approval.
 | QW-4 ▶ | Message editing + "edited" label | `messages.edit` proc + inline editor + bubble marker; sender/text/live-only |
 | QW-5 ▶ | Text formatting bold/italic/strike/mono | renderer shipped (`shared/messageFormat` parser + linkify); composer hints deferred |
 | QW-6 ▶ | Silent send | long-press send → delivers, but the push has no sound (Expo `sound:null` + APNs omits sound) |
-| QW-7 | Group description | photo exists; add the text field |
-| QW-8 | Pinned messages inside a chat | banner at top, admin-gated in groups |
+| QW-7 ▶ | Group description | photo exists; add the text field |
+| QW-8 ▶ | Pinned messages inside a chat | banner at top, admin-gated in groups |
 | QW-9 | Read-receipt / typing privacy toggles | settings + server respect |
 | QW-10 | GIF picker | search-backed, rides the attachment sheet |
 | QW-11 | Per-contact ringtones | variants of the synthesized motif (`shared/ringtone.ts`) |

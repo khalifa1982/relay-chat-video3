@@ -605,6 +605,24 @@ export const MESSAGES = {
     en: "Couldn't update the star. Please try again.",
     ar: "تعذّر تحديث النجمة. يرجى المحاولة مرة أخرى.",
   },
+  /* PINNED MESSAGES (v2.107.60, QW-8) — a conversation-wide pin, unlike the private
+     star above. In a group only an admin sees the Pin/Unpin action. */
+  "msg.pinAction": { en: "Pin", ar: "تثبيت" },
+  "msg.unpinAction": { en: "Unpin", ar: "إلغاء التثبيت" },
+  "msg.pinFailed": {
+    en: "Couldn't update the pin. Please try again.",
+    ar: "تعذّر تحديث التثبيت. يرجى المحاولة مرة أخرى.",
+  },
+  /* The banner at the top of the chat. `pinnedLabel` is the little header; the count
+     is interpolated so one/many both read right. */
+  "msg.pinnedLabel": { en: "Pinned", ar: "مثبتة" },
+  "msg.pinnedCount": {
+    en: "{n} pinned messages",
+    ar: "{n} رسائل مثبتة",
+  },
+  /* A non-text pinned message (a photo, a voice note) has no body to preview, so the
+     banner shows the kind instead of empty text. */
+  "msg.pinnedMedia": { en: "Media", ar: "وسائط" },
   "msg.starredTitle": {
     en: "Starred messages",
     ar: "الرسائل المميزة",

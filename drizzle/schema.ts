@@ -695,6 +695,18 @@ export const messages = mysqlTable(
       .default("sent"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     editedAt: timestamp("editedAt"),
+    /**
+     * PINNED MESSAGE (v2.107.60, QW-7 group description's sibling quick win, roadmap
+     * QW-8) — a CONVERSATION-WIDE pin, not a per-viewer one: a non-null `pinnedAt`
+     * means this message is pinned for everyone in the chat, and the client shows it
+     * in a banner at the top. Distinct from `message_stars`, which is a private
+     * per-user overlay. `pinnedByIdentityId` records who pinned it (for the banner and
+     * for the audit trail). Both NULL for every unpinned message and every pre-release
+     * one, so the migration is additive. In a group only an admin may pin/unpin
+     * (`pin-message` capability); in a DM either participant may.
+     */
+    pinnedAt: timestamp("pinnedAt"),
+    pinnedByIdentityId: int("pinnedByIdentityId"),
     deletedAt: timestamp("deletedAt"),
     /**
      * WHO removed it, when it was not the sender (v2.104.0).

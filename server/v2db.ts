@@ -2699,6 +2699,11 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // working, because `edit-profile` stays unconditional for members.
     { table: "conversation_participants", column: "groupRole", ddl: "ADD COLUMN `groupRole` varchar(16)" },
     { table: "messages", column: "deletedByIdentityId", ddl: "ADD COLUMN `deletedByIdentityId` int" },
+    // v2.107.60 (roadmap QW-8) — pinned messages. A conversation-wide pin: `pinnedAt`
+    // non-null means pinned for everyone in the chat, `pinnedByIdentityId` records who
+    // did it. Both additive/NULL, so every existing message reads as unpinned.
+    { table: "messages", column: "pinnedAt", ddl: "ADD COLUMN `pinnedAt` timestamp NULL" },
+    { table: "messages", column: "pinnedByIdentityId", ddl: "ADD COLUMN `pinnedByIdentityId` int" },
     // v2.105.9 — group invite links. `inviteEpoch` NULL reads as 0 (nothing revoked
     // yet); `joinedAtMessageId` NULL reads as "sees everything", which is what every
     // pre-release participant is. Both no-ops until somebody mints or redeems a link.
@@ -3951,6 +3956,15 @@ export type GroupCapability =
   /** Requires a stored admin or the derived creator, with NO fallback. */
   | "delete-any-message"
   /**
+   * Pinning or unpinning a message for the whole group (v2.107.60, QW-8). Admin-only
+   * DELIBERATELY, and its absence from MEMBER_CAPABILITIES is what makes it so: a pin
+   * is a group-wide statement ("this is the thing to read"), and one member able to
+   * override what everyone sees at the top of the chat is a small takeover primitive
+   * nobody asked for. A DM has no admins, so the DM path never consults this — either
+   * participant may pin there.
+   */
+  | "pin-message"
+  /**
    * #118 — removing a story somebody else posted TO the group.
    *
    * ITS OWN NAME rather than a second meaning for `delete-any-message`, because a
@@ -4585,6 +4599,121 @@ export async function deleteMessageAsGroupAdmin(input: {
   } catch (e) {
     console.warn("[groups] deleteMessageAsGroupAdmin failed:", (e as Error)?.message || "");
     return { ok: false, reason: "unavailable" };
+  }
+}
+
+/**
+ * PIN or UNPIN a message for the whole conversation (v2.107.60, QW-8).
+ *
+ * A conversation-wide pin, not a per-viewer one — so the write is guarded the way a
+ * group-wide change is: in a GROUP only an admin may pin/unpin (`pin-message`, which is
+ * absent from MEMBER_CAPABILITIES and so admin-only by default); in a DM either
+ * participant may, since a DM has no admins and both people already see everything.
+ *
+ * The permission check is INSIDE this helper, never at the call site, for the same
+ * reason the profile edit's is: it changes something several people share, so "who may
+ * do it" is the whole safety argument and must not be forgettable.
+ *
+ * Setting `pin` true stamps `pinnedAt`/`pinnedByIdentityId`; false clears both. A
+ * pinned message that is later unsent keeps its now-meaningless stamp, but the client
+ * never surfaces a deleted message in the banner (the pinned lookup excludes
+ * `deletedAt`), so no stale banner can appear.
+ */
+export async function setMessagePin(input: {
+  messageId: number;
+  conversationId: number;
+  identityId: number;
+  pin: boolean;
+}): Promise<{
+  ok: boolean;
+  reason?: "not-found" | "not-a-member" | "not-an-admin" | "unavailable";
+}> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "unavailable" };
+  try {
+    const [convo] = await db
+      .select({ kind: conversations.kind })
+      .from(conversations)
+      .where(eq(conversations.id, input.conversationId))
+      .limit(1);
+    if (!convo) return { ok: false, reason: "not-found" };
+
+    if (convo.kind === "group") {
+      // Admin-gated. `checkGroupPermission` fails closed and re-derives admin/creator,
+      // so a member — or a stranger naming the id — is refused here.
+      const gate = await checkGroupPermission(input.conversationId, input.identityId, "pin-message");
+      if (!gate.ok) {
+        return { ok: false, reason: gate.reason === "not-a-group" ? "not-found" : gate.reason };
+      }
+    } else {
+      // DM: membership is the whole gate. A non-participant naming the id is refused.
+      const members = await getConversationParticipantIds(input.conversationId);
+      if (!members.includes(input.identityId)) return { ok: false, reason: "not-a-member" };
+    }
+
+    // THE MESSAGE MUST LIVE IN THIS CONVERSATION. Message ids are small sequential
+    // integers, so without this an admin of one group could pin a message from another;
+    // a message elsewhere answers exactly like a missing one, so this is no oracle.
+    const [row] = await db
+      .select({
+        id: messages.id,
+        conversationId: messages.conversationId,
+        deletedAt: messages.deletedAt,
+      })
+      .from(messages)
+      .where(eq(messages.id, input.messageId))
+      .limit(1);
+    if (!row || row.conversationId !== input.conversationId) return { ok: false, reason: "not-found" };
+    // Pinning a deleted message is meaningless; unpinning one is harmless but pointless.
+    if (row.deletedAt && input.pin) return { ok: false, reason: "not-found" };
+
+    await db
+      .update(messages)
+      .set(
+        input.pin
+          ? { pinnedAt: new Date(), pinnedByIdentityId: input.identityId }
+          : { pinnedAt: null, pinnedByIdentityId: null },
+      )
+      .where(eq(messages.id, input.messageId));
+    return { ok: true };
+  } catch (e) {
+    console.warn("[messages] setMessagePin failed:", (e as Error)?.message || "");
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
+/** The pinned messages of a conversation, newest pin first — the client renders them in
+ *  the banner at the top of the chat. Membership-gated: a pinned message only surfaces
+ *  to someone who may read the conversation, and a deleted message never surfaces at
+ *  all. Kept small (a conversation rarely pins many), so this is one cheap query on
+ *  conversation open rather than a join on the message hot path. */
+export async function listPinnedMessages(
+  identityId: number,
+  conversationId: number,
+): Promise<Array<{ id: number; senderIdentityId: number; body: string | null; kind: string; pinnedAt: Date }>> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    const members = await getConversationParticipantIds(conversationId);
+    if (!members.includes(identityId)) return [];
+    const rows = await db
+      .select({
+        id: messages.id,
+        senderIdentityId: messages.senderIdentityId,
+        body: messages.body,
+        kind: messages.kind,
+        pinnedAt: messages.pinnedAt,
+      })
+      .from(messages)
+      .where(and(eq(messages.conversationId, conversationId), isNotNull(messages.pinnedAt), isNull(messages.deletedAt)))
+      .orderBy(desc(messages.pinnedAt))
+      .limit(20);
+    return rows
+      .filter((r): r is typeof r & { pinnedAt: Date } => r.pinnedAt != null)
+      .map((r) => ({ id: r.id, senderIdentityId: r.senderIdentityId, body: r.body, kind: r.kind, pinnedAt: r.pinnedAt }));
+  } catch (e) {
+    console.warn("[messages] listPinnedMessages failed:", (e as Error)?.message || "");
+    return [];
   }
 }
 

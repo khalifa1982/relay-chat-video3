@@ -183,6 +183,8 @@ import {
   starMessage,
   unstarMessage,
   listStarredIdsInConversation,
+  setMessagePin,
+  listPinnedMessages,
   listStarredMessages,
 } from "./v2db";
 import { publishRoutingChanged } from "./callRouting";
@@ -971,6 +973,70 @@ export const v2AuthRouter = router({
     .query(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
       return { ids: await listStarredIdsInConversation(me.id, input.conversationId) };
+    }),
+
+  /**
+   * PIN or UNPIN a message for the whole conversation (v2.107.60, QW-8). Unlike a star,
+   * which is private, this changes what EVERYONE in the chat sees at the top — so the
+   * gate is inside `setMessagePin`: admin-only in a group, either participant in a DM.
+   * On success it fans out the existing `message` SSE kind so every member's banner
+   * refreshes, the same wire the admin-delete uses.
+   */
+  setMessagePin: publicProcedure
+    .input(
+      z.object({
+        conversationId: z.number().int().positive(),
+        messageId: z.number().int().positive(),
+        pinned: z.boolean(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const res = await setMessagePin({
+        messageId: input.messageId,
+        conversationId: input.conversationId,
+        identityId: me.id,
+        pin: input.pinned,
+      });
+      if (!res.ok) {
+        const map: Record<
+          NonNullable<typeof res.reason>,
+          { code: "NOT_FOUND" | "BAD_REQUEST" | "FORBIDDEN" | "INTERNAL_SERVER_ERROR"; message: string }
+        > = {
+          "not-found": { code: "NOT_FOUND", message: "That message isn't in this conversation." },
+          "not-a-member": { code: "FORBIDDEN", message: "Only members can pin a message here." },
+          "not-an-admin": { code: "FORBIDDEN", message: "Only a group admin can pin a message." },
+          unavailable: { code: "INTERNAL_SERVER_ERROR", message: "Couldn't update the pin — nothing changed." },
+        };
+        const m = map[res.reason ?? "unavailable"];
+        throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+      }
+      const members = await getConversationParticipantIds(input.conversationId);
+      for (const id of members) {
+        if (id !== me.id) publishToIdentity(id, { kind: "message", conversationId: input.conversationId, from: me.id });
+      }
+      return { ok: true as const, pinned: input.pinned };
+    }),
+
+  /** The pinned messages of ONE conversation, newest pin first — the client renders the
+   *  banner at the top from this. Membership-gated in the query, and deleted messages
+   *  never appear, so an unsent-then-pinned message can't leave a stale banner. */
+  pinnedMessages: publicProcedure
+    .input(z.object({ conversationId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const rows = await listPinnedMessages(me.id, input.conversationId);
+      return {
+        pins: rows.map((r) => ({
+          id: r.id,
+          senderIdentityId: r.senderIdentityId,
+          // The body is the preview the banner shows; a non-text message (an image,
+          // a voice note) has none, so the client falls back to a kind label.
+          body: r.body,
+          kind: r.kind,
+          pinnedAt: r.pinnedAt,
+        })),
+      };
     }),
 
   /** The caller's starred messages across every conversation, newest star first —
@@ -3100,6 +3166,10 @@ export const v2MessagesRouter = router({
           deliveredAt: r.deliveredAt ?? null,
           readAt: r.readAt ?? null,
           editedAt: r.editedAt,
+          // v2.107.60 (QW-8) — the pin is conversation-wide, so it ships to every
+          // member: a non-null pinnedAt drives the bubble's pin marker and the menu's
+          // Pin/Unpin label. Nothing here reveals content the ticks don't already imply.
+          pinnedAt: r.pinnedAt ?? null,
           attachment: locked ? null : r.attachmentId ? (attById.get(r.attachmentId) ?? null) : null,
           album: locked ? null : (albumByMsg.get(r.id) ?? null),
           replyToId: r.replyToId ?? null,
