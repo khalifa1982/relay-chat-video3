@@ -559,6 +559,11 @@ export function LoginScreen() {
   const accent = business ? T.gold : T.accent;
 
   const [guestName, setGuestName] = useState("");
+  // Apple 1.2 — the guest (new-account) path must gate on agreeing to the terms and
+  // their no-tolerance policy before an account is created. Guest is the primary
+  // new-user route and the one App Review takes; the email/OTP routes restore an
+  // account that already accepted, so the gate lives on this step.
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [email, setEmail] = useState("");
   const [regName, setRegName] = useState("");
   const [code, setCode] = useState("");
@@ -607,6 +612,10 @@ export function LoginScreen() {
     e?.preventDefault();
     const name = guestName.trim();
     if (!name) return;
+    // Apple 1.2 — no account without agreeing to the terms + no-tolerance policy.
+    // The CTA is already disabled until this is true; this is the belt-and-braces
+    // guard so a programmatic submit can't slip past the gate either.
+    if (!agreedToTerms) return;
     setError(null);
     try {
       await startGuest(name);
@@ -797,6 +806,7 @@ export function LoginScreen() {
           inputRef={inputRef}
           guestName={guestName} setGuestName={setGuestName} submitGuest={submitGuest}
           startGuestError={startGuestError?.message ?? null}
+          agreedToTerms={agreedToTerms} setAgreedToTerms={setAgreedToTerms}
           email={email} setEmail={setEmail} emailOk={emailOk} submitEmail={submitEmail}
           probeUnregistered={probeUnregistered}
           sendCode={sendCode}
@@ -867,6 +877,10 @@ interface CardProps {
   inputRef: React.RefObject<HTMLInputElement | null>;
   guestName: string; setGuestName: (v: string) => void; submitGuest: (e?: FormEvent) => void;
   startGuestError: string | null;
+  /** Apple 1.2 — a UGC app must require agreement to terms that state a
+   *  no-tolerance policy for objectionable content and abusive users before the
+   *  person can create an account and start posting. Gates the guest CTA. */
+  agreedToTerms: boolean; setAgreedToTerms: (v: boolean) => void;
   email: string; setEmail: (v: string) => void; emailOk: boolean; submitEmail: (e?: FormEvent) => void;
   probeUnregistered: boolean | null;
   sendCode: () => void;
@@ -1016,8 +1030,33 @@ function GuestStep(p: CardProps) {
       <p style={{ color: T.faint, fontSize: 12.5, margin: "10px 0 0", lineHeight: 1.55 }}>
         {t("login.guestNote")}
       </p>
+      {/* Apple 1.2 — agreement to the terms and their no-tolerance policy for
+          objectionable content and abusive users, required before an account is
+          created. A real checkbox (not a passive "by continuing…" line) so the
+          consent is explicit, and the CTA below stays disabled until it is ticked. */}
+      <label
+        style={{
+          display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer",
+          margin: "16px 0 0", color: T.faint, fontSize: 12.5, lineHeight: 1.55,
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={p.agreedToTerms}
+          onChange={(e) => p.setAgreedToTerms(e.target.checked)}
+          aria-label={t("login.agreeAria")}
+          style={{ marginTop: 2, width: 16, height: 16, accentColor: p.accent, flexShrink: 0, cursor: "pointer" }}
+        />
+        <span>
+          {t("login.agreePrefix")}{" "}
+          <a href="/guidelines" target="_blank" rel="noopener noreferrer" style={{ color: p.accent, textDecoration: "underline" }}>
+            {t("login.agreeGuidelines")}
+          </a>
+          {t("login.agreeSuffix")}
+        </span>
+      </label>
       <div className="mt-3.5">
-        <Cta accent={p.accent} disabled={!p.guestName.trim() || p.busy} type="submit">
+        <Cta accent={p.accent} disabled={!p.guestName.trim() || !p.agreedToTerms || p.busy} type="submit">
           {p.busy ? t("login.reservingNumber") : t("login.guestCta")}
         </Cta>
       </div>

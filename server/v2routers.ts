@@ -7,6 +7,7 @@
    ============================================================ */
 
 import { contactTagsOf, serializeContactTags } from "../shared/contactTags";
+import { sanitizeUgcText } from "../shared/contentFilter";
 import { TRPCError } from "@trpc/server";
 import { s3Config } from "./s3";
 import { storageGetSignedUrl } from "./storage";
@@ -1123,7 +1124,21 @@ export const v2AuthRouter = router({
         }
       }
       // updateIdentityProfile sanitizes mobiles/socials/status server-side.
-      await updateIdentityProfile(me.id, input);
+      // Apple 1.2 — the display name and status note are broadcast to everyone who
+      // looks this person up, so they are UGC-filtered before they are stored. Only
+      // the two free-text, publicly-shown fields; the enums and structured fields
+      // can't carry a slur. sanitizeUgcText passes undefined straight through, so an
+      // update that doesn't touch these fields is unchanged.
+      const filteredInput = {
+        ...input,
+        ...(input.displayName !== undefined
+          ? { displayName: sanitizeUgcText(input.displayName) }
+          : {}),
+        ...(input.statusNote !== undefined
+          ? { statusNote: sanitizeUgcText(input.statusNote) }
+          : {}),
+      };
+      await updateIdentityProfile(me.id, filteredInput);
       // v2.107.48: if the global voicemail switch moved, refresh this user's
       // routing across boxes so the ring-time cache reflects it. Fire-and-forget.
       if (Object.prototype.hasOwnProperty.call(input, "allCallsToVoicemail")) {
@@ -2340,11 +2355,14 @@ export const v2MessagesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
       assertOwnedAvatarUrl(input.avatarUrl, me.id);
+      // Apple 1.2 — a group's name and status note are shown to every member, so the
+      // two free-text fields are UGC-filtered before the write (undefined passes
+      // through untouched, so a photo-only update is unchanged).
       const res = await setGroupProfile(input.conversationId, me.id, {
-        title: input.title,
+        title: input.title !== undefined ? sanitizeUgcText(input.title) : undefined,
         avatarUrl: input.avatarUrl,
         profileStatus: input.profileStatus,
-        statusNote: input.statusNote,
+        statusNote: input.statusNote !== undefined ? sanitizeUgcText(input.statusNote) : undefined,
       });
       if (!res.ok) {
         const map: Record<
@@ -2509,7 +2527,8 @@ export const v2MessagesRouter = router({
       const convo = await createGroupConversation({
         creatorId: me.id,
         memberIds: members.map((m) => m.id),
-        title: input.title,
+        // Apple 1.2 — a group name is shown to every member; UGC-filter it at creation.
+        title: sanitizeUgcText(input.title),
         avatarUrl: input.avatarUrl ?? null,
       });
       // Push a hint so every member's thread list refreshes.
@@ -5145,7 +5164,9 @@ export const v2PartyLinesRouter = router({
       const me = requireIdentity(ctx);
       partyLineGate(ctx);
       try {
-        const row = await createPartyLine({ ownerIdentityId: me.id, title: input.title });
+        // Apple 1.2 — a party-line title is shown to everyone who joins the line, so
+        // it's UGC-filtered before it's stored.
+        const row = await createPartyLine({ ownerIdentityId: me.id, title: sanitizeUgcText(input.title) });
         return { id: row.id, number: row.number, title: row.title, createdAt: row.createdAt };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Could not create the party line.";
@@ -5368,7 +5389,10 @@ export const v2StatusRouter = router({
     .mutation(async ({ ctx, input }) => {
       const me = requireIdentity(ctx);
       statusGate(ctx);
-      const text = (input.text ?? "").trim();
+      // Apple 1.2 — a story's text is broadcast to the poster's audience (or a whole
+      // group), so it's UGC-filtered here, before the length checks and the write,
+      // and every downstream use (the row, the push excerpt) sees the masked text.
+      const text = sanitizeUgcText((input.text ?? "").trim());
       /* GROUP STORIES: MEMBERSHIP IS CHECKED HERE, SERVER-SIDE, BEFORE ANY WRITE.
        *
        * A conversation id is a small sequential integer, so without this anybody

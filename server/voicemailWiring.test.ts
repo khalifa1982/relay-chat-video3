@@ -75,7 +75,7 @@ describe("voicemail routing — data + API wiring", () => {
 
   it("the global master switch accepts the flag and refreshes the routing cache", () => {
     expect(ROUTERS).toMatch(/allCallsToVoicemail: z\.boolean\(\)\.optional\(\)/);
-    const profileMut = ROUTERS.slice(ROUTERS.indexOf("await updateIdentityProfile(me.id, input)"));
+    const profileMut = ROUTERS.slice(ROUTERS.indexOf("await updateIdentityProfile(me.id, filteredInput)"));
     expect(profileMut.slice(0, 500)).toMatch(/publishRoutingChanged\(me\.number\)/);
   });
 

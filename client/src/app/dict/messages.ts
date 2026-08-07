@@ -570,6 +570,10 @@ export const MESSAGES = {
   "msg.reportCsam": { en: "Child sexual abuse", ar: "إساءة جنسية للأطفال" },
   "msg.reportOther": { en: "Something else", ar: "شيء آخر" },
   "msg.reportSubmit": { en: "Submit report", ar: "إرسال البلاغ" },
+  "msg.reportContact": {
+    en: "You can also report inappropriate activity by email:",
+    ar: "يمكنك أيضاً الإبلاغ عن أي نشاط غير لائق عبر البريد الإلكتروني:",
+  },
   "msg.reporting": { en: "Submitting…", ar: "جارٍ الإرسال…" },
   "msg.reportThanks": {
     en: "Thanks — your report was submitted.",

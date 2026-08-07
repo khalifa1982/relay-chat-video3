@@ -24,6 +24,7 @@ const Home = lazy(() => import("./pages/Home"));
 const Docs = lazy(() => import("./pages/Docs"));
 const Technology = lazy(() => import("./pages/Technology"));
 const PrivacyPolicy = lazy(() => import("./pages/PrivacyPolicy"));
+const CommunityGuidelines = lazy(() => import("./pages/CommunityGuidelines"));
 const TurnTest = lazy(() => import("./pages/TurnTest"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const History = lazy(() => import("./pages/app/History"));
@@ -131,6 +132,10 @@ function Router() {
         <Route path={"/docs"} component={Docs} />
         <Route path={"/technology"} component={Technology} />
         <Route path={"/privacy-policy"} component={PrivacyPolicy} />
+        {/* Apple 1.2 — the acceptable-use / no-tolerance terms the guest sign-up gate
+            links to and requires agreement with. Also reachable in-app from the report
+            flow and the profile. */}
+        <Route path={"/guidelines"} component={CommunityGuidelines} />
         <Route path={"/turn-test"} component={TurnTest} />
         <Route path={"/404"} component={NotFound} />
         <Route component={NotFound} />

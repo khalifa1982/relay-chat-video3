@@ -121,6 +121,7 @@ import { isEditableImage } from "@/lib/imageEdit";
 import { GroupInfoSheet } from "@/app/GroupInfoSheet";
 import { SwipeRow, type SwipeAction } from "@/app/SwipeRow";
 import { linkify } from "@/lib/linkify";
+import { siteEmail } from "@/lib/siteHost";
 import { mentionQueryAt, rankMentionMatches, applyMention } from "@shared/mentions";
 import { useIdentity } from "@/app/useIdentity";
 import { demotablePollInterval } from "@/app/useRealtime";
@@ -4631,6 +4632,19 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               );
             })}
           </div>
+          {/* Apple 1.2 — contact information inside the app for reporting inappropriate
+              activity. The reason buttons file a structured report; this gives a direct
+              channel for anything the buttons don't cover, or to reach a human. */}
+          <p className="px-1 pb-1 text-xs text-muted-foreground">
+            {t("msg.reportContact")}{" "}
+            <a
+              href={`mailto:${siteEmail("report")}`}
+              className="font-medium text-foreground underline"
+              dir="ltr"
+            >
+              {siteEmail("report")}
+            </a>
+          </p>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={reportMutation.isPending}>
               {t("common.cancel")}

@@ -53,6 +53,22 @@ export const NAV = {
     en: "I am a guest — reserve my number",
     ar: "أنا ضيف — احجز رقمي",
   },
+  "login.agreePrefix": {
+    en: "I agree to the",
+    ar: "أوافق على",
+  },
+  "login.agreeGuidelines": {
+    en: "Terms & Community Guidelines",
+    ar: "الشروط وإرشادات المجتمع",
+  },
+  "login.agreeSuffix": {
+    en: ", and understand there is zero tolerance for objectionable content or abusive behaviour.",
+    ar: "، وأفهم أنه لا تسامح إطلاقاً مع المحتوى المُسيء أو السلوك المُسيء.",
+  },
+  "login.agreeAria": {
+    en: "Agree to the Terms and Community Guidelines",
+    ar: "الموافقة على الشروط وإرشادات المجتمع",
+  },
   "login.err.guestSession": {
     en: "Couldn't start a guest session. Try again.",
     ar: "تعذّر بدء جلسة الضيف. حاول مرة أخرى.",
