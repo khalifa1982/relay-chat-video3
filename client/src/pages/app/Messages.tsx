@@ -29,6 +29,7 @@ import {
   Flag,
   Star,
   StarOff,
+  Pencil,
   Pin,
   PinOff,
   MailOpen,
@@ -55,6 +56,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -1926,11 +1928,35 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     },
   });
   /**
-   * "Delete for me" (v2.102.2). Optimistic with snapshot-and-restore, the SAME shape
-   * unsend uses above — a hide that stayed on screen until the next poll would read as
-   * a control that did nothing, and a failed one must put the message back rather than
-   * silently vanishing something that still exists for everybody.
+   * Edit one of my OWN text messages (QW-4). Optimistic with snapshot-and-restore,
+   * the same shape as unsend: patch the body + stamp editedAt in the cache the instant
+   * the user saves so the bubble updates and shows "edited" without waiting on the
+   * round-trip, and put the old text back on failure so a rejected edit never silently
+   * rewrites what is on screen.
    */
+  const editMutation = trpc.messages.edit.useMutation({
+    onMutate: async ({ messageId, body }) => {
+      const input = { conversationId, limit: 100 } as const;
+      await utils.messages.list.cancel(input);
+      const prev = utils.messages.list.getData(input);
+      utils.messages.list.setData(input, (old) =>
+        old
+          ? old.map((m) =>
+              m.id === messageId ? { ...m, body, editedAt: new Date() } : m,
+            )
+          : old,
+      );
+      return { prev, input };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.prev) utils.messages.list.setData(context.input, context.prev);
+      toast.error(t("msg.editFailed"));
+    },
+    onSettled: () => {
+      utils.messages.list.invalidate({ conversationId });
+      utils.messages.threads.invalidate();
+    },
+  });
   /**
    * v2.104.0 — a group admin removes somebody else's message for everyone.
    *
@@ -1989,6 +2015,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   const [hidingId, setHidingId] = useState<number | null>(null);
   /** v2.104.0 — the message a group admin is about to remove for everyone. */
   const [adminDeleting, setAdminDeleting] = useState<Msg | null>(null);
+  /* QW-4 message editing. `editingMsg` is the message whose editor is open (one at a
+     time), and `editDraft` is the in-progress replacement text — kept OUT of the
+     composer draft so an edit can't entangle with a half-typed new message, an active
+     reply, or a staged attachment. */
+  const [editingMsg, setEditingMsg] = useState<Msg | null>(null);
+  const [editDraft, setEditDraft] = useState("");
   /* Board 4c — reactions. `reactingTo` is which message's quick row is open (one at
      a time: two open rows is two things claiming to be "the focused bubble"), and
      `pickerFor` is the message whose `+` opened the full catalogue. */
@@ -2102,6 +2134,30 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   }
   function deleteMessage(messageId: number) {
     setUnsendId(messageId);
+  }
+
+  // QW-4 — open the inline editor for one of my own text messages, prefilled with
+  // its current text.
+  function openEdit(m: Msg) {
+    setEditingMsg(m);
+    setEditDraft(m.body ?? "");
+  }
+  // Commit the edit. No-op (just closes) when the text is empty or unchanged — an
+  // edit to the same text is a wasted write and a misleading "edited" mark.
+  async function commitEdit() {
+    const m = editingMsg;
+    if (!m) return;
+    const next = editDraft.trim();
+    if (!next || next === (m.body ?? "").trim()) {
+      setEditingMsg(null);
+      return;
+    }
+    setEditingMsg(null);
+    try {
+      await editMutation.mutateAsync({ messageId: m.id, body: next });
+    } catch {
+      /* editMutation.onError already restored the cache + toasted. */
+    }
   }
 
   // ── composer state ──
@@ -3456,6 +3512,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     onHide={() => setHidingId(m.id)}
                     onToggleStar={() => toggleStar(m.id, starredIds.has(m.id))}
                     starred={starredIds.has(m.id)}
+                    onEdit={
+                      m.kind === "text" && !isExpiringMsg(m.meta)
+                        ? () => openEdit(m)
+                        : undefined
+                    }
                     onDelete={() => deleteMessage(m.id)}
                   />
                 )}
@@ -3490,6 +3551,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         )}
                         <div className="text-4xl leading-tight">{m.body}</div>
                         <div className={"text-[10px] mt-0.5 text-muted-foreground " + (mine ? "text-end" : "")}>
+                          {m.editedAt && <span>{t("msg.editedMark")} </span>}
                           {formatTime(m.createdAt)}
                           <Receipt status={m.status} mine={!!mine} />
                         </div>
@@ -3774,6 +3836,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     className="flex justify-end items-center gap-1 font-mono text-[8.5px] leading-none mt-0.5 -mb-0.5"
                     style={{ color: mine ? "#9fb0ab" : "#7d8f8a" }}
                   >
+                    {/* QW-4 — an "edited" marker sits just before the time when the
+                        sender has edited this message. Both sides see it: an edit
+                        stamps editedAt server-side and it rides the same list read. */}
+                    {m.editedAt && <span>{t("msg.editedMark")}</span>}
                     {formatTime(m.createdAt)}
                     <Receipt status={m.status} mine={!!mine} />
                   </div>
@@ -4708,6 +4774,42 @@ function ConversationView({ conversationId }: { conversationId: number }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* QW-4 — the message editor. Self-contained (its own text state, not the
+          composer draft) so an edit can't collide with a half-typed new message. Save
+          is inert on empty or unchanged text (commitEdit no-ops those too). */}
+      <AlertDialog open={editingMsg !== null} onOpenChange={(open) => !open && setEditingMsg(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("msg.editTitle")}</AlertDialogTitle>
+          </AlertDialogHeader>
+          <Textarea
+            value={editDraft}
+            onChange={(e) => setEditDraft(e.target.value)}
+            maxLength={8000}
+            rows={4}
+            autoFocus
+            aria-label={t("msg.editTitle")}
+            onKeyDown={(e) => {
+              // Enter (without Shift) saves; Shift+Enter is a newline. Escape is the
+              // dialog's own close.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void commitEdit();
+              }
+            }}
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!editDraft.trim()}
+              onClick={() => { void commitEdit(); }}
+            >
+              {t("msg.editSave")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
@@ -5508,6 +5610,7 @@ function MessageMenu({
   onReport,
   onToggleStar,
   starred,
+  onEdit,
 }: {
   mine?: boolean;
   onReply: () => void;
@@ -5548,6 +5651,12 @@ function MessageMenu({
    */
   onToggleStar?: () => void;
   starred?: boolean;
+  /**
+   * QW-4 — edit this message's text. Passed only on my OWN text bubbles (an edit
+   * rewrites content, so it is meaningless on somebody else's message and on media),
+   * so the item is simply absent everywhere else.
+   */
+  onEdit?: () => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -5661,6 +5770,15 @@ function MessageMenu({
                 className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
               >
                 <EyeOff className="size-4" /> {t("msg.hideAction")}
+              </button>
+            )}
+            {mine && onEdit && (
+              <button
+                type="button"
+                onClick={() => { onEdit(); setOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start text-sm hover:bg-muted"
+              >
+                <Pencil className="size-4" /> {t("msg.editAction")}
               </button>
             )}
             {mine && onDelete && (

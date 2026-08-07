@@ -5837,6 +5837,63 @@ export async function deleteMessage(input: {
 }
 
 /**
+ * Edit the text of one of your OWN messages (QW-4). Sender-only, text-kind only,
+ * and only while the message is live (not unsent, not an expiring message that has
+ * already been consumed). Stamps `editedAt` so both sides render an "edited" marker.
+ *
+ * DELIBERATELY NARROW. It touches ONLY `body` and `editedAt` — never the kind, the
+ * attachment, the reply target, or the receipt timestamps. Editing is for fixing
+ * what you typed, so:
+ *   • text messages only — a caption/album edit is a different feature with different
+ *     surfaces, and letting this rewrite a media message's body would put text on a
+ *     bubble that renders as an image;
+ *   • no `expire` messages — a view-once/countdown message's whole contract is that
+ *     it is seen once and burns; an edit is a second write to something that may have
+ *     already been consumed, so those are refused (`meta.expire` present ⇒ no);
+ *   • the body is NOT run through the UGC filter — same reasoning as `send`: a private
+ *     message is not a broadcast surface, and masking private speech is a harm.
+ *
+ * Unread counts are untouched: an edit neither adds nor removes a message, so the
+ * per-recipient counter is already correct (unlike unsend, which removes one).
+ *
+ * Returns the conversation id for the SSE fan-out, or null if the caller may not edit
+ * this message (foreign, missing, deleted, non-text, or expiring).
+ */
+export async function editMessage(input: {
+  messageId: number;
+  identityId: number;
+  body: string;
+}): Promise<number | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.id, input.messageId))
+    .limit(1);
+  if (!row || row.senderIdentityId !== input.identityId || row.deletedAt) return null;
+  if (row.kind !== "text") return null; // text messages only
+  // An expiring message (view-once / countdown) must not be editable — see the doc
+  // above. `meta.expire` is the marker the send path writes for those.
+  const meta = row.meta as { expire?: unknown } | null;
+  if (meta && meta.expire != null) return null;
+  const claim = await db
+    .update(messages)
+    .set({ body: input.body, editedAt: new Date() })
+    .where(
+      and(
+        eq(messages.id, input.messageId),
+        eq(messages.senderIdentityId, input.identityId),
+        isNull(messages.deletedAt),
+      ),
+    );
+  const claimed =
+    Array.isArray(claim) && ((claim[0] as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+  if (!claimed) return null;
+  return row.conversationId;
+}
+
+/**
  * Self-destruct (v2.96): a RECIPIENT opened an expiring message (view-once or
  * countdown) and it burned — destroy the content FOR EVERYONE. Only a
  * conversation participant who is NOT the sender can consume, exactly once.

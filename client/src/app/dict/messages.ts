@@ -223,6 +223,13 @@ export const MESSAGES = {
     en: "Couldn't unsend that message — restored it.",
     ar: "تعذّر التراجع عن إرسال الرسالة — تمت استعادتها.",
   },
+  "msg.editTitle": { en: "Edit message", ar: "تعديل الرسالة" },
+  "msg.editSave": { en: "Save", ar: "حفظ" },
+  "msg.editedMark": { en: "edited", ar: "مُعدّلة" },
+  "msg.editFailed": {
+    en: "Couldn't edit that message — restored it.",
+    ar: "تعذّر تعديل الرسالة — تمت استعادتها.",
+  },
 
   // ── Toasts ──
   "msg.copied": { en: "Copied", ar: "تم النسخ" },
@@ -431,6 +438,7 @@ export const MESSAGES = {
   "msg.forward": { en: "Forward", ar: "إعادة توجيه" },
   "msg.info": { en: "Info", ar: "معلومات" },
   "msg.unsendAction": { en: "Unsend", ar: "التراجع عن الإرسال" },
+  "msg.editAction": { en: "Edit", ar: "تعديل" },
 
   // ── Attachments ──
   "msg.imageAlt": { en: "Image", ar: "صورة" },

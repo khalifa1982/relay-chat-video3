@@ -105,6 +105,7 @@ import {
   reactionsForMessages,
   setThreadState,
   deleteMessage,
+  editMessage,
   consumeExpiringMessage,
   revealExpiringMessage,
   getPresenceAudienceIds,
@@ -3753,6 +3754,39 @@ export const v2MessagesRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "You can only delete your own messages." });
       }
       // Fan out so every participant's thread refreshes (the message vanishes).
+      try {
+        for (const pid of await getConversationParticipantIds(conversationId)) {
+          publishToIdentity(pid, { kind: "message", conversationId, from: me.id });
+        }
+      } catch {
+        /* best-effort */
+      }
+      return { ok: true, conversationId };
+    }),
+
+  /** Edit the text of one of your OWN messages (QW-4). Sender-only, text-only,
+   *  live-only (see editMessage). The body bound matches `send`'s text bound, and
+   *  an edit stamps `editedAt` so both sides render an "edited" marker. */
+  edit: publicProcedure
+    .input(
+      z.object({
+        messageId: z.number().int().positive(),
+        body: z.string().trim().min(1).max(8000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const conversationId = await editMessage({
+        messageId: input.messageId,
+        identityId: me.id,
+        body: input.body,
+      });
+      if (conversationId == null) {
+        // Same refusal for foreign / missing / non-text / expiring / already-unsent —
+        // the endpoint is not an oracle over which of those a message id is.
+        throw new TRPCError({ code: "FORBIDDEN", message: "You can only edit your own text messages." });
+      }
+      // Fan out so every participant re-reads the message (new text + edited mark).
       try {
         for (const pid of await getConversationParticipantIds(conversationId)) {
           publishToIdentity(pid, { kind: "message", conversationId, from: me.id });

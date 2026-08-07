@@ -35,7 +35,7 @@ approval.
 | QW-1 ▶ | Voice playback speed 1×/1.5×/2× | global setting, chained runs inherit it |
 | QW-2 ▶ | Draft indicator on thread rows | quiet italic; lock- and active-row-aware |
 | QW-3 ▶ | Starred messages | per-user bookmarks; menu toggle, bubble marker, cross-chat Starred view |
-| QW-4 | Message editing + "edited" label | server `editMessage` + bubble marker |
+| QW-4 ▶ | Message editing + "edited" label | `messages.edit` proc + inline editor + bubble marker; sender/text/live-only |
 | QW-5 | Text formatting bold/italic/strike/mono | renderer first, composer hints after |
 | QW-6 | Silent send | long-press send → no sound at the far end |
 | QW-7 | Group description | photo exists; add the text field |
@@ -69,24 +69,36 @@ Phone-number registration / SMS OTP (the 6-digit identity IS the product) ·
 Meta 3D avatars · FB/IG cross-posting · payments · Telegram-style premium
 tiers · games platform · nearby-people.
 
-## Apple App Store compliance (v2.107.52 — DONE)
+## Apple App Store compliance (v2.107.52 + v2.107.54 — DONE)
 
-The June rejection (build 21) was content/metadata, not code quality. Two
-guideline blockers needed real code and are now built, tested, and typechecked:
+The June rejection (build 21) was content/metadata, not code quality. Every
+guideline blocker that needed real code is now built, tested, and live:
 
 - **5.1.1(v) account deletion** — `identity.deleteMyAccount` reuses the full
   erase-cascade with the self-guard inverted (actingId=null), tears down the
   session, and is fronted by a Profile card behind a type-your-number confirm.
-- **1.2 UGC safety** — `content_reports` table + `identity.reportContent`
-  (fails loud, refuses self-reports, snapshots the text so a report survives an
-  unsend) + admin `listReports`/`resolveReport` for the 24h window. A **Report**
-  item sits in the message menu on received messages only, with a reason picker.
-  Block already existed (per-contact).
+- **1.2 UGC safety** — the full set of precautions:
+  - **Reporting** — `content_reports` table + `identity.reportContent` (fails
+    loud, refuses self-reports, snapshots the text so a report survives an
+    unsend) + admin `listReports`/`resolveReport` for the 24h window. A **Report**
+    item sits in the message menu with a reason picker.
+  - **Blocking** — per-contact block already existed.
+  - **Remove own posts** — unsend / admin-remove already existed.
+  - **(v2.107.54) Terms + no-tolerance gate** — the guest sign-up path gates on
+    a real "I agree" checkbox stating zero tolerance, linking to a new
+    `/guidelines` page (the acceptable-use terms, report/block/remove how-to, and
+    a 24h enforcement commitment).
+  - **(v2.107.54) Content filter** — `shared/contentFilter.ts` masks unambiguous
+    slurs/exploitation terms on the BROADCAST surfaces (profile name + status
+    note, story text, group name + note, party-line title). NOT private messages.
+  - **(v2.107.54) In-app report contact** — the report dialog shows a
+    `report@<host>` address alongside the reason buttons.
 
 The mic purpose string (5.1.1(ii)) was already fixed in build 43. Remaining
-items are NOT code — set in App Store Connect before resubmitting: the **age
-rating** must declare user-generated content, and **fresh screenshots** of the
-current build.
+items are NOT code — done in App Store Connect before resubmitting: **demo login**
+must work, the **age rating** must declare user-generated content, **fresh
+screenshots** of the current build, and a **screen recording** of the delete flow
+in the review Notes. Then a new build must be submitted.
 
 ## Infrastructure rider (approved with "build everything")
 
