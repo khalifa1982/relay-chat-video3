@@ -132,6 +132,8 @@ export async function sendExpoPush(
     data?: Record<string, string>;
     /** iOS/Android channel hint. "call" gets max priority. */
     kind?: string;
+    /** Silent send (v2.107.57): deliver the banner with NO sound. */
+    silent?: boolean;
   }
 ): Promise<ExpoSendResult> {
   const valid = Array.from(new Set(tokens.filter((t) => classifyNativeToken(t) === "expo")));
@@ -148,7 +150,9 @@ export async function sendExpoPush(
       title: payload.title,
       body: payload.body,
       data: payload.data ?? {},
-      sound: "default" as const,
+      // Expo reads `sound: null` as "show it, don't play anything" — that IS the
+      // silent send. A call is never silent.
+      sound: payload.silent && !isCall ? null : ("default" as const),
       // A ring must arrive now or not at all; everything else can be batched by
       // the OS to save the user's battery.
       priority: isCall ? ("high" as const) : ("normal" as const),

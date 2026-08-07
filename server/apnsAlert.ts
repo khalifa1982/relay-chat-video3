@@ -50,6 +50,8 @@ export interface ApnsAlert {
   kind: string;
   /** A call alert is worthless late: bound its life to the ring window. */
   isCall: boolean;
+  /** Silent send (v2.107.57): omit `aps.sound` so the banner is soundless. */
+  silent?: boolean;
 }
 
 export interface ApnsAlertResult {
@@ -93,7 +95,9 @@ export async function sendApnsAlert(
   const body = JSON.stringify({
     aps: {
       alert: { title: alert.title, body: alert.body },
-      sound: "default",
+      // Silent send (v2.107.57): a soundless banner still shows and still
+      // increments nothing it shouldn't — iOS just doesn't play the tone.
+      ...(alert.silent ? {} : { sound: "default" }),
       // Groups alerts of one conversation in the notification centre.
       ...(alert.tag ? { "thread-id": alert.tag.slice(0, 64) } : {}),
     },

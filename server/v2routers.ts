@@ -3310,6 +3310,11 @@ export const v2MessagesRouter = router({
             expire: z
               .union([z.literal("once"), z.literal(5), z.literal(10), z.literal(30)])
               .optional(),
+            /** Silent send (v2.107.57): the message delivers normally but its
+             *  offline push arrives WITHOUT a sound — the far end sees it, isn't
+             *  interrupted by it. Stored so the flag survives and a client could
+             *  mark the bubble; only the push transport actually reads it. */
+            silent: z.literal(true).optional(),
           })
           .optional(),
       })
@@ -3493,6 +3498,8 @@ export const v2MessagesRouter = router({
                 body,
                 tag: `relay-msg-${input.conversationId}`,
                 url: `/app/messages?c=${input.conversationId}`,
+                // Silent send (v2.107.57): deliver the banner, drop the sound.
+                silent: input.meta?.silent === true,
               }).catch(() => {});
             }
           }

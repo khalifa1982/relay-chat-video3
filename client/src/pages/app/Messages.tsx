@@ -1749,6 +1749,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
    * (or, for view-once, until they leave the thread). */
   type Msg = NonNullable<typeof messagesQuery.data>[number];
   const [expire, setExpire] = useState<null | "once" | 5 | 10 | 30>(null);
+  // Silent send (v2.107.57): press-and-hold the send button. `silentHoldTimer`
+  // is the pending long-press; `silentHoldFired` tells the click handler a hold
+  // just sent (so the trailing click doesn't double-send a normal message).
+  const silentHoldTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const silentHoldFired = useRef(false);
   const [revealed, setRevealed] = useState<
     Map<number, { body: string | null; attachment: Msg["attachment"]; until: number | null }>
   >(() => new Map());
@@ -2641,7 +2646,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     void uploadFile(file);
   }
 
-  async function send() {
+  async function send(opts?: { silent?: boolean }) {
     const body = text.trim();
     if (!body && !pendingUpload && pendingAlbum.length === 0) return;
     /* ── ALBUM SEND (v2.107.32) ──────────────────────────────────────────
@@ -2702,6 +2707,13 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     // all on the first open). The toggle is already hidden in groups; this is the
     // defensive backstop so a stale value can't slip a disappearing message in.
     const exp = isGroup ? null : expire;
+    // Silent send (v2.107.57): long-press send → the message delivers but its
+    // push arrives with no sound. Per-send, like expire — it never sticks.
+    const silent = opts?.silent === true;
+    const meta =
+      exp != null || silent
+        ? { ...(exp != null ? { expire: exp } : {}), ...(silent ? { silent: true as const } : {}) }
+        : undefined;
     // Clear the composer immediately (snappy), but if the send FAILS restore the
     // text/reply/attachment so the message is never silently lost — the user can
     // just tap send again. (Prevents the "I typed a message and it vanished" bug.)
@@ -2717,8 +2729,11 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         body: body || null,
         attachmentId: upload?.id ?? null,
         replyToId: reply?.id ?? null,
-        meta: exp != null ? { expire: exp } : undefined,
+        meta,
       });
+      // A quiet confirmation that the silent send did what it says — otherwise
+      // there's no way to tell a silent send from a normal one at the sender's end.
+      if (silent) toast.success(t("msg.sentSilently"));
     } catch (e) {
       setText(body);
       if (reply) setReplyingToState(reply);
@@ -4350,7 +4365,38 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               code rather than a capability. */}
           <Button
             type="button"
-            onClick={send}
+            onClick={() => {
+              // If a long-press just fired a silent send, swallow the trailing click.
+              if (silentHoldFired.current) {
+                silentHoldFired.current = false;
+                return;
+              }
+              void send();
+            }}
+            onPointerDown={() => {
+              silentHoldFired.current = false;
+              if (silentHoldTimer.current) clearTimeout(silentHoldTimer.current);
+              // Only arm the hold when there's something to send — a hold on an
+              // empty composer should do nothing, like a normal tap.
+              if (!text.trim() && !pendingUpload && pendingAlbum.length === 0) return;
+              silentHoldTimer.current = setTimeout(() => {
+                silentHoldFired.current = true;
+                void send({ silent: true });
+              }, 500);
+            }}
+            onPointerUp={() => {
+              if (silentHoldTimer.current) {
+                clearTimeout(silentHoldTimer.current);
+                silentHoldTimer.current = null;
+              }
+            }}
+            onPointerLeave={() => {
+              // Slid off the button before the hold completed — cancel it.
+              if (silentHoldTimer.current) {
+                clearTimeout(silentHoldTimer.current);
+                silentHoldTimer.current = null;
+              }
+            }}
             disabled={(!text.trim() && !pendingUpload && pendingAlbum.length === 0) || sendMutation.isPending || uploading}
             size="icon"
             /* Board 1d: the composer's primary is the ACCENT circle. The orange stays
@@ -4360,7 +4406,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                where white fails on the yellow and lime entries. */
             className="rcta h-11 w-11 rounded-full border-0 disabled:opacity-50"
             aria-label={t("msg.send")}
-            title={t("msg.send")}
+            title={t("msg.sendHoldHint")}
           >
             <Send className="size-4" />
           </Button>

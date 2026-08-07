@@ -43,6 +43,13 @@ export interface PushPayload {
   /** App path to open on tap, e.g. "/app/dialer". */
   url?: string;
   /**
+   * Silent send (v2.107.57) — deliver the notification but WITHOUT a sound, so
+   * the far end sees the message without being interrupted. Only the alerting
+   * transports read it: APNs omits `aps.sound`, FCM/Web Push mark the
+   * notification silent. A call never sets this (a silent ring is pointless).
+   */
+  silent?: boolean;
+  /**
    * Ring-only, and only APNs VoIP reads it (v2.105.12). A VoIP push is NOT a
    * notification — iOS hands it to PushKit, which reports a real CallKit call —
    * so it needs the things an ANSWER requires rather than the things a banner
@@ -293,6 +300,7 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
       title: p.title,
       body: p.body ?? "",
       kind: p.kind,
+      silent: p.silent === true,
       data: {
         kind: p.kind,
         title: p.title,
@@ -357,6 +365,7 @@ export async function sendPushToIdentity(identityId: number, payload: PushPayloa
       url: p.url ?? "",
       kind: p.kind,
       isCall: p.kind === "incoming-call",
+      silent: p.silent === true,
     });
     apnsAlertDelivered += r.sent;
     await Promise.all(r.invalidTokens.map(t => deletePushSubscription(t).catch(() => {})));

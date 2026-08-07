@@ -129,6 +129,8 @@ export const MESSAGES = {
   "msg.attach": { en: "Attach media or a file", ar: "أرفق وسائط أو ملفًا" },
   "msg.closeAttach": { en: "Close attach menu", ar: "إغلاق قائمة الإرفاق" },
   "msg.send": { en: "Send", ar: "إرسال" },
+  "msg.sendHoldHint": { en: "Send — hold for silent", ar: "إرسال — اضغط مطولاً للإرسال الصامت" },
+  "msg.sentSilently": { en: "Sent silently", ar: "أُرسلت بصمت" },
   "msg.cancelReply": { en: "Cancel reply", ar: "إلغاء الرد" },
   "msg.removeAttachment": { en: "Remove attachment", ar: "إزالة المرفق" },
   "msg.scrollToLatest": { en: "Scroll to latest messages", ar: "انتقل إلى أحدث الرسائل" },
