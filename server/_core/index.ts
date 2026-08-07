@@ -299,7 +299,7 @@ async function startServer() {
           // notifications for one call: whichever arrives second replaces the
           // first.
           tag: "relay-call",
-          url: "/app/dialer",
+          url: "/app/history",
           call: {
             callerName: info.fromName || "Someone",
             callerPin: info.fromPin,
@@ -469,7 +469,7 @@ async function startServer() {
           // One tag for every ring, so a redial REPLACES the notification
           // instead of stacking a second one for the same call.
           tag: "relay-call",
-          url: "/app/dialer",
+          url: "/app/history",
           call: {
             callerName: info.callerName || "Someone",
             callerPin: info.callerPin,
@@ -528,7 +528,7 @@ async function startServer() {
             title: "Call ended",
             body: "",
             tag: "relay-call",
-            url: "/app/dialer",
+            url: "/app/history",
             call: {
               type: "call_cancel",
               // A cancel names the call to stop and nothing else — see
