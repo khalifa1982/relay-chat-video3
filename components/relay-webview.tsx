@@ -14,6 +14,7 @@ import { WebView } from "react-native-webview";
 import type { WebViewMessageEvent, WebViewNavigation } from "react-native-webview";
 import type { WebViewErrorEvent } from "react-native-webview/lib/WebViewTypes";
 import * as Notifications from "expo-notifications";
+import * as ScreenCapture from "expo-screen-capture";
 
 import { RELAY_APP_URL, isInternalUrl } from "@/lib/relay-config";
 import { usePushToken } from "@/hooks/use-push-token";
@@ -29,6 +30,44 @@ const COLORS = {
 };
 
 const RELAY_LOGO = require("@/assets/images/relay-logo.png");
+
+/**
+ * Native-capability handshake (QW-12).
+ *
+ * Set BEFORE the page's own JS runs so the web app can, from its first render,
+ * tell it is inside the shell, which platform it is on, and which native-only
+ * features this build can honour. The web app's "Block screenshots" toggle keys
+ * its visibility off `capabilities.screenshotBlock`, so the switch only appears
+ * on a build that can actually enforce it — never as a dead control on an older
+ * shell or a desktop browser (where `__RELAY_NATIVE__` is simply undefined).
+ *
+ * `screenshotBlock` is advertised on Android only: FLAG_SECURE genuinely blocks
+ * still screenshots, screen recording, and the app-switcher thumbnail there,
+ * whereas iOS cannot block a still screenshot at all — so promising it on iOS
+ * would be a lie the user could disprove in one tap.
+ */
+const NATIVE_BRIDGE_INJECTION = `(function () {
+  try {
+    window.__RELAY_NATIVE__ = {
+      platform: ${JSON.stringify(Platform.OS)},
+      capabilities: { screenshotBlock: ${Platform.OS === "android"} },
+    };
+  } catch (e) {}
+  true;
+})();`;
+
+/**
+ * Apply (or lift) the OS screen-capture block. On Android this flips FLAG_SECURE;
+ * elsewhere the native module is a no-op, which is why the web app never shows the
+ * toggle off Android. Fire-and-forget — a rejected promise (e.g. the Activity is
+ * mid-teardown) must not surface as an unhandled rejection in the shell.
+ */
+function applyScreenshotBlock(enabled: boolean): void {
+  void (enabled
+    ? ScreenCapture.preventScreenCaptureAsync()
+    : ScreenCapture.allowScreenCaptureAsync()
+  ).catch(() => {});
+}
 
 /**
  * RelayWebView — thin WebView shell.
@@ -150,11 +189,22 @@ export function RelayWebView() {
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
       try {
-        const msg = JSON.parse(event.nativeEvent.data) as { type?: string };
+        const msg = JSON.parse(event.nativeEvent.data) as {
+          type?: string;
+          enabled?: unknown;
+        };
         // The web app signals its bridge is ready — re-send the push token so
         // it isn't dropped if loadEnd fired before the listener attached.
         if (msg?.type === "RELAY_WEB_READY" || msg?.type === "web-ready") {
           sendPushTokenOnReady();
+          return;
+        }
+        // QW-12: the web app's privacy toggle asks us to block (or allow) screen
+        // capture. It only sends this on a platform we advertised the capability
+        // for, and re-sends on every load because FLAG_SECURE resets per launch.
+        if (msg?.type === "SET_SCREENSHOT_BLOCK") {
+          applyScreenshotBlock(msg.enabled === true);
+          return;
         }
       } catch {
         // Non-JSON or irrelevant message; ignore.
@@ -196,6 +246,8 @@ export function RelayWebView() {
         allowsPictureInPictureMediaPlayback
         mediaPlaybackRequiresUserAction={false}
         allowsProtectedMedia
+        // ── Native-capability handshake (set before page JS; QW-12) ───────
+        injectedJavaScriptBeforeContentLoaded={NATIVE_BRIDGE_INJECTION}
         // ── Storage / session (persist login + cache across launches) ─────
         domStorageEnabled
         javaScriptEnabled

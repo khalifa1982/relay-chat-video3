@@ -14,7 +14,12 @@ import * as Notifications from "expo-notifications";
 // shows its own notification UI. Background / killed → OS shows natively.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
+    // `shouldShowAlert` is the pre-SDK-51 name (kept for older runtimes);
+    // `shouldShowBanner` + `shouldShowList` are its modern replacement. All
+    // false so a foreground push shows nothing native — the web app draws it.
     shouldShowAlert: false,
+    shouldShowBanner: false,
+    shouldShowList: false,
     shouldPlaySound: false,
     shouldSetBadge: false,
   }),

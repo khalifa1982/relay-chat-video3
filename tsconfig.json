@@ -24,6 +24,13 @@
   ],
   "exclude": [
     "node_modules",
-    "dist"
+    "dist",
+    // Orphaned by the v1.0.42 thin-shell rewrite: `server/` is the old
+    // full-stack template (now referenced only by the unused `dev:server`
+    // script) and `tests/` has no runner wired up. Neither ships in the app
+    // bundle, so they are scoped out of the typecheck rather than compiled
+    // against modules the rewrite deleted.
+    "server",
+    "tests"
   ]
 }

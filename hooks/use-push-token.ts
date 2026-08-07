@@ -28,7 +28,10 @@ export function usePushToken(webViewRef: React.RefObject<WebView | null>) {
     [webViewRef],
   );
 
-  const register = useCallback(async () => {
+  const register = useCallback(async (): Promise<{
+    pushToken: string;
+    tokenKind: "apns" | "fcm";
+  } | null> => {
     try {
       // Request permission (iOS asks the user; Android 13+ needs it too)
       const { status: existing } = await Notifications.getPermissionsAsync();
