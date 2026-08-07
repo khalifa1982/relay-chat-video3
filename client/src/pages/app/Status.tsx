@@ -1290,7 +1290,13 @@ export function StatusViewer({
 
       {/* body */}
       <div
-        className="relative flex-1"
+        /* `min-h-0` is load-bearing: a flex child defaults to `min-height:auto`,
+           so a tall photo refuses to shrink to its share and renders at full
+           width + intrinsic height — flush under the header, overflowing the
+           bottom, instead of letterboxed by `object-contain`. That is the frame
+           the owner saw the photo climbing over. `overflow-hidden` then clips any
+           residual so the media can never paint into the progress bars / name. */
+        className="relative flex-1 min-h-0 overflow-hidden"
         onPointerDown={() => { pressStartRef.current = Date.now(); setPaused(true); }}
         onPointerUp={() => setPaused(false)}
         onPointerLeave={() => setPaused(false)}

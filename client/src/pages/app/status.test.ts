@@ -18,6 +18,15 @@ describe("Status client", () => {
     expect(src).toMatch(/export function StatusViewer\(/);
   });
 
+  it("keeps the story media inside its frame, not climbing the header", () => {
+    // A flex child defaults to `min-height:auto`, so a tall photo refuses to
+    // shrink to its share and renders at intrinsic height flush under the header
+    // (overflowing the bottom) instead of letterboxed by object-contain — the
+    // frame the owner saw the photo painting over. The body wrapper must both
+    // shrink (`min-h-0`) and clip (`overflow-hidden`).
+    expect(src).toMatch(/className="relative flex-1 min-h-0 overflow-hidden"/);
+  });
+
   it("drives the status tRPC surface", () => {
     for (const call of [
       /trpc\.status\.feed\.useQuery/,
