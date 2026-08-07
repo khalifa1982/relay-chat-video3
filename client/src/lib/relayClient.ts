@@ -5425,7 +5425,13 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     lastStatusOverride = labelOverride;
     const text = labelOverride ?? T(STATUS_KEY[s], STATUS_LABEL[s]);
     const lbl = $("callRoomLbl");
-    if (lbl) lbl.textContent = text;
+    /* v2.107.67 (owner): the in-call chip does NOT show the word "Connected" — the
+       live-dot's colour already carries that, so the word beside a green dot is the
+       same fact twice. The header label is therefore BLANK once live; every other
+       state (Ringing…/Connecting…/Reconnecting…) keeps its word, because a colour
+       alone cannot say WHICH not-yet-live state it is. A caller override (a failure
+       reason shown on the dial card) always wins over the blanking. */
+    if (lbl) lbl.textContent = s === "live" && labelOverride == null ? "" : text;
     const ct = $("call")?.querySelector(".call-head .ct");
     if (ct) {
       ct.classList.remove(...ALL_ST_CLASSES);
@@ -5465,41 +5471,21 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   function paintCallIdentity() {
     const who = $("callWho");
     const roleEl = $("callWhoRole");
-    // A conference, a party line, or a call with nobody (or more than one peer)
-    // in it: no single subject, so the chip stays as it was.
+    /* v2.107.67 (owner): the top chip NEVER names the person any more. It carries
+       the call STATUS (the live-dot's colour), the timer, and — for a conference
+       ONLY — the live headcount. So the middle slot shows the number of people on
+       a group / party-line call and collapses to nothing for a 1:1 (the
+       `.hchip-who:empty{display:none}` rule). The tier badge went with the name:
+       a seal with nobody to attach to is noise, and a conference has N people, so
+       one badge would be a claim wrong for everybody else on the call. The
+       `!callIsGroup && pins.length === 1` shape that used to pick the single
+       subject is inverted here into the conference test. */
     const pins = Object.keys(peers);
-    const pin = !callIsGroup && pins.length === 1 ? pins[0] : null;
-    if (who) who.textContent = pin ? (peers[pin]?.name || peerNamesSeen[pin] || "") : "";
+    const isConference = callIsGroup || pins.length > 1;
+    // +1 counts YOU: "number of people in it" is everyone on the call, not the
+    // remote peers alone.
+    if (who) who.textContent = isConference ? String(pins.length + 1) : "";
     if (roleEl) roleEl.style.display = "none";
-    if (!pin || !roleEl) return;
-
-    const paintTier = (tier: PeerTier) => {
-      // Re-check the subject: this can resolve a network round trip after the call
-      // it was asked about has moved on, and a badge from the previous person is
-      // worse than none.
-      const now = Object.keys(peers);
-      if (callIsGroup || now.length !== 1 || now[0] !== pin) return;
-      const meta = TIER_META[tier];
-      roleEl.style.display = "";
-      (roleEl as HTMLElement).style.color = meta.color;
-      roleEl.setAttribute("title", meta.label + " account");
-      roleEl.setAttribute("aria-label", meta.label + " account");
-    };
-
-    const known = peerTierSeen[pin];
-    if (known) { paintTier(known); return; }
-    // Only a call this session never looked the person up for — a rejoin after a
-    // reload, or a peer who arrived by being added to the call rather than by
-    // ringing us. Decoration, so a failure is silent and the chip keeps the name.
-    if (!/^\d{6}$/.test(pin)) return;
-    trpcGet("directory.lookup", { number: pin })
-      .then((j) => {
-        const tier = tierOf(trpcJson<{ role?: string | null; verified?: boolean }>(j));
-        if (!tier) return;
-        peerTierSeen[pin] = tier;
-        paintTier(tier);
-      })
-      .catch(() => { /* the chip is readable without a badge */ });
   }
 
   function clearConnSeq() {

@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation } from "wouter";
-import { Loader2, PhoneOff, UserPlus, Minimize2, Maximize2, Scan, GripHorizontal, Users, Phone, ChevronDown } from "lucide-react";
+import { Loader2, PhoneOff, UserPlus, Minimize2, Maximize2, Scan, Shrink, GripHorizontal, Users, Phone, ChevronDown } from "lucide-react";
 // TYPE-ONLY import — erased at build. The call engine (relayClient + its
 // markup/CSS) is DYNAMICALLY imported inside the mount effect below (v2.88):
 // it's several hundred KB that only matters once a signed-in user is inside
@@ -664,24 +664,16 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
         }
         data-relay-engine-root="true"
       />
-      {/* Fullscreen in-call controls (v2.99.8): a Minimize + Fit cluster centred
-          along the top. v2.107.51 (owner) drops it BELOW the engine's own
-          `.call-head` header (name/timer/lock) instead of `top-3` on top of it —
-          the timer and lock were colliding with the Fit button. Hidden while
-          minimized (the mini box has its own controls) and pre-connect. */}
+      {/* Fullscreen in-call controls: the three size states, parked at the TOP-RIGHT
+          of the frame after the timer (v2.107.67, owner). Order is Fit → Minimize →
+          Bubble, matching the engine's own state ladder: FIT toggles letterbox↔cover,
+          MINIMIZE drops to the draggable mini-box, BUBBLE clips to the tiniest bubble.
+          v2.107.51 had parked the cluster BELOW the header because a CENTRED cluster
+          collided with the timer/lock; right-aligned (`end-3`) it sits clear of the
+          `.ct` chip, which is on the opposite (start) edge. Hidden while minimized
+          (the mini box has its own controls) and pre-connect. */}
       {phase === "in-call" && !minimized ? (
-        /* `left-1/2` + `-translate-x-1/2` is CENTRING, which is direction-independent
-           — the logical `start-1/2` would push this cluster off-centre in Arabic. */
-        <div className="fixed top-16 left-1/2 z-[70] flex -translate-x-1/2 gap-2">
-          <button
-            type="button"
-            onClick={() => setMinimized(true)}
-            className="inline-flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-2 text-xs font-semibold text-white shadow-lg backdrop-blur-md hover:bg-black/75 active:scale-95 transition-transform"
-            aria-label={t("engine.minimizeLabel")}
-            title={t("engine.minimizeHint")}
-          >
-            <Minimize2 className="size-4" /> {t("engine.minimize")}
-          </button>
+        <div className="fixed top-3 end-3 z-[70] flex gap-2">
           <button
             type="button"
             onClick={() => setFitContain((v) => !v)}
@@ -698,6 +690,24 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
             title={fitContain ? t("engine.fitOnHint") : t("engine.fitOffHint")}
           >
             <Scan className="size-4" /> {t("engine.fit")}
+          </button>
+          <button
+            type="button"
+            onClick={() => setMinimized(true)}
+            className="inline-flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-2 text-xs font-semibold text-white shadow-lg backdrop-blur-md hover:bg-black/75 active:scale-95 transition-transform"
+            aria-label={t("engine.minimizeLabel")}
+            title={t("engine.minimizeHint")}
+          >
+            <Minimize2 className="size-4" /> {t("engine.minimize")}
+          </button>
+          <button
+            type="button"
+            onClick={() => setBubbled(true)}
+            className="inline-flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-2 text-xs font-semibold text-white shadow-lg backdrop-blur-md hover:bg-black/75 active:scale-95 transition-transform"
+            aria-label={t("engine.bubbleLabel")}
+            title={t("engine.bubbleHint")}
+          >
+            <Shrink className="size-4" /> {t("engine.bubble")}
           </button>
         </div>
       ) : null}

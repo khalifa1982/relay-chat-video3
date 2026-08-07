@@ -453,21 +453,24 @@ describe("board 1h respects the call surface's standing rules", () => {
     expect(body).toMatch(/who\.textContent\s*=/);
   });
 
-  it("a CONFERENCE is never named by one of its peers", () => {
-    /* The gating argument. A group has N remote peers, so naming one is a claim about the
-       call that is wrong for everybody else on it — the grid's own per-tile band is what
-       names people there. A mutation that drops either half of this (the group check, or
-       the exactly-one-peer check) puts a stranger's name on a conference. */
+  it("the chip NEVER names the person — headcount for a conference, nothing for a 1:1", () => {
+    /* v2.107.67 (owner): the chip stopped naming the callee. It carries the call STATUS
+       (the live-dot colour), the timer, and — for a conference only — the live headcount.
+       A 1:1 writes the empty string so `.hchip-who:empty` collapses the slot. Both halves
+       are load-bearing: drop the group test and a two-party call would show "2"; drop the
+       `+1` (which counts YOU) and a full room undercounts by one. */
     const body = fnBody(CLIENT, "function paintCallIdentity(");
-    expect(body).toMatch(/!callIsGroup\s*&&\s*pins\.length === 1/);
+    expect(body).toMatch(/callIsGroup\s*\|\|\s*pins\.length > 1/);
+    expect(body).toMatch(/who\.textContent\s*=\s*isConference \? String\(pins\.length \+ 1\) : ""/);
   });
 
-  it("an unknown name writes the empty string, never the pin", () => {
-    /* `.hchip-who:empty{display:none}` exists for this: a bare six-digit number sitting
-       between a status and a timer reads as a third piece of state rather than a person.
-       So this deliberately does NOT reuse `nameOf`, whose fallback IS the pin. */
+  it("the chip reads no name source — no peer name, no seen-name cache, no pin", () => {
+    /* The name is GONE (v2.107.67), so every path that used to resolve it must be too: a
+       leftover `peers[pin].name` or `peerNamesSeen` read would put a name back into a chip
+       that now carries only status, headcount and the timer. */
     const body = fnBody(CLIENT, "function paintCallIdentity(");
-    expect(body).toMatch(/peerNamesSeen\[pin\] \|\| ""/);
+    expect(body).not.toMatch(/peerNamesSeen/);
+    expect(body).not.toMatch(/peers\[[^\]]+\]\?\.name/);
     expect(body).not.toMatch(/nameOf\(/);
   });
 
@@ -501,15 +504,16 @@ describe("board 1h respects the call surface's standing rules", () => {
     expect(CLIENT.split(`return d.role === null ? null : "guest";`).length - 1).toBe(1);
   });
 
-  it("the badge costs no third request per call", () => {
-    /* The ring card and the dial card each already look the tier up and throw it away, so
-       the chip reads what they learned. Without the cache this would be a `directory.lookup`
-       on every call in addition to theirs, and the badge would arrive a round trip late. */
-    expect(CLIENT).toMatch(/const peerTierSeen: Record<string, PeerTier> = \{\}/);
+  it("the chip makes no directory lookup — the tier badge went with the name", () => {
+    /* v2.107.67 (owner): with no name to sit beside, the tier seal went too. So the chip
+       does NOT look anyone up — no `directory.lookup`, no tier paint — and the role slot
+       stays hidden. `tierOf` and its cache survive for the ring and dial cards (the test
+       above still pins their single implementation); they are simply no longer read HERE. */
     const body = fnBody(CLIENT, "function paintCallIdentity(");
-    expect(body).toMatch(/peerTierSeen\[pin\]/);
-    // …and the fallback re-checks the subject, because it resolves asynchronously.
-    expect(body).toMatch(/if \(callIsGroup \|\| now\.length !== 1 \|\| now\[0\] !== pin\) return;/);
+    expect(body).not.toMatch(/directory\.lookup/);
+    expect(body).not.toMatch(/paintTier/);
+    expect(body).not.toMatch(/TIER_META/);
+    expect(body).toMatch(/roleEl\.style\.display\s*=\s*"none"/);
   });
 
   it("neither RELAY_CSS nor RELAY_MARKUP contains an interior backtick", () => {

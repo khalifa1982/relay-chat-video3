@@ -68,6 +68,7 @@ export const ENGINE = {
   // v2.107.47 (owner) — the tiny floating call bubble state.
   "engine.bubble": { en: "Bubble", ar: "فقاعة" },
   "engine.bubbleLabel": { en: "Shrink call to a floating bubble", ar: "تصغير المكالمة إلى فقاعة عائمة" },
+  "engine.bubbleHint": { en: "Bubble — shrink the call to a tiny floating bubble", ar: "فقاعة — صغّر المكالمة إلى فقاعة عائمة صغيرة" },
   "engine.restoreCall": { en: "Restore call", ar: "استعادة المكالمة" },
   "engine.maximizeLabel": {
     en: "Maximize the call back to full screen",
