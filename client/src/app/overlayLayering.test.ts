@@ -52,19 +52,28 @@ function* walk(dir: string): Generator<string> {
 type Overlay = { portals: boolean; z: number; ref: string; cls: string };
 function overlays(): Overlay[] {
   const out: Overlay[] = [];
+  const record = (cls: string, portals: boolean, f: string) => {
+    if (!/bg-black|bg-background\b|bg-card\b/.test(cls)) return; // only backdrops
+    const zm = cls.match(/\bz-\[(\d+)\]/) ?? cls.match(/\bz-(\d+)\b/);
+    out.push({
+      portals,
+      z: zm ? parseInt(zm[1], 10) : 0,
+      ref: relative(ROOT, f),
+      cls: cls.slice(0, 60),
+    });
+  };
   for (const f of walk(ROOT)) {
     const src = readFileSync(f, "utf8");
     const portals = /createPortal\s*\(/.test(src);
+    // Plain double-quoted className.
     for (const m of src.matchAll(/className="([^"]*\bfixed inset-0\b[^"]*)"/g)) {
-      const cls = m[1];
-      if (!/bg-black|bg-background\b|bg-card\b/.test(cls)) continue; // only backdrops
-      const zm = cls.match(/\bz-\[(\d+)\]/) ?? cls.match(/\bz-(\d+)\b/);
-      out.push({
-        portals,
-        z: zm ? parseInt(zm[1], 10) : 0,
-        ref: relative(ROOT, f),
-        cls: cls.slice(0, 60),
-      });
+      record(m[1], portals, f);
+    }
+    // Template-literal className, e.g. className={`relay-v2 ${…} fixed inset-0 …`}.
+    // The interpolations are irrelevant to the static classes we key on, so match
+    // the backtick body and keep the literal parts.
+    for (const m of src.matchAll(/className=\{`([^`]*\bfixed inset-0\b[^`]*)`\}/g)) {
+      record(m[1], portals, f);
     }
   }
   return out;

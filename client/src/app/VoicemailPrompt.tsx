@@ -6,6 +6,7 @@ import { RoleBadge } from "./VerifiedBadge";
 import { uploadAttachment } from "@/lib/uploadAttachment";
 import { recorderSupported, startVoiceRecording, type VoiceRecording } from "@/lib/voiceNote";
 import { translate, useLocale, useT, type TKey } from "./i18n";
+import { useTheme } from "@/contexts/ThemeContext";
 
 /* ============================================================================
    BOARD 2g — VOICEMAIL (with 5h's "VOICEMAIL — RECORDING (MAX 60S)" panel)
@@ -62,15 +63,16 @@ import { translate, useLocale, useT, type TKey } from "./i18n";
        has ended (`phase === "idle"` in RelayEngine), so there is no live call
        left to decline.
 
-   `relay-v2` ON THIS WRAPPER, and deliberately NOT `dark`. The shipped surface
-   utilities are scoped `.relay-v2 X` (`.rcta`) or `.dark.relay-v2 X`
-   (`.rsheet`), and `<html>` carries `relay-v2` from AppShell plus `dark` only in
-   the dark theme. Carrying `relay-v2` here makes `.rcta` work regardless of how
-   this overlay is reached; adding `dark` too would force a DARK sheet in the
-   LIGHT theme, which is exactly what v2.106.10 avoided when it made `.rsheet`
-   dark-scoped so the light theme stays byte-identical. `PasscodeGate` can carry
-   both only because that screen was already unconditionally dark; this card is
-   not — it has always been `bg-card`, i.e. light in the light theme.
+   `relay-v2` ON THIS WRAPPER, plus `dark` IN THE DARK THEME (v2.107.58, owner
+   request). The shipped surface utilities are scoped `.relay-v2 X` (`.rcta`) or
+   `.dark.relay-v2 X` (`.rsheet`). This wrapper used to carry ONLY `relay-v2` — the
+   idea being to keep the light theme byte-identical — but the cost was that in the
+   DARK theme the sheet still rendered as a LIGHT card floating over a dark app, and
+   its background resolved light while `text-foreground` still inherited the dark
+   scope from `<html class="dark">`, so the message input was near-white text on a
+   near-white field. The wrapper now mirrors the app theme (`dark` when the app is
+   dark), so background and text always come from the same scope: a dark sheet in
+   dark, a light sheet in light, and an input that always contrasts.
 
    `.rscrim` IS DELIBERATELY NOT USED ON THE BACKDROP, and that is a reading of
    the CSS rather than a preference: `.rscrim` is a radial gradient that is fully
@@ -511,6 +513,7 @@ function RecordPanel({
  */
 export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClose: () => void }) {
   const t = useT();
+  const { theme } = useTheme();
   const openThread = trpc.messages.openThread.useMutation();
   const sendMessage = trpc.messages.send.useMutation();
   const watchOnline = trpc.directory.watchOnline.useMutation();
@@ -663,7 +666,16 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
 
   return (
     <div
-      className="relay-v2 fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
+      // v2.107.58 (owner: "match the sheet to the phone's theme") — this wrapper now
+      // carries `dark` in the dark theme. It used to carry ONLY `relay-v2`, on purpose,
+      // to keep the light theme byte-identical — but the cost was that in DARK theme the
+      // sheet still rendered as a LIGHT card floating over a dark app, and worse, its
+      // background resolved light while `text-foreground` still inherited the dark scope
+      // from <html class="dark">, so the message input was near-white text on a near-white
+      // field — invisible while typing. Adding `dark` here makes background AND text
+      // resolve from the SAME scope, so the sheet is fully dark in dark and fully light in
+      // light, and the input always contrasts.
+      className={`relay-v2 ${theme === "dark" ? "dark" : ""} fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 backdrop-blur-sm`}
       role="alertdialog"
       aria-label={t("voicemail.didntConnect", { who })}
     >
@@ -747,7 +759,10 @@ export function VoicemailPrompt({ info, onClose }: { info: FailedDialInfo; onClo
                 placeholder={t("voicemail.messagePlaceholder", { who })}
                 aria-label={t("voicemail.messageLabel", { who })}
                 maxLength={2000}
-                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                // Explicit text-foreground (v2.107.58): never rely on inheritance for the
+                // typed text's colour — that's what made it invisible when the sheet's
+                // background and foreground came from different theme scopes.
+                className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
               />
               <button
                 type="button"

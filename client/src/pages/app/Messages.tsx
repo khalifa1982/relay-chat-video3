@@ -840,17 +840,14 @@ export default function MessagesPage({
             </div>
           </div>
         </header>
-        {/* v2.106.66 — THE STORIES STRIP IS CHROME, NOT THE FIRST ROW OF THE LIST.
-            Board 1c's own order is header → strip → search → threads, and its caption reads
-            "Stories strip · threads · swipe actions"; the app had it BELOW the search and
-            INSIDE the scroller, so it scrolled away with the threads and sat under a field
-            it is not part of. Read off the board's markup rather than a description of it.
-
-            Out of the scroller matters more than the order does: a story is a 24h thing and
-            the ring is the only signal it exists, so scrolling two threads down used to hide
-            every one of them. Above the search because the search narrows THREADS — putting
-            a stories row under it implies it filters those too. */}
-        <StatusStrip compact={only === "groups"} />
+        {/* v2.107.58 (owner) — THE STORIES STRIP LIVES ONLY ON THE GROUPS TAB NOW.
+            It used to render on both the Messages and the Groups tab; the owner asked for
+            it gone from Messages ("remove the status area — it already exists in the group
+            area"), so the Messages thread list opens straight into the threads and the
+            strip is reachable from Groups, where it renders compact. Everything below —
+            the Status.tsx components, the story routes, posting — is untouched; this is
+            purely where the strip mounts. */}
+        {only === "groups" && <StatusStrip compact />}
         {searchOpen && scopedThreads.length > 0 && (
           <div className="px-3 py-2 border-b border-border/60">
             <div className="relative">

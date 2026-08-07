@@ -125,7 +125,22 @@ describe("board 5h — the sheet's own edge reports its state", () => {
     // fully visible to the JIT and both are the sanctioned pattern the source
     // comments name. What is actually unsafe is a VALUE flowing into the string:
     // a template interpolation, or a bare identifier concatenated in.
-    expect(VM).not.toMatch(/className=\{[^}]*\$\{/);
+    //
+    // v2.107.58 EXTENDS the sanctioned pattern to the wrapper's theme class: the
+    // wrapper is `className={`relay-v2 ${theme === "dark" ? "dark" : ""} …`}`, which
+    // is the SAME "pick between two whole literals" shape — the JIT still sees the
+    // literal `dark`, and no runtime string value reaches the class. So the guard
+    // allows a template whose ONLY interpolations are literal-selecting ternaries,
+    // and still bans a bare `${identifier}` or a value-carrying interpolation.
+    const classNameExprs = [...VM.matchAll(/className=\{`([^`]*)`\}/g)].map((m) => m[1]);
+    for (const body of classNameExprs) {
+      for (const interp of [...body.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1])) {
+        // A literal-selecting ternary is fine: `X ? "a" : "b"` / `X ? "a" : ""`.
+        const literalTernary = /^\s*[^?]+\?\s*"[^"]*"\s*:\s*"[^"]*"\s*$/.test(interp);
+        expect(literalTernary, `unsafe className interpolation: \${${interp}}`).toBe(true);
+      }
+    }
+    // A bare identifier or value concatenated with + is still banned.
     expect(VM).not.toMatch(/className=\{[^}]*\+\s*[A-Za-z_$]/);
     // The sheet still opts into the shared surface recipe as a LITERAL. Two
     // things depend on that: `.dark.relay-v2 .rsheet` supplies the neutral dark

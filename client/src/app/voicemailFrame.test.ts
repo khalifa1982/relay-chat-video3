@@ -376,16 +376,25 @@ describe("motion", () => {
 });
 
 describe("material and scoping", () => {
-  it("the wrapper carries relay-v2 and deliberately NOT dark", () => {
+  it("the wrapper carries relay-v2 and matches the app theme", () => {
     // `.rcta` is `.relay-v2`-scoped, so carrying that class here makes the CTA
-    // work however this overlay is reached. `dark` is NOT added: `.rsheet` is
-    // `.dark.relay-v2`-scoped precisely so the LIGHT theme is byte-identical
-    // (v2.106.10), and this card has always been `bg-card` — light in light.
-    const wrapper = region(VM, "return (\n    <div\n      className=", "role=\"alertdialog\"");
-    expect(wrapper).toContain("relay-v2");
-    expect(wrapper).not.toMatch(/\bdark\b/);
+    // work however this overlay is reached. And as of v2.107.58 the wrapper adds
+    // `dark` in the dark theme (owner request), so the sheet's background AND its
+    // text resolve from the same scope — a dark sheet in dark, light in light —
+    // instead of a light card floating in a dark app with invisible input text.
+    expect(VM).toContain("relay-v2");
+    // The theme is read and gates the `dark` class on the wrapper.
+    expect(VM).toMatch(/const \{ theme \} = useTheme\(\)/);
+    expect(VM).toMatch(/theme === "dark" \? "dark" : ""/);
     expect(VM).toMatch(/className="rsheet /);
     expect(CSS).toMatch(/\.dark\.relay-v2 \.rsheet \{/);
+  });
+
+  it("the message input sets an explicit text colour so it can never be invisible", () => {
+    // The white-on-white bug: the typed text relied on inherited `text-foreground`,
+    // which came from a different theme scope than the card's background. It now
+    // sets text-foreground explicitly.
+    expect(VM).toMatch(/text-sm text-foreground outline-none/);
   });
 
   it("does NOT put .rscrim on the modal backdrop", () => {
