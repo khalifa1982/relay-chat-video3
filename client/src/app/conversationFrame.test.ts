@@ -71,8 +71,15 @@ describe("the voice note is the board's waveform, and its control can be seen", 
     expect(at).toBeGreaterThan(-1);
     const btn = MSG.slice(at, at + 700);
     expect(btn).toMatch(/bg-white/);
+    /* THE HAIRLINE IS THE PROPERTY, NOT ITS ALPHA. v2.107.27 made the ring theme-aware:
+       against the DARK page a white disc has all the edge it needs, but on the LIGHT page
+       the bubble composites to near-white and the disc's shape drops to about 1.05:1 — so
+       the light theme darkens the ring rather than the disc, which is what preserves the
+       4.92:1 glyph and the per-person identity this test's own comment is about. Freezing
+       `ring-black/10` would have forbidden exactly that while saying nothing about whether
+       the disc has an edge at all. */
     expect(btn, "a hairline, because a white disc on a pale bubble is only 1.92:1").toMatch(
-      /ring-1 ring-black\/10/,
+      /ring-1 ring-(black\/10|\[color:var\(--mbub-disc-ring\)\])/,
     );
     expect(btn).toMatch(/style=\{\{ color: glyph \}\}/);
     expect(btn, "the card recipe must not come back on a bubble").not.toMatch(/rchip-accent/);
@@ -142,7 +149,11 @@ describe("board 1d's smaller type and spacing rules", () => {
        conversation one had moved. Exact values belong to `conversationFidelity.test.ts`. */
     // `[^"]*` BEFORE the mono class too: the conversation stamp's class string opens with
     // `flex justify-end …`, so anchoring the capture at `font-mono` found only one of the two.
-    const stamps = [...MSG.matchAll(/className="([^"]*font-mono text-\[[\d.]+px\][^"]*)"\s*\n\s*style=\{\{ color: mine \? "(#[0-9a-f]{6})" : "(#[0-9a-f]{6})" \}\}/gi)];
+    /* `[^"]+` rather than a literal hex (v2.107.27): the stamp colours became
+       `var(--mbub-stamp-*)` so the light theme can override them, and freezing the hex
+       here would have forbidden that while saying nothing about the property — which is
+       only that the two stamps carry the SAME treatment as each other. */
+    const stamps = [...MSG.matchAll(/className="([^"]*font-mono text-\[[\d.]+px\][^"]*)"\s*\n\s*style=\{\{ color: mine \? "([^"]+)" : "([^"]+)" \}\}/gi)];
     expect(stamps.length, "the conversation bubble AND the search-result bubble").toBe(2);
     const [a, b] = stamps;
     const px = (s: RegExpMatchArray) => Number(/\[([\d.]+)px\]/.exec(s[1])![1]);

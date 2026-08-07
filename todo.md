@@ -1,5 +1,181 @@
 # Project TODO
 
+## v2.107.61 — THE LIGHT THEME WAS WHITE ON WHITE, AND THE NAV SPENT ITS WHOLE SAFE AREA ON NOTHING
+
+Owner, with four screenshots and the request stated twice: *"If you see now the white
+theme, the coloring, it's not matching at all. I cannot read it everything in white. The
+background is white. The font is white. … Make sure the white theming is matched. … I
+already mentioned previously there is a gap space on the lower part of the navigation.
+… So take the navigation bar down, let it reach to the bottom exactly, and give the
+space. So at least the display, the middle display, is big and wide."*
+
+### 1. Light theme — a translucent fill means the surface tracks the PAGE
+
+Every message bubble is a translucent fill (`rgba(245,140,60,.17)` for mine,
+`rgba(255,255,255,.08)` for a received one) and the text over it was a **hard-coded
+near-white**. Over the board's near-black page the effective surface composites dark and
+that reads 15–17:1. Over the light page the effective surface *is* the page — so it was
+white on white.
+
+Measured against the real built stylesheet, compositing each fill over the real token:
+
+```
+                          BEFORE (light)     AFTER
+group / 1:1 bubble body       1.04:1        17.84:1
+own bubble body               1.18:1        15.51:1
+own reply quote               1.21:1         4.96:1
+received quote + stamps       2.15:1         5.71:1
+sender name (worst of 17)     1.34:1         5.47:1
+group-lock keypad digit       1.04:1        18.76:1
+new-message toggle label      1.09:1        18.76:1
+```
+
+**Thirteen of thirteen light cases failed AA; all thirteen dark ones passed.** That
+asymmetry *is* the diagnosis — the board is a dark design and the app ships light. It
+arrived at **v2.106.62**, which removed twelve `mine ? white : muted` ternaries and made
+bubble text white UNCONDITIONALLY: correct for the surfaces it was measured on, and it
+never met the light page.
+
+**AN INLINE STYLE CANNOT BRANCH ON THEME**, which is the whole shape of the fix — the same
+reason v2.106.38 had to move the contacts tag chips into `.rtag-*` recipes. The bubble
+keeps its inline fill and border; only the COLOURS become variables, declared on both
+sides in `index.css`. **Dark is byte-identical**: every base value is what was previously
+written inline, so the `:not(.dark)` block is a pure addition.
+
+**THE LIGHT VALUES ARE THE APP'S OWN TOKENS, not a second palette.** `--foreground` and
+`--muted-foreground` are already measured to read on `--background`/`--card`, and a
+bubble's fill is translucent enough that its effective surface stays within a few percent
+of the page — so the text tracks the page for free instead of needing a second palette
+that can drift from the first.
+
+**A SENDER'S NAME IS DARKENED, NEVER RE-PICKED.** Sixteen runtime hues cannot be sixteen
+static classes and must not become sixteen more hand-picked hexes. The call site hands
+over only the palette colour as `--rname`; the theme owns how far it is mixed toward
+black, and **at dark's 100% `color-mix` returns the hex unchanged**, so dark is untouched
+while light gets the same hue, darkened. 55% is the LIGHTEST mix clearing AA on all
+seventeen hues (worst 5.47:1; 62% fails at 4.18) — lightest-that-passes on purpose, so it
+stays closest to the colour the person is known by.
+
+**THREE SURFACES ARE JUDGED ON PARITY, NOT AA**, because they are not text — and my first
+pass picked all three by eye and every one was under-weighted:
+
+```
+                    dark      light (first pass)   light (measured)
+tile vs bubble      1.57         1.14  at 6%          1.52  at 18%
+wave track          2.27         1.52  at 18%         2.34  at 34%
+play-disc edge     16.4          1.97  at 28%         2.49  at 36%
+```
+
+The play **disc stays white in both themes** deliberately: its glyph is the bubble's own
+dark stop, measured at 4.92:1 across 36 surfaces (v2.106.40), and inverting the disc for
+light would cost that per-person identity. On the light page that same disc is 1.21
+against a near-white bubble, so the **ring** carries the edge instead.
+
+Final sweep: **84/84 pass, worst TEXT 4.58:1 overall and 4.96:1 in light**, every edge
+surface at parity with its dark counterpart.
+
+**THE GUARD FOUND TWO COMPONENTS I HAD NOT CONVERTED**, which is what it is for: the
+voice-note player and the file card both render INSIDE the bubble and both were
+white-on-near-white in light exactly like the body text — the fixed-in-one-of-N shape,
+and both would have shipped looking fixed. **The correction there is a REMOVAL rather
+than another variable**: the enclosing bubble already sets `color`, so deleting
+`text-white` inherits the right value per side and per theme for free.
+
+It then caught a **third** on the rebase: v2.107.60's new playback-rate pill shipped with
+`bg-white/15`, the same defect in code written after the fix.
+
+### 2. The bottom nav spent its whole safe-area inset on empty padding
+
+Measured at a 34px iPhone inset, against the real built stylesheet:
+
+```
+                       bar    scroll   dead band under the labels
+before                 77px   767px    34px
+after (reclaim 14px)   63px   781px    20px
+no home indicator      43px   801px     0px
+```
+
+`max(0px, calc(env(safe-area-inset-bottom) - 14px))` — **the `max(0px, …)` is what keeps
+v2.99.94 intact**: with no home indicator the inset is 0, the subtraction floors at 0, and
+the bar still ends exactly at the viewport edge instead of acquiring a new floor. 14px is
+bounded on both sides: it must reclaim something, and it must leave the home-indicator
+pill its room (the pill occupies roughly the bottom 13px of a 34px inset).
+
+### One change was reverted rather than shipped, and that is the honest part
+
+My first pass measured the voicemail sheet's callee name at 1.17:1 and added
+`text-foreground` to the card, on the theory that it inherited `.relay-root`'s private
+near-black theme. **Both halves were wrong**, and only measuring caught it: the overlay is
+a **SIBLING** of the `.relay-root` host in `RelayEngine.tsx` (that div is self-closing), so
+no such inheritance reaches it; and the real defect was that the overlay's own `relay-v2`
+wrapper matched `.relay-v2:not(.dark)` and re-scoped the tokens to light while the app was
+dark — which **v2.107.58 already fixed** from a parallel session, by the right mechanism.
+Re-measured on the rebased source the card reads **16.18:1 dark / 18.76:1 light, identical
+with and without the change**. A no-op with a false explanation attached is worse than
+nothing, so it was reverted and the reasoning recorded in the test file instead.
+
+### Tests
+
+`client/src/app/lightThemeReadable.test.ts` (11). **14 of 14 tripwires verified by
+MUTATION** off a confirmed-green baseline from byte-exact backups, the mutator aborting
+unless its target occurs exactly once and treating a changed test TOTAL as a harness
+failure; all five sources byte-identical afterwards.
+
+**FOUR DEFECTS IN MY OWN TEST, every one caught by it failing on CORRECT source:**
+
+- **`block()` took the FIRST matching selector** and `.relay-v2:not(.dark)` legitimately
+  appears TWICE (the pre-existing light palette, and the new overrides beside it) — so it
+  read the palette block and reported every new variable missing. CSS applies both, so the
+  helper now spans the selector's whole footprint.
+- **`.relay-v2 {` is a SUBSTRING of `.dark.relay-v2 {`** — a bare `indexOf` would have read
+  the dark palette as the shared one. The same collision class that made `--rb` match
+  `--rbub-*` while this was being written (which is why the vars are named `--mbub-*`).
+- **the prose trap**, ~20th recorded: the voicemail file's own header quotes
+  `className="rsheet ` while explaining the recipe, 560 lines above the real element.
+- **a fixed 900-character window** that did not reach `color: var(--text)` — it sits 1,536
+  characters into the rule, behind a long comment. Bounded by the rule's own end now.
+- **the `\n}` trap**: for `function VoiceNotePlayer({ … }: { … })` the first line-start `}`
+  closes the DESTRUCTURED PARAMETER, so the slice read 92 characters of signature and every
+  assertion in it would have passed vacuously. The non-empty guard is what caught it.
+
+**FIVE PRE-EXISTING PINS REWRITTEN TO THE PROPERTY**, and two had frozen exactly what the
+owner asked to change:
+
+- `topBarStatus` and `fiveTabShell` each froze
+  `paddingBottom: "env(safe-area-inset-bottom)"` verbatim — i.e. they forbade the owner's
+  follow-up ask while saying nothing about the rule v2.99.94 stands for, which is only that
+  **no floor** is added under the tab row. Spending the whole inset as empty padding and
+  adding a floor are different mistakes and the literal could not tell them apart. Both now
+  require the padding to be driven by the real inset with any `max()` flooring at ZERO —
+  **stricter** than the string they replace, which banned only the one `0.55rem` spelling.
+- `conversationFrame` froze `ring-black/10` on the play disc, forbidding the theme-aware
+  ring while saying nothing about whether the disc has an edge at all.
+- `conversationFidelity` froze the two stamp hexes; `messagingColors` froze
+  `color: nameColorFor(...)` as a CSS property rather than as a call.
+- `groupDescription` and `pinnedMessages` (from v2.107.59/.60) each froze the exact release
+  string `2.107.60`, so both went red on this release while saying nothing about the feature
+  they are named for. Rewritten to "at or past the release that introduced it"; the version
+  has exactly one owner.
+
+### Not verified on a device, said plainly
+
+Every number here is measured in a real browser against the real built stylesheet, but
+nobody has opened a conversation or looked at the tab bar on the owner's phone.
+
+### The rebase, and a changelog that is 34 releases stale
+
+This was written against v2.107.26 and rebased onto v2.107.60 — parallel sessions shipped
+**34 releases** while it was open (starred messages, editing, formatting, silent send,
+group description, pinned messages, UGC safety). Every hunk applied cleanly except
+`shared/version.ts` and its pin, which conflicted exactly as the version-collision class
+predicts; resolved to **2.107.61**. `todo.md` on that mainline still opens at **v2.107.26**
+— none of .27 through .60 has an entry here. Those are theirs and cannot be reconstructed
+from this side, so they are named as a gap rather than papered over.
+
+No schema change, no new dependency, no new env var, no server change. 6937 tests
+(1 pre-existing device-only `nativeRewrite` failure, which fails at `origin/web-app-main`
+too and is documented in v2.107.58's own commit message).
+
 ## v2.107.26 — THE ADMIN TOOL'S DRY RUN SAID A NUMBER WAS FREE AND THE APPLY REFUSED IT
 
 Owner: *"Change 449243 to 666666"*.

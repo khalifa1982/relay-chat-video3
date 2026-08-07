@@ -177,8 +177,15 @@ describe("board 3c's bubble geometry and stamp", () => {
     expect(at, "the conversation bubble's stamp row").toBeGreaterThan(0);
     const row = MESSAGES.slice(MESSAGES.lastIndexOf("<div", at), at + 400);
     expect(row).toMatch(/justify-end/);
-    expect(row).toMatch(/#9fb0ab/); // mine
-    expect(row).toMatch(/#7d8f8a/); // received
+    /* REWRITTEN AT v2.107.27. This froze the two hexes, i.e. it required the stamp to be a
+       LITERAL — which forbade making it theme-aware while saying nothing about the property
+       it stands for, that the two sides are muted DIFFERENTLY. The colours moved into
+       `--mbub-stamp-mine` / `--mbub-stamp-peer` because a hard-coded near-white measured
+       1.04–2.15:1 on the light page; the per-side split survives, and the dark values in
+       `index.css` are these exact hexes. */
+    const sides = /color: mine \? "([^"]+)" : "([^"]+)"/.exec(row);
+    expect(sides, "the stamp is coloured per side").toBeTruthy();
+    expect(sides![1], "mine and received are not the same value").not.toBe(sides![2]);
     expect(row, "a flat white/70 was the pre-board value").not.toMatch(/text-white\/70/);
   });
 });

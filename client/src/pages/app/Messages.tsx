@@ -137,6 +137,18 @@ import {
 } from "@/app/mediaExclusive";
 import { useTypers, useTypingConversations } from "@/app/typingStore";
 import { bubbleStyleFor, bubbleGlyphColor, nameColorFor, senderAvatarStyle } from "@/app/peerColors";
+
+/**
+ * The soft secondary text INSIDE a bubble — the voicemail tag, the disappearing-message
+ * chip, the "this message has disappeared" italic.
+ *
+ * This was `text-white/75`/`/80`, which is correct over the board's near-black page and
+ * unreadable over the light one, because a bubble's fill is TRANSLUCENT so its effective
+ * surface tracks the page. The variable is declared once in `index.css` with a
+ * `:not(.dark)` override; its dark value is `rgba(255,255,255,.78)`, i.e. what these
+ * three sites already rendered.
+ */
+const BUBBLE_SOFT = "text-[color:var(--mbub-soft)]";
 import { TypingLine } from "@/app/TypingLine";
 import { useDraft, clearDraft as clearDraftFor, getDraft, onDraftsChange } from "@/app/draftStore";
 
@@ -3331,8 +3343,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       >
                         {isGroup && !mine && (
                           <div
-                            className="text-[11px] font-semibold mb-0.5"
-                            style={{ color: nameColorFor({ isGroup, senderIdentityId: m.senderIdentityId }) }}
+                            className="rname text-[11px] font-semibold mb-0.5"
+                            style={
+                              {
+                                "--rname": nameColorFor({ isGroup, senderIdentityId: m.senderIdentityId }),
+                              } as CSSProperties
+                            }
                           >
                             {nameById.get(m.senderIdentityId) || t("msg.member")}
                           </div>
@@ -3374,7 +3390,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             message it points at rendered their time two different ways. */}
                         <div
                           className="font-mono text-[8.5px] mt-1"
-                          style={{ color: mine ? "#9fb0ab" : "#7d8f8a" }}
+                          style={{ color: mine ? "var(--mbub-stamp-mine)" : "var(--mbub-stamp-peer)" }}
                         >
                           {formatTime(m.createdAt)}
                         </div>
@@ -3659,8 +3675,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                             the bubble path, so the two cannot drift. */}
                         {isGroup && !mine && !sameAsPrev && (
                           <div
-                            className="text-[11px] font-semibold mb-0.5"
-                            style={{ color: nameColorFor({ isGroup, senderIdentityId: m.senderIdentityId }) }}
+                            className="rname text-[11px] font-semibold mb-0.5"
+                            style={
+                              {
+                                "--rname": nameColorFor({ isGroup, senderIdentityId: m.senderIdentityId }),
+                              } as CSSProperties
+                            }
                           >
                             {nameById.get(m.senderIdentityId) || t("msg.member")}
                           </div>
@@ -3689,8 +3709,12 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                 >
                   {isGroup && !mine && !sameAsPrev && (
                     <div
-                      className="text-[11px] font-semibold mb-0.5"
-                      style={{ color: nameColorFor({ isGroup, senderIdentityId: m.senderIdentityId }) }}
+                      className="rname text-[11px] font-semibold mb-0.5"
+                      style={
+                        {
+                          "--rname": nameColorFor({ isGroup, senderIdentityId: m.senderIdentityId }),
+                        } as CSSProperties
+                      }
                     >
                       {nameById.get(m.senderIdentityId) || "Member"}
                     </div>
@@ -3780,18 +3804,20 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         }
                       >
                         <div
-                          className="text-[9.5px] font-semibold"
+                          className={"text-[9.5px] font-semibold " + (mine ? "" : "rname")}
                           style={
                             mine
-                              ? { color: "rgba(255,255,255,.9)" }
-                              : { color: nameColorFor({ isGroup, senderIdentityId: quotedId }) }
+                              ? { color: "var(--mbub-own-dim)" }
+                              : ({
+                                  "--rname": nameColorFor({ isGroup, senderIdentityId: quotedId }),
+                                } as CSSProperties)
                           }
                         >
                           {senderLabel(quotedId)}
                         </div>
                         <div
                           className="overflow-hidden text-ellipsis whitespace-nowrap text-[10.5px]"
-                          style={{ color: mine ? "rgba(255,255,255,.75)" : "#9fb0ab" }}
+                          style={{ color: mine ? "var(--mbub-own-dim)" : "var(--mbub-dim)" }}
                         >
                           {previewOf(quoted)}
                         </div>
@@ -3804,7 +3830,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                     <div
                       className={
                         "mb-0.5 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide " +
-                        "text-white/80"
+                        BUBBLE_SOFT
                       }
                     >
                       <Voicemail className="size-3.5" /> {t("msg.voicemail")}
@@ -3828,7 +3854,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       <div
                         className={
                           "mt-1 flex items-center gap-1 text-[10px] font-semibold " +
-                          "text-white/75"
+                          BUBBLE_SOFT
                         }
                       >
                         <Timer className="size-3" /> {label}
@@ -3898,7 +3924,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                         <div
                           className={
                             "flex items-center gap-1.5 py-0.5 text-[12.5px] italic " +
-                            "text-white/75"
+                            BUBBLE_SOFT
                           }
                         >
                           <Timer className="size-3.5 shrink-0" />
@@ -3950,7 +3976,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                       saturated fill and is now brighter than the board's on the glass. */}
                   <div
                     className="flex justify-end items-center gap-1 font-mono text-[8.5px] leading-none mt-0.5 -mb-0.5"
-                    style={{ color: mine ? "#9fb0ab" : "#7d8f8a" }}
+                    style={{ color: mine ? "var(--mbub-stamp-mine)" : "var(--mbub-stamp-peer)" }}
                   >
                     {/* QW-4 — an "edited" marker sits just before the time when the
                         sender has edited this message. Both sides see it: an edit
@@ -5304,7 +5330,7 @@ function LockedGroupGate({
           <LockPadKey key={d} onPress={() => push(d)}>
             <span
               className="font-mono leading-none"
-              style={{ fontSize: 21, fontWeight: 600, color: "#eafff6" }}
+              style={{ fontSize: 21, fontWeight: 600, color: "var(--rlock-fg)" }}
             >
               {d}
             </span>
@@ -5318,7 +5344,7 @@ function LockedGroupGate({
         <LockPadKey onPress={() => push("0")}>
           <span
             className="font-mono leading-none"
-            style={{ fontSize: 21, fontWeight: 600, color: "#eafff6" }}
+            style={{ fontSize: 21, fontWeight: 600, color: "var(--rlock-fg)" }}
           >
             0
           </span>
@@ -5329,7 +5355,7 @@ function LockedGroupGate({
             has to be decided twice. Dimmed with nothing to erase, never hidden,
             because a key that comes and goes makes the grid jump. */}
         <LockPadKey onPress={back} disabled={code.length === 0} label={t("dialer.eraseLast")}>
-          <Delete aria-hidden="true" style={{ width: 21, height: 21, color: "#eafff6" }} strokeWidth={2} />
+          <Delete aria-hidden="true" style={{ width: 21, height: 21, color: "var(--rlock-fg)" }} strokeWidth={2} />
         </LockPadKey>
       </div>
 
@@ -6678,17 +6704,21 @@ function VoiceNotePlayer({
   };
 
   const frac = dur > 0 && Number.isFinite(dur) ? Math.min(1, cur / dur) : 0;
-  const sub = "text-white/70";
-  const track = "bg-white/25";
-  const fill = "bg-white";
+  const sub = BUBBLE_SOFT;
+  const track = "bg-[color:var(--mbub-wave-track)]";
+  const fill = "bg-[color:var(--mbub-wave-fill)]";
 
   if (undecodable) {
     /* SAY SO RATHER THAN RENDER A DEAD CONTROL. A play button that never plays and a bar
        that never moves is what the owner reported; the download still works, because the
        bytes are fine — it is this ENGINE that cannot read them. */
+    /* NO `text-white` ON THE ROW, and that removal IS the fix rather than a tidy-up: the
+       enclosing bubble already sets `color: var(--mbub-own-fg | --mbub-peer-fg)`, so the
+       correct per-side, per-theme colour is inherited for free — a literal here OVERRODE
+       it and painted white on a near-white light bubble. */
     return (
-      <div className="my-1 flex w-60 max-w-full items-center gap-2.5 text-white">
-        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-white/15">
+      <div className="my-1 flex w-60 max-w-full items-center gap-2.5">
+        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[color:var(--mbub-tile)]">
           <Mic className="size-4" />
         </span>
         <div className="min-w-0 flex-1 text-[11px] leading-snug">
@@ -6701,7 +6731,7 @@ function VoiceNotePlayer({
           target="_blank"
           rel="noreferrer"
           aria-label={t("msg.downloadAudio")}
-          className="grid size-7 shrink-0 place-items-center rounded-full bg-white/15 transition hover:brightness-110"
+          className="grid size-7 shrink-0 place-items-center rounded-full bg-[color:var(--mbub-tile)] transition hover:brightness-110"
         >
           <Download className="size-3.5" />
         </a>
@@ -6709,13 +6739,14 @@ function VoiceNotePlayer({
     );
   }
 
+  /* Inherits the bubble's own foreground — see the note on the unsupported branch. */
   return (
-    <div className={"my-1 flex w-60 max-w-full items-center gap-2.5 " + "text-white"}>
+    <div className="my-1 flex w-60 max-w-full items-center gap-2.5">
       <button
         type="button"
         onClick={toggle}
         aria-label={playing ? t("msg.pause") : t("msg.playVoiceNote")}
-        className="grid size-9 shrink-0 place-items-center rounded-full bg-white ring-1 ring-black/10 active:scale-95 transition-transform"
+        className="grid size-9 shrink-0 place-items-center rounded-full bg-white ring-1 ring-[color:var(--mbub-disc-ring)] active:scale-95 transition-transform"
         /* A SOLID WHITE DISC WITH THE BUBBLE'S OWN DARK STOP AS THE GLYPH, and this is a
            correction to my own v2.106.18: `.rchip-accent` is a CARD recipe, measured on
            `--card`, and this control sits on a SATURATED BUBBLE — a surface it was never
@@ -6775,7 +6806,11 @@ function VoiceNotePlayer({
             type="button"
             onClick={cycleRate}
             aria-label={t("msg.playbackSpeed")}
-            className="rounded-full bg-white/15 px-1.5 py-[1px] font-mono text-[9.5px] font-semibold leading-none transition hover:bg-white/25 active:scale-95"
+            /* THEME-AWARE, like every other tile inside a bubble (v2.107.61): a white
+               tint is invisible over a light bubble, which composites to near-white.
+               This pill arrived in v2.107.60 and was caught by the standing guard rather
+               than by review, which is what that guard is for. */
+            className="rounded-full bg-[color:var(--mbub-tile)] px-1.5 py-[1px] font-mono text-[9.5px] font-semibold leading-none transition hover:brightness-125 active:scale-95"
           >
             {rate}×
           </button>
@@ -6790,7 +6825,7 @@ function VoiceNotePlayer({
         aria-label={t("msg.downloadAudio")}
         className={
           "grid size-7 shrink-0 place-items-center rounded-full transition hover:brightness-110 " +
-          "bg-white/15"
+          "bg-[color:var(--mbub-tile)]"
         }
       >
         <Download className="size-3.5" />
@@ -6973,22 +7008,20 @@ function FileCard({ url, filename, mine }: { url: string; filename?: string; min
       rel="noreferrer"
       className={
         "my-1 flex w-60 max-w-full items-center gap-2.5 rounded-xl px-2.5 py-2 transition hover:brightness-110 " +
-        "bg-white/15 text-white"
+        "bg-[color:var(--mbub-tile)]"
       }
     >
+      {/* The glyph tile inherits the bubble's foreground rather than nailing white into it. */}
       <span
         className={
-          "grid size-9 shrink-0 place-items-center rounded-lg " +
-          "bg-white/20 text-white"
+          "grid size-9 shrink-0 place-items-center rounded-lg " + "bg-[color:var(--mbub-tile)]"
         }
       >
         <Paperclip className="size-4" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-semibold">{filename || t("msg.fileFallback")}</span>
-        <span className={"block text-[10.5px] " + "text-white/70"}>
-          {t("msg.tapToOpen")}
-        </span>
+        <span className={"block text-[10.5px] " + BUBBLE_SOFT}>{t("msg.tapToOpen")}</span>
       </span>
       <Download className="size-4 shrink-0 opacity-70" />
     </a>
@@ -7507,7 +7540,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                            (the v2.106.7 trap). */
                         background: "rgba(var(--rb-rgb, 63, 224, 197), 0.20)",
                         borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.50)",
-                        color: "#f2fffa",
+                        color: "var(--rseg-fg)",
                       }
                     : undefined
                 }
@@ -7527,7 +7560,7 @@ function NewMessageDialog({ defaultMode = "dm" }: { defaultMode?: "dm" | "group"
                     ? {
                         background: "rgba(var(--rb-rgb, 63, 224, 197), 0.20)",
                         borderColor: "rgba(var(--rb-rgb, 63, 224, 197), 0.50)",
-                        color: "#f2fffa",
+                        color: "var(--rseg-fg)",
                       }
                     : undefined
                 }

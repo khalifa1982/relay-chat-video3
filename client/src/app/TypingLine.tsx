@@ -17,7 +17,7 @@
  * message list on every step — the v2.99.67 mistake, and the reason v2.99.73's
  * waveform is written imperatively. Isolated here, a tick repaints one short line.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { nameColorFor } from "./peerColors";
 
 /** How fast the capital walks. Slow enough to read, quick enough to look alive. */
@@ -38,6 +38,16 @@ const IS_LETTER = new RegExp("\\p{L}", "u");
  * rendered string — a string would allocate per tick for no gain, and the letters
  * are derived cheaply.
  */
+/**
+ * A person's palette colour is handed over as `--rname` rather than as `color`, so the
+ * `.rname` rule in `index.css` can darken it for the LIGHT theme (v2.107.27). These are
+ * light tints picked for a near-black page; on the light one they measured 1.34–1.71:1.
+ * Dark mixes at 100%, which returns the hex untouched.
+ */
+function rnameStyle(color: string): CSSProperties {
+  return { "--rname": color } as CSSProperties;
+}
+
 function WalkingName({ name, color, offset }: { name: string; color: string; offset: number }) {
   const letters = Array.from(name);
   // Only the letters are candidates for the capital: walking onto a space or a
@@ -53,14 +63,14 @@ function WalkingName({ name, color, offset }: { name: string; color: string; off
     // every tick and the walk would never advance smoothly.
   }, [idxs.length]);
 
-  if (idxs.length === 0) return <span style={{ color }}>{name}</span>;
+  if (idxs.length === 0) return <span className="rname" style={rnameStyle(color)}>{name}</span>;
   // The offset staggers people so two typers are never mid-step together — that is
   // what makes "two three people typing" read as two separate names rather than
   // one blinking blur.
   const hot = idxs[(step + offset) % idxs.length];
 
   return (
-    <span style={{ color }} className="font-semibold">
+    <span className="rname font-semibold" style={rnameStyle(color)}>
       {letters.map((ch, i) => (
         <span
           key={i}

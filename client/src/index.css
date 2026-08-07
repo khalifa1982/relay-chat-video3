@@ -170,6 +170,65 @@
   --relay-red-text: oklch(0.68 0.2 27);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  /* CONVERSATION TEXT ON A TRANSLUCENT FILL — the owner's "the background is white,
+     the font is white, I cannot read it".
+
+     Every message bubble is a TRANSLUCENT fill: 17% orange for mine, 8% white for a
+     received one. The text over it was hard-coded near-white (`#f2fffa` / `#eef7f3`),
+     which is correct over the board's near-black page and catastrophic over the light
+     one, because a translucent fill lets the EFFECTIVE surface track the page. Measured
+     against the real built stylesheet: a group bubble's body was 1.04:1 in light — white
+     on `rgb(248,249,250)`, i.e. invisible — while the same case reads 16.06:1 in dark.
+     Thirteen of thirteen light cases failed AA; all thirteen dark ones passed. That
+     asymmetry IS the bug: the board is a dark design and the app ships light.
+
+     It arrived at v2.106.62, which removed twelve `mine ? white : muted` ternaries and
+     made bubble text white UNCONDITIONALLY. Right for the surfaces it was measured on;
+     it just never met the light page.
+
+     THE VALUES LIVE HERE RATHER THAN IN THE INLINE STYLE BECAUSE AN INLINE STYLE CANNOT
+     BRANCH ON THEME — the same reason v2.106.38 had to move the contacts tag chips into
+     `.rtag-*` recipes with a `:not(.dark)` override. The bubble keeps its inline fill and
+     border; only the COLOURS become variables, so there is exactly one place a theme can
+     disagree with itself.
+
+     DARK IS BYTE-IDENTICAL: every value below is what was previously written inline, so
+     the `:not(.dark)` block is a pure addition and dark cannot regress. */
+  --mbub-own-fg: #f2fffa;
+  --mbub-peer-fg: #eef7f3;
+  /* The reply quote inside MY bubble, and the soft chips/labels on any bubble. */
+  --mbub-own-dim: rgba(255, 255, 255, 0.75);
+  --mbub-soft: rgba(255, 255, 255, 0.78);
+  /* The received bubble's quote preview. */
+  --mbub-dim: #9fb0ab;
+  /* The timestamp. It differs by side on purpose: the own bubble's orange tint is
+     warmer, so it carries the lighter of the two (board 1d/3c). */
+  --mbub-stamp-mine: #9fb0ab;
+  --mbub-stamp-peer: #7d8f8a;
+  /* The file-attachment tile INSIDE a bubble. `bg-white/15` over an already-light
+     bubble is effectively white, so the light theme darkens rather than lightens. */
+  --mbub-tile: rgba(255, 255, 255, 0.15);
+  /* The voice note's 18-bar waveform. The unplayed bars were `bg-white/25` and the played
+     ones a solid `bg-white`, which is the same defect as the body text one element along:
+     on a light bubble the whole control disappears, including the only thing that shows
+     how far through the note you are. */
+  --mbub-wave-track: rgba(255, 255, 255, 0.25);
+  --mbub-wave-fill: #ffffff;
+  /* The play disc's hairline. The disc itself stays WHITE in both themes on purpose — its
+     glyph is the bubble's own dark stop, measured at 4.92:1 across all 36 bubble surfaces
+     (v2.106.40), and inverting the disc for light would cost that per-person identity. What
+     changes is only the edge: white-on-near-white is a 1.05:1 shape, so light needs a
+     stronger ring to read as a button rather than a floating triangle. */
+  --mbub-disc-ring: rgba(0, 0, 0, 0.1);
+  /* Two more surfaces built the same way — a translucent fill with hard-coded near-white
+     text. The group-lock keypad key (a 7% white gradient) measured 1.04:1 in light, on
+     pure white; the new-message Direct/Group toggle (a 20% accent tint) measured 1.09:1. */
+  --rlock-fg: #eafff6;
+  --rseg-fg: #f2fffa;
+  /* How far a sender's name is mixed toward black. 100% = the palette hex untouched,
+     which is what dark wants; light needs it darkened (see `.rname` below). */
+  --rname-mix: 100%;
 }
 
 /* Light phone-app palette — a soft, off-white surface tinted toward
@@ -228,6 +287,61 @@
      line is harder to read than another. */
   --relay-amber-text: oklch(0.54 0.14 75);
   --relay-red-text: oklch(0.54 0.2 27);
+}
+
+/* The light half of the bubble-text rule declared above.
+ *
+ * These are the app's OWN tokens rather than new hand-picked hexes, and that is the
+ * point: `--foreground` and `--muted-foreground` are already measured to read on
+ * `--background`/`--card`, and a bubble's fill is translucent enough that its effective
+ * surface stays within a few percent of the page. So the text tracks the page for free
+ * instead of needing a second palette that can drift from the first.
+ *
+ * Measured on the real built stylesheet, before -> after, worst case per surface:
+ *   group / 1:1 bubble body      1.04:1 -> 17.84:1
+ *   own bubble body              1.18:1 -> 15.51:1  (on the desktop card, 1.12 -> 16.28)
+ *   own reply quote              1.21:1 ->  4.96:1
+ *   received quote + stamps      2.15:1 ->  5.71:1
+ *   sender name (worst of 17)    1.34:1 ->  5.47:1
+ * Every light case clears AA; dark is untouched and still reads 14–17:1. */
+.relay-v2:not(.dark) {
+  --mbub-own-fg: var(--foreground);
+  --mbub-peer-fg: var(--foreground);
+  --mbub-own-dim: var(--muted-foreground);
+  --mbub-soft: var(--muted-foreground);
+  --mbub-dim: var(--muted-foreground);
+  --mbub-stamp-mine: var(--muted-foreground);
+  --mbub-stamp-peer: var(--muted-foreground);
+  /* THESE THREE ARE SURFACES, NOT TEXT, so the bar is not AA — it is PARITY with what the
+     dark theme already reads, measured over the own bubble on the light page:
+       tile vs bubble    dark 1.57  ->  light 1.52 at 18%   (0.06 gave 1.14 — too faint)
+       wave track        dark 2.27  ->  light 2.34 at 34%   (0.18 gave 1.52)
+       play-disc edge    dark 16.4 from the WHITE DISC ITSELF; on the light page that same
+                         disc is 1.21 against a near-white bubble, so the ring has to carry
+                         the edge instead: 2.49 at 36%.
+     My first pass picked all three by eye and every one was under-weighted; the numbers
+     above are why they are not round. */
+  --mbub-tile: rgba(0, 0, 0, 0.18);
+  --mbub-wave-track: rgba(0, 0, 0, 0.34);
+  --mbub-wave-fill: var(--foreground);
+  --mbub-disc-ring: rgba(0, 0, 0, 0.36);
+  --rlock-fg: var(--foreground);
+  --rseg-fg: var(--foreground);
+  /* 55% is the LIGHTEST mix that clears AA on all seventeen name hues (worst 5.47:1 on
+     `#fde68a`; 62% fails at 4.18). Lightest-that-passes is deliberate — it stays closest
+     to the colour the person is known by, so the sixteen remain tellable apart. */
+  --rname-mix: 55%;
+}
+
+/* A sender's name, in their own colour, on either theme.
+ *
+ * The hue is per-person and composed at RUNTIME from a 16-entry palette, so it cannot be
+ * sixteen static classes and it cannot be a hard-coded pair of hexes. The call site hands
+ * over only the palette colour as `--rname`; the mix toward black is the theme's business,
+ * and at dark's 100% `color-mix` returns the hex unchanged — so dark is byte-identical
+ * while light gets the same hue, darkened. */
+.relay-v2 .rname {
+  color: color-mix(in oklab, var(--rname, currentColor) var(--rname-mix, 100%), #000);
 }
 
 .dark.relay-v2 {

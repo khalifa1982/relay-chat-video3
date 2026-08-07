@@ -1168,7 +1168,25 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
             // its 18px is NOT, because that figure is the board's stand-in for the home
             // indicator and we compute the real inset — re-adding it as a floor would
             // undo the owner's own request above on every phone that has no indicator.
-            paddingBottom: "env(safe-area-inset-bottom)",
+            //
+            // v2.107.27, the SAME owner asking again ("there is a gap space on the lower
+            // part of the navigation... take the navigation bar down, let it reach to the
+            // bottom exactly, and give the space [so] the middle display is big widely").
+            // The bar's BACKGROUND already reached the bottom; what they were pointing at
+            // is that the whole inset was spent as EMPTY PADDING under the labels.
+            // Measured against the real built stylesheet with a 34px iPhone inset: bar
+            // 77px tall, 34px of it dead, scroll area 767px — a third of the bar is
+            // nothing at all.
+            //
+            // 14px of that is reclaimed, which is a bound rather than a taste: it leaves
+            // 20px of clearance, and the home-indicator pill occupies roughly the bottom
+            // 13px, so the labels stay clear of it. (Reclaiming 20 would leave 14 and put
+            // them level with the pill.) Measured after: bar 63px, scroll 781px.
+            //
+            // `max(0px, …)` is what keeps v2.99.94 intact — with no indicator the inset is
+            // 0, the subtraction floors at 0, and the bar still ends exactly at the
+            // viewport edge rather than acquiring a new floor.
+            paddingBottom: "max(0px, calc(env(safe-area-inset-bottom) - 14px))",
             ...(accentNav ? { paddingTop: 6, paddingLeft: 4, paddingRight: 4 } : null),
           }}
         >
