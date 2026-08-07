@@ -185,6 +185,12 @@ export function useRealtime(enabled: boolean, selfId?: number | null): void {
         switch (payload.kind) {
           case "typing":
             // Someone is typing — surface it; their actual message will clear it.
+            // QW-9 RECIPROCITY: if I turned typing OFF, I don't get to SEE others'
+            // typing either. The sender is already gated server-side, but a person who
+            // themselves has it off should never see the indicator regardless — the
+            // fair-trade half. Read my own pref from the cached whoami; if it's not
+            // loaded yet, fail OPEN (show it), matching the rest of this file.
+            if (utils.identity.whoami.getData()?.showTyping === false) break;
             setTyping(payload.conversationId, payload.from);
             break;
           case "message":

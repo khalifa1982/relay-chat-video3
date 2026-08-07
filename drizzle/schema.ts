@@ -184,6 +184,17 @@ export const identities = mysqlTable(
      *  a per-box in-memory routing cache at ring time so it never touches the DB
      *  on the hot path (see server/callRouting.ts). */
     allCallsToVoicemail: boolean("allCallsToVoicemail"),
+    /**
+     * READ-RECEIPT & TYPING PRIVACY (v2.107.61, QW-9). Stored as "off" flags so the
+     * additive migration keeps the current behaviour: NULL/false means the feature is
+     * ON (receipts sent, typing shown), which is what every pre-release identity is.
+     * Reciprocal, WhatsApp-style: turning receipts OFF stops me sending my read ticks
+     * AND stops me seeing other people's; turning typing OFF stops me sending "typing…"
+     * AND stops me seeing theirs. The reciprocity is what makes it a fair trade rather
+     * than a one-way peek, and it is enforced server-side, not just hidden in the UI.
+     */
+    readReceiptsOff: boolean("readReceiptsOff"),
+    typingOff: boolean("typingOff"),
     /** JSON array of optional mobile numbers (strings). */
     mobiles: text("mobiles"),
     /** JSON array of { platform, value } social/link entries. */

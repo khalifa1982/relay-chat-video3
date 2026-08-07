@@ -325,6 +325,10 @@ export interface ResolvedIdentity {
   autoReplyEnabled: boolean;
   /** Global "send all my calls to voicemail" master switch (v2.107.48). NULL === off. */
   allCallsToVoicemail: boolean;
+  /** QW-9 — "on" as the app sees it, derived from the stored "off" flag. True means
+   *  receipts are sent / typing is shown, which is the default (a NULL column). */
+  sendReadReceipts: boolean;
+  showTyping: boolean;
   /**
    * An admin's SUGGESTED registration address (v2.105.15), or null. Only ever a
    * suggestion the guest's own app shows them — see the column comment in
@@ -364,6 +368,9 @@ function rowToResolved(row: typeof identities.$inferSelect): ResolvedIdentity {
     autoReplyEnabled: row.autoReplyEnabled === true,
     // Opt-in: only an explicit true diverts all calls to voicemail (v2.107.48).
     allCallsToVoicemail: row.allCallsToVoicemail === true,
+    // Stored as "off" flags; the app reads them as "on". NULL/false → ON (the default).
+    sendReadReceipts: row.readReceiptsOff !== true,
+    showTyping: row.typingOff !== true,
     regInviteEmail: row.regInviteEmail ?? null,
     regInviteAt: row.regInviteAt ?? null,
   };
@@ -1491,6 +1498,9 @@ export async function updateIdentityProfile(
     mobiles?: unknown;
     socials?: unknown;
     allCallsToVoicemail?: boolean;
+    /** QW-9 — the app sends these in "on" terms; stored inverted as the "off" flag. */
+    sendReadReceipts?: boolean;
+    showTyping?: boolean;
   }
 ): Promise<void> {
   const db = await getDb();
@@ -1533,6 +1543,11 @@ export async function updateIdentityProfile(
   // v2.107.48: the global "send ALL my calls to voicemail" master switch. Stored
   // as a real boolean; the ring-time cache reads it (via loadCallRoutingConfig).
   if (patch.allCallsToVoicemail !== undefined) set.allCallsToVoicemail = patch.allCallsToVoicemail === true;
+  // QW-9 — the app speaks "on"; we store the "off" flag, so ON writes NULL-equivalent
+  // false and OFF writes true. Inverting here keeps the default (a fresh identity,
+  // column NULL) reading as ON everywhere.
+  if (patch.sendReadReceipts !== undefined) set.readReceiptsOff = patch.sendReadReceipts !== true;
+  if (patch.showTyping !== undefined) set.typingOff = patch.showTyping !== true;
   if (Object.keys(set).length === 0) return;
   await db.update(identities).set(set).where(eq(identities.id, id));
 }
@@ -2645,6 +2660,10 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // v2.107.48 — calls-to-voicemail routing (opt-in, defaults off).
     { table: "contacts", column: "callsToVoicemail", ddl: "ADD COLUMN `callsToVoicemail` boolean" },
     { table: "identities", column: "allCallsToVoicemail", ddl: "ADD COLUMN `allCallsToVoicemail` boolean" },
+    // v2.107.61 (QW-9) — read-receipt & typing privacy. "Off" flags so NULL reads as the
+    // current behaviour (feature ON); every existing identity keeps receipts and typing.
+    { table: "identities", column: "readReceiptsOff", ddl: "ADD COLUMN `readReceiptsOff` boolean" },
+    { table: "identities", column: "typingOff", ddl: "ADD COLUMN `typingOff` boolean" },
     // Self-hosted email/password auth (v2.54).
     { table: "users", column: "passwordHash", ddl: "ADD COLUMN `passwordHash` text" },
     { table: "users", column: "emailVerified", ddl: "ADD COLUMN `emailVerified` boolean" },
@@ -6393,6 +6412,48 @@ export async function markThreadRead(input: {
  * else's message. Deleted messages report "gone": unsending a post revokes its
  * audit trail along with its content.
  */
+/**
+ * QW-9 — does the OTHER party in a DM have read receipts off?
+ *
+ * The reciprocity gate the fetch path needs. Real-time already withholds a reader's
+ * read event when that reader has receipts off, but the DB still records `status="read"`
+ * (it drives the reader's own unread count), so on a full reload the SENDER would see a
+ * blue tick the reader had opted out of. This answers, for a DM only, "should I suppress
+ * the read state on my own sent messages because my peer turned receipts off?" — which
+ * the serializer folds into the same cap it already applies for the viewer's OWN
+ * off-setting, making the reload path agree with the real-time one.
+ *
+ * DM-ONLY BY DESIGN: `messages.status="read"` in a group is aggregate ("someone read
+ * it") and identifies nobody, and group receipts follow the WhatsApp convention of
+ * always-on; so this returns false for a group and the group tick is untouched. Cheap:
+ * one membership read plus one indexed identity lookup, once per page fetch, never per
+ * message.
+ */
+export async function dmPeerReceiptsOff(conversationId: number, meId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    const [convo] = await db
+      .select({ kind: conversations.kind })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    if (!convo || convo.kind === "group") return false;
+    const members = await getConversationParticipantIds(conversationId);
+    const peerId = members.find((id) => id !== meId);
+    if (peerId == null) return false; // a note-to-self DM has no peer to protect
+    const [peer] = await db
+      .select({ off: identities.readReceiptsOff })
+      .from(identities)
+      .where(eq(identities.id, peerId))
+      .limit(1);
+    return peer?.off === true;
+  } catch (e) {
+    console.warn("[messages] dmPeerReceiptsOff failed:", (e as Error)?.message || "");
+    return false; // fail OPEN — a lookup blip must not silently strip receipts
+  }
+}
+
 export async function listMessageReads(input: {
   messageId: number;
   viewerId: number;

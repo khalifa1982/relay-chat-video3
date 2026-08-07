@@ -2024,7 +2024,108 @@ function StatusPrivacySection() {
         })}
       </div>
       <p className="text-[11px] text-muted-foreground">{t("profile.privacyFooter")}</p>
+      <ReadReceiptTypingToggles />
     </section>
+  );
+}
+
+/**
+ * READ-RECEIPT & TYPING TOGGLES (v2.107.61, QW-9) — two reciprocal switches under the
+ * story-privacy control. Both default ON; turning one OFF stops both sending AND seeing
+ * (enforced server-side, not just here), which the sub-labels spell out so nobody
+ * expects a one-way peek. Optimistic like the call-settings master switch: flip the
+ * cached whoami, roll back on error.
+ */
+function ReadReceiptTypingToggles() {
+  const t = useT();
+  const utils = trpc.useUtils();
+  const me = trpc.identity.whoami.useQuery();
+  const save = trpc.identity.updateProfile.useMutation({
+    onMutate: async (vars) => {
+      const prev = utils.identity.whoami.getData();
+      utils.identity.whoami.setData(undefined, (d) =>
+        d
+          ? {
+              ...d,
+              ...(vars.sendReadReceipts !== undefined ? { sendReadReceipts: vars.sendReadReceipts } : {}),
+              ...(vars.showTyping !== undefined ? { showTyping: vars.showTyping } : {}),
+            }
+          : d,
+      );
+      return { prev };
+    },
+    onError: (_e, _v, cxt) => {
+      if (cxt?.prev !== undefined) utils.identity.whoami.setData(undefined, cxt.prev);
+      toast.error(t("profile.privacyFailed"));
+    },
+    onSettled: () => {
+      void utils.identity.whoami.invalidate();
+    },
+  });
+  if (!me.data) return null;
+  const receipts = me.data.sendReadReceipts !== false; // default ON
+  const typing = me.data.showTyping !== false;
+  const busy = save.isPending;
+
+  const Row = ({
+    on,
+    onToggle,
+    title,
+    desc,
+  }: {
+    on: boolean;
+    onToggle: () => void;
+    title: string;
+    desc: string;
+  }) => (
+    <div className="flex items-center justify-between gap-3 p-4">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{desc}</p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={title}
+        disabled={busy}
+        onClick={onToggle}
+        className={
+          "rhit relative h-7 w-12 shrink-0 rounded-full transition-colors " +
+          (on ? "bg-primary" : "bg-muted-foreground/30")
+        }
+      >
+        <span
+          className={
+            "absolute top-0.5 grid size-6 place-items-center rounded-full bg-white shadow transition-all " +
+            (on ? "start-[1.375rem]" : "start-0.5")
+          }
+        />
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="space-y-3 pt-2">
+      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+        {t("profile.receiptsSectionLabel")}
+      </Label>
+      <div className="rounded-2xl border border-border bg-card/40 divide-y divide-border/60">
+        <Row
+          on={receipts}
+          onToggle={() => save.mutate({ sendReadReceipts: !receipts })}
+          title={t("profile.readReceiptsTitle")}
+          desc={t("profile.readReceiptsDesc")}
+        />
+        <Row
+          on={typing}
+          onToggle={() => save.mutate({ showTyping: !typing })}
+          title={t("profile.typingTitle")}
+          desc={t("profile.typingDesc")}
+        />
+      </div>
+      <p className="text-[11px] text-muted-foreground">{t("profile.receiptsFooter")}</p>
+    </div>
   );
 }
 

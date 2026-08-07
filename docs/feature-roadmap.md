@@ -40,7 +40,7 @@ approval.
 | QW-6 ▶ | Silent send | long-press send → delivers, but the push has no sound (Expo `sound:null` + APNs omits sound) |
 | QW-7 ▶ | Group description | photo exists; add the text field |
 | QW-8 ▶ | Pinned messages inside a chat | banner at top, admin-gated in groups |
-| QW-9 | Read-receipt / typing privacy toggles | settings + server respect |
+| QW-9 ▶ | Read-receipt / typing privacy toggles | settings + server respect |
 | QW-10 | GIF picker | search-backed, rides the attachment sheet |
 | QW-11 | Per-contact ringtones | variants of the synthesized motif (`shared/ringtone.ts`) |
 | QW-12 | Screenshot-block toggle | mobile repo (FLAG_SECURE), ships in 1.0.44 |

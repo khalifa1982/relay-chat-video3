@@ -458,6 +458,32 @@ export const PROFILE = {
     ar: "يسري على ما تنشره من الآن فصاعدًا — أما المنشور سابقًا فيحتفظ بالجمهور الذي اخترته له. وحظر أي شخص يُخفي عنه قصصك دائمًا، أيًّا كان الخيار المحدَّد.",
   },
 
+  // ── Read receipts & typing (v2.107.61, QW-9) — two reciprocal toggles ──
+  "profile.receiptsSectionLabel": {
+    en: "Read receipts & typing",
+    ar: "إيصالات القراءة والكتابة",
+  },
+  "profile.readReceiptsTitle": {
+    en: "Read receipts",
+    ar: "إيصالات القراءة",
+  },
+  "profile.readReceiptsDesc": {
+    en: "If off, you won't send read receipts — and you won't see other people's either.",
+    ar: "إذا كان مغلقًا، فلن ترسل إيصالات القراءة — ولن ترى إيصالات الآخرين أيضًا.",
+  },
+  "profile.typingTitle": {
+    en: "Typing indicators",
+    ar: "مؤشرات الكتابة",
+  },
+  "profile.typingDesc": {
+    en: "If off, others won't see when you're typing — and you won't see when they are.",
+    ar: "إذا كان مغلقًا، فلن يرى الآخرون متى تكتب — ولن ترى متى يكتبون.",
+  },
+  "profile.receiptsFooter": {
+    en: "These are a fair trade: turning one off stops both sending and receiving. Group typing and delivery ticks aren't affected.",
+    ar: "هذه مقايضة عادلة: إيقاف أحدها يوقف الإرسال والاستقبال معًا. لا يتأثر بذلك مؤشر الكتابة في المجموعات ولا علامات التسليم.",
+  },
+
   // ── Do Not Disturb ──
   "profile.dnd": { en: "Do Not Disturb", ar: "عدم الإزعاج" },
   "profile.dndOn": { en: "Do Not Disturb is on", ar: "وضع عدم الإزعاج مُفعَّل" },

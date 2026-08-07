@@ -163,7 +163,7 @@ describe("QW-8 — the client can pin and shows the banner", () => {
 
 /* ─────────────────────────── i18n + version ─────────────────────────── */
 
-describe("QW-8 — strings are bilingual and it ships in 2.107.60", () => {
+describe("QW-8 — strings are bilingual and it ships in 2.107.61", () => {
   it("pin action, failure and banner strings are in en and ar", () => {
     expect(hasBilingualKey(msgDict, "msg.pinAction", '"msg.')).toBe(true);
     expect(hasBilingualKey(msgDict, "msg.unpinAction", '"msg.')).toBe(true);
@@ -173,7 +173,7 @@ describe("QW-8 — strings are bilingual and it ships in 2.107.60", () => {
     expect(hasBilingualKey(msgDict, "msg.pinnedMedia", '"msg.')).toBe(true);
   });
 
-  it("the app version is 2.107.60", () => {
-    expect(version).toMatch(/APP_VERSION = "2\.107\.60"/);
+  it("the app version is 2.107.61", () => {
+    expect(version).toMatch(/APP_VERSION = "2\.107\.61"/);
   });
 });

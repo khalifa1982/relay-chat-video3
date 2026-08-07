@@ -173,6 +173,7 @@ import {
   saveAttachmentTranscriptAlt,
   saveMessageAlbum,
   getAlbumsForMessages,
+  dmPeerReceiptsOff,
   getAttachmentsForIdentityBatch,
   fileContentReport,
   listContentReports,
@@ -449,6 +450,11 @@ function requireIdentity(ctx: { identity: unknown }) {
      * a DB blip would read a registered caller as a guest — which for the invite-link
      * audience gate means refusing somebody a link was minted for. */
     verified: boolean;
+    /** QW-9 — read-receipt & typing privacy, in "on" terms. Carried on the resolved
+     *  identity (ResolvedIdentity), so the request already has them with no extra query;
+     *  the receipt/typing gates and the reciprocity blanking read them off `me`. */
+    sendReadReceipts: boolean;
+    showTyping: boolean;
   } | null;
   if (!id) throw new TRPCError({ code: "UNAUTHORIZED", message: "No identity" });
   return id;
@@ -624,6 +630,9 @@ export const v2AuthRouter = router({
       email,
       bio: ctx.identity.bio,
       allCallsToVoicemail: ctx.identity.allCallsToVoicemail === true,
+      // QW-9 (v2.107.61) — read-receipt & typing privacy, in "on" terms for the UI.
+      sendReadReceipts: ctx.identity.sendReadReceipts,
+      showTyping: ctx.identity.showTyping,
       statusOverride: (ctx.identity.statusOverride as "" | "away" | "travel" | null) ?? "",
       // The profile LABEL (v2.101.1) — separate from the presence override above,
       // and normalized on the way out so a hand-edited row cannot render a label
@@ -1164,6 +1173,9 @@ export const v2AuthRouter = router({
           .optional(),
         /** Global "send all my calls to voicemail" master switch (v2.107.48). */
         allCallsToVoicemail: z.boolean().optional(),
+        /** QW-9 — read-receipt & typing privacy, reciprocal. In "on" terms. */
+        sendReadReceipts: z.boolean().optional(),
+        showTyping: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -3140,6 +3152,11 @@ export const v2MessagesRouter = router({
       // `{emoji: pins[]}` shape here rather than in the DB layer, because that shape
       // is the WIRE contract and `listMessages` returns rows.
       const reactionRows = await reactionsForMessages(rows.map((r) => r.id));
+      // QW-9 RECIPROCITY (reload half): in a DM, if my PEER turned receipts off, their
+      // read of my messages must stay hidden on a full reload too, not only in
+      // real-time — so I fold their opt-out into the same cap I apply for my own
+      // off-setting. False for a group (its tick is aggregate and names nobody).
+      const peerReceiptsOff = await dmPeerReceiptsOff(input.conversationId, me.id);
       return rows.map((r) => {
         // M11: WITHHOLD the content of a locked expiring message — a recipient
         // must reveal it via `revealExpiring` (which burns it), so the secret is
@@ -3157,14 +3174,29 @@ export const v2MessagesRouter = router({
           kind: r.kind,
           body: locked ? null : r.body,
           meta: r.meta,
-          status: r.status,
+          // QW-9 RECIPROCITY (part 1): my own bubbles' status never reaches "read" —
+          // capping at "delivered" — when EITHER I turned receipts off (I forfeit seeing
+          // others' reads of my messages) OR, in a DM, my peer turned receipts off
+          // (their opt-out is honoured on my reload, matching real-time). The client's
+          // ticks derive from `status`, so this is what hides the blue ticks. Only my
+          // own sent messages; a received one is untouched.
+          status:
+            (!me.sendReadReceipts || peerReceiptsOff) && r.senderIdentityId === me.id && r.status === "read"
+              ? "delivered"
+              : r.status,
           createdAt: r.createdAt,
           // v2.99.74 — receipt times for the message-info panel. Sent to BOTH sides:
           // they are timestamps the recipient generated about their own reading, and
           // the sender is precisely who the info panel is for. Nothing here reveals
           // content, an identity, or anything the ticks do not already imply.
-          deliveredAt: r.deliveredAt ?? null,
-          readAt: r.readAt ?? null,
+          //
+          // QW-9 RECIPROCITY (part 2): blank readAt/deliveredAt on MY OWN sent messages
+          // when receipts are off — mine, or (in a DM) my peer's — the info panel's half
+          // of the same trade.
+          deliveredAt:
+            (!me.sendReadReceipts || peerReceiptsOff) && r.senderIdentityId === me.id ? null : (r.deliveredAt ?? null),
+          readAt:
+            (!me.sendReadReceipts || peerReceiptsOff) && r.senderIdentityId === me.id ? null : (r.readAt ?? null),
           editedAt: r.editedAt,
           // v2.107.60 (QW-8) — the pin is conversation-wide, so it ships to every
           // member: a non-null pinnedAt drives the bubble's pin marker and the menu's
@@ -3767,7 +3799,10 @@ export const v2MessagesRouter = router({
       // SECURITY (S6): only fan out the read-receipt when the caller is actually
       // a participant — otherwise a non-member could spam bogus `read` events at
       // a conversation's real participants even though the DB write no-op'd.
-      if (wasMember) {
+      // QW-9: and only when the reader HASN'T turned read receipts off. The DB still
+      // records readAt (it drives the reader's OWN unread count); what the flag governs
+      // is whether the OTHER side is told, which is the whole of "don't send receipts".
+      if (wasMember && me.sendReadReceipts) {
         try {
           const peers = await getConversationParticipantIds(input.conversationId);
           for (const pid of peers) {
@@ -3798,6 +3833,10 @@ export const v2MessagesRouter = router({
         // any identity could push a spurious "typing…" event into strangers'
         // conversations by iterating conversation ids.
         if (!participants.includes(me.id)) return { ok: true };
+        // QW-9: a person who turned typing OFF emits no "typing…" to anyone. The
+        // reciprocal half (they also don't SEE others' typing) is enforced where the
+        // event is delivered — but stopping it at the source is the primary gate.
+        if (!me.showTyping) return { ok: true };
         // …and a BLOCKED sender reaches nobody (v2.99.57). `messages.send` has
         // always been block-gated, but `typing` was not — so someone who had been
         // blocked could still make "X is typing…" appear on the blocker's screen,

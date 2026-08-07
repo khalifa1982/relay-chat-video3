@@ -445,8 +445,11 @@ describe("the ⋮ menu and the info panel", () => {
 
   it("the receipt times reach the client at all", () => {
     const proj = ROUTERS.slice(ROUTERS.indexOf("        return {\n          id: r.id,"), ROUTERS.indexOf("          locked,"));
-    expect(proj).toMatch(/deliveredAt: r\.deliveredAt \?\? null,/);
-    expect(proj).toMatch(/readAt: r\.readAt \?\? null,/);
+    // QW-9 made these conditional (suppressed when the sender — or, in a DM, the reader
+    // — turned receipts off), but the times still flow to the client in the normal case:
+    // the non-suppressed branch is `(r.deliveredAt ?? null)` / `(r.readAt ?? null)`.
+    expect(proj).toMatch(/r\.deliveredAt \?\? null/);
+    expect(proj).toMatch(/r\.readAt \?\? null/);
   });
 });
 

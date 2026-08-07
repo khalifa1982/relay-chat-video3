@@ -164,8 +164,8 @@ describe("QW-7 — the about strings are bilingual", () => {
 
 /* ─────────────────────────── version bump ─────────────────────────── */
 
-describe("QW-7 — ships in 2.107.60", () => {
-  it("the app version is 2.107.60", () => {
-    expect(version).toMatch(/APP_VERSION = "2\.107\.60"/);
+describe("QW-7 — ships in 2.107.61", () => {
+  it("the app version is 2.107.61", () => {
+    expect(version).toMatch(/APP_VERSION = "2\.107\.61"/);
   });
 });
