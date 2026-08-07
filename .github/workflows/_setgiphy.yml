@@ -1,0 +1,40 @@
+name: _setgiphy
+on: workflow_dispatch
+jobs:
+  setenv:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Upsert GIPHY_API_KEY into fleet .env and restart
+        env:
+          SSH_KEY: ${{ secrets.DOHA_SSH_KEY }}
+          GK: ${{ secrets.GIPHY_API_KEY }}
+        run: |
+          set -e
+          mkdir -p ~/.ssh
+          printf '%s' "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          setenv() {
+            H=$1
+            echo "=== $H"
+            # Pipe the key over stdin so it never lands on a command line / ps list.
+            printf '%s' "$GK" | ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@$H \
+              'sudo -u relay bash -c '"'"'
+                 GK=$(cat)
+                 f=/home/relay/.env
+                 grep -v "^GIPHY_API_KEY=" "$f" > "$f.tmp" 2>/dev/null || true
+                 printf "GIPHY_API_KEY=%s\n" "$GK" >> "$f.tmp"
+                 mv "$f.tmp" "$f"
+                 echo "GIPHY lines in .env: $(grep -c "^GIPHY_API_KEY=" "$f")"
+                 cd /home/relay/app && set -a && . /home/relay/.env && set +a && pm2 restart relay --update-env >/dev/null && pm2 save >/dev/null
+                 echo "pm2 restarted"
+               '"'"''
+            for i in $(seq 1 15); do
+              code=$(curl -s -o /dev/null -m 8 -w "%{http_code}" --resolve your-chat.io:443:$H https://your-chat.io/api/health || echo 000)
+              [ "$code" = "200" ] && { echo "$H healthy"; return 0; }
+              sleep 4
+            done
+            echo "$H FAILED health"; return 1
+          }
+          setenv 34.18.175.226
+          setenv 34.18.145.249
+          echo "GIPHY KEY SET ON FLEET"
