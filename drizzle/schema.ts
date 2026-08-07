@@ -409,6 +409,11 @@ export const contacts = mysqlTable(
      *  Distinct from `blocked` (which severs both ways) — this is calls-only,
      *  opt-in, and defaults off (NULL === off). */
     callsToVoicemail: boolean("callsToVoicemail"),
+    /** Per-contact incoming ringtone (v2.107.64, QW-11). One of the synthesized
+     *  variant ids in shared/ringtone.ts; NULL means the default ("classic"), so
+     *  the additive column leaves every existing contact ringing the signature
+     *  motif. Resolved at ring time and played by the call engine. */
+    ringtone: text("ringtone"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

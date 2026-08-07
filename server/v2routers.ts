@@ -7,6 +7,9 @@
    ============================================================ */
 
 import { contactTagsOf, serializeContactTags } from "../shared/contactTags";
+import { RINGTONE_IDS } from "../shared/ringtone";
+// z.enum needs a non-empty readonly tuple; RINGTONE_IDS is a runtime array, so widen it.
+const RINGTONE_IDS_TUPLE = RINGTONE_IDS as [string, ...string[]];
 import { sanitizeUgcText } from "../shared/contentFilter";
 import { TRPCError } from "@trpc/server";
 import { s3Config } from "./s3";
@@ -121,6 +124,7 @@ import {
   clearCallHistory,
   isNumberBlockedBy,
   listContacts,
+  listContactRingtones,
   listMessages,
   searchMessages,
   listThreads,
@@ -2019,6 +2023,17 @@ export const v2DirectoryRouter = router({
 /* ── contacts router ──────────────────────────────────────────── */
 
 export const v2ContactsRouter = router({
+  /**
+   * The owner's per-contact ringtone assignments (v2.107.64, QW-11) — a tiny list
+   * the call engine holds to resolve a caller's ringtone at ring time. Only contacts
+   * with a non-default ringtone are returned. Deliberately its own endpoint (not a
+   * field on the heavy `list` query) so the always-mounted engine never forces the
+   * full contact directory to be fetched and enriched.
+   */
+  ringtones: publicProcedure.query(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    return { ringtones: await listContactRingtones(me.id) };
+  }),
   list: publicProcedure.query(async ({ ctx }) => {
     const me = requireIdentity(ctx);
     const rows = await listContacts(me.id);
@@ -2105,6 +2120,8 @@ export const v2ContactsRouter = router({
         tags: contactTagsOf({ tags: r.tags ?? null, category: r.category ?? null }),
         blocked: r.blocked === true,
         callsToVoicemail: r.callsToVoicemail === true,
+        // QW-11 — per-contact ringtone id; null means the default ("classic").
+        ringtone: r.ringtone ?? null,
         identityId: ident ?? null,
         isOnline: hidden ? false : (pres?.isOnline ?? false),
         idle: hidden ? false : (pres?.idle ?? false),
@@ -2169,6 +2186,10 @@ export const v2ContactsRouter = router({
         /** Send THIS number's calls to voicemail (v2.107.48): calls-only, opt-in;
          *  chat is unaffected. Distinct from `blocked`. */
         callsToVoicemail: z.boolean().optional(),
+        /** Per-contact ringtone (v2.107.64, QW-11): a synthesized variant id from
+         *  shared/ringtone.ts. null clears it back to the default. Validated against
+         *  the known ids so a stale client can't store a variant that won't resolve. */
+        ringtone: z.enum(RINGTONE_IDS_TUPLE).nullable().optional(),
         /** Explicit-rename opt-in — only the edit dialog sends this. Without it a
          *  provided displayName cannot replace an existing alias (see upsertContact). */
         overwriteName: z.boolean().optional(),

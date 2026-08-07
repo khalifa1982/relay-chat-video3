@@ -28,8 +28,9 @@ describe("voice improvements", () => {
   });
 
   it("plays an audible ringtone on incoming and outgoing calls, and stops on connect/teardown", () => {
-    expect(CLIENT).toMatch(/function playRingtone\(kind: "incoming" \| "outgoing"\)/);
-    expect(CLIENT).toMatch(/playRingtone\("incoming"\)/);
+    // QW-11: incoming carries the caller number so the engine can pick their ringtone.
+    expect(CLIENT).toMatch(/function playRingtone\(kind: "incoming" \| "outgoing", fromNumber\?: string \| null\)/);
+    expect(CLIENT).toMatch(/playRingtone\("incoming", /);
     expect(CLIENT).toMatch(/playRingtone\("outgoing"\)/);
     expect(CLIENT).toMatch(/function stopRingtone/);
   });

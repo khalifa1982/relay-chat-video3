@@ -2659,6 +2659,8 @@ export async function ensureSchemaExtensions(): Promise<void> {
     { table: "contacts", column: "blocked", ddl: "ADD COLUMN `blocked` boolean" },
     // v2.107.48 — calls-to-voicemail routing (opt-in, defaults off).
     { table: "contacts", column: "callsToVoicemail", ddl: "ADD COLUMN `callsToVoicemail` boolean" },
+    // v2.107.64 (QW-11) — per-contact ringtone. Additive; NULL rings the default.
+    { table: "contacts", column: "ringtone", ddl: "ADD COLUMN `ringtone` text" },
     { table: "identities", column: "allCallsToVoicemail", ddl: "ADD COLUMN `allCallsToVoicemail` boolean" },
     // v2.107.61 (QW-9) — read-receipt & typing privacy. "Off" flags so NULL reads as the
     // current behaviour (feature ON); every existing identity keeps receipts and typing.
@@ -3312,6 +3314,25 @@ export async function listContacts(ownerId: number) {
   return rows;
 }
 
+/**
+ * The owner's per-contact ringtone assignments (v2.107.64, QW-11) — ONLY the
+ * contacts that set a non-default ringtone, as `{number, ringtone}`. A tiny
+ * payload the always-mounted call engine can hold to resolve a caller's ringtone
+ * at ring time, without pulling (or making the server enrich) the full contact
+ * directory. Bounded by the same per-owner ceiling.
+ */
+export async function listContactRingtones(ownerId: number): Promise<Array<{ number: string; ringtone: string }>> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ number: contacts.number, ringtone: contacts.ringtone })
+    .from(contacts)
+    .where(and(eq(contacts.ownerId, ownerId), isNotNull(contacts.ringtone)))
+    .limit(MAX_CONTACTS_PER_OWNER);
+  // isNotNull already excludes NULLs; the filter also drops any empty-string row.
+  return rows.filter((r): r is { number: string; ringtone: string } => !!r.ringtone);
+}
+
 /* ── sessions / device list (v2.99.1) ─────────────────────────────────────
  * The cookie stays the source of truth for AUTHENTICATION (signed HMAC); this
  * ledger only powers the device list + remote logout. Every helper is
@@ -3594,7 +3615,7 @@ export function contactTagColumns(input: { tags?: string | null; category?: stri
 const CONTACT_UPDATABLE = [
   "displayName", "avatarUrl", "favourite", "notes",
   "email", "phone", "company", "jobTitle", "website", "birthday",
-  "category", "tags", "blocked", "callsToVoicemail",
+  "category", "tags", "blocked", "callsToVoicemail", "ringtone",
 ] as const;
 
 /**
@@ -3654,6 +3675,7 @@ export async function upsertContact(input: {
   tags?: string | null;
   blocked?: boolean;
   callsToVoicemail?: boolean;
+  ringtone?: string | null;
 }) {
   const db = await getDb();
   if (!db) throw new Error("database unavailable");
@@ -3679,6 +3701,7 @@ export async function upsertContact(input: {
     ...contactTagColumns(input),
     blocked: input.blocked ?? false,
     callsToVoicemail: input.callsToVoicemail ?? false,
+    ringtone: input.ringtone ?? null,
   };
   // Only overwrite columns the caller explicitly provided, so a partial update
   // (e.g. a favourite toggle that omits email/notes/…) never wipes saved fields.

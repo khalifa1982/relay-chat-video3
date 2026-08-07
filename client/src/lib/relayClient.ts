@@ -38,6 +38,20 @@ import { callTelemetryStart, callTelemetrySample, callTelemetryNote, callTelemet
 ──────────────────────────────────────────────────────────────────────────────── */
 type EngineTranslator = (key: string, vars?: Record<string, string | number>) => string;
 let engineT: EngineTranslator | null = null;
+
+/* PER-CONTACT RINGTONES (v2.107.64, QW-11). The engine plays the incoming ring
+   deep in an SSE handler where it knows only the caller's number (`m.from`); the
+   React layer owns the contact list and each contact's chosen ringtone. This
+   module-level resolver is the bridge — RelayEngine registers a `number → variant
+   id` lookup, and playRingtone("incoming") consults it. Null / unknown resolves to
+   the default motif, so an unset contact and an un-registered resolver both ring
+   "classic". Mirrors setEngineTranslator's injection pattern exactly. */
+type ContactRingtoneResolver = (fromNumber: string) => string | null;
+let contactRingtoneResolver: ContactRingtoneResolver | null = null;
+
+export function setContactRingtoneResolver(r: ContactRingtoneResolver | null): void {
+  contactRingtoneResolver = r;
+}
 /** Re-render the copy the engine writes itself; set by startRelay. */
 let engineRelabel: (() => void) | null = null;
 
@@ -72,7 +86,7 @@ import { readSnapshot, writeSnapshot, clearSnapshot, type RejoinSnapshot } from 
 import { capPinInput, pinDigits } from "@/app/pinInput";
 import { isDndOn } from "@/app/dnd";
 import { notify } from "@/app/notifications";
-import { RINGTONE_NOTES, RINGTONE_LOOP_MS, RINGTONE_PEAK_GAIN, RINGTONE_WAVE } from "@shared/ringtone";
+import { RINGTONE_PEAK_GAIN, getRingtone } from "@shared/ringtone";
 import { isNativeAndroid, nativeSetSpeaker, nativeSetInCall } from "./nativeBridge";
 import { DEVICE_ID_HEADER, getDeviceId } from "./deviceId";
 import { describePeerPresence, formatElapsedSince } from "@shared/profileFields";
@@ -3333,7 +3347,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     try { navigator.vibrate?.(0); } catch { /* no vibration API */ }
     stopTitleFlash();
   }
-  function playRingtone(kind: "incoming" | "outgoing") {
+  function playRingtone(kind: "incoming" | "outgoing", fromNumber?: string | null) {
     stopRingtone();
     if (!ringtoneEnabled() || isDndOn()) return;
     try {
@@ -3341,25 +3355,33 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       if (!Ctx) return;
       if (!ringtoneCtx) ringtoneCtx = new Ctx();
       void ringtoneCtx.resume();
+      // QW-11: resolve this caller's ringtone ONCE per ring. getRingtone falls back
+      // to "classic" for a null / unknown id — and classic's data is the very
+      // RINGTONE_* spec used before — so an unset contact rings exactly as it always
+      // did. Only the note DATA (motif / timbre / loop / level) varies; the delicate
+      // Web-Audio scheduling below is untouched.
+      const variant =
+        kind === "incoming"
+          ? getRingtone(fromNumber && contactRingtoneResolver ? contactRingtoneResolver(fromNumber) : null)
+          : null;
       const fire = () => {
         const ctx = ringtoneCtx; if (!ctx) return;
         const now = ctx.currentTime;
-        // Incoming: RELAY's signature ringtone — a distinct custom melody at a
-        // fixed MEDIUM-LOUD level (spec + rationale in shared/ringtone.ts; the
-        // Profile "Test ringtone" preview plays the same spec). Outgoing: a
-        // single soft repeating dial-tone beep so the caller hears ringing.
-        // Physical ring on phones that support it (Android — iOS has no
-        // vibration API). Re-fired per burst cycle; stopRingtone cancels.
+        // Incoming: the caller's chosen ringtone (default = RELAY's signature motif),
+        // a distinct custom melody at a MEDIUM-LOUD level (spec + rationale in
+        // shared/ringtone.ts). Outgoing: a single soft repeating dial-tone beep so the
+        // caller hears ringing. Physical ring on phones that support it (Android — iOS
+        // has no vibration API). Re-fired per burst cycle; stopRingtone cancels.
         if (kind === "incoming") { try { navigator.vibrate?.([400, 200, 400]); } catch { /* */ } }
         const notes: Array<{ freq: number; at: number; dur: number; gain?: number }> =
-          kind === "incoming" ? RINGTONE_NOTES : [{ freq: 425, at: 0, dur: 0.9, gain: 0.12 }];
+          kind === "incoming" ? variant!.notes : [{ freq: 425, at: 0, dur: 0.9, gain: 0.12 }];
         notes.forEach(n => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
-          osc.type = kind === "incoming" ? RINGTONE_WAVE : "sine";
+          osc.type = kind === "incoming" ? variant!.wave : "sine";
           osc.frequency.value = n.freq;
           const t0 = now + n.at;
-          const peak = n.gain ?? RINGTONE_PEAK_GAIN;
+          const peak = n.gain ?? (variant ? variant.peak : RINGTONE_PEAK_GAIN);
           gain.gain.setValueAtTime(0.0001, t0);
           gain.gain.exponentialRampToValueAtTime(peak, t0 + 0.02);
           gain.gain.exponentialRampToValueAtTime(0.0001, t0 + n.dur);
@@ -3372,7 +3394,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         });
       };
       fire();
-      ringtoneTimer = setInterval(fire, kind === "incoming" ? RINGTONE_LOOP_MS : 2000);
+      ringtoneTimer = setInterval(fire, kind === "incoming" ? variant!.loopMs : 2000);
     } catch { /* best-effort — visual ring overlay still shows */ }
   }
 
@@ -3898,7 +3920,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     const crInput = $("customReplyInput") as HTMLInputElement | null; if (crInput) crInput.value = "";
     presentRingProfile(m.from!); // photo + verified + presence (async, guarded)
     $("ringOverlay")?.classList.add("active");
-    playRingtone("incoming");
+    playRingtone("incoming", m.from);
     // Out-of-tab alerting: flash the tab title, and (when the page is hidden
     // and permission was granted) raise a system notification. notify() itself
     // suppresses when visible + honours DND, so this never double-alerts.
@@ -7507,7 +7529,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       if (ringPin2) ringPin2.textContent = promotedRing.from.length === 6 ? promotedRing.from.slice(0, 3) + "-" + promotedRing.from.slice(3) : promotedRing.from;
       presentRingProfile(promotedRing.from);
       $("ringOverlay")?.classList.add("active");
-      playRingtone("incoming");
+      playRingtone("incoming", promotedRing.from);
       emitPhase("ringing");
       if (ringTimeoutT) clearTimeout(ringTimeoutT);
       ringTimeoutT = setTimeout(() => {

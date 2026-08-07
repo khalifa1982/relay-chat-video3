@@ -98,8 +98,12 @@ describe("signature ringtone — one shared spec, medium-loud", () => {
 
   it("the ENGINE plays the shared spec for incoming rings (and keeps the soft outgoing dial-tone)", () => {
     expect(CLIENT).toMatch(/from "@shared\/ringtone"/);
-    expect(CLIENT).toMatch(/kind === "incoming" \? RINGTONE_NOTES : \[\{ freq: 425, at: 0, dur: 0\.9, gain: 0\.12 \}\]/);
-    expect(CLIENT).toMatch(/kind === "incoming" \? RINGTONE_LOOP_MS : 2000/);
+    // QW-11: incoming rings the RESOLVED per-contact variant, whose default
+    // (getRingtone(null)) is the shared "classic" spec — so an un-set contact is
+    // unchanged. Outgoing keeps the soft single dial-tone beep.
+    expect(CLIENT).toMatch(/getRingtone\(fromNumber && contactRingtoneResolver \? contactRingtoneResolver\(fromNumber\) : null\)/);
+    expect(CLIENT).toMatch(/kind === "incoming" \? variant!\.notes : \[\{ freq: 425, at: 0, dur: 0\.9, gain: 0\.12 \}\]/);
+    expect(CLIENT).toMatch(/kind === "incoming" \? variant!\.loopMs : 2000/);
     // Android vibration stays part of the ring.
     expect(CLIENT).toMatch(/navigator\.vibrate\?\.\(\[400, 200, 400\]\)/);
   });

@@ -101,6 +101,9 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   const setEngineTranslatorRef = useRef<
     ((t: ((k: string, vars?: Record<string, string | number>) => string) | null) => void) | null
   >(null);
+  /* QW-11: the engine's setContactRingtoneResolver, captured from the dynamic
+     import so the unmount cleanup can clear it. */
+  const setContactRingtoneResolverRef = useRef<((r: ((from: string) => string | null) | null) => void) | null>(null);
   /* THE CAST IS DELIBERATE AND IS CHECKED SOMEWHERE STRONGER THAN THE TYPE SYSTEM.
      `t` accepts a `TKey` union; `applyEngineLabels` accepts a plain string, because
      the keys it reads come out of `data-i18n` attributes inside a template literal —
@@ -119,6 +122,19 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
   // Read the identity directly (no heartbeat side effect — that's owned by
   // AppShell's useIdentity); we only need name + number to auto-register.
   const whoami = trpc.identity.whoami.useQuery(undefined, { staleTime: 30_000 });
+  /* PER-CONTACT RINGTONES (v2.107.64, QW-11). A tiny `{number, ringtone}` list —
+     only contacts with a custom ringtone — kept warm so the engine can resolve a
+     caller's ringtone the instant a ring arrives. Long staleTime: reassignments are
+     rare and a wrong tone for one ring (until the next refetch) is cosmetic. */
+  const contactRingtonesQ = trpc.contacts.ringtones.useQuery(undefined, { staleTime: 300_000 });
+  const ringtoneMapRef = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    const m = new Map<string, string>();
+    for (const r of contactRingtonesQ.data?.ringtones ?? []) m.set(r.number, r.ringtone);
+    // The engine's registered resolver reads this ref lazily at ring time, so
+    // swapping its contents is enough — no need to re-register.
+    ringtoneMapRef.current = m;
+  }, [contactRingtonesQ.data]);
   const me = whoami.data ?? null;
   // Our country flag (for the in-call name tag), resolved from our IP geo.
   const geo = trpc.directory.geoSelf.useQuery(undefined, {
@@ -397,7 +413,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     let timer: ReturnType<typeof setInterval> | null = null;
     let giveUp: ReturnType<typeof setTimeout> | null = null;
     void (async () => {
-      const [{ startRelay, setEngineTranslator }, { RELAY_MARKUP, RELAY_CSS, applyEngineLabels }] =
+      const [{ startRelay, setEngineTranslator, setContactRingtoneResolver }, { RELAY_MARKUP, RELAY_CSS, applyEngineLabels }] =
         await Promise.all([
           import("@/lib/relayClient"),
           import("@/lib/relayAssets"),
@@ -419,6 +435,10 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
          translator over earlier would relabel nothing. */
       setEngineTranslatorRef.current = setEngineTranslator;
       setEngineTranslator(tAnyRef.current);
+      /* QW-11: register the per-contact ringtone resolver. It reads `ringtoneMapRef`
+         lazily, so the map effect above can keep it current without re-registering. */
+      setContactRingtoneResolverRef.current = setContactRingtoneResolver;
+      setContactRingtoneResolver((from: string) => ringtoneMapRef.current.get(from) ?? null);
       handle.setOnStateChange(setPhase);
       handle.setOnPinChange(setPin);
       handle.setOnRejoinChange(setRejoining);
@@ -464,6 +484,8 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       if (timer) clearInterval(timer);
       if (giveUp) clearTimeout(giveUp);
+      // QW-11: drop the ringtone resolver so a torn-down engine leaves no dangling ref.
+      setContactRingtoneResolverRef.current?.(null);
       handle?.destroy();
       handleRef.current = null;
       setReady(false);

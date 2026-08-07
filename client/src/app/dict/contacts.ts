@@ -102,6 +102,14 @@ export const CONTACTS = {
   // v2.107.48 (owner) — per-contact "send this person's calls to voicemail".
   "contacts.callsVoicemailOn": { en: "Send calls to voicemail", ar: "تحويل المكالمات إلى البريد الصوتي" },
   "contacts.callsVoicemailOff": { en: "Stop sending to voicemail", ar: "إيقاف التحويل إلى البريد الصوتي" },
+  /* QW-11 — per-contact ringtone picker. Variant names are short and evocative;
+     Arabic gives each a real descriptive word rather than transliteration. */
+  "contacts.ringtone": { en: "Ringtone", ar: "نغمة الرنين" },
+  "contacts.ringtoneDefault": { en: "Default", ar: "الافتراضية" },
+  "contacts.ringtone_chime": { en: "Chime", ar: "جرس" },
+  "contacts.ringtone_pulse": { en: "Pulse", ar: "نبضة" },
+  "contacts.ringtone_rising": { en: "Rising", ar: "تصاعدية" },
+  "contacts.ringtone_mellow": { en: "Mellow", ar: "هادئة" },
   "contacts.favorite": { en: "Favorite", ar: "إضافة إلى المفضلة" },
   "contacts.unfavorite": { en: "Unfavorite", ar: "إزالة من المفضلة" },
   "contacts.edit": { en: "Edit", ar: "تعديل" },

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { contactTagsOf, sectionsFor, CONTACT_TAGS, TAG_LABEL, primaryTag, toggleContactTag, type ContactTag } from "@shared/contactTags";
+import { RINGTONES, DEFAULT_RINGTONE_ID } from "@shared/ringtone";
+import { previewRingtone } from "@/lib/ringtonePreview";
 
 import { useLocation } from "wouter";
 import {
@@ -26,6 +28,7 @@ import {
   ChevronRight,
   Radio,
   Voicemail,
+  Music2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,6 +57,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
@@ -180,7 +186,12 @@ export default function ContactsPage() {
   // tap is the worst case — the row just doesn't change and the user retries
   // into the void. (The edit dialog surfaces upsert errors inline itself.)
   const upsert = trpc.contacts.upsert.useMutation({
-    onSuccess: () => utils.contacts.list.invalidate(),
+    // Also refresh the lightweight ringtones list (QW-11) so a ringtone change
+    // reaches the always-mounted call engine, not just this screen's checkmarks.
+    onSuccess: () => {
+      void utils.contacts.list.invalidate();
+      void utils.contacts.ringtones.invalidate();
+    },
     onError: (err) => toast.error(err.message || t("contacts.saveFailed")),
   });
   const remove = trpc.contacts.remove.useMutation({
@@ -646,6 +657,9 @@ export default function ContactsPage() {
                           onToggleVoicemail={() =>
                             upsert.mutate({ number: c.number, callsToVoicemail: !c.callsToVoicemail })
                           }
+                          onSetRingtone={(id) =>
+                            upsert.mutate({ number: c.number, ringtone: id })
+                          }
                           /* SEND THE WHOLE FACT, not the mirror. `category` is the derived
                              mirror of `tags[0]`, and `contactUpdateKeys` couples the two —
                              so a category-only write re-derived `tags` FROM it and silently
@@ -747,6 +761,7 @@ function ContactRow({
   onToggleFavorite,
   onToggleBlock,
   onToggleVoicemail,
+  onSetRingtone,
   onSetCategory,
 }: {
   c: {
@@ -773,6 +788,8 @@ function ContactRow({
     tags?: string[];
     blocked: boolean;
     callsToVoicemail?: boolean;
+    /** Per-contact ringtone id (QW-11); null/undefined = the default motif. */
+    ringtone?: string | null;
   };
   onVoice: () => void;
   onVideo: () => void;
@@ -782,6 +799,7 @@ function ContactRow({
   onToggleFavorite: () => void;
   onToggleBlock: () => void;
   onToggleVoicemail: () => void;
+  onSetRingtone: (id: string | null) => void;
   onSetCategory: (cat: Category) => void;
 }) {
   const t = useT();
@@ -1060,6 +1078,36 @@ function ContactRow({
               <Voicemail className={"size-4 " + (c.callsToVoicemail ? "text-primary" : "")} />
               {c.callsToVoicemail ? t("contacts.callsVoicemailOff") : t("contacts.callsVoicemailOn")}
             </DropdownMenuItem>
+            {/* QW-11 — per-contact ringtone. Tapping a variant SETS it and plays a
+                one-shot preview so you hear the pick; the check marks the current one.
+                "Default" clears back to the signature motif (stored as null). */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Music2 className="size-4" /> {t("contacts.ringtone")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {(() => {
+                  const cur = c.ringtone && c.ringtone !== DEFAULT_RINGTONE_ID ? c.ringtone : null;
+                  const rows: Array<{ id: string | null; labelKey: TKey }> = [
+                    { id: null, labelKey: "contacts.ringtoneDefault" },
+                    ...RINGTONES.filter((r) => r.id !== DEFAULT_RINGTONE_ID).map((r) => ({
+                      id: r.id,
+                      labelKey: `contacts.ringtone_${r.id}` as TKey,
+                    })),
+                  ];
+                  return rows.map((row) => (
+                    <DropdownMenuItem
+                      key={row.id ?? "default"}
+                      onClick={() => { onSetRingtone(row.id); previewRingtone(row.id ?? DEFAULT_RINGTONE_ID); }}
+                    >
+                      <Music2 className="size-4" />
+                      {t(row.labelKey)}
+                      {cur === row.id && <CheckCircle2 className="size-3.5 ms-auto text-primary" />}
+                    </DropdownMenuItem>
+                  ));
+                })()}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuItem onClick={onToggleBlock}>
               <Ban className={"size-4 " + (c.blocked ? "" : "text-red-500")} />
               {c.blocked ? t("contacts.unblock") : t("contacts.block")}

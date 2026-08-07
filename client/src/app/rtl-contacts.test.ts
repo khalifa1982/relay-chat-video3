@@ -169,7 +169,7 @@ describe("Contacts.tsx — RTL spacing sweep", () => {
     expect(count("me-1.5")).toBe(1); // icon-before-label in the empty-state button
     expect(count("text-start")).toBe(2); // section heading + the row's main-area button
     expect(count("-end-0.5")).toBe(2); // the two presence LEDs
-    expect(count("ms-auto")).toBe(2); // row actions (pre-existing) + the menu tick
+    expect(count("ms-auto")).toBe(3); // row actions (pre-existing) + category tick + ringtone tick (QW-11)
   });
 
   it("each search icon sits on the SAME logical edge as the padding that clears it", () => {
