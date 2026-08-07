@@ -323,6 +323,35 @@ describe("native rewrite — M5 screen share / PiP (Android)", () => {
     expect(eng).not.toMatch(/\bfrom "livekit-client"/);
   });
 
+  /* THE MANIFEST AND ITS LOCKFILE CANNOT DISAGREE, AND THIS GUARD EXISTS BECAUSE
+     THE WAY THEY BREAK IS SILENT. `native-rn.yml` installs this project with
+     `npm ci`, which REFUSES to run when package.json and package-lock.json declare
+     different roots — but that workflow only fires on a push touching
+     `mobile/native/**`, so a half-restore (the dependency put back in the manifest
+     and not in the lock) sails through every PR and then breaks the Android build
+     for whoever next touches this directory, with nothing here saying why.
+     Comparing the two roots is precisely the check `npm ci` performs, moved into
+     the suite that runs on EVERY change. */
+  it("the mobile manifest and its lockfile declare the same dependencies", () => {
+    const pkg = JSON.parse(read("mobile/native/package.json"));
+    const lock = JSON.parse(read("mobile/native/package-lock.json"));
+    const root = lock.packages?.[""];
+    expect(root, "the lockfile's root package entry").toBeTruthy();
+    for (const section of ["dependencies", "devDependencies"] as const) {
+      expect(root[section] ?? {}, `${section} must match package.json`).toEqual(
+        pkg[section] ?? {},
+      );
+    }
+    // Non-vacuity: a lockfile listing nothing would satisfy an empty manifest.
+    expect(Object.keys(pkg.dependencies ?? {}).length).toBeGreaterThan(5);
+    // …and the initialiser must be RESOLVED, not merely requested: a root entry
+    // with no installed package is what an interrupted `npm install` leaves.
+    expect(
+      lock.packages?.["node_modules/@livekit/react-native"],
+      "the Android initialiser must be resolved in the lockfile",
+    ).toBeTruthy();
+  });
+
   it("PiP: in-call home press shrinks to Picture-in-Picture, gated by the engine", () => {
     expect(read("mobile/native/android/app/src/main/java/com/relaynative/MainActivity.kt"))
       .toContain("enterPictureInPictureMode");

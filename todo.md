@@ -1,5 +1,79 @@
 # Project TODO
 
+## v2.107.62 — THE ANDROID APP LOST A DEPENDENCY ITS OWN KOTLIN STILL IMPORTS
+
+Found by the drive-to-green pass on PR #154, not by anybody looking for it.
+
+### The mainline's own suite was already red
+
+The single failing case fails at `origin/web-app-main` too, so it is not a rebase
+artifact and not v2.107.61's. Reporting it as "the known device-only test" would have
+been wrong twice over — it is neither device-only nor benign.
+
+### `cd08ba7` removed a package the repo's own source says is load-bearing
+
+Its message reads *"drop unused @livekit/react-native cloud SDK dep (native engine uses
+raw WebRTC lib + RELAY signaling only)"*. Three places in the tree contradict the
+premise:
+
+- `mobile/native/android/app/src/main/java/com/relaynative/MainApplication.kt:9` —
+  `import com.livekit.reactnative.LiveKitReactNative`
+- the same file, line 32 — `LiveKitReactNative.setup(this)`
+- `mobile/native/src/call/engine.tsx:17-18` — states outright that this package is the
+  **Android initialiser** and that its `setup()` configures `WebRTCModuleOptions`, i.e.
+  the options of `@livekit/react-native-webrtc`, the binding the **mesh** is built on.
+
+**The package whose name says SFU is not an SFU client.** That is exactly the trap
+v2.106.55 recorded — its own first draft attempted the same deletion and it was caught
+before merge. The guard written that day (`nativeRewrite.test.ts:307`) fired correctly
+this time; the removal shipped regardless.
+
+**The cost is not a red test, it is an unresolved import.** The Kotlin has no package to
+resolve, so the Android build fails outright. Had it compiled, the loss would have been
+every mesh call's hardware AEC + noise suppression, the encoder/decoder factories, and
+`enableMediaProjectionService` — without which **screen share sends black frames**.
+
+### Restored from `cd08ba7^`, not retyped
+
+Both `package.json` and `package-lock.json`; neither has changed since that commit, so
+the restored pair is exactly the one that was in sync before the removal.
+
+The alternative fix — delete the Kotlin import and rewrite the test — would take a
+measured capability away to satisfy a manifest, so it was not taken.
+
+`mobile/native` is **not** a workspace member (no `pnpm-workspace.yaml`, no root
+`workspaces`, its own npm lockfile), so the root `pnpm install --frozen-lockfile` never
+sees it and the app deploy is untouched.
+
+### The new guard is for the risk the FIX introduces
+
+`native-rn.yml` installs with `npm ci`, which refuses a manifest and lockfile whose
+roots disagree — but that workflow fires only on a push touching `mobile/native/**`. So
+a **half-restore** (manifest fixed, lock not) sails through every PR and then breaks the
+Android build for whoever next touches that directory, with nothing saying why.
+
+`nativeRewrite.test.ts` now compares the two roots — precisely what `npm ci` checks,
+moved into the suite that runs on every change — plus:
+
+- **resolved, not merely requested**: a root entry with no `node_modules/` package is
+  what an interrupted `npm install` leaves behind.
+- a **non-vacuity floor**, since a lockfile listing nothing satisfies an empty manifest.
+
+**3 of 3 tripwires verified by mutation** off a confirmed-green baseline from byte-exact
+backups — the half-restore, the declared-but-unresolved entry, and `cd08ba7` reinstated
+*consistently* — with both files byte-identical afterwards.
+
+### Not verified, said plainly
+
+Nobody has run Gradle. What is proven is that the manifest and its lockfile agree and
+that the package the Kotlin imports is declared and resolved. `native-rn.yml` fires on
+this push and is the real check.
+
+No schema change, no new web dependency, no new env var, no server change, no web-app
+behaviour change of any kind. 6940 tests.
+
+---
+
 ## v2.107.61 — THE LIGHT THEME WAS WHITE ON WHITE, AND THE NAV SPENT ITS WHOLE SAFE AREA ON NOTHING
 
 Owner, with four screenshots and the request stated twice: *"If you see now the white
