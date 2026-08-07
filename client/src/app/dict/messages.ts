@@ -623,6 +623,15 @@ export const MESSAGES = {
   /* A non-text pinned message (a photo, a voice note) has no body to preview, so the
      banner shows the kind instead of empty text. */
   "msg.pinnedMedia": { en: "Media", ar: "وسائط" },
+  /* GIF PICKER (v2.107.62, QW-10) — search-backed, rides the attachment sheet. */
+  "msg.gifPick": { en: "GIF", ar: "صورة GIF" },
+  "msg.gifSearchPlaceholder": { en: "Search GIFs", ar: "ابحث عن صور GIF" },
+  "msg.gifNoResults": { en: "No GIFs found. Try another search.", ar: "لا توجد صور GIF. جرّب بحثًا آخر." },
+  "msg.gifPoweredBy": { en: "Powered by GIPHY", ar: "مُشغَّل بواسطة GIPHY" },
+  "msg.gifFailed": {
+    en: "Couldn't add that GIF. Please try another.",
+    ar: "تعذّرت إضافة صورة GIF. يرجى تجربة أخرى.",
+  },
   "msg.starredTitle": {
     en: "Starred messages",
     ar: "الرسائل المميزة",

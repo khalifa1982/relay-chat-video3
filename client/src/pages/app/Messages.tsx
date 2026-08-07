@@ -68,6 +68,7 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 import { trpc } from "@/lib/trpc";
+import { keepPreviousData } from "@tanstack/react-query";
 import { ListLoading } from "@/app/ListStates";
 import { RoleBadge, roleFromFlags } from "@/app/VerifiedBadge";
 import { EmojiPicker } from "@/app/EmojiPicker";
@@ -2352,6 +2353,29 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // in-app (works mid-call) or pick from the library.
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [videoRecOpen, setVideoRecOpen] = useState(false);
+  // GIF PICKER (v2.107.62, QW-10) — opened from the attachment sheet. A chosen GIF is
+  // re-hosted server-side into a normal attachment and then STAGED like a picked photo,
+  // so it rides the same composer preview + send path. The button that opens this is
+  // shown only when the server reports the picker configured (me.gifSearchEnabled).
+  const [gifPickerOpen, setGifPickerOpen] = useState(false);
+  const gifAttachMutation = trpc.identity.gifAttach.useMutation();
+  const pickGif = useCallback(
+    async (url: string, width: number, height: number) => {
+      setGifPickerOpen(false);
+      setUploading(true);
+      try {
+        const att = await gifAttachMutation.mutateAsync({ url, width, height });
+        // Stage it exactly like uploadOne's result — the composer shows it, the send
+        // button sends it, no GIF-specific send path.
+        setPendingUpload({ id: att.id, url: att.url, mimeType: att.mimeType, filename: "giphy.gif" });
+      } catch (e) {
+        toast.error((e as { message?: string })?.message || t("msg.gifFailed"));
+      } finally {
+        setUploading(false);
+      }
+    },
+    [gifAttachMutation, t]
+  );
   /* #144 — the photo waiting on the rotate/crop sheet. Holding the FILE (rather
      than a boolean) is what lets both exits hand the very same object back to
      `uploadFile`, so cancelling is indistinguishable from never having opened
@@ -4286,6 +4310,19 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             >
               <ImageIcon className="size-4 shrink-0" /> <span className="truncate">{t("msg.photoAndVideo")}</span>
             </button>
+            {/* GIF (v2.107.62, QW-10) — shown only when the server reports the picker
+                configured, so with no provider key the row is simply absent rather than
+                a dead button. */}
+            {me?.gifSearchEnabled && (
+              <button
+                type="button"
+                onClick={() => { setAttachMenuOpen(false); setGifPickerOpen(true); }}
+                className="flex items-center justify-center gap-2 rounded-xl bg-muted/60 px-3 py-3 text-sm font-semibold text-foreground active:scale-95 transition-transform"
+              >
+                <span className="grid h-4 w-6 shrink-0 place-items-center rounded-[3px] border border-current text-[8px] font-bold leading-none">GIF</span>
+                <span className="truncate">{t("msg.gifPick")}</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => { setAttachMenuOpen(false); fileRef.current?.click(); }}
@@ -4600,6 +4637,9 @@ function ConversationView({ conversationId }: { conversationId: number }) {
             void uploadFile(new File([r.blob], `video-note.${r.ext}`, { type: r.mimeType }));
           }}
         />
+      )}
+      {gifPickerOpen && (
+        <GifPicker onClose={() => setGifPickerOpen(false)} onPick={pickGif} />
       )}
       {/* Pre-upload photo editor (#144): rotate + crop, then the edited file
           joins the SAME attachment flow — so the downscale, the thumbnail, the
@@ -5776,6 +5816,99 @@ function StarredSheet({
             </ul>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * GIF PICKER (v2.107.62, QW-10) — a full-screen search grid over Giphy. An empty query
+ * shows trending; typing searches (debounced). Tapping a GIF hands its full URL up to
+ * `onPick`, which re-hosts it server-side and stages it in the composer — this component
+ * itself never touches storage or the send path. The grid shows the small preview URL in
+ * an <img> (display needs no CORS); only the re-host fetch, done server-side, does.
+ * Carries the "Powered by GIPHY" mark the provider's terms require.
+ */
+function GifPicker({
+  onClose,
+  onPick,
+}: {
+  onClose: () => void;
+  onPick: (url: string, width: number, height: number) => void;
+}) {
+  const t = useT();
+  const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedQ(q.trim()), 350);
+    return () => window.clearTimeout(id);
+  }, [q]);
+  const search = trpc.identity.gifSearch.useQuery(
+    { q: debouncedQ, limit: 24 },
+    // keepPreviousData (v5 form): keep the last grid on screen while the next query
+    // resolves, so typing doesn't flash the results back to a spinner each keystroke.
+    { staleTime: 60_000, placeholderData: keepPreviousData }
+  );
+  const results = search.data?.results ?? [];
+
+  return (
+    <div className="fixed inset-0 z-[85] flex flex-col bg-background/98 backdrop-blur-sm supports-[backdrop-filter]:bg-background/90">
+      <div className="flex items-center gap-2 border-b border-border/70 px-3 py-2">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={t("msg.gifSearchPlaceholder")}
+            aria-label={t("msg.gifSearchPlaceholder")}
+            className="h-10 w-full rounded-full border border-border bg-card ps-9 pe-3 text-sm text-foreground outline-none focus:border-primary"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t("msg.back")}
+          className="rhit grid size-9 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted"
+        >
+          <X className="size-5" />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        {search.isLoading ? (
+          <div className="grid h-40 place-items-center">
+            <div className="size-6 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-primary" />
+          </div>
+        ) : results.length === 0 ? (
+          <div className="grid h-40 place-items-center px-6 text-center text-sm text-muted-foreground">
+            {t("msg.gifNoResults")}
+          </div>
+        ) : (
+          <div className="columns-2 gap-2 sm:columns-3 [&>button]:mb-2">
+            {results.map((g) => (
+              <button
+                key={g.id}
+                type="button"
+                onClick={() => onPick(g.gifUrl, g.width, g.height)}
+                className="block w-full overflow-hidden rounded-lg bg-muted/50 active:scale-95 transition-transform"
+                style={{ aspectRatio: `${g.previewWidth} / ${g.previewHeight}` }}
+                aria-label={t("msg.gifPick")}
+              >
+                <img
+                  src={g.previewUrl}
+                  alt=""
+                  loading="lazy"
+                  className="h-full w-full object-cover"
+                />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-border/70 px-3 py-1.5 text-center text-[10px] uppercase tracking-wider text-muted-foreground">
+        {t("msg.gifPoweredBy")}
       </div>
     </div>
   );

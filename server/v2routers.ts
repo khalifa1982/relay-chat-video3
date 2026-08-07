@@ -11,6 +11,7 @@ import { sanitizeUgcText } from "../shared/contentFilter";
 import { TRPCError } from "@trpc/server";
 import { s3Config } from "./s3";
 import { storageGetSignedUrl } from "./storage";
+import { gifEnabled, searchGifs, attachGif } from "./gif";
 import {
   MAX_TRANSCRIBE_BYTES,
   geminiKey,
@@ -173,8 +174,7 @@ import {
   saveAttachmentTranscriptAlt,
   saveMessageAlbum,
   getAlbumsForMessages,
-  dmPeerReceiptsOff,
-  getAttachmentsForIdentityBatch,
+  dmPeerReceiptsOff,  getAttachmentsForIdentityBatch,
   fileContentReport,
   listContentReports,
   setReportStatus,
@@ -633,6 +633,10 @@ export const v2AuthRouter = router({
       // QW-9 (v2.107.61) — read-receipt & typing privacy, in "on" terms for the UI.
       sendReadReceipts: ctx.identity.sendReadReceipts,
       showTyping: ctx.identity.showTyping,
+      // QW-10 (v2.107.62) — whether the GIF picker is configured (a provider key is set).
+      // The client hides the attachment sheet's GIF button when this is false, so the
+      // feature is absent rather than broken until a key is provisioned.
+      gifSearchEnabled: gifEnabled(),
       statusOverride: (ctx.identity.statusOverride as "" | "away" | "travel" | null) ?? "",
       // The profile LABEL (v2.101.1) — separate from the presence override above,
       // and normalized on the way out so a hand-edited row cannot render a label
@@ -1046,6 +1050,54 @@ export const v2AuthRouter = router({
           pinnedAt: r.pinnedAt,
         })),
       };
+    }),
+
+  /**
+   * GIF SEARCH (v2.107.62, QW-10) — proxy Giphy so the key stays server-side. An empty
+   * query trends. Returns `enabled` so the client can tell "no results" from "not set
+   * up" (though it also hides the button when disabled). Membership-free: it's a search,
+   * not a read of anyone's data.
+   */
+  gifSearch: publicProcedure
+    .input(z.object({ q: z.string().max(100).optional(), limit: z.number().int().min(1).max(50).optional() }))
+    .query(async ({ ctx, input }) => {
+      requireIdentity(ctx);
+      if (!gifEnabled()) return { enabled: false as const, results: [] };
+      const results = await searchGifs(input.q ?? "", input.limit ?? 24);
+      return { enabled: true as const, results };
+    }),
+
+  /**
+   * GIF ATTACH (v2.107.62, QW-10) — re-host a chosen Giphy GIF as the caller's own
+   * attachment and hand back the id, which the client then sends in a message exactly
+   * like a picked photo. The URL is guarded to Giphy media hosts (SSRF) inside
+   * `attachGif`; a bad choice maps to a plain error rather than a stored external link.
+   */
+  gifAttach: publicProcedure
+    .input(
+      z.object({
+        url: z.string().url(),
+        width: z.number().int().positive().max(4096).optional(),
+        height: z.number().int().positive().max(4096).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      const res = await attachGif({ identityId: me.id, url: input.url, width: input.width, height: input.height });
+      if (!res.ok) {
+        const map: Record<
+          typeof res.reason,
+          { code: "BAD_REQUEST" | "PAYLOAD_TOO_LARGE" | "INTERNAL_SERVER_ERROR"; message: string }
+        > = {
+          "bad-url": { code: "BAD_REQUEST", message: "That isn't a GIF we can attach." },
+          "not-a-gif": { code: "BAD_REQUEST", message: "That link isn't a GIF." },
+          "too-large": { code: "PAYLOAD_TOO_LARGE", message: "That GIF is too large to send." },
+          unavailable: { code: "INTERNAL_SERVER_ERROR", message: "Couldn't attach that GIF — try another." },
+        };
+        const m = map[res.reason];
+        throw new TRPCError({ code: m.code, message: m.message, cause: res.reason });
+      }
+      return { id: res.id, url: res.url, mimeType: res.mimeType };
     }),
 
   /** The caller's starred messages across every conversation, newest star first —
