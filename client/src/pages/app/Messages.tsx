@@ -1663,7 +1663,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       }
       const ok = engine.dialGroup(
         res.targets.map((t) => t.number),
-        { voice, seed: res.hostSeed },
+        { voice, seed: res.hostSeed, name: thread.title ?? null },
       );
       if (!ok) toast.error(t("msg.callFailed"));
       else setLocation("/app/call");

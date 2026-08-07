@@ -21,7 +21,7 @@ describe("mutual-consent video — 1:1 protocol", () => {
   it("state machine + gate exist and reset per call", () => {
     expect(CLIENT).toMatch(/let videoApproved = false;/);
     expect(CLIENT).toMatch(/let callIsGroup = false;/);
-    expect(CLIENT).toMatch(/videoApproved = false; callIsGroup = false; \/\/ consent is per-call/);
+    expect(CLIENT).toMatch(/videoApproved = false; callIsGroup = false; callGroupName = null; \/\/ consent is per-call/);
   });
 
   it("camera tap in an un-approved 1:1 call sends a REQUEST — it never enables the camera directly", () => {

@@ -696,6 +696,11 @@ export function startRelay(root: HTMLElement): RelayHandle {
   // video OFF never needs consent). Group calls (3+) bypass the gate.
   let videoApproved = false;
   let callIsGroup = false;
+  /* The NAME of the group a call was placed from, when it was dialled out of a named
+     group conversation (v2.107.68, owner). It rides the local dial only — the header's
+     middle slot shows it in place of the headcount so the caller sees "Family" rather
+     than "4". null for an ad-hoc conference (no name) and for a 1:1. */
+  let callGroupName: string | null = null;
   let videoReqT: ReturnType<typeof setTimeout> | null = null; // our outstanding request
   function clearVideoReq() { if (videoReqT) { clearTimeout(videoReqT); videoReqT = null; } }
   /**
@@ -3185,7 +3190,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
   // fresh group dial can't race into two rooms.
   async function programmaticGroupDial(
     targets: string[],
-    opts?: { voice?: boolean; seed?: string | null },
+    opts?: { voice?: boolean; seed?: string | null; name?: string | null },
   ): Promise<boolean> {
     if (!me.pin) return false;
     const deduped = Array.from(
@@ -3227,6 +3232,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     if (opts?.voice) setCam(false);
     const alreadyInRoom = inCall && !!roomId;
     callIsGroup = true; // conferences bypass the 1:1 video-consent gate
+    callGroupName = opts?.name ?? null; // named-group dial → the header shows the name
     if (!inCall) {
       inCall = true;
       videoOfferPending = !opts?.voice; videoOfferedForRoom = null; // M37 — a video group dial offers video
@@ -5482,9 +5488,9 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
        subject is inverted here into the conference test. */
     const pins = Object.keys(peers);
     const isConference = callIsGroup || pins.length > 1;
-    // +1 counts YOU: "number of people in it" is everyone on the call, not the
-    // remote peers alone.
-    if (who) who.textContent = isConference ? String(pins.length + 1) : "";
+    // A named group shows its NAME ("Family"); an ad-hoc conference shows the live
+    // headcount (+1 counts YOU); a 1:1 shows nothing.
+    if (who) who.textContent = callGroupName || (isConference ? String(pins.length + 1) : "");
     if (roleEl) roleEl.style.display = "none";
   }
 
@@ -7411,7 +7417,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     clearDialTimeout(); // an ended call must never fire a stale "No answer."
     clearEstablishDeadline(); // …nor a stale "couldn't connect the audio"
     clearFailDial(); // an explicit End during the failure card mustn't re-fire
-    videoApproved = false; callIsGroup = false; // consent is per-call
+    videoApproved = false; callIsGroup = false; callGroupName = null; // consent is per-call
     // Board 1h: clear the chip's subject. AFTER `callIsGroup` is reset and while the
     // peers map is already empty, so the one funnel decides it rather than a second
     // copy of the rule — and the next call cannot open wearing the last person's name.
@@ -7808,7 +7814,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       void programmaticDial(target, opts);
       return true;
     },
-    dialGroup(targets: string[], opts?: { voice?: boolean; seed?: string | null }): boolean {
+    dialGroup(targets: string[], opts?: { voice?: boolean; seed?: string | null; name?: string | null }): boolean {
       if (!me.pin) return false;
       const valid = targets.filter(t => /^\d{6}$/.test(String(t)) && t !== me.pin);
       if (valid.length === 0) return false;

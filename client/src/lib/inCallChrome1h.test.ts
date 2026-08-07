@@ -453,15 +453,17 @@ describe("board 1h respects the call surface's standing rules", () => {
     expect(body).toMatch(/who\.textContent\s*=/);
   });
 
-  it("the chip NEVER names the person — headcount for a conference, nothing for a 1:1", () => {
-    /* v2.107.67 (owner): the chip stopped naming the callee. It carries the call STATUS
-       (the live-dot colour), the timer, and — for a conference only — the live headcount.
-       A 1:1 writes the empty string so `.hchip-who:empty` collapses the slot. Both halves
-       are load-bearing: drop the group test and a two-party call would show "2"; drop the
-       `+1` (which counts YOU) and a full room undercounts by one. */
+  it("the chip NEVER names the person — group name, else headcount, else nothing", () => {
+    /* v2.107.67–68 (owner): the chip stopped naming the callee. It carries the call STATUS
+       (the live-dot colour), the timer, and a middle slot that shows the GROUP'S name when
+       the call was dialled from a named group, the live HEADCOUNT for an ad-hoc conference,
+       and nothing for a 1:1 (`.hchip-who:empty` collapses it). Each piece is load-bearing:
+       drop the group test and a two-party call shows "2"; drop the `+1` (which counts YOU)
+       and a full room undercounts; drop `callGroupName` and "Family" reverts to a number. */
     const body = fnBody(CLIENT, "function paintCallIdentity(");
     expect(body).toMatch(/callIsGroup\s*\|\|\s*pins\.length > 1/);
-    expect(body).toMatch(/who\.textContent\s*=\s*isConference \? String\(pins\.length \+ 1\) : ""/);
+    expect(body).toMatch(/String\(pins\.length \+ 1\)/);
+    expect(body).toMatch(/callGroupName/);
   });
 
   it("the chip reads no name source — no peer name, no seen-name cache, no pin", () => {
