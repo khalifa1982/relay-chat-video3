@@ -9,6 +9,11 @@ import { CrashBoundary } from "@/components/CrashBoundary";
 // M48: capture the boot URL before any routing, so the Dialer can tell an in-app
 // "call" tap from someone ARRIVING on /app/dialer?to=… (see lib/bootUrl.ts).
 import "@/lib/bootUrl";
+// Install window.__relayNavigate__ so a notification tap in the native shell
+// routes client-side (deep-link to the conversation / call history) instead of
+// hard-reloading to the default tab. See lib/nativeNavBridge.ts.
+import { installNativeNavBridge } from "@/lib/nativeNavBridge";
+installNativeNavBridge();
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
 import { createRoot } from "react-dom/client";

@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Link, useLocation } from "wouter";
+import { useRelayEngine } from "./RelayEngine";
+import { registerNavHandler } from "@/lib/nativeNavBridge";
 import { Phone, MessageCircle, UsersRound, History, LogOut, Sparkles, Sun, Moon, Smartphone, Monitor, ArrowLeft, UserRound, BadgeCheck } from "lucide-react";
 import {
   DropdownMenu,
@@ -202,6 +204,28 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
   // the GUEST mutation even for registered members).
   const { requestSignOut, signOutDialog } = useSignOut(me);
   const [location, navigate] = useLocation();
+
+  /* NOTIFICATION DEEP-LINK NAVIGATOR (v2.107.69, owner). The native shell reads a
+     push's deep-link `url` and calls `window.__relayNavigate__(url)`; this wires
+     that into the live router so a tap lands on the exact conversation or the call
+     history rather than the default tab. Registered ONCE and reads the latest
+     engine/navigate through refs, so it never churns on re-render. Opening a chat
+     while a call is up shrinks the call to the mini-box first, so the chat is
+     actually usable behind it ("minimize the call to a small clip"). */
+  const engine = useRelayEngine();
+  const engineRef = useRef(engine);
+  engineRef.current = engine;
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  useEffect(
+    () =>
+      registerNavHandler((path) => {
+        const eng = engineRef.current;
+        if (/^\/app\/messages/.test(path) && eng.phase !== "idle") eng.minimizeCall();
+        navigateRef.current(path);
+      }),
+    [],
+  );
   const utils = trpc.useUtils();
   // Passwordless upgrade panel (guest → verified user). No third-party sign-in.
   const [authOpen, setAuthOpen] = useState(false);

@@ -41,6 +41,10 @@ interface RelayEngineValue {
    *  (History "Join"). The host is asked to approve. Returns false if the
    *  engine isn't ready. */
   knock: (number: string) => boolean;
+  /** Shrink an active call to the draggable mini-box (so a chat opened behind it
+   *  is usable). No-op when idle. Used by the notification nav bridge when a
+   *  message is tapped mid-call. */
+  minimizeCall: () => void;
   /** idle | dialing | ringing | in-call. */
   phase: RelayPhase;
   /** Authoritative 6-digit signaling number, or null until registered. */
@@ -54,6 +58,7 @@ const RelayEngineContext = createContext<RelayEngineValue>({
   dialGroup: () => false,
   hangup: () => {},
   knock: () => false,
+  minimizeCall: () => {},
   phase: "idle",
   pin: null,
   ready: false,
@@ -600,6 +605,7 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     dialGroup: (nums, opts) => handleRef.current?.dialGroup(nums, opts) ?? false,
     hangup: () => handleRef.current?.hangup(),
     knock: (n) => { if (!handleRef.current) return false; handleRef.current.knock(n); return true; },
+    minimizeCall: () => { if (phase !== "idle") setMinimized(true); },
     phase,
     pin,
     ready,
