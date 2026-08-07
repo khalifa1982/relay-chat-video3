@@ -74,7 +74,25 @@ behaviour change of any kind. 6940 tests.
 
 ---
 
-## v2.107.61 — THE LIGHT THEME WAS WHITE ON WHITE, AND THE NAV SPENT ITS WHOLE SAFE AREA ON NOTHING
+## v2.107.62 pt.1 (written as .61, renumbered) — THE LIGHT THEME WAS WHITE ON WHITE, AND THE NAV SPENT ITS WHOLE SAFE AREA ON NOTHING
+
+> **Version collision, fifth recorded.** A parallel session shipped its own
+> **v2.107.61** (`492381c`, QW-9 read-receipt and typing privacy toggles) to
+> `web-app-main` three minutes before this branch's second push, so this work
+> cannot keep a number that is already deployed and ships inside .62.
+>
+> **The second-order effect is the new lesson.** The base moving made PR #154
+> `mergeable_state: "dirty"`, and a PR whose test-merge commit cannot be built
+> creates **zero** workflow runs — silently. `get_status` answered `pending` with
+> `total_count: 0`, which is indistinguishable from "still running" unless you
+> look for the count rather than the colour. `ci.yml`'s own header records that
+> trap from PR #138 and says to read `mergeable_state` first; doing so answered it
+> in one call.
+>
+> The rebase conflicted in exactly two files and both were the *same* defect from
+> the other side: `groupDescription` / `pinnedMessages` had their frozen release
+> literal hand-bumped `2.107.60` → `2.107.61`, which is precisely the maintenance
+> burden the rewrite below removes. The property-based comparison won.
 
 Owner, with four screenshots and the request stated twice: *"If you see now the white
 theme, the coloring, it's not matching at all. I cannot read it everything in white. The
