@@ -42,8 +42,8 @@ approval.
 | QW-8 ▶ | Pinned messages inside a chat | banner at top, admin-gated in groups |
 | QW-9 ▶ | Read-receipt / typing privacy toggles | settings + server respect |
 | QW-10 ▶ | GIF picker | search-backed, rides the attachment sheet |
-| QW-11 | Per-contact ringtones | variants of the synthesized motif (`shared/ringtone.ts`) |
-| QW-12 | Screenshot-block toggle | mobile repo (FLAG_SECURE), ships in 1.0.44 |
+| QW-11 ▶ | Per-contact ringtones | variants of the synthesized motif (`shared/ringtone.ts`) |
+| QW-12 ▶ | Screenshot-block toggle | web privacy toggle + shell `FLAG_SECURE` enforcement; toggle self-gates on a capability the 1.0.44 Android shell advertises |
 
 ## Wave 2 — medium (a week-ish each)
 

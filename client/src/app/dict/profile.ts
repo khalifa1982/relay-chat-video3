@@ -484,6 +484,24 @@ export const PROFILE = {
     ar: "هذه مقايضة عادلة: إيقاف أحدها يوقف الإرسال والاستقبال معًا. لا يتأثر بذلك مؤشر الكتابة في المجموعات ولا علامات التسليم.",
   },
 
+  // ── Screenshot block (v2.107.65, QW-12) — mobile-shell-only, device-local ──
+  "profile.screenshotSectionLabel": {
+    en: "Screenshots",
+    ar: "لقطات الشاشة",
+  },
+  "profile.screenshotBlockTitle": {
+    en: "Block screenshots",
+    ar: "حظر لقطات الشاشة",
+  },
+  "profile.screenshotBlockDesc": {
+    en: "Stop screenshots and screen recording while you're in RELAY.",
+    ar: "منع لقطات الشاشة وتسجيل الشاشة أثناء وجودك في RELAY.",
+  },
+  "profile.screenshotBlockFooter": {
+    en: "Applies to this phone only. On Android, RELAY is also hidden in the app switcher.",
+    ar: "يسري على هذا الهاتف فقط. وعلى أندرويد، يُخفى RELAY أيضًا في مبدِّل التطبيقات.",
+  },
+
   // ── Do Not Disturb ──
   "profile.dnd": { en: "Do Not Disturb", ar: "عدم الإزعاج" },
   "profile.dndOn": { en: "Do Not Disturb is on", ar: "وضع عدم الإزعاج مُفعَّل" },

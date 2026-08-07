@@ -105,6 +105,11 @@ import {
 } from "@/app/biometric";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useLocale, useT, type TKey } from "@/app/i18n";
+import {
+  screenshotBlockSupported,
+  getScreenshotBlockPref,
+  setScreenshotBlock,
+} from "@/app/nativeScreenshotBridge";
 import { formatDateIn, formatDateTimeIn } from "@/app/dateLocale";
 import { loginDetailLine } from "@/app/loginOriginCopy";
 
@@ -2025,6 +2030,7 @@ function StatusPrivacySection() {
       </div>
       <p className="text-[11px] text-muted-foreground">{t("profile.privacyFooter")}</p>
       <ReadReceiptTypingToggles />
+      <ScreenshotBlockToggle />
     </section>
   );
 }
@@ -2125,6 +2131,69 @@ function ReadReceiptTypingToggles() {
         />
       </div>
       <p className="text-[11px] text-muted-foreground">{t("profile.receiptsFooter")}</p>
+    </div>
+  );
+}
+
+/**
+ * SCREENSHOT-BLOCK TOGGLE (v2.107.65, QW-12).
+ *
+ * Renders ONLY inside a mobile shell build that advertises the capability
+ * (Android 1.0.44+). On desktop and older shells `screenshotBlockSupported()` is
+ * false and this draws nothing, so there is never a switch that does nothing.
+ *
+ * Unlike the reciprocal receipt/typing toggles above — which are account flags —
+ * this preference is DEVICE-LOCAL (localStorage, no server call): blocking
+ * screenshots is a property of this phone, not of the account, and mirroring it
+ * to a desktop tab or a second device would be meaningless. The helper both
+ * persists the choice and posts it to the shell, which flips Android's
+ * FLAG_SECURE.
+ */
+function ScreenshotBlockToggle() {
+  const t = useT();
+  const [on, setOn] = useState(() => getScreenshotBlockPref());
+  if (!screenshotBlockSupported()) return null;
+
+  const toggle = () => {
+    const next = !on;
+    setScreenshotBlock(next); // persist to localStorage + tell the shell now
+    setOn(next);
+  };
+
+  return (
+    <div className="space-y-3 pt-2">
+      <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+        {t("profile.screenshotSectionLabel")}
+      </Label>
+      <div className="rounded-2xl border border-border bg-card/40">
+        <div className="flex items-center justify-between gap-3 p-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">{t("profile.screenshotBlockTitle")}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {t("profile.screenshotBlockDesc")}
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={on}
+            aria-label={t("profile.screenshotBlockTitle")}
+            onClick={toggle}
+            className={
+              "rhit relative h-7 w-12 shrink-0 rounded-full transition-colors " +
+              (on ? "bg-primary" : "bg-muted-foreground/30")
+            }
+          >
+            <span
+              className={
+                "absolute top-0.5 grid size-6 place-items-center rounded-full bg-white shadow transition-all " +
+                (on ? "start-[1.375rem]" : "start-0.5")
+              }
+            />
+          </button>
+        </div>
+      </div>
+      <p className="text-[11px] text-muted-foreground">{t("profile.screenshotBlockFooter")}</p>
     </div>
   );
 }

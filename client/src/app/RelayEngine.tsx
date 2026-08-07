@@ -19,6 +19,7 @@ import { isNativeAndroid, nativeEnsureNotifPermission, nativeGetPushToken } from
 import { VoicemailPrompt, type FailedDialInfo } from "./VoicemailPrompt";
 import { trpc } from "@/lib/trpc";
 import { mountNativeTokenBridge } from "./nativeTokenBridge";
+import { applyStoredScreenshotBlock } from "./nativeScreenshotBridge";
 import { onAlertPrefsChanged, readAlertPrefs } from "./swPrefs";
 import type { AlertPrefs } from "@shared/alertPrefs";
 import { mountNativeCallBridge, parseNativeCallIntent } from "@/lib/nativeCallBridge";
@@ -135,6 +136,14 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
     // swapping its contents is enough — no need to re-register.
     ringtoneMapRef.current = m;
   }, [contactRingtonesQ.data]);
+  // QW-12: re-tell the mobile shell whether to block screen capture on every
+  // load. FLAG_SECURE is per-Activity and is dropped on relaunch, so this must
+  // run each mount — and BEFORE auth, because the preference is a property of
+  // this device, not of whoever is signed in. A no-op outside a shell build
+  // that advertises the capability, so it's safe to run unconditionally.
+  useEffect(() => {
+    applyStoredScreenshotBlock();
+  }, []);
   const me = whoami.data ?? null;
   // Our country flag (for the in-call name tag), resolved from our IP geo.
   const geo = trpc.directory.geoSelf.useQuery(undefined, {
