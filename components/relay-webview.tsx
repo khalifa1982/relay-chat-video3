@@ -91,6 +91,10 @@ export function RelayWebView() {
   const firstLoadDone = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canGoBack = useRef(false);
+  // A deep-link URL from a COLD-START notification tap, held until the WebView has
+  // loaded the web app (and its nav bridge). Injected in onLoadEnd, not on a fixed
+  // timer — the bridge queues it and flushes on ready, so there is nothing to race.
+  const pendingNavUrl = useRef<string | null>(null);
 
   // Push token registration
   const { onWebViewLoadEnd: sendPushToken, onWebReady: sendPushTokenOnReady } =
@@ -119,11 +123,21 @@ export function RelayWebView() {
   // ─── Notification URL navigation ─────────────────────────────────────────
   const navigateToUrl = useCallback((path: string) => {
     // path may be "/app/dialer" or a full URL
-    const target = /^https?:\/\//i.test(path)
+    const full = /^https?:\/\//i.test(path)
       ? path
       : `${RELAY_APP_URL.replace(/\/app$/, "")}${path}`;
+    // Prefer CLIENT-SIDE routing via the web app's nav bridge (nativeNavBridge.ts):
+    // it routes WITHOUT reloading, so a tap lands on the exact conversation / call
+    // history and keeps the session — an active call included, which it shrinks to
+    // the mini-box. It QUEUES the request if the app is still booting and flushes it
+    // on ready, so there is no cold-start timer to lose to. A hard `location.href`
+    // is the fallback for a web app too old to define the hook — the reload that
+    // used to be the ONLY path, and the reason a cold tap landed on the default tab.
     webViewRef.current?.injectJavaScript(
-      `window.location.href = ${JSON.stringify(target)}; true;`,
+      `(function(){try{` +
+        `if(window.__relayNavigate__){window.__relayNavigate__(${JSON.stringify(path)});}` +
+        `else{window.location.href=${JSON.stringify(full)};}` +
+        `}catch(e){window.location.href=${JSON.stringify(full)};}})();true;`,
     );
   }, []);
 
@@ -140,19 +154,18 @@ export function RelayWebView() {
     return () => sub.remove();
   }, [navigateToUrl]);
 
-  // Cold-start: app was launched from a killed state by tapping a notification
+  // Cold-start: app was launched from a killed state by tapping a notification.
+  // Stash the URL and let onLoadEnd inject it once the web app (and its nav bridge)
+  // has loaded — the bridge queues it and flushes when the router is live, which is
+  // reliable where the old fixed 2.5s defer raced the boot and lost.
   useEffect(() => {
     void Notifications.getLastNotificationResponseAsync().then((response) => {
       const url = response?.notification.request.content.data?.url as
         | string
         | undefined;
-      if (url) {
-        // Defer until the WebView has finished loading and the user is auth'd
-        const timer = setTimeout(() => navigateToUrl(url), 2_500);
-        return () => clearTimeout(timer);
-      }
+      if (url) pendingNavUrl.current = url;
     });
-  }, [navigateToUrl]);
+  }, []);
 
   // ─── Android hardware back ────────────────────────────────────────────────
   useEffect(() => {
@@ -267,8 +280,17 @@ export function RelayWebView() {
           if (!firstLoadDone.current) setLoading(true);
         }}
         onLoadEnd={() => {
+          const wasFirstLoad = !firstLoadDone.current;
           finishFirstLoad();
           sendPushToken();
+          // Cold-start deep link: the web app + its nav bridge are loaded now, so
+          // route to the tapped conversation / call history. Only on the FIRST load
+          // (the client-side nav bridge doesn't reload, so this won't re-fire).
+          if (wasFirstLoad && pendingNavUrl.current) {
+            const url = pendingNavUrl.current;
+            pendingNavUrl.current = null;
+            navigateToUrl(url);
+          }
         }}
         onError={handleError}
         onHttpError={() => {}}
