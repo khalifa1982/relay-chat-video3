@@ -28,7 +28,7 @@ const schemeFromBundleId = "relay";
 // compares the server manifest's buildNumber against THIS value to decide
 // whether a newer APK is available. Bump this every time you publish a new APK
 // (and set the manifest's buildNumber to match the new release).
-const ANDROID_BUILD_NUMBER = 44;
+const ANDROID_BUILD_NUMBER = 45;
 
 const env = {
   // App branding - update these values directly (do not use env vars)
@@ -46,7 +46,7 @@ const config: ExpoConfig = {
   owner: "uaecoms-team",
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.44",
+  version: "1.0.45",
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -55,7 +55,7 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
-    buildNumber: "44",
+    buildNumber: "45",
     googleServicesFile: "./GoogleService-Info.plist",
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
