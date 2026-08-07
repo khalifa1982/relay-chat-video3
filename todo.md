@@ -66,8 +66,29 @@ backups — the half-restore, the declared-but-unresolved entry, and `cd08ba7` r
 ### Not verified, said plainly
 
 Nobody has run Gradle. What is proven is that the manifest and its lockfile agree and
-that the package the Kotlin imports is declared and resolved. `native-rn.yml` fires on
-this push and is the real check.
+that the package the Kotlin imports is declared and resolved.
+
+**A claim of my own, corrected rather than left standing.** I first wrote that
+`native-rn.yml` would fire on this push and be the real check. **It will not.** Its
+trigger is:
+
+```yaml
+push:
+  branches: [main]
+  paths: ["mobile/native/**", ".github/workflows/native-rn.yml"]
+workflow_dispatch:
+```
+
+Both conditions — and `main` is the **Expo project**, not this app's mainline. So it runs
+on no PR and on no merge into `web-app-main`.
+
+**The same error is already in this file twice, from v2.99.52 / v2.99.53** (*"triggers on
+any push touching `mobile/native/**`, so the commit verifies itself"*), which is how I came
+to repeat it. A stale reason is worse than none, because it is the sentence the next reader
+trusts. Those historical entries are left as written; this correction is the current record.
+
+So the Android build is verified by **nobody** until somebody dispatches that workflow —
+which is exactly why the parity guard had to live in the suite that *does* run.
 
 No schema change, no new web dependency, no new env var, no server change, no web-app
 behaviour change of any kind. 6940 tests.
