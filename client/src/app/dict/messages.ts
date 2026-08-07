@@ -135,6 +135,7 @@ export const MESSAGES = {
   "msg.removeAttachment": { en: "Remove attachment", ar: "إزالة المرفق" },
   "msg.scrollToLatest": { en: "Scroll to latest messages", ar: "انتقل إلى أحدث الرسائل" },
   "msg.scrollToLatestShort": { en: "Scroll to latest", ar: "الأحدث" },
+  "msg.unreadDivider": { en: "{n} unread messages", ar: "{n} رسائل غير مقروءة" },
 
   // ── Voice notes ──
   "msg.playVoiceNote": { en: "Play voice note", ar: "تشغيل الرسالة الصوتية" },

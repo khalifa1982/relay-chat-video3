@@ -112,8 +112,14 @@ describe("Messages.tsx — v2.69 WhatsApp-grade reliability", () => {
     expect(SRC).toMatch(/await sendMutation\.mutateAsync/);
     expect(SRC).toMatch(/setText\(body\);[\s\S]*?toast\.error\(/);
   });
-  it("auto-scroll only fires when near the bottom or the thread changed", () => {
-    expect(SRC).toMatch(/threadChanged \|\| fromBottom <= 150/);
+  it("opens at the unread boundary and only follows new messages when near the bottom", () => {
+    // On open, the scroll is deferred until messages + the frozen unread count are both in
+    // hand, then it lands on the first unread (or the newest when all read) — not the top.
+    expect(SRC).toMatch(/pendingOpenScrollRef/);
+    expect(SRC).toMatch(/firstUnreadId/);
+    // A new message that arrives (not an open) still only pulls the view down if already near
+    // the bottom, so reading history isn't yanked.
+    expect(SRC).toMatch(/fromBottom <= 150/);
   });
   it("read receipts are gated on visible + near-bottom", () => {
     expect(SRC).toMatch(/document\.visibilityState !== "visible"\) return;[\s\S]*?markReadMutation\.mutate/);

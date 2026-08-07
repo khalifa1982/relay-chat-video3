@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useSearch } from "wouter";
 import { useAutoplay } from "@/app/useAutoplay";
@@ -2457,16 +2457,80 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // when the thread itself changes (opening a thread should land at the bottom).
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevConvoRef = useRef<number | null>(null);
+
+  /* UNREAD BOUNDARY (owner). Freeze how many messages were unread when the thread was
+     OPENED — read from the thread summary before markRead zeroes it — so the "N unread"
+     divider and the open-scroll stay put even as the read receipt fires and the threads
+     list refetches to 0. Re-captured on every open, so a fresh open of a thread you already
+     read shows no divider. */
+  const [openUnread, setOpenUnread] = useState<number | null>(null);
+  const openUnreadCidRef = useRef<number | null>(null);
   useEffect(() => {
+    if (openUnreadCidRef.current !== conversationId) {
+      openUnreadCidRef.current = conversationId;
+      setOpenUnread(null); // new open — re-capture below once the summary is in hand
+    }
+  }, [conversationId]);
+  useEffect(() => {
+    if (openUnread === null && openUnreadCidRef.current === conversationId && thread) {
+      setOpenUnread(thread.unreadCount ?? 0);
+    }
+  }, [openUnread, thread, conversationId]);
+
+  /* The first UNREAD message (from someone else): walk back from the newest, counting
+     others' messages, until we reach the frozen unread total — that message is where the
+     divider goes and where an open lands. If more are unread than the loaded window holds,
+     anchor at the top of the window. */
+  const firstUnreadId = useMemo(() => {
+    const n = openUnread ?? 0;
+    if (n <= 0) return null;
+    const arr = messagesQuery.data ?? [];
+    let seen = 0;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr[i].senderIdentityId !== me?.id) {
+        seen += 1;
+        if (seen === n) return arr[i].id;
+      }
+    }
+    return arr.length ? arr[0].id : null;
+  }, [openUnread, messagesQuery.data, me?.id]);
+
+  /* SCROLL ON OPEN → the unread boundary, not the top (owner: "it shows the very first,
+     oldest message"). The old effect scrolled to the bottom on thread-change, but it fired
+     before the messages had loaded (tiny scrollHeight) and never re-fired once they did — so
+     the thread settled at the TOP. Now the open-scroll is deferred until the messages AND the
+     frozen unread count are BOTH in hand, then lands on the first unread (divider just above
+     it) so you read DOWNWARD, or on the newest when all read. A normal new-message arrival
+     keeps the "only follow if already near the bottom" rule. */
+  const pendingOpenScrollRef = useRef(false);
+  useEffect(() => {
+    const threadChanged = prevConvoRef.current !== conversationId;
+    if (threadChanged) {
+      prevConvoRef.current = conversationId;
+      pendingOpenScrollRef.current = true;
+    }
     const el = scrollRef.current;
     if (!el) return;
-    const threadChanged = prevConvoRef.current !== conversationId;
-    prevConvoRef.current = conversationId;
-    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (threadChanged || fromBottom <= 150) {
-      el.scrollTop = el.scrollHeight;
+    const data = messagesQuery.data;
+    if (pendingOpenScrollRef.current) {
+      if (!data || data.length === 0 || openUnread === null) return; // wait for both
+      pendingOpenScrollRef.current = false;
+      const target =
+        firstUnreadId != null
+          ? el.querySelector<HTMLElement>(`[data-mid="${firstUnreadId}"]`)
+          : null;
+      if (target) {
+        target.scrollIntoView({ block: "start" });
+        el.scrollTop = Math.max(0, el.scrollTop - 56); // reveal the divider above it
+      } else {
+        el.scrollTop = el.scrollHeight; // all read (or not loaded) → newest
+      }
+      return;
     }
-  }, [messagesQuery.data?.length, conversationId]);
+    // A new message arrived (not an open): follow it only if already near the bottom.
+    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (fromBottom <= 150) el.scrollTop = el.scrollHeight;
+  }, [messagesQuery.data, conversationId, openUnread, firstUnreadId]);
 
   // "Scroll to bottom" floating button — shown once the user has scrolled UP
   // away from the latest message, so catching back up after reading history
@@ -3604,8 +3668,20 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               ? (lastOfGroup ? "rounded-ee-[5px]" : "")
               : (lastOfGroup ? "rounded-es-[5px]" : "");
             return (
+              <Fragment key={m.id}>
+              {m.id === firstUnreadId && (
+                <div className="flex items-center gap-2 px-3 py-1.5" data-unread-divider>
+                  <div className="h-px flex-1 bg-primary/25" />
+                  <span
+                    className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase text-primary"
+                    style={{ letterSpacing: ".08em" }}
+                  >
+                    {t("msg.unreadDivider").replace("{n}", String(openUnread ?? 0))}
+                  </span>
+                  <div className="h-px flex-1 bg-primary/25" />
+                </div>
+              )}
               <div
-                key={m.id}
                 data-mid={m.id}
                 className={
                   // QW-8 — a brief accent ring when this bubble is the jump target of a
@@ -4094,6 +4170,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
                   </div>
                 )}
               </div>
+              </Fragment>
             );
               })}
             </section>
@@ -4477,6 +4554,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
               if (e.target.value.trim()) notifyTyping();
             }}
             onSelect={(e) => syncMentionQuery(e.currentTarget)}
+            onFocus={() => scrollToBottom()}
             onBlur={() => setMentionQuery(null)}
             onKeyDown={(e) => {
               /* Enter completes the top match while the picker is open, rather than
