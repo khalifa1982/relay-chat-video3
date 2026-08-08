@@ -1775,13 +1775,28 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     }
     return { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 10, max: 15 } };
   }
-  // Echo cancellation / noise suppression / auto-gain are constraint HINTS the
-  // browser applies on its own audio pipeline (no renegotiation, no SFU impact)
-  // and degrade gracefully where unsupported — a clear call-quality win for free.
+  // Echo cancellation / noise suppression are constraint HINTS the browser applies
+  // on its own audio pipeline (no renegotiation, no SFU impact) and degrade
+  // gracefully where unsupported — a clear call-quality win for free.
   const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
     echoCancellation: true,
     noiseSuppression: true,
-    autoGainControl: true,
+    /* THE SPEAKER TICK, part 2 (v2.107.76). Part 1 (v2.107.72) stripped Opus DTX
+       from the SDP — the classic comfort-noise tick — and the owner still hears a
+       periodic tick on the far end. The remaining producer of PERIODIC clicks in
+       this capture chain is the browser's auto-gain: WebRTC AGC adjusts the mic
+       gain in discrete steps on a timer, and on a number of Android/WebView audio
+       HALs each step lands as an audible click/tick in the encoded stream (the
+       level jump is instantaneous, so it's wideband). Nothing else here is
+       periodic — the only audio-path intervals are getStats and the
+       active-speaker analyser, neither of which touches capture, and the one
+       AudioContext is created once and held. So AGC goes. The cost is that a very
+       quiet mic stays quiet instead of being pumped up; every modern handset mic
+       runs hot enough that echoCancellation+noiseSuppression alone is the
+       standard voip profile, and a steady level without ticks beats a normalized
+       one with them. EC and NS stay ON — turning EC off would trade a tick for
+       actual echo. */
+    autoGainControl: false,
     // v2.99.84: MONO, and `ideal` rather than `exact` so a device that only
     // offers stereo still yields a track instead of throwing OverconstrainedError
     // and costing the person their microphone. A voice call is mono by nature —

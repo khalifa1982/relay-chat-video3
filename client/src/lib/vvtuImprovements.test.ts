@@ -20,11 +20,14 @@ const HISTORY = read("client/src/pages/app/History.tsx");
 const CONTACTS = read("client/src/pages/app/Contacts.tsx");
 
 describe("voice improvements", () => {
-  it("acquires audio with echo cancellation / noise suppression / AGC", () => {
+  it("acquires audio with echo cancellation / noise suppression — and AGC OFF", () => {
     expect(CLIENT).toMatch(/const AUDIO_CONSTRAINTS: MediaTrackConstraints = \{/);
     expect(CLIENT).toMatch(/echoCancellation: true/);
     expect(CLIENT).toMatch(/noiseSuppression: true/);
-    expect(CLIENT).toMatch(/autoGainControl: true/);
+    // v2.107.76: browser AGC's stepped gain changes tick audibly on a number of
+    // Android audio HALs — the owner's persistent speaker tick — so it is off.
+    // Flipping this back on is how the tick returns.
+    expect(CLIENT).toMatch(/autoGainControl: false/);
   });
 
   it("plays an audible ringtone on incoming and outgoing calls, and stops on connect/teardown", () => {

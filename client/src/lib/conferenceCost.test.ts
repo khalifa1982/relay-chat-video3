@@ -170,10 +170,12 @@ describe("audio is protected rather than capped", () => {
     // device that only offers stereo and cost the person their microphone.
     expect(CLIENT).toMatch(/channelCount: \{ ideal: 1 \}/);
     expect(codeOnly(CLIENT)).not.toMatch(/channelCount: \{ exact:/);
-    // The existing quality hints are untouched.
+    // The existing quality hints are untouched — except AGC, which v2.107.76
+    // deliberately turned OFF: its stepped gain changes were the remaining
+    // producer of the periodic speaker tick after DTX was stripped (v2.107.72).
     expect(CLIENT).toMatch(/echoCancellation: true/);
     expect(CLIENT).toMatch(/noiseSuppression: true/);
-    expect(CLIENT).toMatch(/autoGainControl: true/);
+    expect(CLIENT).toMatch(/autoGainControl: false/);
   });
 });
 
