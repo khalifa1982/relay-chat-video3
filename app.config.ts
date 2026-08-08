@@ -122,6 +122,16 @@ const config: ExpoConfig = {
     // Local manifest-only plugin: PiP + lock-screen call UI + the
     // USE_FULL_SCREEN_INTENT permission for call-style notifications.
     "./plugins/with-android-pip.js",
+      [
+        "@sentry/react-native/expo",
+        {
+          url: "https://sentry.io/",
+          organization: "relay-apps",
+          project: "relay-mobile",
+          // Sourcemap/dSYM upload runs only when SENTRY_AUTH_TOKEN is present
+          // (set as an EAS secret, deliberately not in this repo).
+        },
+      ],
   ],
   extra: {
     eas: {
