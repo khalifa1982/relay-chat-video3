@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Delete, Lock, ScanFace } from "lucide-react";
-import { useLocked, verifyPasscode, unlockApp } from "./passcode";
+import { useLocked, verifyPasscode, unlockApp, clearPasscode } from "./passcode";
+import { clearBiometric } from "./biometric";
+import { trpc } from "@/lib/trpc";
 import { hasBiometric, biometricUnlock } from "./biometric";
 import { RelayBackground } from "./RelayBackground";
 
@@ -35,9 +37,12 @@ import { RelayBackground } from "./RelayBackground";
    WHAT THE PROMPT'S "emails the owner" REFERS TO IS A DIFFERENT SURFACE, said
    plainly: the 4-wrong-tries lockout that mails the account owner is the SERVER
    login PIN (`attemptPinLogin`, `loginPinLockedAt`, v2.87) on the sign-in screen.
-   This gate is device-local — no session, no server call, nothing that could send
-   mail — so the copy here never claims an email was sent. Claiming one would be a
-   lie rendered on the screen of the person it lies to.
+   This gate verifies LOCALLY against the account-synced hash (v2.107.77) — no
+   verification round-trip, nothing that could send mail — so the copy here never
+   claims an email was sent. Claiming one would be a lie rendered on the screen of
+   the person it lies to. The one server call it CAN make is the Forgot path
+   (`appLock.resetFresh`), which demands real proof: a fresh sign-in for a
+   registered account, the recovery key for a guest.
 
    `dark relay-v2` ON THIS WRAPPER, not on the root: the shipped surface utilities
    are scoped `.relay-v2 X` / `.dark.relay-v2 X`, and `<html>` carries `relay-v2`
@@ -136,6 +141,44 @@ function LockScreen() {
   const [busy, setBusy] = useState(false);
   const [bioEnrolled] = useState(() => hasBiometric());
   const [bioBusy, setBioBusy] = useState(false);
+  /* FORGOT PASSCODE (v2.107.77) — the account-wide lock's recovery, offered on the
+     gate itself because that is where a forgotten code strands you. Stages:
+     confirm → server attempt → (guest) recovery-key entry, or (registered, stale
+     session) sign-out instruction. Success clears the account copy server-side AND
+     the local cache + biometric here, and the gate simply disappears. */
+  const [forgotStage, setForgotStage] = useState<null | "confirm" | "key" | "stale">(null);
+  const [forgotErr, setForgotErr] = useState<string | null>(null);
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const resetMut = trpc.appLock.resetFresh.useMutation();
+  const logoutMut = trpc.auth.logout.useMutation();
+  const signOutGuestMut = trpc.identity.signOutGuest.useMutation();
+  async function attemptReset(recoveryKey?: string) {
+    if (forgotBusy) return;
+    setForgotBusy(true);
+    setForgotErr(null);
+    try {
+      await resetMut.mutateAsync({ recoveryKey });
+      clearPasscode(); // unlocks; the account copy is already gone server-side
+      clearBiometric();
+    } catch (e) {
+      const msg = (e as { message?: string })?.message || "";
+      if (msg.includes("guest-key-required")) setForgotStage("key");
+      else if (msg.includes("bad-key")) { setForgotStage("key"); setForgotErr("That recovery key doesn't match this account."); }
+      else if (msg.includes("stale-session")) setForgotStage("stale");
+      else setForgotErr("Couldn't reset — check your connection and try again.");
+    } finally {
+      setForgotBusy(false);
+    }
+  }
+  async function signOutFromGate() {
+    /* Best-effort BOTH sign-outs (the gate can't know guest vs registered), then a
+       hard landing on the entry screen. A registered account now signs in again —
+       minting the FRESH session resetFresh demands — and taps Forgot once more. */
+    try { await signOutGuestMut.mutateAsync().catch(() => {}); } catch { /* */ }
+    try { await logoutMut.mutateAsync().catch(() => {}); } catch { /* */ }
+    window.location.replace("/");
+  }
   const [tries, setTries] = useState(() => readNum(TRIES_KEY));
   const [leftMs, setLeftMs] = useState(() => cooldownLeft());
 
@@ -506,15 +549,84 @@ function LockScreen() {
               </span>
             </button>
           )}
-          {/* Board 5e's footer line is "Forgot? Sign out and verify your email
-              again" — and that is NOT true of this build: sign-out (`useSignOut`)
-              rotates the device id and drops the session, and leaves
-              `relay_pass_hash` exactly where it is, so the lock would still be
-              here afterwards. The honest recovery is the one that exists. */}
-          <p style={{ marginTop: 10, fontSize: 10, color: "#68797c", lineHeight: 1.5 }}>
-            Forgot it? This code lives only in this browser. Clearing this site's data removes the
-            lock — and a guest number kept only here.
-          </p>
+          {/* FORGOT (v2.107.77). The old footer said the code "lives only in this
+              browser" — true of the device-local lock, false of the account-wide
+              one, and a lie on a lock screen strands people. The honest recovery
+              now exists and is offered here: a registered account proves itself by
+              signing in again (resetFresh only accepts a fresh session), a guest
+              proves itself with the recovery key. */}
+          {forgotStage === null && (
+            <button
+              type="button"
+              onClick={() => { setForgotStage("confirm"); setForgotErr(null); }}
+              className="inline-flex min-h-11 items-center rounded-xl px-3 transition active:scale-[0.98] outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+              style={{ marginTop: 4 }}
+            >
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#8ea09b" }}>Forgot passcode?</span>
+            </button>
+          )}
+          {forgotStage === "confirm" && (
+            <div className="flex w-full max-w-[260px] flex-col items-center" style={{ marginTop: 8, gap: 8 }}>
+              <p style={{ fontSize: 11, color: "#8ea09b", lineHeight: 1.5, textAlign: "center" }}>
+                Reset removes the passcode from <b style={{ color: "#eafff6" }}>every device</b> on this
+                account. You'll be asked to prove it's you.
+              </p>
+              <div className="flex" style={{ gap: 8 }}>
+                <button type="button" onClick={() => setForgotStage(null)}
+                  className="min-h-11 rounded-xl px-3 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                  style={{ fontSize: 12, fontWeight: 600, color: "#68797c" }}>Cancel</button>
+                <button type="button" disabled={forgotBusy} onClick={() => void attemptReset()}
+                  className="min-h-11 rounded-xl px-3 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:opacity-50"
+                  style={{ fontSize: 12, fontWeight: 700, color: ACCENT }}>
+                  {forgotBusy ? "Checking…" : "Reset passcode"}
+                </button>
+              </div>
+              {forgotErr && <p style={{ fontSize: 11, color: DANGER }}>{forgotErr}</p>}
+            </div>
+          )}
+          {forgotStage === "key" && (
+            <div className="flex w-full max-w-[260px] flex-col items-center" style={{ marginTop: 8, gap: 8 }}>
+              <p style={{ fontSize: 11, color: "#8ea09b", lineHeight: 1.5, textAlign: "center" }}>
+                Guest account — enter your <b style={{ color: "#eafff6" }}>recovery key</b> to reset.
+              </p>
+              <input
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                placeholder="XXXX-XXXX-XXXX-XXXX"
+                autoCapitalize="off" autoCorrect="off" spellCheck={false}
+                className="h-11 w-full rounded-xl bg-white/5 px-3 text-center outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                style={{ fontSize: 13, color: "#eafff6", border: "1px solid rgba(255,255,255,.14)", letterSpacing: ".06em" }}
+              />
+              <div className="flex" style={{ gap: 8 }}>
+                <button type="button" onClick={() => { setForgotStage(null); setKeyInput(""); setForgotErr(null); }}
+                  className="min-h-11 rounded-xl px-3 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                  style={{ fontSize: 12, fontWeight: 600, color: "#68797c" }}>Cancel</button>
+                <button type="button" disabled={forgotBusy || keyInput.trim().length < 8}
+                  onClick={() => void attemptReset(keyInput)}
+                  className="min-h-11 rounded-xl px-3 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:opacity-50"
+                  style={{ fontSize: 12, fontWeight: 700, color: ACCENT }}>
+                  {forgotBusy ? "Checking…" : "Reset"}
+                </button>
+              </div>
+              {forgotErr && <p style={{ fontSize: 11, color: DANGER }}>{forgotErr}</p>}
+            </div>
+          )}
+          {forgotStage === "stale" && (
+            <div className="flex w-full max-w-[260px] flex-col items-center" style={{ marginTop: 8, gap: 8 }}>
+              <p style={{ fontSize: 11, color: "#8ea09b", lineHeight: 1.5, textAlign: "center" }}>
+                To prove it's you, sign out and sign back in — then tap
+                <b style={{ color: "#eafff6" }}> Forgot passcode</b> again within 15 minutes.
+              </p>
+              <div className="flex" style={{ gap: 8 }}>
+                <button type="button" onClick={() => setForgotStage(null)}
+                  className="min-h-11 rounded-xl px-3 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                  style={{ fontSize: 12, fontWeight: 600, color: "#68797c" }}>Cancel</button>
+                <button type="button" disabled={forgotBusy} onClick={() => void signOutFromGate()}
+                  className="min-h-11 rounded-xl px-3 outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:opacity-50"
+                  style={{ fontSize: 12, fontWeight: 700, color: GOLD }}>Sign out</button>
+              </div>
+            </div>
+          )}
         </div>
       </form>
     </div>

@@ -19,6 +19,7 @@ import { isNativeAndroid, nativeEnsureNotifPermission, nativeGetPushToken } from
 import { VoicemailPrompt, type FailedDialInfo } from "./VoicemailPrompt";
 import { trpc } from "@/lib/trpc";
 import { mountNativeTokenBridge } from "./nativeTokenBridge";
+import { adoptRemoteLock, localLockSnapshot } from "./passcode";
 import { applyStoredScreenshotBlock } from "./nativeScreenshotBridge";
 import { onAlertPrefsChanged, readAlertPrefs } from "./swPrefs";
 import type { AlertPrefs } from "@shared/alertPrefs";
@@ -230,6 +231,40 @@ export function RelayEngineProvider({ children }: { children: ReactNode }) {
       .then((r) => sendMessage.mutateAsync({ conversationId: r.conversationId, kind: "text", body: text }))
       .catch(() => {/* best-effort — the decline itself already went through */});
   };
+
+  /* ACCOUNT-WIDE APP LOCK sync (v2.107.77). One policy, one place:
+   *   - the ACCOUNT's lock wins: if it differs from this device's cached pair (or
+   *     this device has none), adopt it — locking immediately only when this
+   *     device had no lock at all, i.e. the just-opened case where gating is what
+   *     the person expects. A device already past its gate is not yanked mid-use;
+   *     it simply starts verifying against the account's code.
+   *   - a device that has a lock the account does not (set before this feature
+   *     shipped) pushes it UP once, so the first device to sync defines the
+   *     account code instead of losing it.
+   * Cleared server-side (Settings or the gate's forgot path) → `get` returns null
+   * and the local cache is dropped too, or a removed lock would keep gating the
+   * other devices forever. */
+  const appLockQ = trpc.appLock.get.useQuery(undefined, {
+    enabled: !!me,
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
+  });
+  const appLockSet = trpc.appLock.set.useMutation();
+  const appLockPushedRef = useRef(false);
+  useEffect(() => {
+    if (!me || appLockQ.data === undefined) return;
+    const remote = appLockQ.data; // {hash,salt} | null
+    const local = localLockSnapshot();
+    if (remote) {
+      if (!local || local.hash !== remote.hash) {
+        adoptRemoteLock(remote.hash, remote.salt, { lockNow: !local });
+      }
+    } else if (local && !appLockPushedRef.current) {
+      appLockPushedRef.current = true; // once per mount — a failed push retries next load
+      appLockSet.mutate(local);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.id, appLockQ.data]);
 
   // NATIVE ANDROID APP: register this device's FCM token so the server can
   // WAKE it for incoming calls even when the app is closed (kind:"fcm" —

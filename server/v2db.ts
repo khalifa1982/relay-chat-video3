@@ -2704,6 +2704,10 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // the requesting browser. NULL = no invite, i.e. every pre-release row.
     { table: "identities", column: "regInviteEmail", ddl: "ADD COLUMN `regInviteEmail` varchar(320)" },
     { table: "identities", column: "regInviteAt", ddl: "ADD COLUMN `regInviteAt` timestamp NULL" },
+    // v2.107.77 — account-wide app lock (client-computed hash+salt; NULL = none).
+    { table: "identities", column: "appLockHash", ddl: "ADD COLUMN `appLockHash` varchar(64)" },
+    { table: "identities", column: "appLockSalt", ddl: "ADD COLUMN `appLockSalt` varchar(32)" },
+    { table: "identities", column: "appLockAt", ddl: "ADD COLUMN `appLockAt` timestamp NULL" },
     // v2.102.0 — a group's own identity: a 6-digit id from the shared space, a photo,
     // a status from the SAME vocabulary a person's uses, and its creator. All
     // nullable, so every DM and every pre-release group simply has none.
@@ -5561,6 +5565,59 @@ export async function hideMessageForIdentity(input: {
  * hidden by them. Idempotent by construction, which is why it is safe to call from a
  * path that may be retried.
  */
+
+/**
+ * ACCOUNT-WIDE APP LOCK (v2.107.77) — the sync store behind the client gate.
+ *
+ * The hash+salt are computed on the CLIENT (same primitive the device-local lock
+ * has always used, passcode.ts `hashCode`), so the server never sees a plaintext
+ * passcode and cannot: these two columns are a mirror, not an authenticator. Every
+ * device of the account pulls this pair on load and gates with it, which is what
+ * "set it on the iPhone, the Android asks too" means.
+ */
+export async function getAppLock(
+  identityId: number,
+): Promise<{ hash: string; salt: string } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select({ hash: identities.appLockHash, salt: identities.appLockSalt })
+    .from(identities)
+    .where(eq(identities.id, identityId))
+    .limit(1);
+  return row?.hash && row?.salt ? { hash: row.hash, salt: row.salt } : null;
+}
+
+export async function writeAppLock(
+  identityId: number,
+  lock: { hash: string; salt: string } | null,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(identities)
+    .set({
+      appLockHash: lock?.hash ?? null,
+      appLockSalt: lock?.salt ?? null,
+      appLockAt: lock ? new Date() : null,
+    })
+    .where(eq(identities.id, identityId));
+}
+
+/** When this sid's session row was minted — the "is this sign-in fresh?" input for
+ *  the app-lock forgot path. Null when the sid names no row (or storage is down),
+ *  which the caller must treat as NOT fresh. */
+export async function getSessionCreatedAt(sid: string): Promise<Date | null> {
+  const db = await getDb();
+  if (!db || !sid) return null;
+  const [row] = await db
+    .select({ createdAt: sessions.createdAt })
+    .from(sessions)
+    .where(eq(sessions.sid, sid))
+    .limit(1);
+  return row?.createdAt ?? null;
+}
+
 export async function recomputeUnreadFor(conversationId: number, identityId: number): Promise<void> {
   const db = await getDb();
   if (!db) return;

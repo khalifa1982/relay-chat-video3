@@ -126,6 +126,9 @@ import {
   listContacts,
   listContactRingtones,
   listMessages,
+  getAppLock,
+  writeAppLock,
+  getSessionCreatedAt,
   searchMessages,
   listThreads,
   listUnseenMissedCalls,
@@ -5227,6 +5230,84 @@ export const v2OtpAuthRouter = router({
  * this device for incoming calls (paging) and missed-call notices even when
  * no tab/SSE is alive. `publicKey` hands the client the VAPID application
  * server key it must subscribe with (null ⇒ push disabled on this deploy). */
+/**
+ * ACCOUNT-WIDE APP LOCK (v2.107.77, owner: "build account wide").
+ *
+ * The lock used to be device-local localStorage, which is why his iPhone asked and
+ * his Android did not. Now the client-computed hash+salt live on the identity and
+ * every device pulls them on load. Three properties worth stating:
+ *
+ *  - THE SERVER NEVER SEES THE PASSCODE. `set` takes the hash+salt the client
+ *    already computes; verification stays where it always was, in the gate.
+ *  - `clear` IS UNGATED beyond auth, deliberately: it is only reachable from the
+ *    Settings pane, which sits BEHIND the gate — anyone there has already proved
+ *    the code (or holds an unlocked phone, at which point the lock has done all a
+ *    privacy screen can).
+ *  - `resetFresh` is the FORGOT path and is the one that needs real proof, because
+ *    it is offered ON the lock screen itself. A registered account proves itself by
+ *    signing in again (only a session younger than APP_LOCK_FRESH_MS qualifies —
+ *    a thief holding a long-unlocked phone fails, and signing out costs them the
+ *    account). A guest has no credentials and device-binding auto-restores them
+ *    with a *fresh* session, so freshness proves nothing there: a guest must
+ *    present the account's RECOVERY KEY, the one secret a guest actually holds.
+ */
+export const APP_LOCK_FRESH_MS = 15 * 60_000;
+export function isFreshSession(createdAt: Date | null, now: Date): boolean {
+  if (!createdAt) return false;
+  const age = now.getTime() - createdAt.getTime();
+  return age >= 0 && age <= APP_LOCK_FRESH_MS;
+}
+const APP_LOCK_HASH = /^[0-9a-f]{64}$/;
+const APP_LOCK_SALT = /^[0-9a-f]{8,32}$/;
+
+export const v2AppLockRouter = router({
+  get: publicProcedure.query(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    return getAppLock(me.id);
+  }),
+
+  set: publicProcedure
+    .input(z.object({ hash: z.string().regex(APP_LOCK_HASH), salt: z.string().regex(APP_LOCK_SALT) }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      await writeAppLock(me.id, { hash: input.hash, salt: input.salt });
+      return { ok: true };
+    }),
+
+  clear: publicProcedure.mutation(async ({ ctx }) => {
+    const me = requireIdentity(ctx);
+    await writeAppLock(me.id, null);
+    return { ok: true };
+  }),
+
+  resetFresh: publicProcedure
+    .input(z.object({ recoveryKey: z.string().max(200).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const me = requireIdentity(ctx);
+      if (me.isGuest) {
+        // Rate-gated like every other recovery-key surface; the key is 256-bit so
+        // guessing is not the threat, an unmetered DB read is.
+        directoryGate(ctx);
+        const key = normalizeRecoveryKey(input.recoveryKey ?? "");
+        if (!key) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "guest-key-required" });
+        }
+        const row = await getIdentityById(me.id);
+        const stored = (row as { recoveryHash?: string | null } | null)?.recoveryHash ?? null;
+        if (!stored || hashRecoveryKey(key) !== stored) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "bad-key" });
+        }
+      } else {
+        const created = await getSessionCreatedAt(ctx.sessionSid ?? "");
+        if (!isFreshSession(created, new Date())) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "stale-session" });
+        }
+      }
+      await writeAppLock(me.id, null);
+      return { ok: true };
+    }),
+});
+
 export const v2PushRouter = router({
   publicKey: publicProcedure.query(() => {
     const cfg = vapidConfig();

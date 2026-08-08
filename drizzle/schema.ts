@@ -283,6 +283,14 @@ export const identities = mysqlTable(
      */
     profileStatus: varchar("profileStatus", { length: 16 }),
     statusNote: varchar("statusNote", { length: 140 }),
+    /** ACCOUNT-WIDE APP LOCK (v2.107.77). The passcode's salted SHA-256 hash and
+     *  salt, computed CLIENT-side (the plaintext never reaches the server) and
+     *  synced here so every device of this account gates with the same code.
+     *  NULL = no lock, which is what every pre-existing row reads as. The gate
+     *  itself stays client-side UX; these columns are the sync store. */
+    appLockHash: varchar("appLockHash", { length: 64 }),
+    appLockSalt: varchar("appLockSalt", { length: 32 }),
+    appLockAt: timestamp("appLockAt"),
     /**
      * AN ADMIN'S SUGGESTED REGISTRATION ADDRESS (v2.105.15) — a nudge, never a
      * binding, and the distinction is the whole safety argument.

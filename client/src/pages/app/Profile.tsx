@@ -2313,6 +2313,9 @@ function PasscodeSection({ displayName }: { displayName: string }) {
     }
   }
 
+  const appLockSetMut = trpc.appLock.set.useMutation();
+  const appLockClearMut = trpc.appLock.clear.useMutation();
+
   const onlyDigits = (s: string) => s.replace(/\D+/g, "").slice(0, 8);
 
   function reset() {
@@ -2334,7 +2337,12 @@ function PasscodeSection({ displayName }: { displayName: string }) {
     }
     setBusy(true);
     try {
-      await setPasscode(code);
+      const pair = await setPasscode(code);
+      // ACCOUNT-WIDE (v2.107.77): mirror the pair to the account so every other
+      // device adopts it on its next load. Fire-and-forget by design — the local
+      // lock is already set either way, and the sync effect re-pushes on the next
+      // load if this write is lost.
+      appLockSetMut.mutate(pair);
       setEnabled(true);
       reset();
     } catch {
@@ -2348,6 +2356,10 @@ function PasscodeSection({ displayName }: { displayName: string }) {
     if (!window.confirm(t("profile.lockRemoveConfirm"))) return;
     clearPasscode();
     clearBiometric(); // biometric is only an unlock for the passcode — drop it too
+    // ACCOUNT-WIDE (v2.107.77): removing here removes it for every device, or the
+    // account copy would re-adopt onto this device on the next load and keep
+    // gating the others forever.
+    appLockClearMut.mutate();
     setEnabled(false);
     setBioOn(false);
     reset();
