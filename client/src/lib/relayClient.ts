@@ -195,7 +195,7 @@ interface PeerEntry {
    *  being the whole picture once audio lives on its own element. */
   remoteStream?: MediaStream | null;
 }
-interface PendingRing { from: string; fromName: string; roomId: string; flag?: string; video?: boolean; at?: number; }
+interface PendingRing { from: string; fromName: string; roomId: string; flag?: string; video?: boolean; at?: number; groupName?: string; }
 interface Recent { id: string; name: string; }
 
 interface Msg {
@@ -205,6 +205,9 @@ interface Msg {
   device?: string;
   from?: string;
   fromName?: string;
+  /** Named-group dial (v2.107.73): the group's title, on the invite (caller→
+   *  server) and the ring (server→callee). Absent for 1:1 calls. */
+  groupName?: string;
   to?: string;
   roomId?: string;
   // Host moderation / roles. (`on`/`by` are shared with the peer-hold message
@@ -701,6 +704,13 @@ export function startRelay(root: HTMLElement): RelayHandle {
      middle slot shows it in place of the headcount so the caller sees "Family" rather
      than "4". null for an ad-hoc conference (no name) and for a 1:1. */
   let callGroupName: string | null = null;
+  /** Group-call name, RECEIVER side (v2.107.73): every invite of a NAMED group
+   *  dial carries the group's title so the server can put it on the callee's
+   *  ring card, wake-up push and in-call header. Returns {} for a 1:1 or an
+   *  ad-hoc (unnamed) dial — those invites stay byte-identical to before. */
+  function inviteGroupExtras(): { groupName?: string } {
+    return callGroupName ? { groupName: callGroupName } : {};
+  }
   let videoReqT: ReturnType<typeof setTimeout> | null = null; // our outstanding request
   function clearVideoReq() { if (videoReqT) { clearTimeout(videoReqT); videoReqT = null; } }
   /**
@@ -1399,7 +1409,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         // Group call: now that the room exists, ring the remaining invitees.
         if (pendingGroupInvites.length) {
           const q = pendingGroupInvites; pendingGroupInvites = [];
-          q.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t, video: camOn }); });
+          q.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t, video: camOn, ...inviteGroupExtras() }); });
         }
         break;
       case "ringing":
@@ -1599,7 +1609,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
         if (reachErr && callIsGroup && outgoingDial && !establishedOnce && !roomId && aloneInCall()) {
           if (pendingGroupInvites.length) {
             const next = pendingGroupInvites.shift()!;
-            sendWS({ type: "invite", to: next, video: camOn });
+            sendWS({ type: "invite", to: next, video: camOn, ...inviteGroupExtras() });
           } else {
             failDial(m.message || "Nobody could be reached.", "server-error:" + (m.code || "?"));
           }
@@ -3133,7 +3143,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       emitPhase("dialing");
       playRingtone("outgoing");
     }
-    sendWS({ type: "invite", to: target, video: camOn });
+    sendWS({ type: "invite", to: target, video: camOn, ...inviteGroupExtras() });
     if (wasInCall) ensureInvitedTile(target);
     toast("Calling " + target + "…");
   }
@@ -3177,7 +3187,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       emitPhase("dialing");
       playRingtone("outgoing");
     }
-    sendWS({ type: "invite", to: target, video: !opts?.voice });
+    sendWS({ type: "invite", to: target, video: !opts?.voice, ...inviteGroupExtras() });
     if (wasInCall) ensureInvitedTile(target);
     toast("Calling " + target + "…");
     return true;
@@ -3243,7 +3253,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     if (alreadyInRoom) {
       // Adding people to a call that already exists — never a dial, so the
       // outstanding-invitee bookkeeping below must not apply.
-      clean.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t, video: camOn }); });
+      clean.forEach(t => { if (!peers[t]) sendWS({ type: "invite", to: t, video: camOn, ...inviteGroupExtras() }); });
     } else {
       const [first, ...rest] = clean;
       pendingGroupInvites = rest;
@@ -3262,7 +3272,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
          A HINT, NOT AN ASSERTION: understating it gets the mesh (today's
          behaviour), overstating it refuses only our own call. See isGroupParty. */
       sendWS({
-        type: "invite", to: first, video: camOn, parties: clean.length + 1,
+        type: "invite", to: first, video: camOn, parties: clean.length + 1, ...inviteGroupExtras(),
         ...(opts?.seed ? { seed: opts.seed } : {}),
       });
     }
@@ -3887,8 +3897,9 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       // call-waiting VIDEO call always got answered voice-only via switchCall
       // (it never consults video) and the promoted-after-hangup path (below)
       // showed a stale video-answer button left over from a PRIOR call.
-      waitingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, flag: m.flag, video: !!m.video, at: Date.now() };
-      showCallWaiting(m.fromName || nameOf(m.from!), m.from, m.flag);
+      waitingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, flag: m.flag, video: !!m.video, at: Date.now(), groupName: m.groupName };
+      // Named-group dial: the waiting card leads with the group's title.
+      showCallWaiting((m.groupName ? m.groupName + " · " : "") + (m.fromName || nameOf(m.from!)), m.from, m.flag);
       return;
     }
     // A pendingRing normally means "already being rung — reject the second
@@ -3903,7 +3914,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       sendWS({ type: "reject", to: m.from });
       return;
     }
-    pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, video: !!m.video, at: Date.now() };
+    pendingRing = { from: m.from!, fromName: m.fromName!, roomId: m.roomId!, video: !!m.video, at: Date.now(), groupName: m.groupName };
     // The OS call screen already reported an answer for THIS room (native shell,
     // cold start or in-page). Complete it rather than presenting a ring the user
     // has visibly already accepted — the consent gesture happened on a screen the
@@ -3916,12 +3927,15 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     // labels in a wrapper, so the WRAPPER is what hides.
     const vWrap = $("acceptVideoWrap"); if (vWrap) vWrap.style.display = m.video ? "" : "none";
     const ringAv = $("ringAv"); if (ringAv) ringAv.textContent = initials(m.fromName!);
-    const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = m.fromName!;
+    // Named-group dial (v2.107.73): the card leads with the GROUP's title â
+    // what the callee is being invited into â and the caller's name moves to
+    // the sub line. Identity verification (pin, flag, photo) stays the CALLER's.
+    const ringWho = $("ringWho"); if (ringWho) ringWho.textContent = m.groupName || m.fromName!;
     // Caller identity verification: their PIN (mono, formatted) + country flag.
     const ringPin = $("ringPin");
     if (ringPin) ringPin.textContent = m.from && m.from.length === 6 ? m.from.slice(0, 3) + "-" + m.from.slice(3) : (m.from || "");
     const ringFlag = $("ringFlag"); if (ringFlag) ringFlag.textContent = m.flag || "";
-    const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = m.video ? "Video call…" : "Voice call…";
+    const ringSub = $("ringSub"); if (ringSub) ringSub.textContent = (m.groupName ? (m.fromName || nameOf(m.from!)) + " · " : "") + (m.video ? "Video call…" : "Voice call…");
     $("quickReplies")?.classList.remove("open"); // fresh ring → replies folded
     const crInput = $("customReplyInput") as HTMLInputElement | null; if (crInput) crInput.value = "";
     presentRingProfile(m.from!); // photo + verified + presence (async, guarded)
@@ -3933,7 +3947,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     startTitleFlash("📞 Incoming call — RELAY");
     notify({
       title: `Incoming ${m.video ? "video" : "voice"} call`,
-      body: `${m.fromName || m.from || "Someone"} · ${m.from || ""} is calling you on RELAY`,
+      body: `${m.groupName ? m.groupName + " — " : ""}${m.fromName || m.from || "Someone"} · ${m.from || ""} is calling you on RELAY`,
       tag: "relay-ring-" + (m.from || ""),
       autoCloseMs: 30_000,
       onClick: () => { try { window.focus(); } catch { /* */ } },
@@ -3980,6 +3994,9 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     // instead of staying silent until a play() failure happens to re-arm it.
     armAudioUnlock();
     callAnswered = true; // WE answered — the watchdog may enforce media now
+    // Named-group dial: the callee's header shows the group's title, exactly as
+    // the caller's does (v2.107.68) — the shared reset clears it on call end.
+    callGroupName = r.groupName ?? null;
     inCall = true; roomId = r.roomId; enterCallUI("In call");
     sendWS({ type: "accept", roomId: r.roomId });
     // Mutual-consent reply to the caller (after `accept`, so the server knows
@@ -7388,7 +7405,7 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     addInviteOfflineGuard = true;
     if (addInviteGuardT) clearTimeout(addInviteGuardT);
     addInviteGuardT = setTimeout(() => { addInviteOfflineGuard = false; addInviteGuardT = null; }, 6000);
-    sendWS({ type: "invite", to: pin, video: camOn });
+    sendWS({ type: "invite", to: pin, video: camOn, ...inviteGroupExtras() });
     toast("Inviting " + pin + "…");
     closeAddPad();
     addInviting = false;

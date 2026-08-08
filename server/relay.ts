@@ -388,6 +388,10 @@ export interface PendingRing {
   roomId: string;    // the caller's dial room the accept must target
   video: boolean;    // mutual-consent flow: was this dialed as a video call?
   at: number;        // unix ms when the invite was dispatched
+  /** Named-group dial (v2.107.73): the group's name, relayed so a LATE-delivered
+   *  ring (deliverPendingRing) shows the callee the same group title an on-time
+   *  one does. Absent for 1:1 dials. */
+  groupName?: string;
   /**
    * Was this ring delivered by a PUSH rather than over a live socket?
    *
@@ -470,6 +474,7 @@ export function deliverPendingRing(reg: RelayRegistry, calleePin: string, socket
     fromName: caller.name,
     flag: caller.flag,
     roomId: pr.roomId,
+    ...(pr.groupName ? { groupName: pr.groupName } : {}),
     video: pr.video,
   });
   safeSend(caller.socket, { type: "ringing", pin: calleePin, name: callee.name });
@@ -1948,6 +1953,9 @@ export type PageCalleeHook = (info: {
   calleePin: string;
   callerPin: string;
   callerName: string;
+  /** Named-group dial (v2.107.73): the group's name, so the wake-up push can
+   *  title the ring the way the ring card will. Absent for 1:1 dials. */
+  groupName?: string;
   roomId: string;
   video: boolean;
 }) => Promise<{ exists: boolean; name?: string; pushed?: number } | null>;
@@ -2240,6 +2248,18 @@ export function handleMessage(
       const callerPin = conn.pin;
       const callerSocket = conn.socket;
       const wantVideo = !!msg.video;
+      /* GROUP-CALL NAME, RECEIVER SIDE (v2.107.73). The caller's screen already
+       * shows the dialed group's name (v2.107.68); this relays it so the CALLEE's
+       * ring card, wake-up push and in-call header can show the same title.
+       * Sanitized here because it is caller-supplied text headed for another
+       * user's screen: string only, control characters stripped, capped at 64 —
+       * and OMITTED when absent or empty, so a 1:1 ring stays byte-identical to
+       * every pre-2.107.73 one. */
+      const rawGroupName = (msg as { groupName?: unknown }).groupName;
+      const groupName =
+        typeof rawGroupName === "string"
+          ? rawGroupName.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 64)
+          : "";
       /* SERVICE BUSY FOR A GROUP, BEFORE ANYTHING IS SPENT (v2.106.59).
        *
        * The owner's node-scaling doc: "Mesh fallback is for 1:1 calls. If group rooms exist
@@ -2442,7 +2462,7 @@ export function handleMessage(
           //     return before this point. The per-invitee drain at the client keys on
           //     `pin`, which every reply below carries.
           const pagingRoom = ensureDialRoom();
-          onPageCallee({ calleePin: to, callerPin, callerName: me.name, roomId: pagingRoom, video: wantVideo })
+          onPageCallee({ calleePin: to, callerPin, callerName: me.name, ...(groupName ? { groupName } : {}), roomId: pagingRoom, video: wantVideo })
             .then(info => {
               // Stale-continuation guard — the SAME discipline the party-line
               // resolver applies at `settle` (line ~1526). onPageCallee awaits
@@ -2468,6 +2488,7 @@ export function handleMessage(
                     roomId: pagingRoom,
                     video: wantVideo,
                     at: Date.now(),
+                    ...(groupName ? { groupName } : {}),
                     // Rung by PUSH, so a hang-up owes this callee a pushed cancel.
                     // The LIVE-ring path below deliberately leaves this unset: that
                     // callee has a socket, gets the websocket `ring-cancel`, and must
@@ -2590,6 +2611,8 @@ export function handleMessage(
           fromName: me.name,
           flag: me.flag,
           roomId: me.roomId,
+          // Named-group dial: the callee's ring shows the group's title too.
+          ...(groupName ? { groupName } : {}),
           // Mutual-consent video: the callee's ring card shows the dialed mode,
           // and only a VIDEO dial offers the "answer with video" (= consent).
           video: wantVideo,
@@ -2615,7 +2638,7 @@ export function handleMessage(
         // Keep the ring redeliverable: if the callee's page reloads (or their SSE
         // blips) mid-ring, their re-register gets the ring again instead of a
         // silent void (deliverPendingRing). Cleared on accept/reject/cancel/TTL.
-        reg.pendingRings.set(to, { from: callerPin, roomId: me.roomId!, video: wantVideo, at: Date.now() });
+        reg.pendingRings.set(to, { from: callerPin, roomId: me.roomId!, video: wantVideo, at: Date.now(), ...(groupName ? { groupName } : {}) });
         // Fan out a notification hint so the callee's other open tabs
         // (e.g. Messages, Contacts) also see the incoming call.
         if (onInvite && me.roomId) {

@@ -464,7 +464,10 @@ async function startServer() {
         // rings and then cannot connect.
         pushed = await sendPushToIdentity(callee.id, {
           kind: "incoming-call",
-          title: `${info.callerName || "Someone"} is calling`,
+          // Named-group dial (v2.107.73): the group's name joins the title —
+          // the same title the ring card is about to show, so still nothing the
+          // callee wasn't about to see.
+          title: `${info.groupName ? info.groupName + " — " : ""}${info.callerName || "Someone"} is calling`,
           body: "Tap to answer on RELAY",
           // One tag for every ring, so a redial REPLACES the notification
           // instead of stacking a second one for the same call.

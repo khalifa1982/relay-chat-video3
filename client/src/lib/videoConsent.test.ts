@@ -37,7 +37,7 @@ describe("mutual-consent video — 1:1 protocol", () => {
   it("a voice-dialed ring HIDES the Video answer button and labels the mode", () => {
     // v2.97: the round buttons carry labels in a wrapper, so the WRAPPER hides.
     expect(CLIENT).toMatch(/vWrap\.style\.display = m\.video \? "" : "none";/);
-    expect(CLIENT).toMatch(/ringSub\.textContent = m\.video \? "Video call…" : "Voice call…";/);
+    expect(CLIENT).toMatch(/ringSub\.textContent = \(m\.groupName \? \(m\.fromName \|\| nameOf\(m\.from!\)\) \+ " · " : ""\) \+ \(m\.video \? "Video call…" : "Voice call…"\);/);
   });
 
   it("publication is consent-gated at every point video can start flowing", () => {

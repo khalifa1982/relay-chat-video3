@@ -100,7 +100,7 @@ describe("v2.66 communication reliability (verified)", () => {
 
   it("accepting a call arms the audio unlock on the tap gesture", () => {
     // (v2.70.1 inserted the callAnswered flag between the two pinned lines.)
-    expect(CLIENT).toMatch(/armAudioUnlock\(\);[\s\S]{0,120}?inCall = true; roomId = r\.roomId; enterCallUI\("In call"\);/);
+    expect(CLIENT).toMatch(/armAudioUnlock\(\);[\s\S]{0,460}?inCall = true; roomId = r\.roomId; enterCallUI\("In call"\);/);
   });
 });
 

@@ -40,7 +40,7 @@ describe("issue 1 — pre-ring dial drops", () => {
     expect(CLIENT).toMatch(/pendingRing && pendingRing\.from !== m\.from && Date\.now\(\) - \(pendingRing\.at \|\| 0\) <= 70_000/);
     expect(CLIENT).toMatch(/waitingRing && waitingRing\.from !== m\.from && Date\.now\(\) - \(waitingRing\.at \|\| 0\) <= 70_000/);
     // Rings are stamped so staleness is decidable.
-    expect(CLIENT).toMatch(/pendingRing = \{ from: m\.from!, fromName: m\.fromName!, roomId: m\.roomId!, video: !!m\.video, at: Date\.now\(\) \}/);
+    expect(CLIENT).toMatch(/pendingRing = \{ from: m\.from!, fromName: m\.fromName!, roomId: m\.roomId!, video: !!m\.video, at: Date\.now\(\), groupName: m\.groupName \}/);
   });
 
   it("returning to the foreground sweeps zombie ring state (frozen 60s timers)", () => {

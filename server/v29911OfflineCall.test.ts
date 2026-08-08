@@ -50,7 +50,7 @@ describe("server: an unreachable callee still fails fast; a WOKEN one is paged",
     // A ring whose payload names no room is a phone that rings and then cannot
     // connect. The ordering is the property; `roomId: ""` was the old shape.
     expect(branch).toMatch(/const pagingRoom = ensureDialRoom\(\);/);
-    expect(branch).toMatch(/onPageCallee\(\{ calleePin: to, callerPin, callerName: me\.name, roomId: pagingRoom, video: wantVideo \}\)/);
+    expect(branch).toMatch(/onPageCallee\(\{ calleePin: to, callerPin, callerName: me\.name, \.\.\.\(groupName \? \{ groupName \} : \{\}\), roomId: pagingRoom, video: wantVideo \}\)/);
     expect(branch.indexOf("const pagingRoom")).toBeLessThan(branch.indexOf("onPageCallee("));
   });
 
