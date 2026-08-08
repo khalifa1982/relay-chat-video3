@@ -2457,6 +2457,10 @@ function ConversationView({ conversationId }: { conversationId: number }) {
   // when the thread itself changes (opening a thread should land at the bottom).
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevConvoRef = useRef<number | null>(null);
+  // Flipped by a REAL user scroll gesture (wheel / touch / key), never by our own
+  // programmatic scrollTop writes — so the open-scroll re-assertion yields to the user
+  // instead of fighting them. Reset on every thread open.
+  const userScrolledRef = useRef(false);
 
   /* UNREAD BOUNDARY (owner). Freeze how many messages were unread when the thread was
      OPENED — read from the thread summary before markRead zeroes it — so the "N unread"
@@ -2495,41 +2499,73 @@ function ConversationView({ conversationId }: { conversationId: number }) {
     return arr.length ? arr[0].id : null;
   }, [openUnread, messagesQuery.data, me?.id]);
 
-  /* SCROLL ON OPEN → the unread boundary, not the top (owner: "it shows the very first,
-     oldest message"). The old effect scrolled to the bottom on thread-change, but it fired
-     before the messages had loaded (tiny scrollHeight) and never re-fired once they did — so
-     the thread settled at the TOP. Now the open-scroll is deferred until the messages AND the
-     frozen unread count are BOTH in hand, then lands on the first unread (divider just above
-     it) so you read DOWNWARD, or on the newest when all read. A normal new-message arrival
-     keeps the "only follow if already near the bottom" rule. */
+  /* SCROLL ON OPEN → the unread boundary, else the NEWEST — and NEVER the top. Three
+     things were wrong and each on its own left the thread sitting at its oldest message
+     (the owner's report). (1) `scrollRef` was declared but never attached to the scroll
+     container, so `scrollRef.current` was null and every scroll effect early-returned —
+     nothing ever moved. (2) This effect waited for the frozen unread count, and on a cold
+     inbox or a notification deep-link that count stays null, so even with the ref wired it
+     would never fire. (3) It positioned with `scrollIntoView`, which scrolls whichever
+     ancestor is nearest and could leave THIS container untouched. Now: the ref is attached;
+     as soon as the messages are in the DOM we position THIS container directly with
+     container-relative math — onto the first-unread divider when we can find it, otherwise
+     onto the newest — and we re-assert for a few frames so a late-loading photo can't drag
+     the newest back off-screen. Re-assertion stops the instant the user scrolls by hand. */
   const pendingOpenScrollRef = useRef(false);
+  const openScrollRafRef = useRef<number | null>(null);
   useEffect(() => {
     const threadChanged = prevConvoRef.current !== conversationId;
     if (threadChanged) {
       prevConvoRef.current = conversationId;
       pendingOpenScrollRef.current = true;
+      userScrolledRef.current = false;
+      if (openScrollRafRef.current != null) cancelAnimationFrame(openScrollRafRef.current);
     }
     const el = scrollRef.current;
     if (!el) return;
     const data = messagesQuery.data;
-    if (pendingOpenScrollRef.current) {
-      if (!data || data.length === 0 || openUnread === null) return; // wait for both
-      pendingOpenScrollRef.current = false;
-      const target =
-        firstUnreadId != null
-          ? el.querySelector<HTMLElement>(`[data-mid="${firstUnreadId}"]`)
-          : null;
-      if (target) {
-        target.scrollIntoView({ block: "start" });
-        el.scrollTop = Math.max(0, el.scrollTop - 56); // reveal the divider above it
-      } else {
-        el.scrollTop = el.scrollHeight; // all read (or not loaded) → newest
-      }
+    if (!pendingOpenScrollRef.current) {
+      // A new message arrived mid-thread (not an open): follow it only if already near
+      // the bottom, so reading history is never yanked away.
+      const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (fromBottom <= 150) el.scrollTop = el.scrollHeight;
       return;
     }
-    // A new message arrived (not an open): follow it only if already near the bottom.
-    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (fromBottom <= 150) el.scrollTop = el.scrollHeight;
+    if (!data || data.length === 0) return; // nothing to position onto yet
+    // We have messages → position now and stop waiting. If the unread boundary is known
+    // we land on its divider; otherwise (all read, OR the summary hasn't loaded — a
+    // deep-link) we land on the newest. The one thing we never do is leave it at the top.
+    pendingOpenScrollRef.current = false;
+    const applyTarget = () => {
+      const box = scrollRef.current;
+      if (!box) return;
+      const row =
+        firstUnreadId != null
+          ? box.querySelector<HTMLElement>(`[data-mid="${firstUnreadId}"]`)
+          : null;
+      if (row) {
+        // Container-relative: put the row ~60px below the top so its divider shows above.
+        const delta = row.getBoundingClientRect().top - box.getBoundingClientRect().top;
+        box.scrollTop = Math.max(0, box.scrollTop + delta - 60);
+      } else {
+        box.scrollTop = box.scrollHeight; // newest
+      }
+    };
+    applyTarget();
+    // Re-assert across the next few frames: image / media layout lands AFTER this commit
+    // and would otherwise shift the target. Cancelled on the next open, and it yields the
+    // moment the user scrolls (a real wheel/touch flips userScrolledRef, not our writes).
+    let frames = 0;
+    const tick = () => {
+      if (userScrolledRef.current || frames++ > 8) {
+        openScrollRafRef.current = null;
+        return;
+      }
+      applyTarget();
+      openScrollRafRef.current = requestAnimationFrame(tick);
+    };
+    if (openScrollRafRef.current != null) cancelAnimationFrame(openScrollRafRef.current);
+    openScrollRafRef.current = requestAnimationFrame(tick);
   }, [messagesQuery.data, conversationId, openUnread, firstUnreadId]);
 
   // "Scroll to bottom" floating button — shown once the user has scrolled UP
@@ -2557,9 +2593,18 @@ function ConversationView({ conversationId }: { conversationId: number }) {
       }
     };
     el.addEventListener("scroll", onScroll, { passive: true });
+    // A real user gesture (not our programmatic scrollTop writes) ends the open-scroll
+    // re-assertion, so we never fight someone who starts reading immediately.
+    const onUserIntent = () => { userScrolledRef.current = true; };
+    el.addEventListener("wheel", onUserIntent, { passive: true });
+    el.addEventListener("touchmove", onUserIntent, { passive: true });
+    el.addEventListener("keydown", onUserIntent);
     onScroll();
     return () => {
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onUserIntent);
+      el.removeEventListener("touchmove", onUserIntent);
+      el.removeEventListener("keydown", onUserIntent);
       if (markReadT) clearTimeout(markReadT);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3544,6 +3589,7 @@ function ConversationView({ conversationId }: { conversationId: number }) {
         );
       })()}
       <div
+        ref={scrollRef}
         className="flex-1 min-h-0 overflow-y-auto px-3 md:px-5 py-4 space-y-0.5 bg-background md:bg-card flex flex-col"
       >
         {/* Anchors a short conversation to the BOTTOM (iMessage-style) instead
