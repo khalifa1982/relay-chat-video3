@@ -1,62 +1,42 @@
-// Load environment variables with proper priority (system > .env)
-import "./scripts/load-env.js";
 import type { ExpoConfig } from "expo/config";
 
-// Bundle ID format: space.manus.<project_name_dots>.<timestamp>
-// e.g., "my-app" created at 2024-01-15 10:30:45 -> "space.manus.my.app.t20240115103045"
-// Bundle ID can only contain letters, numbers, and dots
-// Android requires each dot-separated segment to start with a letter
-const rawBundleId = "com.app.relaymobile";
-const bundleId =
-  rawBundleId
-    .replace(/[-_]/g, ".") // Replace hyphens/underscores with dots
-    .replace(/[^a-zA-Z0-9.]/g, "") // Remove invalid chars
-    .replace(/\.+/g, ".") // Collapse consecutive dots
-    .replace(/^\.+|\.+$/g, "") // Trim leading/trailing dots
-    .toLowerCase()
-    .split(".")
-    .map((segment) => {
-      // Android requires each segment to start with a letter
-      // Prefix with 'x' if segment starts with a digit
-      return /^[a-zA-Z]/.test(segment) ? segment : "x" + segment;
-    })
-    .join(".") || "space.manus.app";
-// Deep-link scheme: the server fires relay://call/<callId> — must match exactly.
-const schemeFromBundleId = "relay";
+/**
+ * RELAY mobile shell — clean rebuild (1.1.0, build 46).
+ *
+ * One WebView to https://your-chat.io plus the native minimum: push, deep
+ * links, call affordances, screenshot block. Same bundle ids and EAS project
+ * as every prior build, so this ships as a normal update.
+ *
+ * Push, per the server's senders:
+ *  • Android — server/fcm.ts sends FCM HTTP v1 directly; the shell needs a
+ *    real FCM registration token, which expo-notifications provides when
+ *    `android.googleServicesFile` is set. No Firebase JS SDK required.
+ *  • iOS — server/apnsAlert.ts (v2.107.50+) sends raw APNs with the .p8 key;
+ *    the shell hands over the raw APNs device token. No Firebase involved,
+ *    so the old GoogleService-Info.plist + @react-native-firebase/* are gone.
+ */
 
-// Android native build number (versionCode). The self-hosted APK updater
-// compares the server manifest's buildNumber against THIS value to decide
-// whether a newer APK is available. Bump this every time you publish a new APK
-// (and set the manifest's buildNumber to match the new release).
-const ANDROID_BUILD_NUMBER = 45;
+// Deep-link scheme: the server's notification payloads use relay:// links —
+// must match exactly.
+const SCHEME = "relay";
 
-const env = {
-  // App branding - update these values directly (do not use env vars)
-  appName: "RELAY",
-  appSlug: "relay",
-  // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
-  // Leave empty to use the default icon from assets/images/icon.png
-  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/86205309/gICDuHUjOkeXoJiJ.png",
-  scheme: schemeFromBundleId,
-  iosBundleId: "com.app.relaymobile",
-  androidPackage: bundleId,
-};
+const APP_VERSION = "1.1.0";
+const BUILD_NUMBER = 46; // iOS buildNumber + Android versionCode
 
 const config: ExpoConfig = {
   owner: "uaecoms-team",
-  name: env.appName,
-  slug: env.appSlug,
-  version: "1.0.45",
+  name: "RELAY",
+  slug: "relay",
+  version: APP_VERSION,
   orientation: "portrait",
   icon: "./assets/images/icon.png",
-  scheme: env.scheme,
+  scheme: SCHEME,
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
   ios: {
     supportsTablet: true,
-    bundleIdentifier: env.iosBundleId,
-    buildNumber: "45",
-    googleServicesFile: "./GoogleService-Info.plist",
+    bundleIdentifier: "com.app.relaymobile",
+    buildNumber: String(BUILD_NUMBER),
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
       NSCameraUsageDescription:
@@ -68,6 +48,8 @@ const config: ExpoConfig = {
     },
   },
   android: {
+    // FCM registration tokens for expo-notifications — the server sends
+    // pushes to this token via FCM HTTP v1 (server/fcm.ts).
     googleServicesFile: "./google-services.json",
     adaptiveIcon: {
       backgroundColor: "#0B1020",
@@ -77,29 +59,25 @@ const config: ExpoConfig = {
     },
     edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
-    package: env.androidPackage,
-    // versionCode is the integer build number the APK updater compares against.
-    versionCode: ANDROID_BUILD_NUMBER,
+    package: "com.app.relaymobile",
+    versionCode: BUILD_NUMBER,
     permissions: [
       "POST_NOTIFICATIONS",
+      // WebRTC in the WebView — the shell grants, the web app captures.
       "CAMERA",
       "RECORD_AUDIO",
       "MODIFY_AUDIO_SETTINGS",
-      // Required so the app can launch the system installer for the downloaded APK.
-      // Allow the call/notification service + WebRTC to keep running in background.
+      // Keep a call (mic/camera/WebRTC) running when the app is backgrounded.
       "FOREGROUND_SERVICE",
       "FOREGROUND_SERVICE_MICROPHONE",
       "FOREGROUND_SERVICE_CAMERA",
       "WAKE_LOCK",
-      // Let a ringing incoming-call notification pop full-screen even when the
-      // app is minimized or the device is locked, so the caller is identified.
-      // Audio output routing to Bluetooth headsets (earpiece/speaker/Bluetooth switch).
+      // Audio output routing to Bluetooth headsets.
       "BLUETOOTH",
       "BLUETOOTH_CONNECT",
     ],
-    // Defense-in-depth (audit follow-up): even if a transitive dependency tries
-    // to merge these in, strip them. The app downloads updates to its private
-    // cache dir, so it never needs shared/external storage access.
+    // Defense-in-depth: even if a transitive dependency tries to merge these
+    // in, strip them. The shell never touches shared/external storage.
     blockedPermissions: [
       "android.permission.WRITE_EXTERNAL_STORAGE",
       "android.permission.READ_EXTERNAL_STORAGE",
@@ -110,7 +88,7 @@ const config: ExpoConfig = {
         autoVerify: true,
         data: [
           {
-            scheme: env.scheme,
+            scheme: SCHEME,
             host: "*",
           },
         ],
@@ -118,21 +96,8 @@ const config: ExpoConfig = {
       },
     ],
   },
-  web: {
-    bundler: "metro",
-    output: "static",
-    favicon: "./assets/images/favicon.png",
-  },
   plugins: [
-    "expo-router",
-    [
-      "expo-notifications",
-      {
-        // Bundle the incoming-call ringtone so the Android channel + iOS
-        // notification can play it as the call sound.
-        sounds: ["./assets/audio/ringtone.wav"],
-      },
-    ],
+    "expo-notifications",
     [
       "expo-splash-screen",
       {
@@ -148,29 +113,20 @@ const config: ExpoConfig = {
     [
       "expo-build-properties",
       {
-        ios: {
-          useFrameworks: "static",
-          deploymentTarget: "15.1",
-        },
         android: {
           buildArchs: ["armeabi-v7a", "arm64-v8a"],
           minSdkVersion: 24,
         },
       },
     ],
-    // Firebase: core + messaging for alert push tokens (iOS message notifications)
-    "@react-native-firebase/app",
-    "@react-native-firebase/messaging",
-    // Local plugin: enable Android picture-in-picture for active calls.
-    "./plugins/with-android-pip.js",  ],
+    // Local manifest-only plugin: PiP + lock-screen call UI + the
+    // USE_FULL_SCREEN_INTENT permission for call-style notifications.
+    "./plugins/with-android-pip.js",
+  ],
   extra: {
     eas: {
       projectId: "e157c3d8-8d70-42ad-a11c-86d75c691039",
     },
-  },
-  experiments: {
-    typedRoutes: true,
-    reactCompiler: true,
   },
 };
 

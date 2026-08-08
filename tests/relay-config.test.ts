@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { RELAY_APP_URL, RELAY_BASE_URL, isInternalUrl } from "../lib/relay-config";
+import { RELAY_APP_URL, RELAY_BASE_URL, isInternalUrl } from "../src/relay-config";
 
 describe("relay-config URL resolution", () => {
   it("derives a base URL with no trailing slash", () => {

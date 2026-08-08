@@ -16,8 +16,8 @@ import type { WebViewErrorEvent } from "react-native-webview/lib/WebViewTypes";
 import * as Notifications from "expo-notifications";
 import * as ScreenCapture from "expo-screen-capture";
 
-import { RELAY_APP_URL, isInternalUrl } from "@/lib/relay-config";
-import { usePushToken } from "@/hooks/use-push-token";
+import { RELAY_APP_URL, isInternalUrl } from "./relay-config";
+import { usePushToken } from "./use-push-token";
 
 const COLORS = {
   navy: "#050608",
@@ -29,7 +29,7 @@ const COLORS = {
   border: "#1A1F2B",
 };
 
-const RELAY_LOGO = require("@/assets/images/relay-logo.png");
+const RELAY_LOGO = require("../assets/images/relay-logo.png");
 
 /**
  * Native-capability handshake (QW-12).

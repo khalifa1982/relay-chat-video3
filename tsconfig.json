@@ -1,36 +1,7 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true,
-    "types": [
-      "node",
-      "nativewind/types"
-    ],
-    "paths": {
-      "@/*": [
-        "./*"
-      ],
-      "@shared/*": [
-        "./shared/*"
-      ]
-    }
+    "strict": true
   },
-  "include": [
-    "**/*.ts",
-    "**/*.tsx",
-    ".expo/types/**/*.ts",
-    "expo-env.d.ts",
-    "nativewind-env.d.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    // Orphaned by the v1.0.42 thin-shell rewrite: `server/` is the old
-    // full-stack template (now referenced only by the unused `dev:server`
-    // script) and `tests/` has no runner wired up. Neither ships in the app
-    // bundle, so they are scoped out of the typecheck rather than compiled
-    // against modules the rewrite deleted.
-    "server",
-    "tests"
-  ]
+  "include": ["App.tsx", "index.ts", "app.config.ts", "src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "plugins/**/*.js"]
 }
