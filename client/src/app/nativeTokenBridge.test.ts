@@ -448,4 +448,47 @@ describe("acceptNativeEventDetail — the relay:native envelope", () => {
       expect(viaEvent?.token).toBe(viaPost?.token);
     }
   });
+
+  it("registers a token delivered ONLY on `document` — the Android dispatch target", () => {
+    /* THE Android push regression (2026-08-08). react-native-webview dispatches the
+       shell's postMessage as a non-bubbling `message` event on `document`, never
+       `window` — so a window-only listener silently dropped every FCM token and no
+       Android phone could be woken. iOS dispatches on `window`, which is why it
+       looked platform-specific. This stands up a fake window AND document, mounts the
+       real bridge, and posts the token through the DOCUMENT listener alone: it must
+       still register, or Android push is broken again. */
+    const winListeners: Array<(e: MessageEvent) => void> = [];
+    const docListeners: Array<(e: MessageEvent) => void> = [];
+    const g = globalThis as unknown as { window?: unknown; document?: unknown };
+    const prevWin = g.window;
+    const prevDoc = g.document;
+    const fakeWin = {
+      location: { origin: SELF },
+      addEventListener: (_t: string, fn: (e: MessageEvent) => void) => winListeners.push(fn),
+      removeEventListener: () => {},
+      postMessage: () => {},
+    };
+    const fakeDoc = {
+      addEventListener: (_t: string, fn: (e: MessageEvent) => void) => docListeners.push(fn),
+      removeEventListener: () => {},
+    };
+    g.window = fakeWin;
+    g.document = fakeDoc;
+    try {
+      const register = vi.fn();
+      const off = mountNativeTokenBridge(register);
+      // The bridge must have attached a listener to `document`, not only `window`.
+      expect(docListeners.length).toBeGreaterThan(0);
+      // Deliver exactly as Android does: on document, empty origin, null source.
+      const token = "abc:APA91b" + "z".repeat(40);
+      docListeners.forEach((fn) =>
+        fn({ origin: "", source: null, data: JSON.stringify({ type: "SET_PUSH_TOKEN", token }) } as unknown as MessageEvent),
+      );
+      expect(register).toHaveBeenCalledWith(token, "fcm");
+      off();
+    } finally {
+      if (prevWin === undefined) delete g.window; else g.window = prevWin;
+      if (prevDoc === undefined) delete g.document; else g.document = prevDoc;
+    }
+  });
 });

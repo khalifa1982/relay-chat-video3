@@ -205,6 +205,19 @@ export function mountNativeTokenBridge(
     admit(acceptNativeEventDetail((ev as CustomEvent).detail));
   };
   window.addEventListener("message", onMessage);
+  // ANDROID (the whole reason Android push was dead): react-native-webview
+  // dispatches the shell's RN→web postMessage as a NON-BUBBLING `message` event on
+  // `document`, NOT `window` (RNCWebViewManagerImpl.kt: `document.dispatchEvent`
+  // with a MessageEvent whose `bubbles` defaults to false). A `window`-only listener
+  // never sees it, so the FCM token never reached the server and no message or call
+  // could wake the phone. iOS dispatches the identical event on `window`
+  // (RNCWebViewImpl.m), which is exactly why this was invisible — the one platform
+  // that worked was the one the single listener happened to match. Listening on BOTH
+  // targets catches the Android post; the `seen` dedup makes a message that reaches
+  // both harmless, and an ordinary browser delivers neither except from same-document
+  // script (which is the `relay:native` path's domain anyway).
+  const doc = typeof document !== "undefined" ? document : undefined;
+  doc?.addEventListener("message", onMessage as EventListener);
   window.addEventListener("relay:native", onNative);
   // Let the shell ask us to re-send rather than having to time its post against
   // our mount: some shells post before the bundle has finished evaluating.
@@ -213,8 +226,22 @@ export function mountNativeTokenBridge(
   } catch {
     /* a stricter engine may refuse; the shell's own retry covers it */
   }
+  // And tell the RN shell DIRECTLY — the window.postMessage above only reaches this
+  // page's own listeners, never the shell. react-native-webview exposes
+  // `window.ReactNativeWebView.postMessage` for the web→shell direction, and the
+  // shell re-sends the push token on RELAY_WEB_READY. Without this, the token only
+  // registers on a later app-foreground (the shell's other re-send trigger), because
+  // the shell's loadEnd post can land before this listener is even attached. An
+  // ordinary browser has no `ReactNativeWebView`, so the optional chain no-ops.
+  try {
+    (window as unknown as { ReactNativeWebView?: { postMessage: (m: string) => void } })
+      .ReactNativeWebView?.postMessage(JSON.stringify({ type: "RELAY_WEB_READY" }));
+  } catch {
+    /* no shell present, or it refused; the shell's foreground re-send still covers it */
+  }
   return () => {
     window.removeEventListener("message", onMessage);
+    doc?.removeEventListener("message", onMessage as EventListener);
     window.removeEventListener("relay:native", onNative);
   };
 }
