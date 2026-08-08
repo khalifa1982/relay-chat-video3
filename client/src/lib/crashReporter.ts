@@ -25,6 +25,7 @@
  * EVERY PATH IS WRAPPED. A crash reporter that can itself throw turns one defect
  * into two; failure here must always degrade to "no report", never to noise.
  */
+import { sentryCapture } from "@/lib/sentry";
 import { APP_VERSION } from "@shared/version";
 import {
   CRASH_CAPS,
@@ -179,6 +180,12 @@ export function reportCrash(
   err: unknown,
   extra?: { componentStack?: string | null; kind?: string }
 ): void {
+  // Sentry forward (v2.107.78): this function is the choke point every in-house
+  // hook — window.onerror, unhandledrejection, the render boundary — already
+  // routes through, so one line here gives Sentry everything the net catches.
+  // Fire-and-forget and fully guarded inside; the in-house report below is
+  // unconditional either way.
+  sentryCapture(err, { kind: extra?.kind ?? "crash", componentStack: extra?.componentStack ?? null });
   try {
     /* v2.107.45: a non-Error throwable used to become `new Error(String(err))`,
        i.e. "[object Object]" for any plain object — which is exactly how crash

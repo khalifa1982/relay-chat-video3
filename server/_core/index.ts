@@ -1,4 +1,6 @@
 import "dotenv/config";
+// Sentry hooks before ANY other module can throw (see ./sentry).
+import { sentryTrpcError } from "./sentry";
 import express from "express";
 import type { Request, Response } from "express";
 import cookieParser from "cookie-parser";
@@ -903,6 +905,10 @@ async function startServer() {
     createExpressMiddleware({
       router: appRouter,
       createContext,
+      // Sentry (v2.107.78): only the UNEXPECTED error classes are forwarded —
+      // the deliberate codes (auth walls, not-founds, throttles) are the product
+      // working, and forwarding them would bury the one INTERNAL that matters.
+      onError: sentryTrpcError,
     })
   );
   // development mode uses Vite, production mode uses static files

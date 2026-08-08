@@ -4,6 +4,11 @@ import { DEVICE_ID_HEADER, getDeviceId } from "@/lib/deviceId";
 // crash during the very first render is caught, queued and delivered. The
 // boundary at the bottom of this file is the render-crash half of the same net.
 import { initCrashReporter } from "@/lib/crashReporter";
+// Sentry FIRST among the telemetry (v2.107.78): its global hooks want to exist
+// before anything can throw, and the in-house reporter below FORWARDS into it,
+// so the two nets are one pipe with two sinks rather than two pipes.
+import { initSentry } from "@/lib/sentry";
+initSentry();
 import { initSessionTelemetry, sessionEvent } from "./lib/sessionTelemetry";
 import { CrashBoundary } from "@/components/CrashBoundary";
 // M48: capture the boot URL before any routing, so the Dialer can tell an in-app
