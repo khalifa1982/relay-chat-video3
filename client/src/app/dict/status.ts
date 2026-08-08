@@ -136,6 +136,17 @@ export const STATUS = {
     en: "Anyone on RELAY who opens your profile.",
     ar: "أي شخص على RELAY يفتح ملفك الشخصي.",
   },
+  "status.audSpecific": { en: "Specific people", ar: "أشخاص محددون" },
+  "status.audSpecificHint": {
+    en: "Only the people you pick — nobody else can see it.",
+    ar: "الأشخاص الذين تختارهم فقط — لا يمكن لأحد غيرهم رؤيتها.",
+  },
+  "status.pickPeople": { en: "Choose who can see it", ar: "اختر من يمكنه رؤيتها" },
+  "status.done": { en: "Done", ar: "تم" },
+  "status.noContactsToPick": {
+    en: "No contacts to pick — add someone first.",
+    ar: "لا توجد جهات اتصال للاختيار — أضف شخصًا أولًا.",
+  },
 
   /* ── The post confirmations ──────────────────────────────────────────────────────
      WHOLE SENTENCES, one per outcome, never a stem plus an interpolated tail. The
@@ -150,6 +161,10 @@ export const STATUS = {
   "status.postedEveryone": {
     en: "Story posted — visible for 24h to anyone on RELAY who opens your profile.",
     ar: "تم نشر القصة — تظهر 24 ساعة لأي شخص على RELAY يفتح ملفك الشخصي.",
+  },
+  "status.postedSpecific": {
+    en: "Story posted — visible for 24h only to the people you picked.",
+    ar: "تم نشر القصة — تظهر 24 ساعة فقط للأشخاص الذين اخترتهم.",
   },
   "status.postedGroup": {
     en: "Story posted to {group} — everyone in the group can see it for 24h.",

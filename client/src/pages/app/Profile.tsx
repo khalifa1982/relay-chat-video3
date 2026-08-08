@@ -1992,7 +1992,10 @@ function StatusPrivacySection() {
         role="radiogroup"
         aria-label={t("profile.privacyAria")}
       >
-        {AUDIENCE_OPTIONS.map((opt) => {
+        {/* "specific" is a PER-POST choice only (it needs a member list), so the saved
+            default offers just contacts/everyone. The `!== "specific"` guard on the click
+            also narrows the value to what the settings mutation accepts. */}
+        {AUDIENCE_OPTIONS.filter((o) => o.value !== "specific").map((opt) => {
           const active = current === opt.value;
           return (
             <button
@@ -2002,7 +2005,7 @@ function StatusPrivacySection() {
               aria-checked={active}
               disabled={busy}
               onClick={() => {
-                if (!active) setPrivacy.mutate({ audience: opt.value });
+                if (!active && opt.value !== "specific") setPrivacy.mutate({ audience: opt.value });
               }}
               className="flex w-full items-start gap-3 p-4 text-start disabled:opacity-60"
             >

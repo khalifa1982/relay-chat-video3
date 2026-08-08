@@ -241,8 +241,8 @@ describe("the stories screen renders through the dictionary", () => {
        exactly as `audienceOption` does: labelling it as the wider one would tell
        somebody their story is more visible than it is. */
     expect(CODE).toMatch(/const AUDIENCE_KEYS: Record<\s*\n?\s*StatusAudience,/);
-    expect(CODE).toMatch(/return v === "everyone" \? AUDIENCE_KEYS\.everyone : AUDIENCE_KEYS\.contacts;/);
-    for (const value of ["everyone", "contacts"] as const) {
+    expect(CODE).toMatch(/return v === "everyone" \? AUDIENCE_KEYS\.everyone : v === "specific" \? AUDIENCE_KEYS\.specific : AUDIENCE_KEYS\.contacts;/);
+    for (const value of ["everyone", "contacts", "specific"] as const) {
       for (const slot of ["label", "hint", "posted"] as const) {
         const key = AUDIENCE_KEYS_EXPECTED[value][slot];
         expect(DICT[key as keyof typeof DICT], `${value}.${slot}`).toBeTruthy();
@@ -276,5 +276,10 @@ const AUDIENCE_KEYS_EXPECTED = {
     label: "status.audEveryone",
     hint: "status.audEveryoneHint",
     posted: "status.postedEveryone",
+  },
+  specific: {
+    label: "status.audSpecific",
+    hint: "status.audSpecificHint",
+    posted: "status.postedSpecific",
   },
 } as const;

@@ -118,7 +118,7 @@ describe("status privacy hardening (review §3/§4/§5)", () => {
        audience AND the group are asserted, so dropping either fails. */
     const mv = router.slice(router.indexOf("  markViewed: publicProcedure"), router.indexOf("  getPrivacy:"));
     expect(mv.length).toBeGreaterThan(200);
-    expect(mv).toMatch(/statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId\)/);
+    expect(mv).toMatch(/statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId, st\.audienceMembers\)/);
     expect(mv).toMatch(/return \{ ok: false \}/);
     expect(router).toMatch(/statusGate\(ctx\)/);
   });

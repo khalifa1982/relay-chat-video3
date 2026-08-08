@@ -209,10 +209,10 @@ describe("v2.105.6 — a group story cannot escape its group", () => {
     // Without it a member's view is never recorded (the ring stays lit forever) and
     // their reply is refused with the generic "unavailable".
     const mv = proc("markViewed", "getPrivacy");
-    expect(mv).toMatch(/statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId\)/);
+    expect(mv).toMatch(/statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId, st\.audienceMembers\)/);
     const rp = ROUTERS.slice(ROUTERS.indexOf("  reply: publicProcedure"));
     expect(rp.slice(0, 6000)).toMatch(
-      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId\)/,
+      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId, st\.audienceMembers\)/,
     );
   });
 

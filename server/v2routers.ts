@@ -5473,6 +5473,13 @@ export function sanitizeStatusBg(v: string | undefined | null): string | null {
 
 /** The two status-audience options (v2.99.66). */
 const StatusAudienceSchema = z.enum(["contacts", "everyone"]);
+/**
+ * The PER-POST audience (owner): "specific" is allowed here — a hand-picked list —
+ * but NOT in `StatusAudienceSchema`, which gates the SAVED DEFAULT (settings), because
+ * a default has no member list to go with it. So "specific" is a post-time choice only.
+ */
+const StatusPostAudienceSchema = z.enum(["contacts", "everyone", "specific"]);
+const STATUS_MAX_SPECIFIC_MEMBERS = 256;
 
 /**
  * The wire shape of a status.
@@ -5574,11 +5581,19 @@ async function publishStatusEvent(
   conversationId?: number | null,
   /** The group's display name, so the toast can name the group and not the author. */
   groupName?: string | null,
+  /**
+   * SPECIFIC audience (owner): the exact ids to notify. When given it REPLACES the
+   * contacts+savers fan-out, so only the hand-picked people get the "posted a story"
+   * ping and refresh — nobody else even learns the post happened.
+   */
+  specificMemberIds?: number[] | null,
 ): Promise<void> {
   const audience =
-    conversationId != null
-      ? await getGroupStatusAudienceIds(conversationId, ownerId)
-      : await getStatusAudienceIds(ownerId, ownerNumber);
+    specificMemberIds != null
+      ? specificMemberIds
+      : conversationId != null
+        ? await getGroupStatusAudienceIds(conversationId, ownerId)
+        : await getStatusAudienceIds(ownerId, ownerNumber);
   for (const id of audience) {
     publishToIdentity(id, {
       kind: "status",
@@ -5603,8 +5618,13 @@ export const v2StatusRouter = router({
         mediaKey: z.string().max(256).optional(),
         mimeType: z.string().max(128).optional(),
         durationMs: z.number().int().min(0).max(10 * 60_000).optional(),
-        /** Per-post override; omitted ⇒ my saved default (v2.99.66). */
-        audience: StatusAudienceSchema.optional(),
+        /** Per-post override; omitted ⇒ my saved default (v2.99.66). "specific" ⇒ members. */
+        audience: StatusPostAudienceSchema.optional(),
+        /**
+         * SPECIFIC audience (owner): the hand-picked viewer identity ids, required when
+         * `audience` is "specific" and ignored otherwise. Capped, de-duplicated below.
+         */
+        members: z.array(z.number().int().positive()).max(STATUS_MAX_SPECIFIC_MEMBERS).optional(),
         /**
          * Post this story TO A GROUP instead of to my own ring (v2.105.6, #110).
          * Omitted ⇒ a personal story, byte-identical to every previous caller.
@@ -5710,6 +5730,25 @@ export const v2StatusRouter = router({
       // option), so a failed read can never publish a post wider than intended.
       const audience =
         input.audience ?? (await getIdentityStatusAudience(me.id).catch(() => "contacts" as const));
+      /* SPECIFIC audience (owner): stamp the hand-picked list on the row (de-duplicated,
+         self dropped — the author always sees their own). A "specific" post with nobody
+         picked is refused rather than stored as an invisible status, so the person gets a
+         clear "choose at least one person" instead of a story only they can see. NULL for
+         every other audience. A group story ignores audience entirely, so no list is stored
+         for it. */
+      let audienceMembers: string | null = null;
+      let specificMemberIds: number[] | null = null;
+      if (audience === "specific" && group == null) {
+        const picked = Array.from(new Set(input.members ?? [])).filter((id) => id !== me.id);
+        if (picked.length === 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Choose at least one person for a specific-audience status.",
+          });
+        }
+        specificMemberIds = picked;
+        audienceMembers = JSON.stringify(picked);
+      }
       const row = await insertStatus({
         identityId: me.id,
         conversationId: group?.id ?? null,
@@ -5722,6 +5761,7 @@ export const v2StatusRouter = router({
         mimeType: input.mimeType ?? null,
         durationMs: input.durationMs ?? null,
         audience,
+        audienceMembers,
         ttlMs: STATUS_TTL_MS,
       });
       if (!row) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't post your status." });
@@ -5773,7 +5813,24 @@ export const v2StatusRouter = router({
     const ownerIds = candidateIds.filter(
       (id) => id === me.id || (!blockedMe.has(id) && !blockedIdents.has(id)),
     );
-    const rows = await getActiveStatusesForOwners(ownerIds);
+    const allRows = await getActiveStatusesForOwners(ownerIds);
+    /* SPECIFIC audience (owner): the either-direction candidate set IS the audience for
+       a "contacts" post and a superset of it for "everyone", but a "specific" post is
+       visible only to its hand-picked ids — which the candidate set does not encode. So
+       drop any "specific" story the viewer isn't named in (their own always stay). The
+       media gate refuses the bytes regardless, but without this filter the story's TEXT
+       would still surface in the feed. */
+    const rows = allRows.filter((r) => {
+      if (r.identityId === me.id) return true;
+      if (normalizeStatusAudience(r.audience) !== "specific") return true;
+      if (!r.audienceMembers) return false;
+      try {
+        const ids = JSON.parse(r.audienceMembers);
+        return Array.isArray(ids) && ids.includes(me.id);
+      } catch {
+        return false;
+      }
+    });
     const owners = await getIdentitiesByIds(Array.from(new Set(rows.map((r) => r.identityId))));
     const ownerById = new Map(owners.map((o) => [o.id, o]));
     const viewed = await getViewedStatusIds(me.id, rows.map((r) => r.id));
@@ -6013,7 +6070,7 @@ export const v2StatusRouter = router({
       // story the author's contacts rule is the wrong question, so omitting it
       // would refuse the very members it was posted for and their views would
       // silently never be recorded — the ring would stay lit forever.
-      if (!(await statusAudienceAuthorized(me.id, st.identityId, st.audience, st.conversationId)))
+      if (!(await statusAudienceAuthorized(me.id, st.identityId, st.audience, st.conversationId, st.audienceMembers)))
         return { ok: false };
       await recordStatusView(input.id, me.id);
       return { ok: true };
@@ -6154,7 +6211,7 @@ export const v2StatusRouter = router({
       // covers blocks in BOTH directions, ahead of the "everyone" short-circuit,
       // so a block outranks a public audience.
       if (
-        !(await statusAudienceAuthorized(me.id, st.identityId, st.audience, st.conversationId))
+        !(await statusAudienceAuthorized(me.id, st.identityId, st.audience, st.conversationId, st.audienceMembers))
       ) {
         return { ok: false as const, reason: "unavailable" as const };
       }

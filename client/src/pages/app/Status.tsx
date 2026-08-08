@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useAutoplay } from "@/app/useAutoplay";
-import { Plus, X, Camera, Type, Trash2, Eye, ChevronDown, ChevronLeft, ChevronRight, Send, Video, Smile, Users, Pencil } from "lucide-react";
+import { Plus, X, Camera, Type, Trash2, Eye, ChevronDown, ChevronLeft, ChevronRight, Send, Video, Smile, Users, Pencil, Check } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -194,15 +194,20 @@ const AUDIENCE_KEYS: Record<
     hint: "status.audEveryoneHint",
     posted: "status.postedEveryone",
   },
+  specific: {
+    label: "status.audSpecific",
+    hint: "status.audSpecificHint",
+    posted: "status.postedSpecific",
+  },
 };
 
 /**
- * Fail closed on the way in, exactly as `audienceOption` does: anything that is not the
- * literal "everyone" resolves to the PRIVATE option. A value we do not recognise must
- * never be labelled as the wider one.
+ * Fail closed on the way in, exactly as `audienceOption` does: "everyone" and "specific"
+ * are honoured, anything else resolves to the PRIVATE option. A value we do not recognise
+ * must never be labelled as a wider one.
  */
 function audienceKeys(v: string | null | undefined) {
-  return v === "everyone" ? AUDIENCE_KEYS.everyone : AUDIENCE_KEYS.contacts;
+  return v === "everyone" ? AUDIENCE_KEYS.everyone : v === "specific" ? AUDIENCE_KEYS.specific : AUDIENCE_KEYS.contacts;
 }
 
 /**
@@ -479,7 +484,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
    * audience and group panels stack and push the Post pill off the bottom, and that
    * bar is the whole point of the column layout.
    */
-  const [panel, setPanel] = useState<"audience" | "group" | null>(null);
+  const [panel, setPanel] = useState<"audience" | "group" | "members" | null>(null);
   const [text, setText] = useState("");
   const [caption, setCaption] = useState("");
   const [bgIndex, setBgIndex] = useState(0);
@@ -508,8 +513,24 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
      Profile → Status privacy, which is the deliberate split: a one-off story
      shouldn't silently rewrite your standing preference. */
   const privacy = trpc.status.getPrivacy.useQuery(undefined, { staleTime: 60_000 });
-  const [audience, setAudience] = useState<"contacts" | "everyone" | null>(null);
+  const [audience, setAudience] = useState<"contacts" | "everyone" | "specific" | null>(null);
   const effectiveAudience = audience ?? privacy.data?.audience ?? "contacts";
+
+  /* SPECIFIC audience (owner): the hand-picked viewer identity ids. Only meaningful when
+     `effectiveAudience` is "specific"; the picker below fills it from my registered contacts
+     (people with a resolved identity — an unregistered saved number has no id to authorize).
+     `messages.threads` is already fetched for the group picker, so contacts.list is the only
+     extra request, and only while the composer is open. */
+  const [specificMembers, setSpecificMembers] = useState<number[]>([]);
+  const contactsQuery = trpc.contacts.list.useQuery(undefined, { staleTime: 60_000, enabled: !!privacy });
+  const pickableContacts = useMemo(
+    () =>
+      (contactsQuery.data ?? [])
+        .filter((c): c is typeof c & { identityId: number } => typeof c.identityId === "number")
+        .map((c) => ({ identityId: c.identityId, name: c.displayName || c.number }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [contactsQuery.data],
+  );
 
   /* WHERE THIS STORY GOES (v2.105.6, #110): my own ring, or one of my groups.
      Read off `messages.threads`, which the Messages tab this composer opens from
@@ -603,6 +624,8 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           text: body,
           bgColor: BG_OPTIONS[bgIndex],
           audience: effectiveAudience,
+          // Only sent for a "specific" post; ignored by the server otherwise.
+          ...(effectiveAudience === "specific" ? { members: specificMembers } : {}),
           // Omitted for a personal story, so the request is byte-identical to
           // every pre-v2.105.6 one.
           ...(targetGroupId != null ? { conversationId: targetGroupId } : {}),
@@ -627,6 +650,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
           text: caption.trim() || undefined,
           durationMs,
           audience: effectiveAudience,
+          ...(effectiveAudience === "specific" ? { members: specificMembers } : {}),
           ...(targetGroupId != null ? { conversationId: targetGroupId } : {}),
         });
       }
@@ -882,6 +906,63 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
             </div>
           )}
 
+          {/* SPECIFIC audience (owner): pick exactly who may watch. Shown only when I chose
+              "Specific people" and I'm posting to my own ring (a group target has no per-post
+              audience). Registered contacts only — an unregistered saved number has no identity
+              id to authorize. */}
+          {audiencePickerApplies && panel === "members" && (
+            <div className="shrink-0 px-3 pb-1">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-white/70">
+                  {t("status.pickPeople")}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setPanel(null)}
+                  className="shrink-0 text-[11px] font-semibold text-white/85 hover:text-white"
+                >
+                  {t("status.done")}
+                  {specificMembers.length > 0 ? ` · ${specificMembers.length}` : ""}
+                </button>
+              </div>
+              {pickableContacts.length === 0 ? (
+                <p className="rounded-xl border border-white/25 bg-black/40 px-3 py-2 text-[11px] leading-snug text-white/85">
+                  {t("status.noContactsToPick")}
+                </p>
+              ) : (
+                <div className="max-h-40 overflow-y-auto no-scrollbar rounded-xl border border-white/25 bg-black/30">
+                  {pickableContacts.map((c) => {
+                    const on = specificMembers.includes(c.identityId);
+                    return (
+                      <button
+                        key={c.identityId}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() =>
+                          setSpecificMembers((cur) =>
+                            cur.includes(c.identityId)
+                              ? cur.filter((x) => x !== c.identityId)
+                              : [...cur, c.identityId],
+                          )
+                        }
+                        className="flex w-full items-center gap-2 px-3 py-2 text-start text-sm text-white/90 hover:bg-white/10"
+                      >
+                        <span
+                          className={`grid size-4 shrink-0 place-items-center rounded border ${
+                            on ? "border-white bg-white/30" : "border-white/40"
+                          }`}
+                        >
+                          {on && <Check className="size-3" aria-hidden="true" />}
+                        </span>
+                        <span className="truncate">{c.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Who can watch THIS post (v2.99.55). Two options, per the owner's ask.
               WITHHELD for a group target rather than disabled: a group story's
               audience IS its membership (the server ignores the stored value once a
@@ -900,7 +981,7 @@ function StatusComposer({ onClose, onPosted }: { onClose: () => void; onPosted: 
                       <button
                         key={opt.value}
                         type="button"
-                        onClick={() => { setAudience(opt.value); setPanel(null); }}
+                        onClick={() => { setAudience(opt.value); setPanel(opt.value === "specific" ? "members" : null); }}
                         aria-pressed={active}
                         className={`min-w-0 flex-1 rounded-xl border px-2.5 py-2 text-start transition-colors ${
                           active

@@ -2797,6 +2797,10 @@ export async function ensureSchemaExtensions(): Promise<void> {
     // already-published status.
     { table: "identities", column: "statusAudience", ddl: "ADD COLUMN `statusAudience` varchar(16)" },
     { table: "statuses", column: "audience", ddl: "ADD COLUMN `audience` varchar(16)" },
+    // specific-audience list (owner): the hand-picked viewer ids for an
+    // audience="specific" post, JSON, NULL for every other audience. No-op until
+    // someone posts a "specific" story.
+    { table: "statuses", column: "audienceMembers", ddl: "ADD COLUMN `audienceMembers` text" },
     // v2.105.5 — a story addressed to a GROUP rather than to the author's
     // contacts. `identityId` still means the AUTHOR (a group does not write, a
     // member does, and the viewer needs to know which one), so this is an
@@ -6706,6 +6710,7 @@ export async function authorizeStorageKey(
       st.identityId,
       st.audience,
       st.conversationId,
+      st.audienceMembers,
     );
     return { kind: "status", authorized: ok };
   }
@@ -6942,16 +6947,18 @@ export async function getIdentitiesByNumbers(numbers: string[]) {
  *
  * A block in either direction still wins over BOTH.
  */
-export type StatusAudience = "contacts" | "everyone";
+export type StatusAudience = "contacts" | "everyone" | "specific";
 
 /**
- * Read a stored audience value. Anything that is not exactly "everyone" — NULL
- * (every pre-v2.99.66 row), a typo, a value from a future version, a corrupted
- * column — resolves to the PRIVATE option. Fail closed: a garbled value must
- * never be the reason a status is published wider than its author chose.
+ * Read a stored audience value. "everyone" and "specific" are honoured exactly;
+ * anything else — NULL (every pre-v2.99.66 row), a typo, a value from a future
+ * version, a corrupted column — resolves to the PRIVATE "contacts" option. Fail
+ * closed: a garbled value must never be the reason a status is published wider
+ * than its author chose. ("specific" with no stored member list is itself the
+ * narrowest reading — visible to nobody but the author — see statusAudienceAuthorized.)
  */
 export function normalizeStatusAudience(v: string | null | undefined): StatusAudience {
-  return v === "everyone" ? "everyone" : "contacts";
+  return v === "everyone" ? "everyone" : v === "specific" ? "specific" : "contacts";
 }
 
 export interface StatusRow {
@@ -6971,6 +6978,8 @@ export interface StatusRow {
    *  MEANINGLESS on a group story, where membership replaces it — see
    *  `statusAudienceAuthorized`, which ignores it once a conversationId is given. */
   audience: string | null;
+  /** JSON array of viewer identity ids when `audience` is "specific"; else NULL. */
+  audienceMembers: string | null;
   createdAt: Date;
   expiresAt: Date;
 }
@@ -6987,6 +6996,8 @@ export async function insertStatus(input: {
   mimeType: string | null;
   durationMs: number | null;
   audience: StatusAudience;
+  /** JSON array of viewer ids, required when `audience` is "specific"; else omitted. */
+  audienceMembers?: string | null;
   ttlMs: number;
 }): Promise<StatusRow | null> {
   const db = await getDb();
@@ -7005,6 +7016,9 @@ export async function insertStatus(input: {
     // Stamped at insert, never read back from the identity default — that is what
     // makes a later default change unable to widen this post.
     audience: input.audience,
+    // Only meaningful for "specific"; NULL otherwise so a later audience read is
+    // unambiguous.
+    audienceMembers: input.audience === "specific" ? (input.audienceMembers ?? null) : null,
     expiresAt,
   });
   const [row] = await db
@@ -7296,6 +7310,7 @@ export type ActiveStatusMediaRow = {
   id: number;
   identityId: number;
   audience: string | null;
+  audienceMembers: string | null;
   conversationId: number | null;
 };
 
@@ -7309,6 +7324,7 @@ export async function getActiveStatusByMediaKey(
       id: statuses.id,
       identityId: statuses.identityId,
       audience: statuses.audience,
+      audienceMembers: statuses.audienceMembers,
       conversationId: statuses.conversationId,
     })
     .from(statuses)
@@ -7349,6 +7365,14 @@ export async function statusAudienceAuthorized(
    * predicate may decide.
    */
   conversationId?: number | null,
+  /**
+   * The hand-picked viewer ids for a "specific"-audience post, as the JSON array
+   * string stored in `statuses.audienceMembers` (owner). Passed by the callers that
+   * hold the status row. Omitting it makes a "specific" post visible to nobody but
+   * the author — fail closed, so a caller that forgets it can only ever OVER-restrict,
+   * never leak.
+   */
+  members?: string | null,
 ): Promise<boolean> {
   if (requesterId === ownerId) return true;
   const db = await getDb();
@@ -7390,6 +7414,22 @@ export async function statusAudienceAuthorized(
       )
       .limit(1);
     return !!member;
+  }
+  /* SPECIFIC AUDIENCE (owner): only the hand-picked ids may watch. AFTER the block
+   * checks (a block still hides both ways) and the group check (a group story's
+   * membership already decided), and BEFORE "everyone"/"contacts" — a per-post list
+   * is the author's explicit choice and replaces the broader rules, exactly as a
+   * group's membership does. Fail closed: no list, an empty list, or an unparseable
+   * one authorizes nobody but the author (already returned true above). */
+  if (normalizeStatusAudience(audience) === "specific") {
+    if (!members) return false;
+    let ids: unknown;
+    try {
+      ids = JSON.parse(members);
+    } catch {
+      return false;
+    }
+    return Array.isArray(ids) && ids.includes(requesterId);
   }
   // "Everyone": any signed-in identity that gets this far may watch. Note the
   // caller has already established the requester IS a resolved identity — an
@@ -7455,16 +7495,24 @@ export async function getViewableStatusesOfOwner(
   const rows = await getActiveStatusesForOwners([ownerId]);
   if (rows.length === 0) return [];
   if (requesterId === ownerId) return rows;
-  // One authorization call per DISTINCT audience value, not per row: the two
-  // possible values mean at most two calls however many stories are live.
+  // One authorization call per DISTINCT audience value for "contacts"/"everyone"
+  // (at most two calls however many stories are live). "specific" is the exception:
+  // each such post carries its own member list, so it is evaluated PER ROW and never
+  // cached by audience value.
   const verdict = new Map<StatusAudience, boolean>();
   const out: StatusRow[] = [];
   for (const r of rows) {
     const a = normalizeStatusAudience(r.audience);
-    if (!verdict.has(a)) {
-      verdict.set(a, await statusAudienceAuthorized(requesterId, ownerId, a));
+    let ok: boolean;
+    if (a === "specific") {
+      ok = await statusAudienceAuthorized(requesterId, ownerId, a, r.conversationId, r.audienceMembers);
+    } else {
+      if (!verdict.has(a)) {
+        verdict.set(a, await statusAudienceAuthorized(requesterId, ownerId, a));
+      }
+      ok = verdict.get(a) ?? false;
     }
-    if (verdict.get(a)) out.push(r);
+    if (ok) out.push(r);
   }
   return out;
 }

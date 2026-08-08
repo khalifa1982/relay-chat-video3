@@ -114,12 +114,19 @@ describe("4b — the bottom bar can never be pushed off the sheet", () => {
        last CHARACTER of the file — a pin that passes for the wrong reason. This file's
        first draft did exactly that in three places; it is the trap CLAUDE.md records
        at v2.105.26 / v2.106.0, and it is why these now key on the class itself. */
-    const scroller = COMPOSER.match(/className="[^"]*overflow-y-auto[^"]*"/g) ?? [];
-    // Exactly one scrolling region in the composer — a second one is a second place
-    // for the bar to hide behind.
-    expect(scroller).toHaveLength(1);
-    expect(scroller[0]).toMatch(/min-h-0/);
-    expect(scroller[0]).toMatch(/flex-1/);
+    const scrollers = COMPOSER.match(/className="[^"]*overflow-y-auto[^"]*"/g) ?? [];
+    // The BODY is the one scroller that may GROW — flex-1 + min-h-0 — and there is
+    // exactly one of it. A second GROWING scroller would be a second place for the bar
+    // to hide behind.
+    const growers = scrollers.filter((c) => /flex-1/.test(c));
+    expect(growers).toHaveLength(1);
+    expect(growers[0]).toMatch(/min-h-0/);
+    // Any OTHER scroller (the specific-members picker, v2.107.71) is height-CAPPED, so
+    // it cannot push the bar off the bottom no matter how many contacts it lists.
+    for (const c of scrollers) {
+      if (c === growers[0]) continue;
+      expect(c, "a second scroller must be height-capped (max-h-*)").toMatch(/max-h-/);
+    }
   });
 
   it("the swatches and the Post pill sit OUTSIDE the scroller", () => {
@@ -159,9 +166,9 @@ describe("4b — the bottom bar can never be pushed off the sheet", () => {
   });
 
   it("at most ONE picker panel is open, so two cannot stack above the bar", () => {
-    // A boolean each would let the audience and group panels open together and push
-    // the Post pill off the bottom.
-    expect(COMPOSER).toMatch(/useState<"audience" \| "group" \| null>\(null\)/);
+    // A boolean each would let the audience, group, and members panels open together
+    // and push the Post pill off the bottom. One nullable union = one panel at a time.
+    expect(COMPOSER).toMatch(/useState<"audience" \| "group" \| "members" \| null>\(null\)/);
   });
 });
 

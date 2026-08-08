@@ -160,9 +160,10 @@ describe("the audience is a property of the POST, not of the poster", () => {
 
   it("markViewed passes the per-status audience too", () => {
     // v2.105.6 — plus the group it was addressed to; see status.test.ts for why
-    // that argument is load-bearing rather than decorative.
+    // that argument is load-bearing rather than decorative. Plus the specific-audience
+    // member list (fifth arg), so a hand-picked story authorizes markViewed correctly.
     expect(ROUTERS).toMatch(
-      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId\)/,
+      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId, st\.audienceMembers\)/,
     );
   });
 
@@ -295,8 +296,8 @@ describe("the migration cannot change anyone's visibility", () => {
 });
 
 describe("the two options are described the same way on every surface", () => {
-  it("there are exactly two, and the copy lives in one module", () => {
-    expect(AUDIENCE_OPTIONS.map((o) => o.value)).toEqual(["contacts", "everyone"]);
+  it("there are exactly three, and the copy lives in one module", () => {
+    expect(AUDIENCE_OPTIONS.map((o) => o.value)).toEqual(["contacts", "everyone", "specific"]);
     for (const o of AUDIENCE_OPTIONS) {
       expect(o.label.length).toBeGreaterThan(0);
       expect(o.hint.length).toBeGreaterThan(0);
@@ -310,7 +311,9 @@ describe("the two options are described the same way on every surface", () => {
     expect(composer).toMatch(/from "@\/app\/statusAudience"/);
     expect(profile).toMatch(/from "@\/app\/statusAudience"/);
     expect(composer).toMatch(/AUDIENCE_OPTIONS\.map/);
-    expect(profile).toMatch(/AUDIENCE_OPTIONS\.map/);
+    // Profile filters "specific" out (a default can't have a member list) but still
+    // renders from the shared module, not its own strings.
+    expect(profile).toMatch(/AUDIENCE_OPTIONS\.filter\([\s\S]*?\)\.map/);
   });
 
   it("the 'everyone' copy does not promise a broadcast the server never performs", () => {
@@ -337,5 +340,161 @@ describe("the two options are described the same way on every surface", () => {
     ).toBe(true);
     // Guests post statuses too — the section must not be gated on a user row.
     expect(sec).not.toMatch(/signedIn/);
+  });
+});
+
+/**
+ * SPECIFIC AUDIENCE (owner) — a per-post, hand-picked viewer list.
+ *
+ * The property that must hold everywhere: a "specific" post is visible to the
+ * author plus exactly the ids on its stored list, and to NOBODY else — and a post
+ * whose list is missing, empty, or unparseable is visible to the author alone.
+ * The list is DB-backed, so `statusAudienceAuthorized` can't be exercised without a
+ * database here; these assertions instead pin the enforcement wiring in the source,
+ * the same way the group-story tests do, plus the fail-closed direction of every
+ * branch that decides it.
+ */
+describe("specific audience — only the hand-picked ids, fail closed otherwise", () => {
+  it("normalizeStatusAudience honours 'specific' and still fails closed on garbage", () => {
+    expect(normalizeStatusAudience("specific")).toBe("specific");
+    // Adding a third real value must not open a hole for lookalikes.
+    for (const bad of ["Specific", "specific ", " specific", "specifics", "spec", "pecific"]) {
+      expect(normalizeStatusAudience(bad), `"${bad}" must not resolve to specific`).toBe("contacts");
+    }
+  });
+
+  it("the client audienceOption agrees with the server on 'specific' too", () => {
+    expect(audienceOption("specific").value).toBe("specific");
+    for (const v of ["specific", "Specific", "specific ", "everyone", "contacts", null, undefined]) {
+      expect(audienceOption(v).value, `disagreement on ${JSON.stringify(v)}`).toBe(
+        normalizeStatusAudience(v),
+      );
+    }
+  });
+
+  it("statusAudienceAuthorized takes the member list as a parameter", () => {
+    const sig = V2DB.slice(
+      V2DB.indexOf("export async function statusAudienceAuthorized("),
+      V2DB.indexOf("): Promise<boolean> {", V2DB.indexOf("export async function statusAudienceAuthorized(")),
+    );
+    expect(sig).toMatch(/members\?: string \| null,/);
+  });
+
+  it("the 'specific' branch checks membership and fails closed on no/empty/unparseable list", () => {
+    const body = fnBody(V2DB, "statusAudienceAuthorized");
+    const at = body.indexOf('normalizeStatusAudience(audience) === "specific"');
+    expect(at, "a specific branch exists").toBeGreaterThan(-1);
+    const branch = body.slice(at, at + 400);
+    // No list at all → nobody but the author (who already returned true above).
+    expect(branch).toMatch(/if \(!members\) return false;/);
+    // Unparseable list → refuse, never throw into the caller.
+    expect(branch).toMatch(/catch \{[\s\S]*?return false;/);
+    // Only an array that literally contains the requester passes.
+    expect(branch).toMatch(/Array\.isArray\(ids\) && ids\.includes\(requesterId\)/);
+  });
+
+  it("'specific' is decided AFTER the block checks and the group check, and BEFORE 'everyone'", () => {
+    // A per-post list is the author's explicit choice: it must replace the broad
+    // rules (like a group's membership does), but a block still has to outrank it.
+    const body = fnBody(V2DB, "statusAudienceAuthorized");
+    const ownerBlocked = body.indexOf("isNumberBlockedBy(ownerId, requester.number)");
+    const group = body.indexOf("conversationId != null");
+    const specific = body.indexOf('normalizeStatusAudience(audience) === "specific"');
+    const everyone = body.indexOf('normalizeStatusAudience(audience) === "everyone"');
+    expect(ownerBlocked).toBeGreaterThan(-1);
+    expect(ownerBlocked).toBeLessThan(specific); // a block still wins
+    expect(group).toBeLessThan(specific); // group membership decided first
+    expect(specific).toBeLessThan(everyone); // the list overrides "everyone"
+  });
+
+  it("insertStatus stamps the list only for 'specific', NULL for every other audience", () => {
+    const body = fnBody(V2DB, "insertStatus");
+    expect(body).toMatch(/audienceMembers: input\.audience === "specific" \? \(input\.audienceMembers \?\? null\) : null/);
+  });
+
+  it("getActiveStatusByMediaKey selects the member list (or the media gate reads undefined)", () => {
+    const body = fnBody(V2DB, "getActiveStatusByMediaKey");
+    expect(body).toMatch(/audienceMembers: statuses\.audienceMembers/);
+  });
+
+  it("the media gate passes THIS status's member list", () => {
+    const gate = fnBody(V2DB, "authorizeStorageKey");
+    const call = gate.slice(gate.indexOf("statusAudienceAuthorized("));
+    expect(call).toMatch(/st\.audienceMembers/);
+  });
+
+  it("reply passes the member list too", () => {
+    // Two call sites share this exact shape (markViewed + reply); at least one must
+    // carry the fifth argument, and the markViewed test already pins the other.
+    const hits = ROUTERS.match(/statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId, st\.audienceMembers\)/g);
+    expect(hits && hits.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("getViewableStatusesOfOwner evaluates 'specific' PER ROW, with the row's own list", () => {
+    const helper = fnBody(V2DB, "getViewableStatusesOfOwner");
+    // Contacts/everyone are still cached by audience value…
+    expect(helper).toMatch(/statusAudienceAuthorized\(requesterId, ownerId, a\)/);
+    // …but a specific post carries its own list, so it is judged row-by-row.
+    expect(helper).toMatch(/statusAudienceAuthorized\(requesterId, ownerId, a, r\.conversationId, r\.audienceMembers\)/);
+  });
+
+  it("the feed hides a 'specific' story's TEXT from anyone not on its list", () => {
+    // The either-direction candidate set is the audience for contacts/everyone but a
+    // superset for specific, so the feed must filter it — otherwise the story text
+    // (not just the media, which the gate already refuses) would surface.
+    const feed = ROUTERS.slice(ROUTERS.indexOf("  feed: publicProcedure"), ROUTERS.indexOf("  markViewed: publicProcedure"));
+    expect(feed).toMatch(/allRows\.filter/);
+    const filt = feed.slice(feed.indexOf("allRows.filter"), feed.indexOf("allRows.filter") + 500);
+    expect(filt).toMatch(/normalizeStatusAudience\(r\.audience\) !== "specific"/);
+    expect(filt).toMatch(/ids\.includes\(me\.id\)/);
+    expect(filt).toMatch(/return false;/); // fail closed on a bad list
+  });
+
+  it("the realtime 'posted a story' ping is scoped to the picked ids", () => {
+    const at = ROUTERS.indexOf("async function publishStatusEvent(");
+    const body = ROUTERS.slice(at, ROUTERS.indexOf("export const v2StatusRouter", at));
+    // When a specific member list is given it REPLACES the contacts+savers fan-out,
+    // so nobody outside the list even learns the post happened.
+    expect(body).toMatch(/specificMemberIds != null[\s\S]*?\? specificMemberIds/);
+  });
+
+  it("post takes the per-post audience schema (which allows specific), not the default one", () => {
+    const post = ROUTERS.slice(ROUTERS.indexOf("  post: publicProcedure"), ROUTERS.indexOf("  feed: publicProcedure"));
+    expect(post).toMatch(/audience: StatusPostAudienceSchema\.optional\(\)/);
+    // The members array is accepted and capped.
+    expect(post).toMatch(/members: z\.array\(z\.number\(\)\.int\(\)\.positive\(\)\)\.max\(STATUS_MAX_SPECIFIC_MEMBERS\)/);
+  });
+
+  it("post rejects an empty 'specific' list rather than storing an invisible story", () => {
+    const post = ROUTERS.slice(ROUTERS.indexOf("  post: publicProcedure"), ROUTERS.indexOf("  feed: publicProcedure"));
+    // De-dupe and drop self, then insist on at least one real recipient.
+    expect(post).toMatch(/Array\.from\(new Set\(input\.members \?\? \[\]\)\)\.filter\(\(id\) => id !== me\.id\)/);
+    expect(post).toMatch(/if \(picked\.length === 0\)/);
+    expect(post).toMatch(/code: "BAD_REQUEST"/);
+  });
+
+  it("the SAVED DEFAULT still cannot be 'specific' — it has no member list", () => {
+    // StatusAudienceSchema (the settings gate) stays two-valued; only the per-post
+    // StatusPostAudienceSchema adds "specific".
+    expect(ROUTERS).toMatch(/StatusAudienceSchema = z\.enum\(\["contacts", "everyone"\]\)/);
+    expect(ROUTERS).toMatch(/StatusPostAudienceSchema = z\.enum\(\["contacts", "everyone", "specific"\]\)/);
+    const setter = fnBody(V2DB, "setIdentityStatusAudience");
+    expect(setter).not.toMatch(/specific/);
+  });
+
+  it("the audienceMembers migration is additive and nullable — a no-op until someone opts in", () => {
+    expect(V2DB).toContain("ADD COLUMN `audienceMembers` text");
+    expect(V2DB).not.toMatch(/ADD COLUMN `audienceMembers`[^\n]*(NOT NULL|DEFAULT)/);
+  });
+
+  it("the composer offers 'Specific people' and Profile's saved default does not", () => {
+    const composer = fs.readFileSync(path.join(ROOT, "client/src/pages/app/Status.tsx"), "utf8");
+    const profile = fs.readFileSync(path.join(ROOT, "client/src/pages/app/Profile.tsx"), "utf8");
+    // Composer: all three, via the shared module.
+    expect(AUDIENCE_OPTIONS.some((o) => o.value === "specific")).toBe(true);
+    // Composer sends the member list for a specific post.
+    expect(composer).toMatch(/effectiveAudience === "specific" \? \{ members: specificMembers \}/);
+    // Profile filters "specific" out of the saved default.
+    expect(profile).toMatch(/AUDIENCE_OPTIONS\.filter\(\(o\) => o\.value !== "specific"\)/);
   });
 });

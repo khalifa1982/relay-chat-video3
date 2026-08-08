@@ -1,4 +1,4 @@
-import { Users, Globe2 } from "lucide-react";
+import { Users, Globe2, UserCheck } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 /**
@@ -19,7 +19,7 @@ import type { LucideIcon } from "lucide-react";
  * to stay bounded). Saying "everyone can see it" without that qualifier would
  * promise a broadcast the server never performs.
  */
-export type StatusAudience = "contacts" | "everyone";
+export type StatusAudience = "contacts" | "everyone" | "specific";
 
 export interface StatusAudienceOption {
   value: StatusAudience;
@@ -47,11 +47,18 @@ export const AUDIENCE_OPTIONS: readonly StatusAudienceOption[] = [
     posted: "visible for 24h to anyone on RELAY who opens your profile",
     Icon: Globe2,
   },
+  {
+    value: "specific",
+    label: "Specific people",
+    hint: "Only the people you pick — nobody else can see it.",
+    posted: "visible for 24h only to the people you picked",
+    Icon: UserCheck,
+  },
 ];
 
-/** Fail closed, exactly like the server's normalizeStatusAudience: anything that
- *  isn't the literal "everyone" renders as the private option. A value we don't
- *  recognise must never be labelled as the wider one. */
+/** Fail closed, exactly like the server's normalizeStatusAudience: "everyone" and
+ *  "specific" are honoured, anything else renders as the private "contacts" option. A
+ *  value we don't recognise must never be labelled as a wider one. */
 export function audienceOption(v: string | null | undefined): StatusAudienceOption {
-  return v === "everyone" ? AUDIENCE_OPTIONS[1] : AUDIENCE_OPTIONS[0];
+  return v === "everyone" ? AUDIENCE_OPTIONS[1] : v === "specific" ? AUDIENCE_OPTIONS[2] : AUDIENCE_OPTIONS[0];
 }

@@ -185,8 +185,10 @@ describe("status.reply — the guards, in order", () => {
     // v2.105.6 — and the GROUP it was addressed to. Without that argument a group
     // member's reply to a group story would be refused, because the author's
     // contacts rule is the wrong question for a story the group authorized.
+    // v2.107.71 — and the specific-audience member list (fifth arg): a reply to a
+    // hand-picked story must ask whether THIS viewer is on its list.
     expect(PROC).toMatch(
-      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId\)/
+      /statusAudienceAuthorized\(me\.id, st\.identityId, st\.audience, st\.conversationId, st\.audienceMembers\)/
     );
   });
 

@@ -895,6 +895,16 @@ export const statuses = mysqlTable(
      * the contacts-only rule).
      */
     audience: varchar("audience", { length: 16 }),
+    /**
+     * SPECIFIC-AUDIENCE list (owner). When `audience` is "specific" this holds the
+     * hand-picked viewer identity ids as a JSON array (e.g. "[3,7,12]"); NULL for
+     * every other audience. Stamped at insert alongside `audience`, so later edits
+     * to the list are impossible and an already-published status keeps the reach it
+     * was posted with. A "specific" post with a missing/empty list is visible to
+     * nobody but the author — fail closed, the same direction `normalizeStatusAudience`
+     * takes for a garbled value.
+     */
+    audienceMembers: text("audienceMembers"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     /** createdAt + TTL (default 24h). Reads filter `expiresAt > now`. */
     expiresAt: timestamp("expiresAt").notNull(),
