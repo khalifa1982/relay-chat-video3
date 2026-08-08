@@ -2634,6 +2634,57 @@ export async function getPresenceForIds(ids: number[]): Promise<PresenceLite[]> 
  * STRICTLY additive — never drops or alters existing columns/data. Best-effort:
  * a DB hiccup is logged and never blocks startup.
  */
+/**
+ * ONE-TIME NUMBER REASSIGNMENTS (v2.107.79, owner's list). Deliberate vanity
+ * assignments into the RESERVED `111` block — the block the random allocator
+ * never mints from, which is precisely why these targets are guaranteed
+ * un-squatted and why only an administrative path may take them.
+ *
+ * This function writes NOTHING itself: each pair goes through
+ * `claimIdentityNumberAsAdmin` → `regenerateIdentityNumber`, the single writer
+ * of `identities.number`, and therefore inherits everything renumbering already
+ * means here — the row-locked transaction, contact propagation to every saver of
+ * the old number, the conference-history rewrite, the reservation ledger (old
+ * number retired forever, new one confirmed), and notifyNumberChanged. A second
+ * parallel implementation of any of that is exactly how History's copies rotted
+ * before v2.99.54, and guestUpgrade.test.ts pins that it cannot ship.
+ *
+ * Idempotent by construction: a completed pair finds no source identity on the
+ * next boot and logs "already done" when the target is held. Runs on EVERY boot
+ * of EVERY box; the second box (and every later deploy) is a clean no-op.
+ */
+export const NUMBER_REASSIGNMENTS: ReadonlyArray<readonly [string, string]> = [
+  ["997140", "111115"],
+  ["414319", "111113"],
+  ["812424", "111114"],
+];
+export async function ensureNumberReassignments(): Promise<void> {
+  for (const [from, to] of NUMBER_REASSIGNMENTS) {
+    try {
+      const src = await getIdentityByNumber(from);
+      if (!src) {
+        const holder = await getIdentityByNumber(to);
+        console.log(
+          holder
+            ? `[renumber] ${from}→${to}: already done (held by identity #${holder.id})`
+            : `[renumber] ${from}→${to}: source not found — skipped`,
+        );
+        continue;
+      }
+      const res = await claimIdentityNumberAsAdmin(src.id, to);
+      console.log(
+        res.ok
+          ? `[renumber] ${from}→${to}: ok (identity #${src.id}${res.unchanged ? ", unchanged" : ""})`
+          : `[renumber] ${from}→${to}: REFUSED (${res.reason}) — left untouched`,
+      );
+    } catch (e) {
+      // Per-pair isolation: one refused pair must not stop the others, and a
+      // renumber failure must never block boot.
+      console.error(`[renumber] ${from}→${to}: failed`, e);
+    }
+  }
+}
+
 export async function ensureSchemaExtensions(): Promise<void> {
   const db = await getDb();
   if (!db) return;

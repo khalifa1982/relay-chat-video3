@@ -24,6 +24,7 @@ import { RoleBadge, roleFromFlags } from "./VerifiedBadge";
 import { CountryFlag } from "./CountryFlag";
 import { OnboardingGate } from "./OnboardingGate";
 import { PasscodeGate } from "./PasscodeGate";
+import { AppDownloadPrompt } from "./AppDownloadPrompt";
 import { useRealtime } from "./useRealtime";
 import { useDeliveryReceipts } from "./useDeliveryReceipts";
 import { useDnd } from "./dnd";
@@ -1336,6 +1337,10 @@ function Inner({ children, tab: routeTab }: { children: React.ReactNode; tab?: S
       {/* Global peer overlays (v2.96): the status viewer + profile popup any
           avatar or name click opens, from ANY screen. Mounted once here. */}
       <PeerOverlaysHost />
+      {/* GET-THE-APP (v2.107.79): mobile-BROWSER-only download card. Renders null
+          for desktop, inside the native shell, in an installed PWA, and for 14
+          days after a dismissal — see the component for why each. */}
+      <AppDownloadPrompt />
     </div>
   );
 }

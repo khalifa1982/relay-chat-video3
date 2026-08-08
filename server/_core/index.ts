@@ -19,7 +19,7 @@ import { registerV2Events, publishToIdentity, publishPresenceTo } from "../v2eve
 import { registerV2Offline } from "../v2offline";
 import { registerStatsFeed } from "../statsFeed";
 import { routeCallToVoicemail, loadRoutingForNumber, initCallRoutingBus } from "../callRouting";
-import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, reapStaleSessions, reapUnclaimedReservations, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds,
+import { getIdentityByNumber, getPartyLineByNumber, reapStalePresence, reapExpiredStatuses, reapStaleSessions, reapUnclaimedReservations, recordMissedCall, recordConferenceEnd, ensureSchemaExtensions, ensureNumberReassignments, getOrCreateDmConversation, isNumberBlockedBy, getPresenceAudienceIds,
   claimMissedCallEmail,
   releaseMissedCallEmailClaim,
   MISSED_CALL_EMAIL_COOLDOWN_MS,
@@ -790,6 +790,12 @@ async function startServer() {
   // outer catch is belt-and-suspenders.
   await ensureSchemaExtensions().catch((err) => {
     console.warn("[v2 schema ensure]", err);
+  });
+  // One-time number reassignments (v2.107.79) — see the function's doc for why
+  // this is three calls into the existing single writer rather than SQL. After
+  // the schema ensure so the columns it touches definitely exist; never blocks boot.
+  await ensureNumberReassignments().catch((err) => {
+    console.warn("[renumber ensure]", err);
   });
 
   /* MEDIA-NODE POOL — the refresh timer that makes adding a node an infrastructure step.

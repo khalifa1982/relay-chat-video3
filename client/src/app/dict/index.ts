@@ -27,6 +27,7 @@ import { VIDEOREC } from "./videorec";
 import { IMAGEEDIT } from "./imageedit";
 import { PEER } from "./peer";
 import { GROUPCALL } from "./groupcall";
+import { GETAPP } from "./getapp";
 
 export const ALL_DICT = {
   ...CORE,
@@ -49,4 +50,5 @@ export const ALL_DICT = {
   ...IMAGEEDIT,
   ...PEER,
   ...GROUPCALL,
+  ...GETAPP,
 } as const;
