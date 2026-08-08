@@ -1,21 +1,21 @@
 /**
- * v2.106.57 — the voice-mode audio profile, on the transport that carries calls.
+ * v2.107.72 — the voice-mode audio profile, on the transport that carries calls:
+ * Opus, 32 kbps ceiling, FEC on, ptime 20 — and DTX OFF, actively stripped.
  *
- * Owner spec (the voice/video activation doc): "Audio encoding (both mesh and
- * mediasoup, identical): codec Opus, bitrate 24–32 kbps, DTX on, FEC on
- * (useinbandfec: 1), ptime 20 ms", and explicitly the SAME profile in video mode —
- * "audio is always Opus 24–32k + DTX + FEC".
+ * DTX WAS REMOVED BECAUSE THE OWNER COULD HEAR IT. v2.106.57 enabled `usedtx=1`
+ * per the activation doc's bandwidth spec; on real devices the cost surfaced as a
+ * periodic tick-tick in the speaker, during calls only — DTX stops the stream in
+ * silence and the comfort-noise transitions around every speech pause click.
+ * Opus VBR already spends almost nothing on silence, so the saving was small and
+ * the artifact was not. The profile now SCRUBS `usedtx` from our offer AND answer:
+ * DTX is a receiver preference (`usedtx=1` in our SDP asks the PEER to go
+ * discontinuous toward us), so cleaning both descriptions turns it off in both
+ * directions — the same deploy, because both ends are this web app.
  *
- * MEASURED FIRST, WHICH NARROWED THE WORK: a real two-browser mesh call already
- * reported `useinbandfec=1` and `targetBitrate: 32000` — FEC and the bitrate band are
- * Chromium defaults and needed nothing. What was genuinely absent was `usedtx=1` and
- * any `ptime`. So this adds two of the five parameters plus an explicit
- * `maxaveragebitrate` so the ceiling is ours rather than a default that could move.
- *
- * AND THE OBVIOUS MECHANISM WAS RULED OUT BY MEASUREMENT: `setParameters` with
- * `encodings[0].dtx` is ACCEPTED WITHOUT THROWING and then silently dropped — the key
- * is absent when read straight back — so an API-level version of this would have read
- * as done and changed nothing. SDP is the only mechanism that works.
+ * STILL MEASURED, STILL SDP-ONLY: `RTCRtpSender.setParameters` with
+ * `encodings[0].dtx` is ACCEPTED WITHOUT THROWING and then silently dropped — the
+ * key is absent when read straight back — so an API-level version of any of this
+ * would read as done and change nothing.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -39,10 +39,15 @@ function tuneOpusSdp(sdp: string | null | undefined): string {
     if (!src) return src;
     const m = src.match(OPUS_FMTP_RE);
     if (!m) return src;
-    let line = m[1];
-    if (!/\busedtx=/.test(line)) line += ";usedtx=1";
-    if (!/\bmaxaveragebitrate=/.test(line)) line += ";maxaveragebitrate=" + OPUS_MAX_BITRATE;
-    let next = src.replace(OPUS_FMTP_RE, line);
+    const params = m[3]
+      .split(";")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0 && !/^usedtx=/i.test(p));
+    if (!params.some((p) => /^maxaveragebitrate=/i.test(p))) {
+      params.push("maxaveragebitrate=" + OPUS_MAX_BITRATE);
+    }
+    const line = "a=fmtp:" + m[2] + " " + params.join(";");
+    let next = src.replace(OPUS_FMTP_RE, () => line);
     if (!/^a=ptime:/m.test(next)) {
       next = next.replace(
         new RegExp("^(a=rtpmap:" + m[2] + " opus/48000/2)$", "m"),
@@ -69,19 +74,36 @@ const REAL_SDP = [
   "a=rtpmap:96 VP8/90000",
 ].join("\r\n");
 
-describe("v2.106.57 — the Opus profile is negotiated, not merely requested", () => {
-  it("adds DTX, an explicit bitrate ceiling and ptime 20", () => {
+describe("v2.107.72 — the Opus profile: bitrate + ptime negotiated, DTX scrubbed", () => {
+  it("adds an explicit bitrate ceiling and ptime 20, and requests NO DTX", () => {
     const out = tuneOpusSdp(REAL_SDP);
     const fmtp = out.split("\r\n").find(l => l.startsWith("a=fmtp:111"))!;
-    expect(fmtp).toContain("usedtx=1");
+    expect(fmtp).not.toContain("usedtx");
     expect(fmtp).toContain("maxaveragebitrate=32000");
     expect(fmtp).toContain("useinbandfec=1");   // already there — must SURVIVE
     expect(out).toMatch(/^a=ptime:20$/m);
   });
 
+  it("STRIPS a usedtx the browser (or an older build) put there", () => {
+    /* This is the actual fix for the owner's speaker tick: DTX is a RECEIVER
+       preference, so a `usedtx=1` we publish invites the peer to click at us.
+       Merely not adding it would leave the v2.106.x token alive through any
+       renegotiation of an old description; scrubbing kills it everywhere. */
+    const pre = REAL_SDP.replace(
+      "a=fmtp:111 minptime=10;useinbandfec=1",
+      "a=fmtp:111 minptime=10;useinbandfec=1;usedtx=1",
+    );
+    const out = tuneOpusSdp(pre);
+    const fmtp = out.split("\r\n").find(l => l.startsWith("a=fmtp:111"))!;
+    expect(fmtp).not.toContain("usedtx");
+    expect(fmtp).toContain("minptime=10");           // neighbours survive the rebuild
+    expect(fmtp).toContain("useinbandfec=1");
+    expect(fmtp).toContain("maxaveragebitrate=32000");
+  });
+
   it("keeps FEC and minptime rather than replacing the line", () => {
     /* FEC was already on by default; a rewrite that DROPPED it would trade one of the
-       doc's five parameters for another and read as progress. */
+       profile's parameters for another and read as progress. */
     const fmtp = tuneOpusSdp(REAL_SDP).split("\r\n").find(l => l.startsWith("a=fmtp:111"))!;
     expect(fmtp).toContain("minptime=10");
     expect(fmtp).toContain("useinbandfec=1");
@@ -112,25 +134,27 @@ describe("v2.106.57 — the Opus profile is negotiated, not merely requested", (
 
   it("is IDEMPOTENT — a renegotiation re-runs it", () => {
     /* ICE restart and the consent upgrade both create a fresh offer through the same
-       funnel, so applying twice must not produce `usedtx=1;usedtx=1` or a second
-       ptime line. */
+       funnel, so applying twice must not grow the line or add a second ptime. */
     const once = tuneOpusSdp(REAL_SDP);
     expect(tuneOpusSdp(once)).toBe(once);
-    expect((once.match(/usedtx=/g) || []).length).toBe(1);
+    expect(once).not.toContain("usedtx");
+    expect((once.match(/maxaveragebitrate=/g) || []).length).toBe(1);
     expect((once.match(/^a=ptime:/gm) || []).length).toBe(1);
   });
 
-  it("respects an SDP that already carries its own values", () => {
-    /* If a future Chromium starts emitting usedtx or ptime itself, we must not
-       double-write or override it. */
+  it("keeps a peer's own ceiling and ptime — but still scrubs DTX", () => {
+    /* A future Chromium's own maxaveragebitrate or ptime must not be overridden;
+       usedtx is the ONE token this profile owns the removal of, whoever wrote it. */
     const pre = REAL_SDP
       .replace("a=fmtp:111 minptime=10;useinbandfec=1",
                "a=fmtp:111 minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=24000")
       .replace("a=rtpmap:111 opus/48000/2", "a=rtpmap:111 opus/48000/2\r\na=ptime:60");
     const out = tuneOpusSdp(pre);
-    expect(out).toBe(pre);                       // nothing to add
+    expect(out).not.toContain("usedtx");
     expect(out).toContain("maxaveragebitrate=24000");  // theirs, not ours
+    expect(out).not.toContain("maxaveragebitrate=32000");
     expect(out).toContain("a=ptime:60");
+    expect(out).not.toMatch(/^a=ptime:20$/m);
   });
 
   it("a multi-m-line SDP gets exactly ONE audio tune", () => {
@@ -138,11 +162,11 @@ describe("v2.106.57 — the Opus profile is negotiated, not merely requested", (
     const out = tuneOpusSdp(two);
     // The regex is non-global by design: one call, one line, so a bundled SDP cannot
     // be half-rewritten into something inconsistent.
-    expect((out.match(/usedtx=1/g) || []).length).toBe(1);
+    expect((out.match(/maxaveragebitrate=32000/g) || []).length).toBe(1);
   });
 });
 
-describe("v2.106.57 — ONE funnel, so no signalling site can forget the profile", () => {
+describe("v2.107.72 — ONE funnel, so no signalling site can forget the profile", () => {
   it("setLocalDescription is called in exactly one place: the funnel", () => {
     /* Three call sites existed (the offer, the answer, the ICE-restart offer) and
        three is three chances to forget — including whichever is added next. */
@@ -169,6 +193,15 @@ describe("v2.106.57 — ONE funnel, so no signalling site can forget the profile
   it("the funnel tunes rather than passing the description straight through", () => {
     const fn = CODE.slice(CODE.indexOf("async function setLocalTuned"));
     expect(fn.slice(0, 400)).toMatch(/sdp: tuneOpusSdp\(desc\.sdp\)/);
+  });
+
+  it("the shipped source NEVER writes a usedtx token", () => {
+    /* Belt to the behaviour tests' braces: the string "usedtx=1" appearing anywhere
+       in shipped code (outside comments) would mean someone re-added the request.
+       The only permitted mention is inside the STRIP filter's regex. */
+    expect(CODE).not.toMatch(/usedtx=1/);
+    const strips = CODE.match(/\^usedtx=/g) || [];
+    expect(strips.length).toBeGreaterThanOrEqual(1);
   });
 
   it("the re-declared copy is BODY-IDENTICAL to the shipped function", () => {
@@ -207,9 +240,9 @@ describe("v2.106.57 — ONE funnel, so no signalling site can forget the profile
   });
 
   it("the profile is NOT gated on voice mode — it is identical in both", () => {
-    /* The doc is explicit that audio is the same in voice and video mode, and a real
-       VIDEO call was measured carrying the same fmtp. A `wantVideo`/voice condition
-       reaching this would split one profile into two. */
+    /* Audio is the same in voice and video mode, and a real VIDEO call was measured
+       carrying the same fmtp. A `wantVideo`/voice condition reaching this would split
+       one profile into two. */
     const fn = CODE.slice(CODE.indexOf("function tuneOpusSdp"),
                           CODE.indexOf("async function setLocalTuned"));
     expect(fn.length).toBeGreaterThan(200);

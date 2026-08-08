@@ -5019,8 +5019,20 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
     return peer;
   }
   /* THE VOICE-MODE AUDIO PROFILE, applied to our own SDP before it goes on the wire.
-   * Owner spec: Opus, 24-32 kbps, DTX on, FEC on, ptime 20 - and IDENTICAL in voice and
-   * video mode, so this runs on every description rather than only on voice calls.
+   * v2.107.72: Opus, 32 kbps ceiling, FEC on, ptime 20, and DTX OFF - stripped, not
+   * merely un-requested. IDENTICAL in voice and video mode, so this runs on every
+   * description rather than only on voice calls.
+   *
+   * DTX IS GONE BECAUSE THE OWNER COULD HEAR IT. v2.106.57 enabled `usedtx=1` per the
+   * activation doc's bandwidth spec, and the cost surfaced on real devices as a
+   * periodic tick-tick in the speaker, calls only: DTX stops the stream during
+   * silence, and the comfort-noise transitions around every speech pause are an
+   * audible click. Opus VBR already spends almost nothing on silence, so what DTX
+   * saved was small and what it cost was audible. STRIPPING (rather than just not
+   * adding) matters because DTX IS A RECEIVER PREFERENCE: `usedtx=1` in OUR SDP is
+   * what asks the PEER to go discontinuous toward us, so scrubbing our offer AND our
+   * answer is what turns it off in both directions once both ends run this build -
+   * which is the same deploy, because both ends are this web app.
    *
    * MEASURED, BOTH WAYS, BECAUSE THE OBVIOUS MECHANISM SILENTLY DOES NOTHING:
    * `RTCRtpSender.setParameters` with `encodings[0].dtx` is ACCEPTED without throwing
@@ -5028,27 +5040,15 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
    * version of this would have read as done and changed nothing. SDP is the only
    * mechanism that works here.
    *
-   * TWO OF THE FIVE WERE ALREADY TRUE and are left alone: a real call already reports
-   * `useinbandfec=1` (FEC) and `targetBitrate: 32000`, both Chromium defaults. What is
-   * genuinely added is `usedtx=1` and `a=ptime:20`, plus an explicit
-   * `maxaveragebitrate` so the 32 kbps ceiling is OURS rather than a default that could
-   * move.
-   *
-   * DTX IS A RECEIVER PREFERENCE, which is why BOTH sides must ask: `usedtx=1` in our
-   * SDP tells the PEER to use DTX when sending to us. Since our code runs on both ends,
-   * tuning the offer AND the answer is what turns it on in both directions - verified,
-   * both peers' outbound codec reading
-   * `maxaveragebitrate=32000;minptime=10;usedtx=1;useinbandfec=1`.
-   *
    * IT FAILS TOWARD THE UNTOUCHED ORIGINAL, and that is the whole safety argument: this
-   * sits on the offer/answer path of EVERY call, so a regex that misfires would break
+   * sits on the offer/answer path of EVERY call, so a rewrite that misfires would break
    * calling outright. No recognisable Opus fmtp line => the SDP is returned BYTE-
    * IDENTICAL; anything thrown => the original. Verified against garbage SDP, empty
    * SDP, and already-tuned SDP (idempotent, which matters because a renegotiation
    * re-runs this). */
   /* 32 kbps is the TOP of the owner's 24-32 band, and a CEILING rather than a target:
-   * Opus is variable-rate, so this caps the peak while DTX and silence take the average
-   * well below it. 20ms ptime is the spec's value and Opus's own default frame size. */
+   * Opus is variable-rate, so silence stays cheap even without DTX. 20ms ptime is the
+   * spec's value and Opus's own default frame size. */
   const OPUS_MAX_BITRATE = 32_000;
   const OPUS_PTIME_MS = 20;
   const OPUS_FMTP_RE = /^(a=fmtp:(\d+) ([^\r\n]*\buseinbandfec=1\b[^\r\n]*))$/m;
@@ -5058,10 +5058,15 @@ function nativeAnswerArmed(roomId: string): { voice: boolean } | null {
       if (!src) return src;
       const m = src.match(OPUS_FMTP_RE);
       if (!m) return src;                       // not recognisable - do not touch it
-      let line = m[1];
-      if (!/\busedtx=/.test(line)) line += ";usedtx=1";
-      if (!/\bmaxaveragebitrate=/.test(line)) line += ";maxaveragebitrate=" + OPUS_MAX_BITRATE;
-      let next = src.replace(OPUS_FMTP_RE, line);
+      const params = m[3]
+        .split(";")
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0 && !/^usedtx=/i.test(p));
+      if (!params.some((p) => /^maxaveragebitrate=/i.test(p))) {
+        params.push("maxaveragebitrate=" + OPUS_MAX_BITRATE);
+      }
+      const line = "a=fmtp:" + m[2] + " " + params.join(";");
+      let next = src.replace(OPUS_FMTP_RE, () => line);
       if (!/^a=ptime:/m.test(next)) {
         next = next.replace(
           new RegExp("^(a=rtpmap:" + m[2] + " opus/48000/2)$", "m"),
