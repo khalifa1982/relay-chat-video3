@@ -21,7 +21,7 @@ import type { ExpoConfig } from "expo/config";
 const SCHEME = "relay";
 
 const APP_VERSION = "1.1.0";
-const BUILD_NUMBER = 46; // iOS buildNumber + Android versionCode
+const BUILD_NUMBER = 47; // iOS buildNumber + Android versionCode
 
 const config: ExpoConfig = {
   owner: "uaecoms-team",
